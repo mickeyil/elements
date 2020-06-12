@@ -35,7 +35,7 @@ class RGBUnit:
         # request id is a sequence for debug purposes.
         self.req_id = 1
 
-    def set(self, pin, rgb_array):
+    def set(self, rgb_array):
         if not isinstance(rgb_array, np.ndarray):
             raise ValueError('rgb_array must be a numpy array')
         if not rgb_array.dtype == np.uint8:
@@ -47,7 +47,7 @@ class RGBUnit:
         num_pixels = rgb_array.shape[0]
         data_size = 3*num_pixels
 
-        msg_header = MsgHeader(req_id=self.req_id, pin=pin, data_size=data_size)
+        msg_header = MsgHeader(req_id=self.req_id, pin=3, data_size=data_size)
         rgb_array_bin = rgb_array.tobytes()
         req_msg = struct.pack("<III", *msg_header) + rgb_array.tobytes()
 
