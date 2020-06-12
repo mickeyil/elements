@@ -11,6 +11,8 @@
 // route requests for device by topic
 #include "routereq.h"
 
+#include "sensors.h"
+
 // This file contains the #define statements for SECRET_* constants and should
 // not be uploaded to GitHub / src code repo.
 #include "secrets.h"
@@ -41,6 +43,15 @@ String topic_operate;
 
 #define MAX_MQTT_CONNECTION_ATTEMPTS 12
 
+// If this device is a sensor sending periodic readouts, type is set.
+sensor_type_t sensor_type = SENSOR_DISTANCE;
+
+// sensor data saved here. when sensor type is determined via an operate command
+// this pointer should be allocated.
+sensor_data_t sensor_data;
+
+// helper for loop invocation measurements
+unsigned int loop_ticks = 0;
 
 // contains a chipid in the format of ESP-XXXXXXXX with X's being 32 bits
 // of id unique to the ESP chip in hex numbers.
@@ -52,7 +63,7 @@ void setup() {
 
   Serial.begin(115200); // Start the Serial communication to send messages to the computer delay(10);
   delay(10);
-  Serial.println('\r\n');
+  Serial.println("\r\n");
 
   startWifi();
 
@@ -88,9 +99,18 @@ void loop()
   client.loop();
 
   unsigned long now = millis();
+  loop_ticks += 1;
+
   if (now - last_ts > 5000) {
     last_ts = now;
-    Serial.print(".");
+    Serial.print("\n[");
+    Serial.print(loop_ticks);
+    Serial.println("] ");
+    loop_ticks = 0;
+  }
+
+  if (sensor_type != SENSOR_NOT_AVAILABLE) {
+    process_sensor(sensor_type, &sensor_data, now);
   }
 }
 

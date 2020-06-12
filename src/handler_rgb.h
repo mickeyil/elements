@@ -74,13 +74,14 @@ void cmd_set_rgb(byte* payload, unsigned int length)
     return;
   }
 
-  unsigned int num_pixels = data_size / 3;
+  // unsigned int num_pixels = data_size / 3;
 
   // rgb_byte_array sees rgb_array of CRGB struct as an array of bytes
   byte * rgb_byte_array = reinterpret_cast<byte*>(&rgb_array);
   
   // copy pixel data from payload to the rgb_array
   memcpy(rgb_byte_array, payload + header_size, length - header_size);
+    #if 0
 
   for (unsigned int lidx = 0; lidx < num_pixels; lidx++) {
     int r = rgb_byte_array[3*lidx];
@@ -96,6 +97,8 @@ void cmd_set_rgb(byte* payload, unsigned int length)
     Serial.print(" B: ");
     Serial.println(b);
   }
+      #endif
+
   FastLED.show();
 }
 
