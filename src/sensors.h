@@ -2,6 +2,7 @@
 #define __SENSORS_H__
 
 // #include "sensor_distance.h"
+#include "topicparser.h"
 
 typedef enum {
     SENSOR_NOT_AVAILABLE = 0,
@@ -15,6 +16,8 @@ typedef struct {
 
 #define echoPin D7 // Echo Pin
 #define trigPin D6 // Trigger Pin
+
+sensor_type_t sensor_type = SENSOR_NOT_AVAILABLE;
 
 void setup_sensor_distance(sensor_data_t *sensor_data)
 {
@@ -70,6 +73,28 @@ void process_sensor(sensor_type_t sensor_type, sensor_data_t *sensor_data, unsig
             Serial.print("unknown sensor type: ");
             Serial.println(sensor_type);
     }
+}
+
+
+void operation_handler_sensors(const TopicParser& tp, unsigned int topic_index, 
+                           byte* payload, unsigned int length)
+{
+  const char * command = tp.get_topic_level(topic_index);
+  
+  Serial.print("topic index: ");
+  Serial.println(topic_index);
+  Serial.print("command: [");
+  Serial.print(command);
+  Serial.println("]");
+
+  if (strncmp(command, "set_distance", MAXSTRLEN_COMMAND) == 0) {
+    sensor_type = SENSOR_DISTANCE;  
+    Serial.println("sensors: device is set as a distance sensor.");
+  } else {
+    Serial.print("unsupported command: [");
+    Serial.print(command);
+    Serial.println("]");
+  }
 }
 
 

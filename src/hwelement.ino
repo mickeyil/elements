@@ -43,8 +43,21 @@ String topic_operate;
 
 #define MAX_MQTT_CONNECTION_ATTEMPTS 12
 
-// If this device is a sensor sending periodic readouts, type is set.
-sensor_type_t sensor_type = SENSOR_DISTANCE;
+template <typename T, int N>
+class Sample
+{
+ public:
+  Sample(T init_val)
+  {
+    for (size_t i=0; i < N; i++) {
+      sample[i] = init_val;
+    }
+  }
+
+ private:
+  T sample[N];
+};
+
 
 // sensor data saved here. when sensor type is determined via an operate command
 // this pointer should be allocated.
@@ -71,8 +84,7 @@ void setup() {
   uint32_t chipidnum = ESP.getChipId();
   snprintf(chipid, 16, "ESP-%08X", chipidnum);
   Serial.print("Chip ID: ");
-  Serial.print(chipid);
-  Serial.print('\n');
+  Serial.println(chipid);
 
   topic_status = String("elements/") + String(chipid) + String("/status");
   topic_operate = String("elements/") + String(chipid) + String("/operate/#");
@@ -88,6 +100,10 @@ void setup() {
 
   // FastLED Related
   FastLED.addLeds<NEOPIXEL, 3>(rgb_array, RGB_ARRAY_SIZE);
+
+  // sensor related
+  // If this device is a sensor sending periodic readouts, type is set.
+  sensor_type = SENSOR_NOT_AVAILABLE;
 }
 
 void loop()
