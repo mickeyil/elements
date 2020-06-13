@@ -1,8 +1,8 @@
 #ifndef __SENSORS_H__
 #define __SENSORS_H__
 
-// #include "sensor_distance.h"
 #include "topicparser.h"
+#include "sample.h"
 
 typedef enum {
     SENSOR_NOT_AVAILABLE = 0,
@@ -32,7 +32,7 @@ void process_sensor_distance(sensor_data_t *sensor_data, unsigned long time_ms)
 {
     static unsigned long last_ts = 0;
     static int once = 0;
-
+    static Sample<int, 10> samples(0);
     
     if (once == 0) {
         setup_sensor_distance(sensor_data);
@@ -59,8 +59,14 @@ void process_sensor_distance(sensor_data_t *sensor_data, unsigned long time_ms)
     *pdata = distance;
     sensor_data->timestamp = time_ms;
 
-    Serial.print("distance: ");
-    Serial.println(distance);
+    samples.sample(distance);
+    int dmedian = samples.get_median();
+
+    Serial.print("distance median: ");
+    Serial.println(dmedian);
+
+    // events
+    
 }
 
 void process_sensor(sensor_type_t sensor_type, sensor_data_t *sensor_data, unsigned long time_ms)

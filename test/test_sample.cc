@@ -16,7 +16,7 @@ void print_samples(const Sample<T, N>& sample)
 
 int main()
 {
-  Sample<int, 5> sample(0);
+  Sample<int, 15> sample(0);
   print_samples(sample);
   sample.sample(9);
   print_samples(sample);
@@ -33,7 +33,7 @@ int main()
   print_samples(sample);
   sample.sample(190);
   print_samples(sample);
-  assert(sample.items_within_range(1,3) == 2);
+  assert(sample.items_within_range(1,3,3) == 1);
   
   return 0;
 }

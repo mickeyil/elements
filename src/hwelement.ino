@@ -43,21 +43,6 @@ String topic_operate;
 
 #define MAX_MQTT_CONNECTION_ATTEMPTS 12
 
-template <typename T, int N>
-class Sample
-{
- public:
-  Sample(T init_val)
-  {
-    for (size_t i=0; i < N; i++) {
-      sample[i] = init_val;
-    }
-  }
-
- private:
-  T sample[N];
-};
-
 
 // sensor data saved here. when sensor type is determined via an operate command
 // this pointer should be allocated.
