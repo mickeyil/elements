@@ -19,31 +19,44 @@ typedef struct {
 
 sensor_type_t sensor_type = SENSOR_NOT_AVAILABLE;
 
-void setup_sensor_distance(sensor_data_t *sensor_data)
-{
-    pinMode(trigPin, OUTPUT);
-    pinMode(echoPin, INPUT);
 
-    sensor_data->data = malloc(sizeof(int));
-    Serial.println("distance sensor initialized.");
+template <typename T>
+bool in_range(T val, T min_val, T max_val)
+{
+    if (min_val <= val && val <= max_val)
+        return true;
+    return false;
 }
 
-void process_sensor_distance(sensor_data_t *sensor_data, unsigned long time_ms)
+
+void process_sensor_distance(PubSubClient& client, unsigned long time_ms, 
+    const String& topic)
 {
     static unsigned long last_ts = 0;
     static int once = 0;
     static Sample<int, 10> samples(0);
-    
+    static int counter = 0;
+    static bool state_in_range = false;
+
+    // FIXME: make it a variable read from mqtt
+    static const int in_range_low = 40;
+    static const int in_range_high = 60;
+
+    #if 0
     if (once == 0) {
         setup_sensor_distance(sensor_data);
         once = 1;
         Serial.println("distance sensor is ready.");
     }
+    #endif
 
+    bool update_distance = false;
     if (time_ms - last_ts < 50) {
         return;
     }
+
     last_ts = time_ms;
+    counter += 1;
 
     long duration, distance; // Duration used to calculate distance
     digitalWrite(trigPin, LOW);
@@ -55,25 +68,50 @@ void process_sensor_distance(sensor_data_t *sensor_data, unsigned long time_ms)
     //Calculate the distance (in cm) based on the speed of sound.
     distance = duration/58.2;
 
-    int *pdata = static_cast<int*>(sensor_data->data);
-    *pdata = distance;
-    sensor_data->timestamp = time_ms;
-
     samples.sample(distance);
     int dmedian = samples.get_median();
 
-    Serial.print("distance median: ");
-    Serial.println(dmedian);
+    Serial.print("samples_in ");
+    int votes_for_approach = samples.items_within_range(in_range_low, in_range_high, 10);
+    Serial.print("samples_out");
+    bool is_approach = in_range(dmedian, in_range_low, in_range_high);
 
-    // events
-    
+    Serial.print("votes_for_approach: ");
+    Serial.print(votes_for_approach);
+    Serial.print("\t is_approace: ");
+    Serial.println(is_approach);
+
+    #if 1
+    // Serial.print(counter);
+    Serial.print("distance: ");
+    Serial.print(distance);
+    Serial.print("\tmedian-filtered: ");
+    Serial.println(dmedian);
+    #endif
+
+    bool new_state_in_range = false;
+    const char * response = "";
+    if (is_approach && votes_for_approach > 6) {
+        new_state_in_range = true;
+    }
+
+    String topic_distance = topic + String("/is_approaching");
+    if (new_state_in_range == true && state_in_range == false) {
+        // approaching: false -> true
+        client.publish(topic_distance.c_str(), "true");
+    } else if (new_state_in_range == false && state_in_range == true ) {
+        // moving away: true -> false
+        client.publish(topic_distance.c_str(), "false");
+    }
+    state_in_range = new_state_in_range;
 }
 
-void process_sensor(sensor_type_t sensor_type, sensor_data_t *sensor_data, unsigned long time_ms)
+void process_sensor(sensor_type_t sensor_type, PubSubClient& client, unsigned long time_ms,
+    const String& topic)
 {
     switch (sensor_type) {
         case SENSOR_DISTANCE:
-            process_sensor_distance(sensor_data, time_ms);
+            process_sensor_distance(client, time_ms, topic);
             break;
         default:
             Serial.print("unknown sensor type: ");

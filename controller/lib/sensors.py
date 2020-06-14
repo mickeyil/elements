@@ -5,7 +5,8 @@ from lib.utils import printable_bytes, get_hex_str
 import paho.mqtt.publish as publish
 
 # address of mqtt server
-server_addr = "192.168.5.5"
+#server_addr = "192.168.5.5"
+server_addr = "10.0.0.120"
 
 
 class SensorDistance:

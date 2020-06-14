@@ -25,7 +25,8 @@ const char* ssid = SECRET_WIFI_SSID;
 const char* password = SECRET_WIFI_PASSWORD;
 
 // MQTT server address
-const char* mqtt_server = "192.168.5.5";
+//const char* mqtt_server = "192.168.5.5";
+const char* mqtt_server = "10.0.0.120";
 
 // setup an instance of MQTT client
 WiFiClient espClient;
@@ -40,6 +41,9 @@ String topic_status;
 
 // topic pattern to subscribe to
 String topic_operate;
+
+// topic for publishing distance sensor reading
+String topic_distance;
 
 #define MAX_MQTT_CONNECTION_ATTEMPTS 12
 
@@ -73,6 +77,7 @@ void setup() {
 
   topic_status = String("elements/") + String(chipid) + String("/status");
   topic_operate = String("elements/") + String(chipid) + String("/operate/#");
+  topic_distance = String("elements/") + String(chipid) + String("/sensors/distance");
 
   // Setup MQTT Server
   client.setServer(mqtt_server, 1883);
@@ -111,7 +116,7 @@ void loop()
   }
 
   if (sensor_type != SENSOR_NOT_AVAILABLE) {
-    process_sensor(sensor_type, &sensor_data, now);
+    process_sensor(sensor_type, client, now, topic_distance);
   }
 }
 
