@@ -65,6 +65,8 @@ class Sample
   // for debugging/testing
   T get_item(size_t idx) const { return samples[idx]; }
 
+  size_t size() const { return (size_t) N; }
+
   private:
   T samples[N];
   

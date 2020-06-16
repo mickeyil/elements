@@ -10,5 +10,5 @@ logconfig.config_default_logger()
 import numpy as np
 from lib.sensors import SensorDistance
 
-strip1 = SensorDistance(device_id='ESP-00147633')
+strip1 = SensorDistance(device_id='ESP-000BA4DC')
 

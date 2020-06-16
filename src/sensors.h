@@ -4,21 +4,24 @@
 #include "topicparser.h"
 #include "sample.h"
 
+// #include <NewPing.h>
+
 typedef enum {
     SENSOR_NOT_AVAILABLE = 0,
     SENSOR_DISTANCE,
+    SENSOR_BUTTON,
 } sensor_type_t;
 
-typedef struct {
-    void *data;
-    unsigned long timestamp;
-} sensor_data_t;
 
-#define echoPin D7 // Echo Pin
-#define trigPin D6 // Trigger Pin
+#define echoPin D2 // Echo Pin
+#define trigPin D1 // Trigger Pin
+
+// how long to wait between sending another ping
+// specs suggests min interval of 60ms
+static const int PING_INTERVAL = 60;
+static const int PING_MAX_DISTANCE = 200; 
 
 sensor_type_t sensor_type = SENSOR_NOT_AVAILABLE;
-
 
 template <typename T>
 bool in_range(T val, T min_val, T max_val)
@@ -33,31 +36,20 @@ void process_sensor_distance(PubSubClient& client, unsigned long time_ms,
     const String& topic)
 {
     static unsigned long last_ts = 0;
-    static int once = 0;
     static Sample<int, 10> samples(0);
-    static int counter = 0;
     static bool state_in_range = false;
 
     // FIXME: make it a variable read from mqtt
     static const int in_range_low = 40;
     static const int in_range_high = 60;
 
-    #if 0
-    if (once == 0) {
-        setup_sensor_distance(sensor_data);
-        once = 1;
-        Serial.println("distance sensor is ready.");
-    }
-    #endif
-
-    bool update_distance = false;
-    if (time_ms - last_ts < 50) {
+    if (time_ms - last_ts < PING_INTERVAL) {
         return;
     }
 
     last_ts = time_ms;
-    counter += 1;
 
+    #if 1
     long duration, distance; // Duration used to calculate distance
     digitalWrite(trigPin, LOW);
     delayMicroseconds(2);
@@ -67,8 +59,10 @@ void process_sensor_distance(PubSubClient& client, unsigned long time_ms,
     duration = pulseIn(echoPin, HIGH);
     //Calculate the distance (in cm) based on the speed of sound.
     distance = duration/58.2;
+    #endif
 
     samples.sample(distance);
+
     int dmedian = samples.get_median();
 
     Serial.print("samples_in ");
@@ -82,7 +76,6 @@ void process_sensor_distance(PubSubClient& client, unsigned long time_ms,
     Serial.println(is_approach);
 
     #if 1
-    // Serial.print(counter);
     Serial.print("distance: ");
     Serial.print(distance);
     Serial.print("\tmedian-filtered: ");
@@ -106,12 +99,52 @@ void process_sensor_distance(PubSubClient& client, unsigned long time_ms,
     state_in_range = new_state_in_range;
 }
 
+
+void process_sensor_button(PubSubClient& client, unsigned long time_ms, 
+    const String& topic)
+{
+    #define button_pin D1
+    static unsigned long last_ts = 0;
+
+    static int once = 0;
+    static Sample<int, 10> samples(0);
+
+    static unsigned long last_press_ts = 0;
+
+    if (once == 0) {
+        once = 1;
+        pinMode(button_pin, INPUT);
+        Serial.println('init button.');
+    }
+    
+    if (time_ms - last_ts < 10) {
+        return;
+    }
+
+    last_ts = time_ms;
+    
+    int val = digitalRead(button_pin);
+    samples.sample(val);
+
+    if (samples.items_within_range(1,1) == samples.size())
+    {
+        if (time_ms - last_press_ts > 1000) {
+            Serial.println("press event!");
+            last_press_ts = time_ms;
+        }
+    }
+}
+
+
 void process_sensor(sensor_type_t sensor_type, PubSubClient& client, unsigned long time_ms,
     const String& topic)
 {
     switch (sensor_type) {
         case SENSOR_DISTANCE:
             process_sensor_distance(client, time_ms, topic);
+            break;
+        case SENSOR_BUTTON:
+            process_sensor_button(client, time_ms, topic);
             break;
         default:
             Serial.print("unknown sensor type: ");

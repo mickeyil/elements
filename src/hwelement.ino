@@ -25,8 +25,7 @@ const char* ssid = SECRET_WIFI_SSID;
 const char* password = SECRET_WIFI_PASSWORD;
 
 // MQTT server address
-//const char* mqtt_server = "192.168.5.5";
-const char* mqtt_server = "10.0.0.120";
+const char* mqtt_server = "192.168.5.5";
 
 // setup an instance of MQTT client
 WiFiClient espClient;
@@ -47,10 +46,6 @@ String topic_distance;
 
 #define MAX_MQTT_CONNECTION_ATTEMPTS 12
 
-
-// sensor data saved here. when sensor type is determined via an operate command
-// this pointer should be allocated.
-sensor_data_t sensor_data;
 
 // helper for loop invocation measurements
 unsigned int loop_ticks = 0;
@@ -93,7 +88,9 @@ void setup() {
 
   // sensor related
   // If this device is a sensor sending periodic readouts, type is set.
-  sensor_type = SENSOR_NOT_AVAILABLE;
+  //sensor_type = SENSOR_NOT_AVAILABLE;
+  sensor_type = SENSOR_BUTTON;
+
 }
 
 void loop()
