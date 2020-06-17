@@ -5,6 +5,8 @@
 
 #include <ESP8266WiFi.h>
 #include <ESP8266mDNS.h>
+#include <WiFiUdp.h>
+#include <NTPClient.h>
 
 #include <PubSubClient.h>
 
@@ -27,10 +29,15 @@ const char* password = SECRET_WIFI_PASSWORD;
 
 // MQTT server address
 const char* mqtt_server = "192.168.5.5";
+const char* ntp_server = mqtt_server;
+const long utcOffsetInSeconds = 7200;
 
 // setup an instance of MQTT client
 WiFiClient espClient;
 PubSubClient client(espClient);
+
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP, ntp_server, utcOffsetInSeconds);
 
 // define payload message buffer
 #define MSG_BUFFER_SIZE  512
@@ -86,6 +93,9 @@ void setup() {
   // connect to mqtt server
   mqtt_connect();
 
+  // start ntp client
+  timeClient.begin();
+
   // FastLED Related
   FastLED.addLeds<NEOPIXEL, 3>(rgb_array, RGB_ARRAY_SIZE);
 
@@ -109,15 +119,19 @@ void loop()
   }
 
   client.loop();
+  timeClient.update();
 
   unsigned long now = millis();
   loop_ticks += 1;
 
-  if (now - last_ts > 5000) {
+  if (now - last_ts > 1000) {
     last_ts = now;
     Serial.print("\n[");
     Serial.print(loop_ticks);
-    Serial.println("] ");
+    Serial.print("] ");
+    Serial.print(timeClient.getEpochTime());
+    Serial.print(".");
+    Serial.println(timeClient.getEpochMSec());    
     loop_ticks = 0;
   }
 
