@@ -14,7 +14,7 @@ typedef struct {
 
 #define MAXSTRLEN_COMMAND     16
 
-#define RGB_ARRAY_SIZE        300
+#define RGB_ARRAY_SIZE        150
 
 // buffer to hold the payload header.
 // it is copied due to 4-byte alignment requirement.

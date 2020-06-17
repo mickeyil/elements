@@ -12,6 +12,7 @@
 #include "routereq.h"
 
 #include "sensors.h"
+#include "animations.h"
 
 // This file contains the #define statements for SECRET_* constants and should
 // not be uploaded to GitHub / src code repo.
@@ -46,6 +47,8 @@ String topic_distance;
 
 #define MAX_MQTT_CONNECTION_ATTEMPTS 12
 
+static const bool is_animation = true;
+Animation animation(10);
 
 // helper for loop invocation measurements
 unsigned int loop_ticks = 0;
@@ -88,9 +91,15 @@ void setup() {
 
   // sensor related
   // If this device is a sensor sending periodic readouts, type is set.
-  //sensor_type = SENSOR_NOT_AVAILABLE;
-  sensor_type = SENSOR_BUTTON;
+  sensor_type = SENSOR_NOT_AVAILABLE;
 
+  if (is_animation) {
+    hsv_t bg, fg;
+    bg.h = 0; bg.s = 255; bg.v = 0;
+    fg.h = 30; fg.s = 255; fg.v = 255;
+    
+    animation.setup_uniform_fade(bg, fg, 4.0, millis()+5000);
+  }
 }
 
 void loop()
@@ -114,6 +123,15 @@ void loop()
 
   if (sensor_type != SENSOR_NOT_AVAILABLE) {
     process_sensor(sensor_type, client, now, topic_distance);
+  }
+
+  if (is_animation) {
+    unsigned long r_ts = millis();
+    animation.render(r_ts, (uint8_t* ) rgb_array);
+    unsigned long r_te = millis();
+    //Serial.print("render time ms: ");
+    //Serial.println(r_te - r_ts);
+    FastLED.show();
   }
 }
 

@@ -10,7 +10,7 @@ logconfig.config_default_logger()
 import numpy as np
 from lib.ledstrip import ledstrip
 
-strip1 = ledstrip(length=10, device_id='ESP-00147D0A')
+strip1 = ledstrip(length=10, device_id='ESP-000B1277')
 strip1.update()
 strip1.setall([0, 0, 15])
 strip1.update()

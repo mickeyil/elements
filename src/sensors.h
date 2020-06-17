@@ -83,7 +83,6 @@ void process_sensor_distance(PubSubClient& client, unsigned long time_ms,
     #endif
 
     bool new_state_in_range = false;
-    const char * response = "";
     if (is_approach && votes_for_approach > 6) {
         new_state_in_range = true;
     }
@@ -114,7 +113,7 @@ void process_sensor_button(PubSubClient& client, unsigned long time_ms,
     if (once == 0) {
         once = 1;
         pinMode(button_pin, INPUT);
-        Serial.println('init button.');
+        Serial.println("init button.");
     }
     
     if (time_ms - last_ts < 10) {

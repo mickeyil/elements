@@ -8,8 +8,7 @@ from collections import namedtuple
 import paho.mqtt.publish as publish
 
 # address of mqtt server
-#server_addr = "192.168.5.5"
-server_addr = "10.0.0.120"
+server_addr = "192.168.5.5"
 
 
 MsgHeader = namedtuple('MsgHeader', ['req_id', 'pin', 'data_size'])
