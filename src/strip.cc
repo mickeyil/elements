@@ -8,11 +8,11 @@ static int offsets[2][3] = {
 
 const uint8_t& Strip::pixel(int pixel_index, pixel_color_t pixel_color) const
 {
-  uint8_t* base_ptr = &buf[3*pixel_index];
+  uint8_t* base_ptr = &_buf[3*pixel_index];
   
   // use enum mappings of strip type and given pixel color to determine the
   // correct offset. buffer is always in layout 'RGB'.
-  int offset = offsets[static_cast<int>(strip_type)][static_cast<int>(pixel_color)];    
+  int offset = offsets[static_cast<int>(_strip_type)][static_cast<int>(pixel_color)];
   return *(base_ptr + offset);
 }
 
