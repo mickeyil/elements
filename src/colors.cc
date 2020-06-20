@@ -1,7 +1,7 @@
 #include <cstdint>
 
-void hsv2rgb(int hue, int sat, int val, uint8_t rgbarr[3]) { 
-  
+void hsv2rgb(int hue, int sat, int val, uint8_t& r_out, uint8_t& g_out, uint8_t& b_out)
+{
   // http://www.kasperkamperman.com/blog/arduino/arduino-programming-hsb-to-rgb/
   
   int r;
@@ -11,9 +11,9 @@ void hsv2rgb(int hue, int sat, int val, uint8_t rgbarr[3]) {
   int base;
 
   if (sat == 0) { // Acromatic color (gray). Hue doesn't mind.
-    rgbarr[0]=val;
-    rgbarr[1]=val;
-    rgbarr[2]=val;  
+    r_out=static_cast<uint8_t>(val);
+    g_out=static_cast<uint8_t>(val);
+    b_out=static_cast<uint8_t>(val);  
   } else  { 
     base = ((255 - sat) * val)>>8;
 
@@ -50,9 +50,9 @@ void hsv2rgb(int hue, int sat, int val, uint8_t rgbarr[3]) {
     break;
     }
 
-    rgbarr[0]=r;
-    rgbarr[1]=g;
-    rgbarr[2]=b; 
+    r_out=static_cast<uint8_t>(r);
+    g_out=static_cast<uint8_t>(g);
+    b_out=static_cast<uint8_t>(b); 
   }   
   
 }

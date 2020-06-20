@@ -1,4 +1,4 @@
-// g++ -g -Wall -I . -o test/test_strip test/test_strip.cc src/strip.cc
+// g++ -g -Wall -Wno-unused-function -DDEBUG_HELPERS -I . -o test/test_strip test/test_strip.cc src/strip.cc
 #include <cassert>
 #include <cstdio>
 #include <cstdint>
@@ -19,6 +19,9 @@ int main()
 
   Strip strip_rgb(stripdata, 2);  // RGB
   Strip strip_bgr(stripdata, 2, STRIP_BGR);
+
+  strip_rgb.print();
+  strip_bgr.print();
 
   assert(strip_rgb.pixel(0, PIXEL_R) == 10);
   assert(strip_rgb.pixel(1, PIXEL_R) == 100);

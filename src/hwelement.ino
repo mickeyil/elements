@@ -14,11 +14,12 @@
 #include "routereq.h"
 
 #include "sensors.h"
-#include "animations.h"
 
 // This file contains the #define statements for SECRET_* constants and should
 // not be uploaded to GitHub / src code repo.
 #include "secrets.h"
+
+#include "animation.h"
 
 // WiFi credentials
 // The SSID (name) of the Wi-Fi network you want to connect to
@@ -54,8 +55,7 @@ String topic_distance;
 
 #define MAX_MQTT_CONNECTION_ATTEMPTS 12
 
-static const bool is_animation = true;
-Animation animation(10);
+
 
 // helper for loop invocation measurements
 unsigned int loop_ticks = 0;
@@ -103,6 +103,7 @@ void setup() {
   // If this device is a sensor sending periodic readouts, type is set.
   sensor_type = SENSOR_NOT_AVAILABLE;
 
+#if 0
   if (is_animation) {
     hsv_t bg, fg;
     bg.h = 0; bg.s = 255; bg.v = 0;
@@ -110,6 +111,8 @@ void setup() {
     
     animation.setup_uniform_fade(bg, fg, 4.0, millis()+5000);
   }
+#endif
+
 }
 
 void loop()
@@ -139,6 +142,7 @@ void loop()
     process_sensor(sensor_type, client, now, topic_distance);
   }
 
+#if 0
   if (is_animation) {
     unsigned long r_ts = millis();
     animation.render(r_ts, (uint8_t* ) rgb_array);
@@ -147,6 +151,8 @@ void loop()
     //Serial.println(r_te - r_ts);
     FastLED.show();
   }
+#endif
+
 }
 
 
