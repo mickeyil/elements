@@ -1,4 +1,5 @@
 // g++ -g -DDEBUG_HELPERS -Wall -Wno-unused-function -I . -o test/test_pixelarray test/test_pixelarray.cc src/pixelarray.cc src/colors.cc src/strip.cc
+// run valgrind to test for memory issues
 #include <cassert>
 #include <cstdlib>
 #include "src/pixelarray.h"
@@ -30,6 +31,21 @@ int main()
 
   pa1.hsv_to_rgb_strip(strip_rgb);
   strip_rgb.print();
+
+  Strip strip_bgr((uint8_t*) stripdata, 2, STRIP_BGR);
+  pa1.hsv_to_rgb_strip(strip_bgr);
+  strip_bgr.print();
+
+  // test: sidx array allocation
+  PixelArray pa2(2, (hsv_t*) fa1);
+  pa2.print();
+
+  // test: allocate also pixel array
+  PixelArray pa3(2);
+  for (unsigned int i = 0; i < pa3.len(); i++) {
+    pa3[i] = pa2[i];
+  }
+  pa3.print();
 
   return 0;
 }

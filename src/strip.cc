@@ -36,7 +36,12 @@ void Strip::print()
     uint8_t r = pixel(i, PIXEL_R);
     uint8_t g = pixel(i, PIXEL_G);
     uint8_t b = pixel(i, PIXEL_B);
-    print_indexed_triplet<uint8_t>(i, r, g, b);
+
+    if (_strip_type == STRIP_RGB) {
+      print_indexed_triplet<uint8_t>(i, r, g, b);
+    } else if (_strip_type == STRIP_BGR) {
+      print_indexed_triplet<uint8_t>(i, b, g, r);
+    } 
   }
   printf("\n");
 }

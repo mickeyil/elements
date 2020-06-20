@@ -24,6 +24,8 @@ class PixelArray
       return _hsv_array[idx];
     }
 
+    unsigned int len() const { return _len; }
+
     // convert hsv to rgb and assign to an rgb strip instance according to
     // indexing
     void hsv_to_rgb_strip(Strip& rgb_strip);
