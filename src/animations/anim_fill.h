@@ -12,11 +12,19 @@ typedef struct {
 class AnimationFill : public Animation
 {
   public:
-    AnimationFill();
 
     virtual void setup(void *params, unsigned int size);
 
     virtual void render(float t_rel, PixelArray& pa);
+
+  protected:
+
+    #ifdef DEBUG_HELPERS
+    virtual void derived_print() {
+      printf("< AnimationFill: fill params: H: %.1f S: %.1f V: %.1f\n",
+        _fill_params.color.h, _fill_params.color.s, _fill_params.color.v);
+    }
+    #endif
 
   private:
     fill_params_t _fill_params;

@@ -25,6 +25,12 @@ class PixelArray
     }
 
     unsigned int len() const { return _len; }
+    
+    void set_default_indexing() {
+      for (unsigned int i = 0; i < _len; i++) {
+        _strip_idx_arr[i] = i;
+      }
+    }
 
     // convert hsv to rgb and assign to an rgb strip instance according to
     // indexing

@@ -1,10 +1,11 @@
+// g++ -g -DTEST_SLOTSMM -Wall -I . -o test/test_slotsmm test/test_slotsmm.cc src/slotsmm.cc
 #include <cassert>
 #include <cstdio>
 #include <cstdint>
 
 #include "src/slotsmm.h"
 
-#ifndef TEST_SLOTSMM
+#ifndef DEBUG_HELPERS
 # error "Test should be built with SLOTSMM defined"
 #endif
 
@@ -14,9 +15,13 @@ typedef struct {
   uint32_t c;
 } num_t;
 
+#define BUF_N_SIZE  3
+uint8_t databuf[sizeof(num_t)*BUF_N_SIZE];
+uint8_t usagebuf[BUF_N_SIZE];
+
 int main()
 {
-  SlotsMM slotsmm1(3, sizeof(num_t));
+  SlotsMM slotsmm1(3, sizeof(num_t), databuf, usagebuf);
   num_t n1;
   n1.a = 10;
   n1.b = 20;

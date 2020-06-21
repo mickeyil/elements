@@ -28,9 +28,15 @@ PixelArray::PixelArray(uint8_t len, hsv_t* hsv_ptr, uint8_t* sia_ptr)
 PixelArray::~PixelArray()
 {
   if (_is_hsvarr_memown) {
+    #ifdef DEBUG_HELPERS
+    printf("~PixelArray(): freeing: %p\n", _hsv_array);
+    #endif
     free(_hsv_array);
   }
   if (_is_idxarr_memown) {
+    #ifdef DEBUG_HELPERS
+    printf("~PixelArray(): freeing: %p\n", _strip_idx_arr);
+    #endif
     free(_strip_idx_arr);
   }
 }

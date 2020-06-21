@@ -4,14 +4,22 @@
 
 #include "slotsmm.h"
 
+#ifdef DEBUG_HELPERS
+#include <cstdio>
+#endif
 
-SlotsMM::SlotsMM(unsigned int num_slots, unsigned int slot_size) :
-  _buffer(nullptr), _slot_size(slot_size), _num_slots(num_slots), 
-  _usage_vec(nullptr), _avail_slots(num_slots)
+
+SlotsMM::SlotsMM(unsigned int num_slots, unsigned int slot_size,
+  uint8_t* buffer, uint8_t* usage_vec) :
+  _buffer(buffer), _slot_size(slot_size), _num_slots(num_slots), 
+  _usage_vec(usage_vec), _avail_slots(num_slots), _is_mem_owner(false)
 {
-  // allocate main buffer and usage buffer
-  _buffer = (uint8_t*) malloc(_slot_size * _num_slots);
-  _usage_vec = (uint8_t*) malloc(_num_slots * sizeof(uint8_t));
+  if (buffer == nullptr) {
+    // allocate main buffer and usage buffer
+    _buffer = (uint8_t*) malloc(_slot_size * _num_slots);
+    _usage_vec = (uint8_t*) malloc(_num_slots * sizeof(uint8_t));
+    _is_mem_owner = true;
+  }
 
   // initialize usage buffer. 0 means available for allocation.
   for (unsigned int i = 0; i < _num_slots; i++) {
@@ -22,8 +30,13 @@ SlotsMM::SlotsMM(unsigned int num_slots, unsigned int slot_size) :
 
 SlotsMM::~SlotsMM()
 {
-  free(_buffer);
-  free(_usage_vec);
+  if (_is_mem_owner) {
+    #ifdef DEBUG_HELPERS
+    printf("~SlotsMM(): freeing: %p and %p\n", _buffer, _usage_vec);
+    #endif
+    free(_buffer);
+    free(_usage_vec);
+  }
 }
 
 
@@ -40,6 +53,11 @@ void * SlotsMM::allocate()
       void * ptr = _buffer + i*_slot_size;
       _usage_vec[i] = 1;
       _avail_slots--;
+      
+      #ifdef DEBUG_HELPERS
+      printf("SlotsMM::allocate(): idx: %u  -- avail: %u --  %p\n", i, _avail_slots, ptr);
+      #endif
+
       return ptr;
     }
   }
@@ -59,7 +77,11 @@ void SlotsMM::deallocate(unsigned int slot_index)
   _usage_vec[slot_index] = 0;
   _avail_slots++;
 
-  #ifdef TEST_SLOTSMM
+  #ifdef DEBUG_HELPERS
+  printf("SlotsMM::deallocate(): idx: %u -- avail: %u\n", slot_index, _avail_slots);
+  #endif
+
+  #ifdef DEBUG_HELPERS
   // for testing/validation
   void * ptr = _buffer + slot_index*_slot_size;
   bzero(ptr, _slot_size);

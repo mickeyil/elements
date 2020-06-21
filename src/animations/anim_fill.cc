@@ -1,14 +1,15 @@
 #include <cassert>
 #include "anim_fill.h"
 
+
 void AnimationFill::setup(void *params, unsigned int size)
 {
-  assert(size == sizeof(base_params_t) + sizeof(fill_params_t));
+  assert(size == sizeof(anim_params_t) + sizeof(fill_params_t));
 
-  base_params_t *base_params = reinterpret_cast<base_params_t*>(params);
-  set_base_params(base_params);
+  anim_params_t *anim_params = reinterpret_cast<anim_params_t*>(params);
+  set_base_params(anim_params);
 
-  fill_params_t *fill_params = reinterpret_cast<fill_params_t*>((uint8_t*)params + sizeof(base_params_t));
+  fill_params_t *fill_params = reinterpret_cast<fill_params_t*>((uint8_t*)params + sizeof(anim_params_t));
   _fill_params = *fill_params;
 
   _state = ANIMATION_STATE_PENDING;

@@ -9,7 +9,8 @@
 class SlotsMM
 {
   public:
-    SlotsMM(unsigned int num_slots, unsigned int slot_size);
+    SlotsMM(unsigned int num_slots, unsigned int slot_size, 
+      uint8_t* buffer=nullptr, uint8_t* usage_vec=nullptr);
     ~SlotsMM();
 
   unsigned int available_slots() const {
@@ -36,4 +37,5 @@ class SlotsMM
     unsigned int _num_slots;
     uint8_t *_usage_vec;
     unsigned int _avail_slots;
+    bool _is_mem_owner;
 };
