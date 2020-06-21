@@ -6,6 +6,10 @@
 // program, in favor of one large allocation on setup() and allocation of fixed
 // size memory slots inside that buffer.
 
+#ifdef USE_SLOTSMM_ALLOC
+#include "slotsmm.h"
+#endif
+
 class SlotsMM
 {
   public:

@@ -4,8 +4,7 @@
 #include "pixelarray.h"
 
 typedef enum {
-    ANIMATION_CONSTANT = 1000,
-    ANIMATION_BLEND,
+    ANIMATION_TYPE_FILL = 1000,
 } animation_type_t;
 
 typedef enum {
@@ -49,6 +48,17 @@ class Animation
     // animation is rendered on the given pixel array. It's size may be taken
     // into account in animation rendering.
     virtual void render(float t_rel, PixelArray& pa) = 0;
+
+    // returns sizeof(anim_params_t) + sizeof(internal struct of derived 
+    // animation class). Any derived animation class must implement this as such.
+    virtual uint32_t header_size() const = 0;
+
+    // set duration to a smaller value
+    void trim(double t_other) {
+      if (_animation_params.t_start + _animation_params.duration > t_other) {
+        _animation_params.duration = t_other - _animation_params.t_start;
+      }
+    }
 
     #ifdef DEBUG_HELPERS
     virtual void print() { base_print(); }

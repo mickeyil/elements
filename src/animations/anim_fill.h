@@ -16,6 +16,10 @@ class AnimationFill : public Animation
     virtual void setup(void *params, unsigned int size);
 
     virtual void render(float t_rel, PixelArray& pa);
+    
+    virtual uint32_t header_size() const {
+      return sizeof(anim_params_t) + sizeof(fill_params_t);
+    }
 
   protected:
 

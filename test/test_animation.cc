@@ -48,6 +48,7 @@ int main()
   uint8_t params_buf[sizeof(anim_params_t) + sizeof(fill_params_t)];
   Animation *anim = new(slotsmm.allocate()) AnimationFill;
 
+  assert(anim->header_size() == sizeof(anim_params_t) + sizeof(fill_params_t));
   memcpy(params_buf, &anim_params, sizeof(anim_params_t));
   memcpy(params_buf+sizeof(anim_params_t), &fill_params, sizeof(fill_params_t)); 
 
@@ -55,5 +56,8 @@ int main()
   anim->setup(params_buf, sizeof(params_buf));
   anim->print(); 
   
+  anim->render(0.0, pa);
+  pa.print();
+
   return 0;
 }

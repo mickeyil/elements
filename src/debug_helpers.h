@@ -68,3 +68,6 @@ static int msleep(long msec)
 
     return res;
 }
+
+#define debug_print(fmt, ...) \
+            do { if (DEBUG_HELPERS) fprintf(stderr, fmt, __VA_ARGS__); } while (0)
