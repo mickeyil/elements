@@ -1,6 +1,9 @@
 #include <new>
 #include "channel.h"
 
+#ifdef DEBUG_HELPERS
+#include <cstdio>
+#endif
 
 // use custom allocation (SlotsMM) if given
 #define ALLOCATE_INSTANCE(animvar, psmmvar, classtype) do { \
@@ -37,8 +40,11 @@ void Channel::setup_channel(void* setup_data_buf, unsigned int size, const char 
   }
 
   uint8_t len = header->len;
-  _ppix_arr = new PixelArray(len);
-
+  uint8_t *strip_idx_arr = ((uint8_t*) setup_data_buf) + sizeof(channel_setup_header_t);
+  
+  // channel's PixelArray instance uses dynamic memory and copies the strip indices
+  // from the given setup buffer. 
+  _ppix_arr = new PixelArray(len, nullptr, strip_idx_arr);
 }
 
 
@@ -103,7 +109,6 @@ void Channel::insert_to_timeline(Animation* animation, double t_abs_now, bool tr
 }
 
 
-
 Animation* Channel::create_animation(animation_type_t animation_type)
 {
   Animation *animation = nullptr;
@@ -116,3 +121,52 @@ Animation* Channel::create_animation(animation_type_t animation_type)
 
   return animation;
 }
+
+
+void Channel::render(double t_abs_now, Strip& strip)
+{
+  for (unsigned int i = 0; i < _anim_timeline.size(); i++) {
+
+  }
+}
+
+
+#ifdef DEBUG_HELPERS
+void Channel::print()
+{
+  if (_p_smm == nullptr) {
+    printf("using dynamic memory allocation for animations.\n");
+  } else {
+    printf("using slots mm with %u slots of size %u.\n", _p_smm->num_slots(), 
+      _p_smm->slot_size());
+  }
+
+  if (_ppix_arr == nullptr) {
+    printf("pixel_array unallocated.\n");
+  } else {
+    printf("pixel_array:\n");
+    _ppix_arr->print();
+  }
+
+  printf("timeline size: %u\n", _anim_timeline.size());
+  if (_anim_timeline.size() == 0) {
+    return;
+  }
+
+  printf("Current time: %16.3lf\n", get_time_lf());
+  printf("%-16s %-10s %-16s %-10s %s\n","t_start         ","duration  ","t_end           ","state     ","details");
+  printf("%-16s %-10s %-16s %-10s %s\n","================","==========","================","==========","=======");
+  
+
+  for (unsigned int i = 0; i < _anim_timeline.size(); i++) {
+    Animation *a = _anim_timeline.peek_from_tail(i);
+    double t_start = a->t_start();
+    float duration = a->duration();
+    double t_end = t_start + duration;
+    const char *state = animation_state_str(a->state());
+    const char *details = a->str();
+    printf("%16.3lf %10.3f %16.3lf %-10s %s\n",
+      t_start, duration, t_end, state, details);
+  }
+}
+#endif

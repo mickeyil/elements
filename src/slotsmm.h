@@ -35,6 +35,10 @@ class SlotsMM
     }
   }
 
+  unsigned int slot_size() const { return _slot_size; }
+
+  unsigned int num_slots() const { return _num_slots; }
+  
   private:
     uint8_t *_buffer;
     unsigned int _slot_size;

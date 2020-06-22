@@ -3,6 +3,12 @@
 #include <cassert>
 #include "pixelarray.h"
 
+#ifdef DEBUG_HELPERS
+#include <cstring>
+
+#define MAX_DESCRIBE_STR  128
+#endif
+
 typedef enum {
     ANIMATION_TYPE_FILL = 1000,
 } animation_type_t;
@@ -60,9 +66,17 @@ class Animation
       }
     }
 
+    double t_start() const { return _animation_params.t_start; }
+    float duration() const { return _animation_params.duration; }
+    animation_state_t state() const { return _state; }
+
     #ifdef DEBUG_HELPERS
+    // prints basic information about the animation (t_start, duration)
     virtual void print() { base_print(); }
+    
+    virtual const char * str() const = 0;
     #endif
+
 
   protected:
     void set_base_params(anim_params_t *pparams) {

@@ -38,6 +38,10 @@ class Channel
     // milliseconds). render is made to a strip instance. 
     void render(double t_abs_now, Strip& strip);
   
+    #ifdef DEBUG_HELPERS
+    void print();
+    #endif
+
   private:
     // factory for animation instances creation
     Animation* create_animation(animation_type_t animation_type);
