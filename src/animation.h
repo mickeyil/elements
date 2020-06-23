@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cassert>
+#include "colors.h"
 #include "pixelarray.h"
 
 #ifdef DEBUG_HELPERS
@@ -46,14 +47,14 @@ class Animation
   public:
 
     // setup animation parameters.
-    virtual void setup(void *params, unsigned int size) = 0;
+    void setup(void *params, unsigned int size);
 
     // render animation at relative time to animation time.
     // negative values case noop, since animation hasn't started yet.
     // values larger than duration time also immediately return.
     // animation is rendered on the given pixel array. It's size may be taken
     // into account in animation rendering.
-    virtual void render(float t_rel, PixelArray& pa) = 0;
+    void render(float t_rel, PixelArray& pa);
 
     // returns sizeof(anim_params_t) + sizeof(internal struct of derived 
     // animation class). Any derived animation class must implement this as such.
@@ -79,6 +80,14 @@ class Animation
 
 
   protected:
+
+    // specific implemetation of animation rendering is done in subclasses,
+    // in the following function implementation.
+    virtual void _render(float t_rel, PixelArray& pa) = 0;
+
+    // setup specific animation parameters
+    virtual void _setup(void *params, unsigned int size) = 0;
+
     void set_base_params(anim_params_t *pparams) {
       _animation_params = *pparams;
     }
