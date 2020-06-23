@@ -45,6 +45,11 @@ void Channel::setup_channel(void* setup_data_buf, unsigned int size, const char 
   // channel's PixelArray instance uses dynamic memory and copies the strip indices
   // from the given setup buffer. 
   _ppix_arr = new PixelArray(len, nullptr, strip_idx_arr);
+
+  // initialize pixelarray values to 0.0
+  for (unsigned int i=0; i < len; i++) {
+    (*_ppix_arr)[i] = hsv_t(0.0, 0.0, 0.0);
+  }
 }
 
 

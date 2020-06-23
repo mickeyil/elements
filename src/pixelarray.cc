@@ -8,6 +8,7 @@ PixelArray::PixelArray(uint8_t len, hsv_t* hsv_ptr, uint8_t* sia_ptr)
     _is_idxarr_memown(false)
 {
   // allocate memory if not provided
+  // FIXME: handle memory allocation failures
   if (_hsv_array == nullptr) {
     _hsv_array = (hsv_t*) malloc(_len * sizeof(hsv_t));
     _is_hsvarr_memown = true;
