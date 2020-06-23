@@ -101,9 +101,11 @@ void Channel::insert_to_timeline(Animation* animation, double t_abs_now, bool tr
 {
   _anim_timeline.push_front(animation);
   if (trim_overlaps) {
-    for (unsigned int i = 0; i < _anim_timeline.size(); i++) {
+    // go over all previously inserted animations, trim animation durations
+    // which their t_end > t_now to a new duration such that their t_end = t_now.
+    for (int i = 0; i < static_cast<int>(_anim_timeline.size()) - 1; i++) {
       Animation *a = _anim_timeline.peek_from_tail(i);
-        a->trim(t_abs_now);
+      a->trim(animation->t_start());
     }
   }
 }
@@ -148,19 +150,20 @@ void Channel::print()
     _ppix_arr->print();
   }
 
-  printf("timeline size: %u\n", _anim_timeline.size());
+  printf("timeline size: %u.\n", _anim_timeline.size());
   if (_anim_timeline.size() == 0) {
     return;
   }
 
-  printf("Current time: %16.3lf\n", get_time_lf());
+  double t_now = get_time_lf();
+  printf("timestamps below are displayed relative to current time: %16.3lf\n", t_now);
   printf("%-16s %-10s %-16s %-10s %s\n","t_start         ","duration  ","t_end           ","state     ","details");
   printf("%-16s %-10s %-16s %-10s %s\n","================","==========","================","==========","=======");
   
 
   for (unsigned int i = 0; i < _anim_timeline.size(); i++) {
     Animation *a = _anim_timeline.peek_from_tail(i);
-    double t_start = a->t_start();
+    double t_start = a->t_start() - t_now;
     float duration = a->duration();
     double t_end = t_start + duration;
     const char *state = animation_state_str(a->state());

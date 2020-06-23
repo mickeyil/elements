@@ -41,7 +41,7 @@ int main()
   memcpy(params_buf, &anim_setup_header, sizeof(anim_setup_header_t));
   memcpy(params_buf+sizeof(anim_setup_header_t), &anim_params, sizeof(anim_params_t));
   memcpy(params_buf+sizeof(anim_setup_header_t)+sizeof(anim_params_t), 
-    &fill_params, sizeof(fill_params_t)); 
+    &fill_params, sizeof(fill_params_t));
 
   uint8_t strip_idx_arr[5] = {10, 11, 12, 13, 14};
   channel_setup_header_t setup_header;
@@ -69,6 +69,22 @@ int main()
     printf("error: %s\n", errstr);
   }
   channel.print();
+
+  anim_params.t_start = get_time_lf() + 0.2;
+  anim_params.duration = 1.0;
+  fill_params.color = hsv_t(125.0, 125.0, 125.0);
+  
+  memcpy(params_buf, &anim_setup_header, sizeof(anim_setup_header_t));
+  memcpy(params_buf+sizeof(anim_setup_header_t), &anim_params, sizeof(anim_params_t));
+  memcpy(params_buf+sizeof(anim_setup_header_t)+sizeof(anim_params_t), 
+    &fill_params, sizeof(fill_params_t));
+
+  channel.add_animation(params_buf, params_size, t_now, &errstr);
+  if (errstr != nullptr) {
+    printf("error: %s\n", errstr);
+  }
+  channel.print();
+
 
   return 0;
 }

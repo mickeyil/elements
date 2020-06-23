@@ -2,11 +2,15 @@
 
 #include <cstdint>
 
-typedef struct {
+struct hsv_t
+{
   float h;
   float s;
   float v;
-} hsv_t;
+
+  hsv_t() { }
+  hsv_t(float _h, float _s, float _v) : h(_h), s(_s), v(_v) { }
+};
 
 
 typedef struct {
