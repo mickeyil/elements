@@ -25,10 +25,20 @@ class PixelArray
     }
 
     unsigned int len() const { return _len; }
-    
+
     void set_default_indexing() {
       for (unsigned int i = 0; i < _len; i++) {
         _strip_idx_arr[i] = i;
+      }
+    }
+
+    void copy_indexing(const PixelArray& other) {
+      if (_len != other._len) {
+        // FIXME: handle erros
+        return;
+      }
+      for (unsigned int i = 0; i < _len; i++) {
+        _strip_idx_arr[i] = other._strip_idx_arr[i];
       }
     }
 

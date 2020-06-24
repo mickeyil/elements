@@ -6,11 +6,13 @@
 #include "fixed_deque.h"
 
 typedef struct {
+  uint8_t strip_type;
   uint8_t len;
 } channel_setup_header_t;
 
 typedef struct {
-  int32_t anim_type;    // values are animation_type_t enum int values
+  int16_t id;
+  int16_t anim_type;    // values are animation_type_t enum int values
 } anim_setup_header_t;
 
 // max number of active animations in a timeline.
@@ -50,6 +52,9 @@ class Channel
     // NOTE: code assumes start time insertions occurs sorted! 
     // (i.e. sorted by the client).
     void insert_to_timeline(Animation* animation, double t_abs_now, bool trim_overlaps=true);
+
+    // remove animations with a state DONE (occur in the past) from timeline.
+    void timeline_cleanup(double t_abs_now);
 
     PixelArray *_ppix_arr;  // dynamically allocated
     FixedDeque<Animation*>  _anim_timeline;

@@ -24,6 +24,14 @@ Channel::Channel(SlotsMM *p_smm) :
 
 Channel::~Channel()
 {
+  // clean up timeline resources
+  if (_p_smm == nullptr) {
+    while (_anim_timeline.size() > 0) {
+      Animation *a = _anim_timeline.peek_from_tail(0);
+      delete a;
+      _anim_timeline.remove_last();
+    }
+  }
   if (_ppix_arr != nullptr) {
     delete _ppix_arr;
   }
@@ -92,7 +100,9 @@ void Channel::add_animation(void* setup_data_buf, unsigned int size,  double t_a
   }
 
   // initialize specific (derived) animation instance with animation parameters
-  animation->setup(anim_params, params_buf_size);
+  // channel's pixel array is passed here to enable the animation instance to 
+  // create internal buffer with the same indexing.
+  animation->setup(anim_params, params_buf_size, *_ppix_arr);
   #ifdef DEBUG_HELPERS
   printf("Channel::add_animation():\n");
   animation->print();
@@ -132,8 +142,35 @@ Animation* Channel::create_animation(animation_type_t animation_type)
 
 void Channel::render(double t_abs_now, Strip& strip)
 {
+  assert(_ppix_arr != nullptr);
+  timeline_cleanup(t_abs_now);
+  
   for (unsigned int i = 0; i < _anim_timeline.size(); i++) {
+    Animation *a = _anim_timeline.peek_from_tail(i);
+    float t_rel = t_abs_now - a->t_start();
+    a->render(t_rel, *_ppix_arr);
+  }
+  
+  // write output to strip
+  _ppix_arr->hsv_to_rgb_strip(strip);
+}
 
+
+void Channel::timeline_cleanup(double t_abs_now)
+{
+  while (_anim_timeline.size() > 0) {
+    Animation *a = _anim_timeline.peek_from_tail(0);
+    if (a->state() == ANIMATION_STATE_DONE) {
+      _anim_timeline.remove_last();
+      a->tear_down();   // release resources taken by the animation instance
+
+      if (_p_smm == nullptr) {
+        delete a;
+      }
+
+    } else {
+      break;    // timeline is sorted
+    }
   }
 }
 

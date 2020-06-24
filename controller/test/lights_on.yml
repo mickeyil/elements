@@ -1,0 +1,31 @@
+- setup:
+    strip_type: rgb
+    active_indices: 10, 11, 12, 13, 14
+- animation:
+    type: fill
+    t_start: 0.0
+    duration: 0.0
+    params:
+      color:
+        h: 120
+        s: 255
+        v: 0
+- animation:
+    type: fill
+    t_start: 0.0
+    duration: 3.0
+    params:
+      color:
+        h: 120
+        s: 255
+        v: 255
+- animation:
+    type: fill
+    t_start: 60.0
+    duration: 0.0
+    params:
+      color:
+        h: 120
+        s: 255
+        v: 0
+

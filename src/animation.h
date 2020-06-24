@@ -45,9 +45,10 @@ static const char* animation_state_str(animation_state_t state)
 class Animation
 {
   public:
+    virtual ~Animation() { }
 
     // setup animation parameters.
-    void setup(void *params, unsigned int size);
+    void setup(void *params, unsigned int size, PixelArray& pa);
 
     // render animation at relative time to animation time.
     // negative values case noop, since animation hasn't started yet.
@@ -55,6 +56,9 @@ class Animation
     // animation is rendered on the given pixel array. It's size may be taken
     // into account in animation rendering.
     void render(float t_rel, PixelArray& pa);
+
+    // allow the  animation object to release resources
+    virtual void tear_down() { }
 
     // returns sizeof(anim_params_t) + sizeof(internal struct of derived 
     // animation class). Any derived animation class must implement this as such.
@@ -81,12 +85,16 @@ class Animation
 
   protected:
 
+    // setup specific animation parameters
+    virtual void _setup(void *params, unsigned int size, PixelArray& pa) = 0;
+
     // specific implemetation of animation rendering is done in subclasses,
     // in the following function implementation.
     virtual void _render(float t_rel, PixelArray& pa) = 0;
 
-    // setup specific animation parameters
-    virtual void _setup(void *params, unsigned int size) = 0;
+    // called on first activation. allows for copying pixel array values at
+    // the time of first activation. default implementation is a no-op.
+    virtual void _first_activation(PixelArray& pa) { }
 
     void set_base_params(anim_params_t *pparams) {
       _animation_params = *pparams;

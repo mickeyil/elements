@@ -12,6 +12,19 @@ struct hsv_t
   hsv_t(float _h, float _s, float _v) : h(_h), s(_s), v(_v) { }
 };
 
+struct hsvu8_t
+{
+  uint8_t h;
+  uint8_t s;
+  uint8_t v;
+
+  hsvu8_t() { }
+  hsvu8_t(uint8_t _h, uint8_t _s, uint8_t _v) : h(_h), s(_s), v(_v) { }
+  hsv_t to_hsv_t() const {
+    hsv_t hsv((float) h, (float) s, (float) v);
+    return hsv;
+  }
+};
 
 typedef struct {
   uint8_t r;
