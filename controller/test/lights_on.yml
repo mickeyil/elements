@@ -1,6 +1,6 @@
 - setup:
     strip_type: rgb
-    active_indices: 10, 11, 12, 13, 14
+    active_indices: [10, 11, 12, 13, 14]
 - animation:
     type: fill
     t_start: 0.0

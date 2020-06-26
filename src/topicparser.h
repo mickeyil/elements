@@ -1,5 +1,4 @@
-#ifndef __TOPICPARSER_H__
-#define __TOPICPARSER_H__
+#pragma once
 
 #define MAX_TOPIC_LEN 128
 #define MAX_TOPIC_DEPTH 16
@@ -49,5 +48,4 @@ class TopicParser
   char topic_tokens[MAX_TOPIC_LEN];
 };
 
-#endif
 

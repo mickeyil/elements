@@ -11,20 +11,18 @@ ANIMATION_TYPES = {
     'fill': 1000,
 }
 
-CHANNEL_SETUP_KEYS = ('strip_type', 'active_indices')
+CHANNEL_SETUP_KEYS = ['strip_type', 'active_indices']
 ChannelSetupHeader = namedtuple('ChannelSetupHeader', ['strip_type', 'len'])
 AnimationSetupHeader = namedtuple('AnimationSetupHeader',
                                   ['anim_id', 'anim_type', 't_start', 'duration'])
 
-ANIMATION_SETUP_KEYS = ('type', 't_start', 'duration', 'params')
+ANIMATION_SETUP_KEYS = ['type', 't_start', 'duration', 'params']
 
 # specific animations
-ANIMATION_FILL_SETUP_KEYS = ('color')
+ANIMATION_FILL_SETUP_KEYS = ['color']
 COLOR_KEYS = ('h', 's', 'v')
 
-specific_animation_parsers = {
-    'fill' : parse_animation_fill,
-}
+
 
 
 def parse_channel_setup(params):
@@ -39,7 +37,7 @@ def parse_channel_setup(params):
     if not all(isinstance(x, int) for x in indices):
         raise ValueError('active_indices field must contain only integers')
 
-    header = ChannelSetupHeader(strip_type=strip_type, active_indices=len(indices))
+    header = ChannelSetupHeader(strip_type=STRIP_TYPES[strip_type], len=len(indices))
     header_bytes = struct.pack("<BB", *header)
     msg = header_bytes + array.array('B', indices)
     return msg
@@ -69,7 +67,7 @@ def parse_animation(exec_time, seq_id, params):
     if duration < 0.0:
         raise ValueError('negative duration value')
 
-    header = AnimationSetupHeader(anim_id=seq_id, anim_type=anim_type,
+    header = AnimationSetupHeader(anim_id=seq_id, anim_type=ANIMATION_TYPES[anim_type],
                                   t_start=t_start, duration=duration)
     header_bytes = struct.pack('<HHdf', *header)
     specific_animation_parser = specific_animation_parsers[anim_type]
@@ -97,12 +95,17 @@ def parse_color_value(params):
     return msg_bytes
 
 
+specific_animation_parsers = {
+    'fill' : parse_animation_fill,
+}
+
+
 class Parser:
 
     def __init__(self):
         self.seq_id = 0
 
-    def parse(self, exec_time, plan_instructions):
+    def parse(self, exec_time, instructions):
         ''' parses an array of animation instructions.
             returns byte array ready to be sent over mqtt.
 
@@ -111,6 +114,22 @@ class Parser:
             plan_data: array of dictionaries to parse. dictionary key calls
                        the proper parser to its value.
             '''
+        msgs_bytes = []
+        for ins in instructions:
+            print(f'parsing: {ins}')
 
-        for plan in plan_data:
-            pass
+            msg_bytes = None
+            if 'setup' in ins:
+                msg_bytes = parse_channel_setup(ins['setup'])
+            elif 'animation' in ins:
+                msg_bytes = parse_animation(exec_time, self.seq_id, ins['animation'])
+                self.seq_id += 1
+                if self.seq_id == 65000:
+                    self.seq_id = 0
+            else:
+                raise ValueError('unknown instruction')
+
+            msgs_bytes.append(msg_bytes)
+
+        return msgs_bytes
+

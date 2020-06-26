@@ -2,10 +2,35 @@
 
 #include <cassert>
 #include <cerrno>
+#include <cstdarg>
 #include <cstdint>
 #include <cstdio>
 #include <ctime>
 #include <sys/time.h>
+
+#define MAX_UNIPRINTF_BUF  160
+
+#ifdef ARDUINO
+#include <Arduino.h>
+#endif
+
+
+static void uniprintf(const char *format, ...)
+{
+  char unibuf[MAX_UNIPRINTF_BUF];
+      
+  va_list args;
+  va_start (args, format);
+  vsnprintf(unibuf, sizeof(unibuf), format, args);
+  va_end(args);
+
+  #ifdef ARDUINO
+  Serial.println(unibuf);
+  #else
+  printf("%s\n", unibuf);
+  #endif
+}
+
 
 template <typename T>
 static void print_indexed_triplet(unsigned int idx, T a, T b, T c)

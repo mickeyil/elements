@@ -3,3 +3,4 @@
 */.idea/*
 .travis.yml
 *__pycache__*
+*.swp

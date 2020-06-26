@@ -29,6 +29,7 @@ class Strip
     uint8_t * dataptr() { return _buf; }
 
     strip_type_t type() const { return _strip_type; }
+    void set_type(strip_type_t strip_type) { _strip_type = strip_type; } 
 
     // direct access to pixel value
     const uint8_t& pixel(int pixel_index, pixel_color_t pixel_color) const;
