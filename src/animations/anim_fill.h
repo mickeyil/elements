@@ -11,6 +11,7 @@ typedef struct {
 class AnimationFill : public Animation
 {
   public:
+    AnimationFill() : _ppix_arr(nullptr) { }
     virtual ~AnimationFill() { }
     virtual void tear_down();
 

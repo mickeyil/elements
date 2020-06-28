@@ -120,7 +120,7 @@ int main(int argc, char* argv[])
 			const char *errstr = nullptr;
 
 			static char topic[160];
-			memcpy(topic, msg->get_topic().c_str(), msg->get_topic().size());
+			strncpy(topic, msg->get_topic().c_str(), 159);
 			static uint8_t payload_msg[160];
 			memcpy(payload_msg, msgstr.c_str(), msgstr.size());
 			
