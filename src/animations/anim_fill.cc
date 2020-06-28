@@ -4,12 +4,18 @@
 
 void AnimationFill::_setup(void *params, unsigned int size, PixelArray& pa)
 {
+  DPRINTF("AnimationFill::_setup(): params=%p size=%u", params, size);
   if (_ppix_arr == nullptr) {
+    DPRINTF("Creating new PixelArray.");
     _ppix_arr = new PixelArray(pa.len(), nullptr, nullptr);
   }
   
+  DPRINTF("AnimationFill::_setup(): copy indexing to pa.");
+
   // copy indexing from given pixel array
   _ppix_arr->copy_indexing(pa);
+  
+  DPRINTF("AnimationFill::_setup(): done copy indexing.");
 
   fill_params_t *fill_params = (fill_params_t*) params;
   color = fill_params->color.to_hsv_t();

@@ -11,7 +11,7 @@ typedef struct {
 } channel_setup_header_t;
 
 typedef struct {
-  int16_t id;
+  uint16_t id;
   int16_t anim_type;    // values are animation_type_t enum int values
 } anim_setup_header_t;
 

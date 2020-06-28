@@ -13,8 +13,9 @@ ANIMATION_TYPES = {
 
 CHANNEL_SETUP_KEYS = ['strip_type', 'active_indices']
 ChannelSetupHeader = namedtuple('ChannelSetupHeader', ['strip_type', 'len'])
-AnimationSetupHeader = namedtuple('AnimationSetupHeader',
-                                  ['anim_id', 'anim_type', 't_start', 'duration'])
+AnimationSetupHeader = namedtuple('AnimationSetupHeader', ['id', 'anim_type'])
+AnimationParamsHeader = namedtuple('AnimationParamsHeader',
+                                   ['t_start', 'duration'])
 
 ANIMATION_SETUP_KEYS = ['type', 't_start', 'duration', 'params']
 
@@ -67,9 +68,12 @@ def parse_animation(exec_time, seq_id, params):
     if duration < 0.0:
         raise ValueError('negative duration value')
 
-    header = AnimationSetupHeader(anim_id=seq_id, anim_type=ANIMATION_TYPES[anim_type],
-                                  t_start=t_start, duration=duration)
-    header_bytes = struct.pack('<HHdf', *header)
+    anim_setup_header = AnimationSetupHeader(id=seq_id, anim_type=ANIMATION_TYPES[anim_type])
+    setup_header_bytes = struct.pack('<Hh', *anim_setup_header)
+
+    anim_params_header = AnimationParamsHeader(t_start=t_start, duration=duration)
+    params_header_bytes = struct.pack('<df', *anim_params_header)
+    header_bytes = setup_header_bytes + params_header_bytes
     specific_animation_parser = specific_animation_parsers[anim_type]
 
     msg_bytes = header_bytes + specific_animation_parser(params['params'])

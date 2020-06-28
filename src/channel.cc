@@ -1,5 +1,6 @@
 #include <new>
 #include "channel.h"
+#include "utils.h"
 
 #ifdef DEBUG_HELPERS
 #include <cstdio>
@@ -50,9 +51,14 @@ void Channel::setup_channel(void* setup_data_buf, unsigned int size, const char 
   uint8_t len = header->len;
   uint8_t *strip_idx_arr = ((uint8_t*) setup_data_buf) + sizeof(channel_setup_header_t);
   
+  DPRINTF("setup_channel: len: %d, values: %s", len, arr2str(strip_idx_arr, len));
+
   // channel's PixelArray instance uses dynamic memory and copies the strip indices
   // from the given setup buffer. 
-  _ppix_arr = new PixelArray(len, nullptr, strip_idx_arr);
+  if (_ppix_arr == nullptr) {
+    _ppix_arr = new PixelArray(len, nullptr, strip_idx_arr);
+    assert(_ppix_arr != nullptr);
+  }
 
   // initialize pixelarray values to 0.0
   for (unsigned int i=0; i < len; i++) {
@@ -77,10 +83,13 @@ void Channel::add_animation(void* setup_data_buf, unsigned int size,  double t_a
     return;
   }
 
+  DPRINTF("%s", arr2str((uint8_t *)setup_data_buf, size, true));
+
   anim_setup_header_t *setup_header = (anim_setup_header_t*) setup_data_buf;
   anim_params_t *anim_params = (anim_params_t*)((uint8_t*) setup_data_buf + sizeof(anim_setup_header_t));
   double t_end = anim_params->t_start + anim_params->duration;
-  if (t_abs_now > t_end) {
+  DPRINTF("t_abs_now: %lf  t_end: %lf", t_abs_now, t_end);
+  if (t_abs_now > t_end && anim_params->duration > 0.0) {
     *errstr = "animation dropped: occurs in the past";
     return;
   }
@@ -94,6 +103,10 @@ void Channel::add_animation(void* setup_data_buf, unsigned int size,  double t_a
   }
 
   unsigned int params_buf_size = size - sizeof(anim_setup_header_t);
+  DPRINTF("data buf size: %u, sizeof(anim_setup_header_t): %u, animation->header_size(): %u",
+    size, (unsigned int) sizeof(anim_setup_header_t), animation->header_size());
+  DPRINTF("anim_params_t size: %u  fill_params_t: %u", (uint32_t) sizeof(anim_params_t),
+    (uint32_t) sizeof(fill_params_t));
   if (animation->header_size() != params_buf_size) {
     *errstr = "invalid animation params size";
     return;
@@ -142,7 +155,9 @@ Animation* Channel::create_animation(animation_type_t animation_type)
 
 void Channel::render(double t_abs_now, Strip& strip)
 {
-  assert(_ppix_arr != nullptr);
+  if(_ppix_arr == nullptr) {
+    return;   // nothing to render on an uninitialized channel
+  }
   timeline_cleanup(t_abs_now);
   
   for (unsigned int i = 0; i < _anim_timeline.size(); i++) {
@@ -159,6 +174,7 @@ void Channel::render(double t_abs_now, Strip& strip)
 void Channel::timeline_cleanup(double t_abs_now)
 {
   while (_anim_timeline.size() > 0) {
+    DPRINTF("timeline cleanup");
     Animation *a = _anim_timeline.peek_from_tail(0);
     if (a->state() == ANIMATION_STATE_DONE) {
       _anim_timeline.remove_last();

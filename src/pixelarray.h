@@ -1,9 +1,11 @@
 #pragma once
 
+#include <cassert>
 #include <cstdint>
 
 #include "colors.h"
 #include "strip.h"
+#include "utils.h"
 
 #ifdef DEBUG_HELPERS
 #include "debug_helpers.h"
@@ -33,10 +35,12 @@ class PixelArray
     }
 
     void copy_indexing(const PixelArray& other) {
-      if (_len != other._len) {
-        // FIXME: handle erros
-        return;
-      }
+      assert(_len == other._len);
+      // if (_len != other._len) {
+      //   // FIXME: handle erros
+      //   return;
+      // }
+      DPRINTF("self idxarr=%p other idxarr=%p", _strip_idx_arr, other._strip_idx_arr);
       for (unsigned int i = 0; i < _len; i++) {
         _strip_idx_arr[i] = other._strip_idx_arr[i];
       }

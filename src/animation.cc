@@ -4,6 +4,7 @@
 void Animation::setup(void *params, unsigned int size, PixelArray& pa)
 {
   anim_params_t *anim_params = reinterpret_cast<anim_params_t*>(params);
+  DPRINTF("Animation::setup(): params=%p size=%u", params, size);
   set_base_params(anim_params);
 
   // call specific subclass setup

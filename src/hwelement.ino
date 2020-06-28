@@ -1,3 +1,4 @@
+#include <cstdint>
 #include <ESP8266WiFi.h>
 #include <ESP8266mDNS.h>
 #include <WiFiUdp.h>
@@ -22,6 +23,7 @@
 #include "handlers.h"
 #include "element_topics.h"
 #include "syncedtime.h"
+#include "utils.h"
 
 handlers_t handlers;
 
@@ -35,7 +37,7 @@ const char* password = SECRET_WIFI_PASSWORD;
 // MQTT server address
 const char* mqtt_server = "192.168.5.5";
 const char* ntp_server = mqtt_server;
-const long utcOffsetInSeconds = 7200;
+const long utcOffsetInSeconds = 0;
 
 // setup an instance of MQTT client
 WiFiClient espClient;
@@ -47,16 +49,16 @@ SyncedTime *psynced_time = nullptr; // (&timeClient);
 
 // define payload message buffer
 #define MSG_BUFFER_SIZE  512
-char payload_msg[MSG_BUFFER_SIZE];
+alignas(8) uint8_t payload_msg[MSG_BUFFER_SIZE];
 
 // topic for publishing status
-String topic_status;
+// String topic_status;
 
 // topic pattern to subscribe to
-String topic_operate;
+// String topic_operate;
 
 // topic for publishing distance sensor reading
-String topic_distance;
+// String topic_distance;
 
 #define MAX_MQTT_CONNECTION_ATTEMPTS 12
 
@@ -115,10 +117,14 @@ void setup() {
   // start ntp client
   timeClient.begin();
   psynced_time = new SyncedTime(&timeClient);
+  psynced_time->sync();
   // synced_time.sync();
 
   // FastLED Related
   FastLED.addLeds<NEOPIXEL, 3>(rgb_array, RGB_ARRAY_SIZE);
+  DPRINTF("sizeof rgb_array=%u, RGB_ARRAY_SIZE*3=%u", (uint32_t) sizeof(rgb_array),
+    RGB_ARRAY_SIZE*3);
+  memset(rgb_array, 0, RGB_ARRAY_SIZE*3);
 
   // Animation related
   handlers.panim_mgr = &anim_mgr;
@@ -131,6 +137,8 @@ void setup() {
 
 void loop()
 {
+  static unsigned long render_millis = 0;
+
   if (!client.connected()) {
     mqtt_connect();
   }
@@ -139,13 +147,19 @@ void loop()
 
   unsigned long now = millis();
   loop_ticks += 1;
+  
+  if (now - render_millis > 100) { 
+    double render_ts_lf = psynced_time->get_time_lf();
+    handlers.panim_mgr->render(render_ts_lf);
+    FastLED.show();
+  }
 
-  if (now - last_ts > 300) {    
+  if (now - last_ts > 1000) {    
     last_ts = now;
     Serial.print("\n[");
     Serial.print(loop_ticks);
     Serial.print("] ");
-    psynced_time->sync();
+    // psynced_time->sync();
     double t_now_lf = psynced_time->get_time_lf();
     Serial.println(t_now_lf);
     loop_ticks = 0;
@@ -225,7 +239,8 @@ void callback(char* topic, byte* payload, unsigned int length) {
   Serial.print(topic);
   Serial.print("] size: ");
   Serial.println(length);
-  return;
+  memcpy(payload_msg, payload, length);
+
 #if 0
   // debug printing of the payload data
   for (int i = 0; i < length; i++) {
@@ -233,24 +248,14 @@ void callback(char* topic, byte* payload, unsigned int length) {
   }
   Serial.println();
 #endif
-  #if 0
-  timeClient.update();
-  Serial.print("tc milli: ");
-  Serial.print(timeClient.getEpochMSec());
-  Serial.print("  millis(): ");
-  Serial.println(millis());
-  double t_now = static_cast<double>(timeClient.getEpochTime()) 
-               + static_cast<double>(timeClient.getEpochMSec()) / 1000.0;
-  #endif
-  double t_now = 11.0;
-  // double t_now = synced_time.get_time_lf();
-  Serial.print("ts: ");
-  Serial.println(t_now);
+
+  double t_now = psynced_time->get_time_lf();
+  DPRINTF("mqtt callback. t_now: %lf", t_now);
   handlers.t_now = t_now;
 
   const char *errstr = nullptr;
   
-  process_request(topic, payload, length, handlers, &errstr);
+  process_request(topic, payload_msg, length, handlers, &errstr);
   if (errstr != nullptr) {
     Serial.print("error: ");
     Serial.println(errstr);

@@ -1,5 +1,7 @@
+#include <cassert>
 #include <cstdlib>
 
+#include "utils.h"
 #include "pixelarray.h"
 
 
@@ -7,15 +9,20 @@ PixelArray::PixelArray(uint8_t len, hsv_t* hsv_ptr, uint8_t* sia_ptr)
   : _hsv_array(hsv_ptr), _len(len), _strip_idx_arr(sia_ptr), _is_hsvarr_memown(false), 
     _is_idxarr_memown(false)
 {
+  DPRINTF("PixelArray::PixelArray(). New array of length %u. hsv_ptr=%p, sia_ptr=%p",
+    len, hsv_ptr, sia_ptr);
+
   // allocate memory if not provided
   // FIXME: handle memory allocation failures
   if (_hsv_array == nullptr) {
     _hsv_array = (hsv_t*) malloc(_len * sizeof(hsv_t));
+    assert(_hsv_array != nullptr);
     _is_hsvarr_memown = true;
   }
 
   if (_strip_idx_arr == nullptr) {
     _strip_idx_arr = (uint8_t*) malloc(_len*sizeof(uint8_t));
+    assert(_strip_idx_arr != nullptr);
     _is_idxarr_memown = true;
     
     // initialize default mapping

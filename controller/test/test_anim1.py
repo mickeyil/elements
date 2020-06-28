@@ -13,7 +13,11 @@ server_addr = "192.168.5.5"
 
 device_id = 'ESP-000B1277'
 client_id = f"i-testanim1-{random.randint(0, 1e8 - 1):08d}"
-topic_setup = f"elements/{device_id}/operate/animation/setup"
+
+topics = {
+    'setup' : f"elements/{device_id}/operate/animation/setup",
+    'animation' : f"elements/{device_id}/operate/animation/add"
+}
 
 logconfig.config_default_logger()
 
@@ -26,7 +30,9 @@ parser = Parser()
 
 msgs_bytes = parser.parse(time.time(), plans)
 
-for m in msgs_bytes:
+for i in range(len(msgs_bytes)):
+    m = msgs_bytes[i]
     print(get_hex_str(m))
-    publish.single(topic_setup, payload=m, qos=1, retain=False,
+    plan_type = list(plans[i].keys())[0]
+    publish.single(topics[plan_type], payload=m, qos=1, retain=False,
                    hostname=server_addr, client_id=client_id)

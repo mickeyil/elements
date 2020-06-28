@@ -4,6 +4,8 @@
 #include "colors.h"
 #include "pixelarray.h"
 
+#include "utils.h"
+
 #ifdef DEBUG_HELPERS
 #include <cstring>
 
@@ -20,7 +22,7 @@ typedef enum {
   ANIMATION_STATE_DONE,
 } animation_state_t;
 
-typedef struct {
+typedef struct __attribute__((__packed__)) {
     double t_start;    // time is epoch in seconds.millisec resolution
     float duration;
 } anim_params_t;
@@ -98,6 +100,8 @@ class Animation
 
     void set_base_params(anim_params_t *pparams) {
       _animation_params = *pparams;
+      DPRINTF("Animation::set_base_params(): t_start=%lf, duration=%f", 
+        _animation_params.t_start, _animation_params.duration);
     }
 
     #ifdef DEBUG_HELPERS
