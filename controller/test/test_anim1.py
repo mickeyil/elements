@@ -11,7 +11,8 @@ from lib.parser import Parser
 
 server_addr = "192.168.5.5"
 
-device_id = 'ESP-000B1277'
+#device_id = 'ESP-000B1277'
+device_id = 'SIM-00000001'
 client_id = f"i-testanim1-{random.randint(0, 1e8 - 1):08d}"
 
 topics = {

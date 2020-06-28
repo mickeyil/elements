@@ -3,8 +3,6 @@
 #include "topicparser.h"
 #include "utils.h"
 
-#include <Arduino.h>
-
 
 void process_operation(const TopicParser& tp, unsigned int topic_index, 
                        uint8_t* payload, unsigned int length, handlers_t& handlers, 
@@ -21,8 +19,7 @@ void cmd_animation_add(uint8_t* payload, unsigned int length, handlers_t& handle
 void  process_request(char* topic, uint8_t* payload, unsigned int length, 
   handlers_t& handlers, const char **errstr)
 {
-  Serial.print("request time: ");
-  Serial.println(handlers.t_now);
+  DPRINTF("request time: %lf", handlers.t_now);
 
   TopicParser tp(topic);
   const char *category = tp.get_topic_level(2);
