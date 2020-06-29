@@ -1,13 +1,13 @@
 - setup:
     strip_type: rgb
-    active_indices: [10, 11, 12, 13, 14]
+    active_indices: [10, 11, 12, 13, 14,20,21,22,23,24]
 - animation:
     type: fill
     t_start: 0.0
     duration: 0.0
     params:
       color:
-        h: 120
+        h: 20
         s: 255
         v: 0
 - animation:
@@ -16,16 +16,33 @@
     duration: 3.0
     params:
       color:
-        h: 120
+        h: 20
         s: 255
         v: 255
 - animation:
     type: fill
-    t_start: 60.0
-    duration: 0.0
+    t_start: 3.0
+    duration: 1.0
     params:
       color:
-        h: 120
+        h: 80
         s: 255
+        v: 255
+- animation:
+    type: fill
+    t_start: 4.0
+    duration: 1.0
+    params:
+      color:
+        h: 80
+        s: 128
+        v: 255
+- animation:
+    type: fill
+    t_start: 5.0
+    duration: 3.0
+    params:
+      color:
+        h: 80
+        s: 128
         v: 0
-

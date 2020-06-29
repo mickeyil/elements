@@ -9,9 +9,10 @@
 
 #define MAX_DPRINTF_BUF  160
 
-#ifdef ARDUINO
-#define DPRINTF(Format, ...) do {                                   \
-    char dbuf[MAX_DPRINTF_BUF];                                     \
+#ifdef DEBUG_HELPERS
+#  ifdef ARDUINO
+#    define DPRINTF(Format, ...) do {                                   \
+       char dbuf[MAX_DPRINTF_BUF];                                     \
     snprintf(dbuf, MAX_DPRINTF_BUF, (Format), ## __VA_ARGS__);      \
     Serial.println(dbuf);                                           \
   } while(0);
@@ -21,6 +22,9 @@
     snprintf(dbuf, MAX_DPRINTF_BUF, (Format), ## __VA_ARGS__);      \
     printf("%s\n",dbuf);                                           \
   } while(0);
+#endif
+#else
+#define DPRINTF
 #endif
 
 

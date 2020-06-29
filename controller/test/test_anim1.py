@@ -12,13 +12,24 @@ from lib.parser import Parser
 server_addr = "192.168.5.5"
 
 device_id = 'ESP-000B1277'
-#device_id = 'SIM-00000001'
-client_id = f"i-testanim1-{random.randint(0, 1e8 - 1):08d}"
+device_id2 = 'ESP-000B11DB'
+device_id3 = 'SIM-00000001'
 
+devices = [device_id, device_id2, device_id3]
+client_id = f"i-testanim1-{random.randint(0, 1e8 - 1):08d}"
 topics = {
-    'setup' : f"elements/{device_id}/operate/animation/setup",
-    'animation' : f"elements/{device_id}/operate/animation/add"
+    'setup' : [],
+    'animation' : [],
 }
+
+for did in devices:
+    topics['setup'].append(f"elements/{did}/operate/animation/setup")
+    topics['animation'].append(f"elements/{did}/operate/animation/add")
+
+#topics = {
+#    'setup' : f"elements/{device_id}/operate/animation/setup",
+#    'animation' : f"elements/{device_id}/operate/animation/add"
+#}
 
 logconfig.config_default_logger()
 
@@ -35,5 +46,6 @@ for i in range(len(msgs_bytes)):
     m = msgs_bytes[i]
     print(get_hex_str(m))
     plan_type = list(plans[i].keys())[0]
-    publish.single(topics[plan_type], payload=m, qos=1, retain=False,
-                   hostname=server_addr, client_id=client_id)
+    for topic in topics[plan_type]:
+        publish.single(topic, payload=m, qos=1, retain=False,
+            hostname=server_addr, client_id=client_id)

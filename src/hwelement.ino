@@ -148,7 +148,7 @@ void loop()
   unsigned long now = millis();
   loop_ticks += 1;
   
-  if (now - render_millis > 100) { 
+  if (now - render_millis > 20) { 
     double render_ts_lf = psynced_time->get_time_lf();
     handlers.panim_mgr->render(render_ts_lf);
     FastLED.show();

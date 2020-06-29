@@ -91,7 +91,19 @@ int main(int argc, char* argv[])
 		// Consume messages
 
 		while (true) {
-			auto msg = cli.consume_message();
+			//auto msg = cli.consume_message();
+			
+			mqtt::const_message_ptr msg;
+			bool is_msg_recv = cli.try_consume_message_for(&msg, std::chrono::milliseconds(1000));
+			if (!is_msg_recv) {
+				// "loop()"
+
+				double render_ts_lf = get_time_lf();
+				handlers.panim_mgr->render(render_ts_lf);
+
+				
+				continue;
+			}
 
 			if (!msg) {
 				if (!cli.is_connected()) {

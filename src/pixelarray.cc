@@ -1,7 +1,6 @@
 #include <cassert>
 #include <cstdlib>
 
-#include "utils.h"
 #include "pixelarray.h"
 
 
@@ -20,15 +19,20 @@ PixelArray::PixelArray(uint8_t len, hsv_t* hsv_ptr, uint8_t* sia_ptr)
     _is_hsvarr_memown = true;
   }
 
-  if (_strip_idx_arr == nullptr) {
-    _strip_idx_arr = (uint8_t*) malloc(_len*sizeof(uint8_t));
-    assert(_strip_idx_arr != nullptr);
-    _is_idxarr_memown = true;
-    
+  // TODO: eliminate those small frequent allocations
+  _strip_idx_arr = (uint8_t*) malloc(_len*sizeof(uint8_t));
+  assert(_strip_idx_arr != nullptr);
+  _is_idxarr_memown = true;
+
+  if (sia_ptr == nullptr) {  
     // initialize default mapping
     for (int i = 0; i < (int) _len; i++) {
       _strip_idx_arr[i] = i;
-    }  
+    } 
+  } else {
+    for (int i =0; i<len; i++) {
+      _strip_idx_arr[i] = sia_ptr[i];
+    }
   }
 }
 

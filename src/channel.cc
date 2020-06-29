@@ -158,6 +158,9 @@ void Channel::render(double t_abs_now, Strip& strip)
   if(_ppix_arr == nullptr) {
     return;   // nothing to render on an uninitialized channel
   }
+  #ifdef DEBUG_HELPERS
+  _ppix_arr->print();
+  #endif
   timeline_cleanup(t_abs_now);
   
   for (unsigned int i = 0; i < _anim_timeline.size(); i++) {
@@ -168,15 +171,19 @@ void Channel::render(double t_abs_now, Strip& strip)
   
   // write output to strip
   _ppix_arr->hsv_to_rgb_strip(strip);
+  #ifdef DEBUG_HELPERS
+  strip.print();
+  #endif
 }
 
 
 void Channel::timeline_cleanup(double t_abs_now)
 {
   while (_anim_timeline.size() > 0) {
-    DPRINTF("timeline cleanup");
     Animation *a = _anim_timeline.peek_from_tail(0);
     if (a->state() == ANIMATION_STATE_DONE) {
+      DPRINTF("timeline cleanup: removing %s");
+
       _anim_timeline.remove_last();
       a->tear_down();   // release resources taken by the animation instance
 
