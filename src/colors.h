@@ -10,6 +10,19 @@ struct hsv_t
 
   hsv_t() { }
   hsv_t(float _h, float _s, float _v) : h(_h), s(_s), v(_v) { }
+  
+  // accessor by channel number. h=0, s=1, v=2
+  float value_by_ch(unsigned int ch) const {
+    switch (ch) {
+      case 0:
+        return h;
+      case 1:
+        return s;
+      case 2:
+        return v;
+    }
+    return 0.0;
+  }
 };
 
 struct hsvu8_t

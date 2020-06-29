@@ -26,11 +26,14 @@ void Animation::render(float t_rel, PixelArray& pa)
     _first_activation(pa);
   }
 
-  // call specific class rendering
-  _render(t_rel, pa);
-  
   if (t_rel >= _animation_params.duration) {
     _state = ANIMATION_STATE_DONE;
+
+    // from the animation perspective, t_rel must never exceed duration time
+    t_rel = _animation_params.duration;
   }
+  
+  // call specific class rendering
+  _render(t_rel, pa);  
 }
 

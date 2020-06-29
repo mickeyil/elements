@@ -52,6 +52,9 @@ class PixelArray
 
     #ifdef DEBUG_HELPERS
     void print();
+
+    // pretty print horizontaly only selected indices
+    void pprint(double t_start, double t_abs_now, bool convert_to_rgb);
     #endif
 
   private:

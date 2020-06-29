@@ -43,6 +43,9 @@ void AnimationFill::_render(float t_rel, PixelArray& pa)
       pa[i].h = (*_ppix_arr)[i].h + alpha * (color.h - (*_ppix_arr)[i].h);
       pa[i].s = (*_ppix_arr)[i].s + alpha * (color.s - (*_ppix_arr)[i].s);
       pa[i].v = (*_ppix_arr)[i].v + alpha * (color.v - (*_ppix_arr)[i].v);
+      if (pa[i].h > 255.0 || pa[i].s > 255.0 || pa[i].v > 255.0) {
+        DPRINTF("overflow!\n");
+      }
     }
   }
 }

@@ -75,6 +75,12 @@ void PixelArray::hsv_to_rgb_strip(Strip& rgb_strip)
 
 
 #ifdef DEBUG_HELPERS
+static const char *color_space_str[2][3] = {
+  {"H", "S", "V"},
+  {"R", "G", "B"},
+};
+
+
 void PixelArray::print()
 {
   print_pa_title("H", "S", "V");
@@ -83,4 +89,52 @@ void PixelArray::print()
   }
   printf("\n");
 }
+
+
+void PixelArray::pprint(double t_start, double t_abs_now, bool convert_to_rgb)
+{
+  unsigned int cs_select;
+  if (convert_to_rgb) {
+    cs_select = 1;
+  } else {
+    cs_select = 0;
+  }
+
+  printf("T+%5.3lf  (%.3lf)\n", t_start, t_abs_now);
+  printf("   ");
+  // print title
+  for (unsigned int i = 0; i < _len; i++) {
+    printf("%3d ", _strip_idx_arr[i]);
+  }
+  printf("\n   ");
+  for (unsigned int i = 0; i < _len; i++) {
+    printf("=== ");
+  }
+  printf("\n");
+
+  for (unsigned int ch = 0; ch < 3; ch++) {
+    printf("%s: ", color_space_str[cs_select][ch]);
+    for (unsigned int i = 0; i < _len; i++) {
+      unsigned int print_val;
+      int hsv[3];
+      hsv[0] = static_cast<int>(_hsv_array[i].h);
+      hsv[1] = static_cast<int>(_hsv_array[i].s);
+      hsv[2] = static_cast<int>(_hsv_array[i].v);
+      
+      if (convert_to_rgb) {
+        uint8_t rgb[3];
+        hsv2rgb(hsv[0], hsv[1], hsv[2], rgb[0], rgb[1], rgb[2]);
+        print_val = rgb[ch];
+      } else {
+        print_val = hsv[ch];
+      }
+      
+      printf("%3d ", print_val);
+    }
+    printf("\n");
+  }
+  printf("\n");
+  fflush(stdout);
+}
+
 #endif

@@ -18,6 +18,9 @@
 
 Channel::Channel(SlotsMM *p_smm) :
   _ppix_arr(nullptr), _anim_timeline(ANIM_TIMELINE_MAX), _p_smm(p_smm)
+  #ifdef DEBUG_HELPERS
+  , dbg_t_start(0.0)
+  #endif
 {
 
 }
@@ -122,6 +125,12 @@ void Channel::add_animation(void* setup_data_buf, unsigned int size,  double t_a
   #endif
 
   insert_to_timeline(animation, t_abs_now, true);
+
+  #ifdef DEBUG_HELPERS
+  if (_anim_timeline.size() == 1) {
+    dbg_t_start = animation->t_start();
+  }
+  #endif
 }
 
 
@@ -158,9 +167,7 @@ void Channel::render(double t_abs_now, Strip& strip)
   if(_ppix_arr == nullptr) {
     return;   // nothing to render on an uninitialized channel
   }
-  #ifdef DEBUG_HELPERS
-  _ppix_arr->print();
-  #endif
+
   timeline_cleanup(t_abs_now);
   
   for (unsigned int i = 0; i < _anim_timeline.size(); i++) {
@@ -172,7 +179,9 @@ void Channel::render(double t_abs_now, Strip& strip)
   // write output to strip
   _ppix_arr->hsv_to_rgb_strip(strip);
   #ifdef DEBUG_HELPERS
-  strip.print();
+  if (_anim_timeline.size() > 0) {
+    _ppix_arr->pprint(t_abs_now - dbg_t_start, t_abs_now, false);
+  }
   #endif
 }
 
@@ -182,7 +191,8 @@ void Channel::timeline_cleanup(double t_abs_now)
   while (_anim_timeline.size() > 0) {
     Animation *a = _anim_timeline.peek_from_tail(0);
     if (a->state() == ANIMATION_STATE_DONE) {
-      DPRINTF("timeline cleanup: removing %s");
+      DPRINTF("timeline cleanup: removing animation with start,duration: %lf, %f",
+        a->t_start(), a->duration());
 
       _anim_timeline.remove_last();
       a->tear_down();   // release resources taken by the animation instance

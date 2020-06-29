@@ -37,6 +37,7 @@ class Strip
 
     #ifdef DEBUG_HELPERS
     void print();
+    const char * get_channel_str(unsigned int ch) const;
     #endif
 
   private:

@@ -5,6 +5,11 @@ static int offsets[2][3] = {
   {2, 1, 0},  // BGR
 };
 
+static const char *channel_str[2][3] = {
+  {"R", "G", "B"},
+  {"B", "G", "R"},
+};
+
 
 const uint8_t& Strip::pixel(int pixel_index, pixel_color_t pixel_color) const
 {
@@ -20,6 +25,7 @@ uint8_t& Strip::pixel(int pixel_index, pixel_color_t pixel_color)
 {
   return const_cast<uint8_t&>(const_cast<const Strip*>(this)->pixel(pixel_index, pixel_color));
 }
+
 
 #ifdef DEBUG_HELPERS
 void Strip::print()
@@ -45,4 +51,13 @@ void Strip::print()
   }
   printf("\n");
 }
+
+
+const char * Strip::get_channel_str(unsigned int ch) const
+{
+  assert(0 <= ch && ch < 3);
+  return channel_str[static_cast<int>(_strip_type)][ch];
+}
+
+
 #endif

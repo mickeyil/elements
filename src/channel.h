@@ -59,4 +59,10 @@ class Channel
     PixelArray *_ppix_arr;  // dynamically allocated
     FixedDeque<Animation*>  _anim_timeline;
     SlotsMM *_p_smm;
+
+    #ifdef DEBUG_HELPERS
+    // time the timeline started populating with animations - for debug prints.
+    // resets everytime the timeline empties and repopulates.
+    double dbg_t_start;
+    #endif
 };
