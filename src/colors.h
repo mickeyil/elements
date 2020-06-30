@@ -25,7 +25,7 @@ struct hsv_t
   }
 };
 
-struct hsvu8_t
+struct __attribute__((__packed__)) hsvu8_t
 {
   uint8_t h;
   uint8_t s;

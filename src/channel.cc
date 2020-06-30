@@ -180,7 +180,7 @@ void Channel::render(double t_abs_now, Strip& strip)
   _ppix_arr->hsv_to_rgb_strip(strip);
   #ifdef DEBUG_HELPERS
   if (_anim_timeline.size() > 0) {
-    _ppix_arr->pprint(t_abs_now - dbg_t_start, t_abs_now, false);
+    _ppix_arr->pprint(t_abs_now - dbg_t_start, t_abs_now, true);
   }
   #endif
 }

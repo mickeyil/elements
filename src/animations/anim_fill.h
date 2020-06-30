@@ -3,7 +3,8 @@
 #include "animation.h"
 
 
-typedef struct {
+typedef struct __attribute__((__packed__)) {
+  float slope;
   hsvu8_t color;
 } fill_params_t;
 
@@ -34,15 +35,22 @@ class AnimationFill : public Animation
     virtual const char * str() const
     {
       static char sbuf[MAX_DESCRIBE_STR];
-      snprintf(sbuf, MAX_DESCRIBE_STR, "Fill [HSV = (%3.1f,%3.1f,%3.1f)",
-        color.h, color.s, color.v);
+      snprintf(sbuf, MAX_DESCRIBE_STR, "Fill [FG = (%u,%u,%u) slope=%.3f]",
+        _params.color.h, _params.color.s, _params.color.v, _params.slope);
       return sbuf;
     }
     #endif
 
   private:
-    hsv_t color;
+
+    void f_activation_linear(hsv_t& pix_out, float t, const hsv_t& fg, const hsv_t& bg);
+
+    fill_params_t _params;
     PixelArray *_ppix_arr;
+
+    // cache of values used in rendering
+    hsv_t _color;
+    float _slope_coeff;   // 1 / slope
 };
 
 static_assert(sizeof(AnimationFill) <= MAX_ANIMATION_MEM, "new MAX_ANIMATION_MEM value is needed.");

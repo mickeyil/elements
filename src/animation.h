@@ -29,7 +29,7 @@ typedef struct __attribute__((__packed__)) {
 
 // maximum amount of memory usage for Animation class and subclasses.
 // Through this constant 
-#define MAX_ANIMATION_MEM 64
+#define MAX_ANIMATION_MEM 96
 
 static const char* animation_state_str(animation_state_t state)
 {

@@ -6,6 +6,7 @@
     t_start: 0.0
     duration: 0.0
     params:
+      slope: 0.0
       color:
         h: 20
         s: 255
@@ -15,6 +16,7 @@
     t_start: 0.0
     duration: 3.0
     params:
+      slope: 0.0
       color:
         h: 20
         s: 255
@@ -24,6 +26,7 @@
     t_start: 3.0
     duration: 1.0
     params:
+      slope: 0.0
       color:
         h: 80
         s: 255
@@ -33,6 +36,7 @@
     t_start: 4.0
     duration: 1.0
     params:
+      slope: 0.0
       color:
         h: 80
         s: 128
@@ -42,6 +46,7 @@
     t_start: 5.0
     duration: 3.0
     params:
+      slope: 0.0
       color:
         h: 80
         s: 128

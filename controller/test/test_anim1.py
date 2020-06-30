@@ -15,7 +15,9 @@ device_id = 'ESP-000B1277'
 device_id2 = 'ESP-000B11DB'
 device_id3 = 'SIM-00000001'
 
-devices = [device_id, device_id2, device_id3]
+#devices = [device_id, device_id2, device_id3]
+devices = [device_id2, device_id3]
+
 client_id = f"i-testanim1-{random.randint(0, 1e8 - 1):08d}"
 topics = {
     'setup' : [],
@@ -33,7 +35,8 @@ for did in devices:
 
 logconfig.config_default_logger()
 
-YAML_FILE = '/home/mickey/dev/elements/controller/test/lights_on.yml'
+#YAML_FILE = '/home/mickey/dev/elements/controller/test/lights_on.yml'
+YAML_FILE = '/home/mickey/dev/elements/controller/test/runway.yml'
 with open(YAML_FILE, 'r') as f:
     plans_file = f.read()
 
