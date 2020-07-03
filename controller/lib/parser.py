@@ -16,12 +16,12 @@ ChannelSetupHeader = namedtuple('ChannelSetupHeader', ['strip_type', 'len'])
 AnimationSetupHeader = namedtuple('AnimationSetupHeader', ['id', 'anim_type'])
 AnimationParamsHeader = namedtuple('AnimationParamsHeader',
                                    ['t_start', 'duration'])
-AnimationFillParams = namedtuple('AnimationFillParams', 'slope')
+AnimationFillParams = namedtuple('AnimationFillParams', ['slope', 'speed_factor'])
 
 ANIMATION_SETUP_KEYS = ['type', 't_start', 'duration', 'params']
 
 # specific animations
-ANIMATION_FILL_SETUP_KEYS = ['color', 'slope']
+ANIMATION_FILL_SETUP_KEYS = ['color', 'slope', 'speed_factor']
 COLOR_KEYS = ('h', 's', 'v')
 
 
@@ -84,12 +84,13 @@ def parse_animation(exec_time, seq_id, params):
 def parse_animation_fill(params):
     if not all(key in params for key in ANIMATION_FILL_SETUP_KEYS):
         raise ValueError('missing mandatory keys.')
-    fill_params_header = AnimationFillParams(slope=params['slope'])
+    fill_params_header = AnimationFillParams(slope=params['slope'],
+                                             speed_factor=params['speed_factor'])
 
     color = params['color']
     color_bytes = parse_color_value(color)
 
-    fill_header_bytes = struct.pack('<f', *fill_params_header) + color_bytes
+    fill_header_bytes = struct.pack('<ff', *fill_params_header) + color_bytes
     return fill_header_bytes
 
 

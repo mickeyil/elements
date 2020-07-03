@@ -24,6 +24,7 @@ void AnimationFill::_setup(void *params, unsigned int size, PixelArray& pa)
   
   _color = _params.color.to_hsv_t();
   _slope_coeff = -1.0 / _params.slope;
+  _time_coeff = _params.speed_factor / duration();
 }
 
 
@@ -52,7 +53,7 @@ void AnimationFill::_render(float t_rel, PixelArray& pa)
       }
     } else {
       for (unsigned int i =0; i < pa.len(); i++) {
-        float t = static_cast<float>(i)/(pa.len()-1) - t_rel / duration();
+        float t = static_cast<float>(i)/(pa.len()-1) - t_rel * _time_coeff;
         f_activation_linear(pa[i], t, _color, (*_ppix_arr)[i]);
       }
     }

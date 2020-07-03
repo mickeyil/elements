@@ -7,27 +7,41 @@
     duration: 0.0
     params:
       slope: 0.0
+      speed_factor: 1.0
       color:
-        h: 0
+        h: 50
         s: 255
-        v: 10
+        v: 50
 - animation:
     type: fill
-    t_start: 1.0
-    duration: 6.0
+    t_start: 3.0
+    duration: 4.0
     params:
       slope: 5.0
+      speed_factor: 1.2
       color:
-        h: 0
-        s: 0
+        h: 50
+        s: 180
         v: 255
 - animation:
     type: fill
-    t_start: 10.0
-    duration: 1.0
+    t_start: 13.0
+    duration: 3.0
     params:
       slope: 0.0
+      speed_factor: 1.0
       color:
-        h: 0
-        s: 0
-        v: 0
+        h: 50
+        s: 255
+        v: 120
+- animation:
+    type: fill
+    t_start: 20.0
+    duration: 3.0
+    params:
+      slope: 0.0
+      speed_factor: 1.0
+      color:
+        h: 50
+        s: 255
+        v: 50

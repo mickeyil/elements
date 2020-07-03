@@ -11,12 +11,13 @@ from lib.parser import Parser
 
 server_addr = "192.168.5.5"
 
-device_id = 'ESP-000B1277'
+#device_id = 'ESP-000B1277'
+device_id = 'ESP-000DC374'
 device_id2 = 'ESP-000B11DB'
 device_id3 = 'SIM-00000001'
 
-#devices = [device_id, device_id2, device_id3]
-devices = [device_id2, device_id3]
+devices = [device_id, device_id2, device_id3]
+#devices = [device_id, device_id3]
 
 client_id = f"i-testanim1-{random.randint(0, 1e8 - 1):08d}"
 topics = {

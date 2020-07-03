@@ -5,6 +5,7 @@
 
 typedef struct __attribute__((__packed__)) {
   float slope;
+  float speed_factor;
   hsvu8_t color;
 } fill_params_t;
 
@@ -51,6 +52,7 @@ class AnimationFill : public Animation
     // cache of values used in rendering
     hsv_t _color;
     float _slope_coeff;   // 1 / slope
+    float _time_coeff;    // speed_coeff / duration
 };
 
 static_assert(sizeof(AnimationFill) <= MAX_ANIMATION_MEM, "new MAX_ANIMATION_MEM value is needed.");

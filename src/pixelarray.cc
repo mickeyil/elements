@@ -69,6 +69,7 @@ void PixelArray::hsv_to_rgb_strip(Strip& rgb_strip)
     int hue = static_cast<int>(_hsv_array[i].h);
     int sat = static_cast<int>(_hsv_array[i].s);
     int val = static_cast<int>(_hsv_array[i].v);
+    
     hsv2rgb(hue, sat, val, r, g, b);
   }
 }

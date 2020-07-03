@@ -78,7 +78,7 @@ unsigned long last_ts = 0;
 
 // LEDs related
 // define CRGB array - FastLED's r,g,b (u8) array for writing signal to LED strip
-#define RGB_ARRAY_SIZE        150
+#define RGB_ARRAY_SIZE        50
 CRGB rgb_array[RGB_ARRAY_SIZE];
 
 // Animation Manager operates directly on the RGB buffer and manages all animation

@@ -1,4 +1,5 @@
 #pragma once
+#include <cstring>
 
 #define MAX_TOPIC_LEN 128
 #define MAX_TOPIC_DEPTH 16
