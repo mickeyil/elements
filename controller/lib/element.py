@@ -6,6 +6,7 @@ from collections import namedtuple
 SENSOR_TYPES = {
     'distance'  : 0,
     'button'    : 1,
+    'freeheap'  : 2,
 }
 
 SENSOR_INTERVAL_MIN_MS = 20
@@ -14,7 +15,7 @@ SENSOR_INTERVAL_MAX_MS = 10000
 DPIN_MIN = 0
 DPIN_MAX = 10
 
-SENSOR_SETUP_KEYS = ['type', 'min_interval_ms', 'publish_raw', 'params']
+SENSOR_SETUP_KEYS = ['type', 'min_interval_ms', 'publish_raw']
 DISTANCE_PARAMS_KEYS = ['trig_dpin', 'echo_dpin']
 
 SensorSetupHeader = namedtuple('SensorSetupHeader',
@@ -63,7 +64,10 @@ def parse_sensor_config(params, sensor_id):
                                      publish_raw=params['publish_raw'])
 
     setup_header_bytes = struct.pack('<HHHH', *setup_header)
-    return setup_header_bytes + specific_sensor_parsers[params['type']](params['params'])
+    if 'params' in params.keys():
+        return setup_header_bytes + specific_sensor_parsers[params['type']](params['params'])
+    else:
+        return setup_header_bytes
 
 
 class Element:

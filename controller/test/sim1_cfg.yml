@@ -5,3 +5,7 @@
     params:
         trig_dpin: 6
         echo_dpin: 7
+- sensor:
+    type: freeheap
+    min_interval_ms: 5000
+    publish_raw: 1

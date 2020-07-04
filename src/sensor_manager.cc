@@ -4,6 +4,7 @@
 #include "sensor_manager.h"
 #include "sensor.h"
 #include "sensors/distance.h"
+#include "sensors/freeheap.h"
 
 #include "utils.h"
 
@@ -17,6 +18,10 @@ static Sensor* create_sensor(sensor_type_t sensor_type)
       sensor = new SensorDistance;
       break;
     
+    case SENSOR_TYPE_FREEHEAP:
+      sensor = new SensorFreeHeap;
+      break;
+      
     default:
       return nullptr;
   }

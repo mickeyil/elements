@@ -35,10 +35,11 @@ static const char* dev_pin_map_str[11] = {
 typedef enum {
     SENSOR_TYPE_DISTANCE = 0,
     SENSOR_TYPE_BUTTON,
+    SENSOR_TYPE_FREEHEAP,
 } sensor_type_t;
 
 static const char *sensor_types_str[] = {
-  "distance HC-SR04", "button"
+  "distance HC-SR04", "button", "free heap"
 };
 
 typedef struct __attribute__((__packed__)) {
