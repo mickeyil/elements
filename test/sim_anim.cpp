@@ -13,10 +13,13 @@
 #include "mqtt/client.h"
 
 #include "src/animation_manager.h"
+#include "src/sensor_manager.h"
 #include "src/handlers.h"
 #include "src/utils.h"
 #include "src/debug_helpers.h"
 #include "src/requests.h"
+#include "element_topics.h"
+#include "publisher.h"
 
 using namespace std;
 using namespace std::chrono;
@@ -44,9 +47,10 @@ bool try_reconnect(mqtt::client& cli)
 }
 
 /////////////////////////////////////////////////////////////////////////////
-
+// static values
 #define RGB_ARRAY_SIZE 150
 uint8_t rgb_array[RGB_ARRAY_SIZE*3];
+SensorManager *psnsmgr;
 
 AnimationManager anim_mgr((uint8_t*) rgb_array, RGB_ARRAY_SIZE);
 handlers_t handlers;
@@ -56,12 +60,14 @@ ElementTopics topics;
 int main(int argc, char* argv[])
 {
 	// setup
+	psnsmgr = new SensorManager(&handlers);
+
 	memset(rgb_array, 0, RGB_ARRAY_SIZE*3);
 	topics.set_chipid("SIM-00000001");
   
 	handlers.ptopics = &topics;
   handlers.panim_mgr = &anim_mgr;
-
+	handlers.psensor_mgr = psnsmgr;
 
 	// ***************
 	mqtt::connect_options connOpts;
@@ -69,10 +75,10 @@ int main(int argc, char* argv[])
 	connOpts.set_clean_session(true);
 
 	mqtt::client cli(SERVER_ADDRESS, CLIENT_ID);
+	Publisher publisher(cli);
+	handlers.publisher = &publisher;
 
 	const string TOPIC("elements/SIM-00000001/operate/#");
-	//const vector<string> TOPICS { "elements/SIM-00000001/operate/#" };
-	//const vector<int> QOS { 0, 1 };
 
 	try {
 		cout << "Connecting to the MQTT server..." << flush;
@@ -99,8 +105,9 @@ int main(int argc, char* argv[])
 				// "loop()"
 
 				double render_ts_lf = get_time_lf();
+				unsigned long t_millis = static_cast<unsigned long>((render_ts_lf - 1593800000.0)* 1000.0); 
 				handlers.panim_mgr->render(render_ts_lf);
-
+				handlers.psensor_mgr->process_sensors(t_millis);
 				
 				continue;
 			}

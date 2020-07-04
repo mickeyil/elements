@@ -4,6 +4,7 @@
 #include "utils.h"
 
 #include "op_animation.h"
+#include "op_sensor.h"
 
 void process_operation(const TopicParser& tp, unsigned int topic_index, 
                        uint8_t* payload, unsigned int length, handlers_t& handlers, 
@@ -42,13 +43,10 @@ void process_operation(const TopicParser& tp, unsigned int topic_index,
     operation_handler_animation(tp, 4, payload, length, handlers, errstr);
   } 
   
-  #if 0
-  if (strncmp(operation, "sensors", MAXSTRLEN_OPERATION) == 0 ) {
+  else if (strncmp(operation, "sensors", MAXSTRLEN_OPERATION) == 0 ) {
     operation_supported = true;
-    Serial.println("operation sensors");
-    operation_handler_sensors(tp, 4, payload, length);
+    operation_handler_sensor(tp, 4, payload, length, handlers, errstr);
   }
-  #endif
   
   if (!operation_supported) {
     *errstr = "unsupported operation";

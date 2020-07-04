@@ -24,9 +24,9 @@ void hsv2rgb(int hue, int sat, int val, uint8_t& r_out, uint8_t& g_out, uint8_t&
 {
   // http://www.kasperkamperman.com/blog/arduino/arduino-programming-hsb-to-rgb/
   
-  int r;
-  int g;
-  int b;
+  int r=255;
+  int g=255;
+  int b=255;
 
   int base;
 

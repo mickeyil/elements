@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 #include "handlers.h"
 
@@ -19,19 +20,29 @@ static const uint8_t D9   = 99;
 static const uint8_t D10  = 100;
 #endif
 
-static const char* strpin_map[11] = {
+// dev_pin_map array is used for translating D<N> pins to their D defined value.
+// i.e.: pin with value 8 will get the value set by D8 #define in Arduino.h.
+static const uint8_t dev_pin_map[11] = {
+  D0, D1, D2, D3, D4, D5, D6, D7, D8, D9, D10 
+};
+
+static const char* dev_pin_map_str[11] = {
   "D0", "D1", "D2", "D3", "D4", "D5", "D6", "D7", "D8", "D9", "D10", 
 };
 
 #define PUBLISH_RAW_TOPIC_LEN 64
 
 typedef enum {
-    SENSOR_TYPE_BUTTON = 1000,
-    SENSOR_TYPE_DISTANCE,
+    SENSOR_TYPE_DISTANCE = 0,
+    SENSOR_TYPE_BUTTON,
 } sensor_type_t;
 
+static const char *sensor_types_str[] = {
+  "distance HC-SR04", "button"
+};
 
 typedef struct __attribute__((__packed__)) {
+    uint16_t sensor_type;
     uint16_t id;    // sensor id to allow more than one on the same device
     uint16_t min_interval_ms;   // min interval between two process() calls in milliseconds.
 
@@ -58,6 +69,15 @@ class Sensor
     // it's done within this function.
     void process(unsigned long t_now_ms, handlers_t& handlers);
   
+    virtual uint32_t header_size() const = 0;
+
+    unsigned int id() const { return _sensor_params.id; }
+    
+    const char * typestr() const 
+    { 
+      return sensor_types_str[(uint16_t) _sensor_params.sensor_type]; 
+    }
+    
   protected:
 
     // specific sensor setup function, called by setup()

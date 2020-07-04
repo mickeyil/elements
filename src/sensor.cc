@@ -1,6 +1,8 @@
 #include <cassert>
 #include <cstring>
 
+#include "element_topics.h"
+#include "publisher.h"
 #include "sensor.h"
 #include "utils.h"
 
@@ -14,9 +16,9 @@ Sensor::Sensor() : _last_ts(0), _publish_raw_counter(1)
 
 void Sensor::setup(void *params, unsigned int size, handlers_t& handlers)
 {
-  assert(sizeof(sensor_params_t) == size);
+  assert(header_size() == size);
 
-  memcpy(&_sensor_params, params, size);
+  memcpy(&_sensor_params, params, sizeof(sensor_params_t));
   
   // prepare topic string if needed
   if (_sensor_params.publish_raw > 0) {
@@ -51,8 +53,8 @@ void Sensor::process(unsigned long t_now_ms, handlers_t& handlers)
       // call specific publish_raw to get pointer and size of payload
       const char *raw_cstr = _publish_raw();
       
-      if (handlers.publish_func != nullptr) {
-        handlers.publish_func(_publish_raw_topic, raw_cstr);
+      if (handlers.publisher != nullptr) {
+        handlers.publisher->publish(_publish_raw_topic, raw_cstr);
       }
     }
   }

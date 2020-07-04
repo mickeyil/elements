@@ -1,6 +1,7 @@
+#include "animation_manager.h"
 #include "requests.h"
 #include "op_animation.h"
-
+#include "utils.h"
 
 void cmd_animation_setup(uint8_t* payload, unsigned int length, handlers_t& handlers, 
                          const char **errstr);

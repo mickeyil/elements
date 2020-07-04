@@ -22,6 +22,8 @@
 // handler_t struct
 #include "handlers.h"
 #include "element_topics.h"
+#include "animation_manager.h"
+#include "sensor_manager.h"
 #include "syncedtime.h"
 #include "utils.h"
 
