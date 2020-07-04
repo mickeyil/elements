@@ -18,7 +18,7 @@ server_addr = "192.168.5.5"
 device_id_3 = 'ESP-000DC374'
 device_id_sim = 'SIM-00000001'
 mclient = MClient(server_addr)
-sim = Element(device_id_3, mclient)
+sim = Element(device_id_sim, mclient)
 
 cfg_file = '/home/mickey/dev/elements/controller/test/sim1_cfg.yml'
 with open(cfg_file, 'r') as f:
