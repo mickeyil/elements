@@ -56,10 +56,10 @@ void SensorDistance::_setup(void *params, unsigned int size)
   memcpy(&_params, params, sizeof(dist_params_t));
 
   DPRINTF("_setup(): distance sensor will use: %s pin for trigger, %s pin for echo.",
-    dev_pin_map_str[_params.trigger_pindnum], dev_pin_map_str[_params.echo_pindnum]);
+    dev_pin_map_str[_params.trigger_dpin], dev_pin_map_str[_params.echo_dpin]);
 
-  _trig_pin = dev_pin_map[_params.trigger_pindnum];
-  _echo_pin = dev_pin_map[_params.echo_pindnum];
+  _trig_pin = dev_pin_map[_params.trigger_dpin];
+  _echo_pin = dev_pin_map[_params.echo_dpin];
   initialize_sensor_pins(_trig_pin, _echo_pin);
 }
 

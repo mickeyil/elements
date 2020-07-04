@@ -50,7 +50,7 @@ typedef struct __attribute__((__packed__)) {
     // the raw sensor reading to elemenes/<chip_id>/sensors/<id>/raw
     // example: publish_raw = 10 and min_interval_ms = 100 will cause a publish
     //          of raw reading every 1 second.
-    uint8_t  publish_raw;
+    uint16_t  publish_raw;
 } sensor_params_t;
 
 

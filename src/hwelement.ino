@@ -26,6 +26,7 @@
 #include "sensor_manager.h"
 #include "syncedtime.h"
 #include "utils.h"
+#include "publisher.h"
 
 handlers_t handlers;
 
@@ -87,6 +88,7 @@ CRGB rgb_array[RGB_ARRAY_SIZE];
 // requests.
 AnimationManager anim_mgr((uint8_t*) rgb_array, RGB_ARRAY_SIZE);
 
+SensorManager *psensor_mgr = nullptr;
 
 void setup() {
 
@@ -132,10 +134,13 @@ void setup() {
   handlers.panim_mgr = &anim_mgr;
 
   // sensor related
-  // If this device is a sensor sending periodic readouts, type is set.
-  // sensor_type = SENSOR_NOT_AVAILABLE;
+  psensor_mgr = new SensorManager(&handlers);
+  handlers.psensor_mgr = psensor_mgr;
 
+  static Publisher publisher(client);
+  handlers.publisher = &publisher;
 }
+
 
 void loop()
 {
@@ -154,6 +159,13 @@ void loop()
     double render_ts_lf = psynced_time->get_time_lf();
     handlers.panim_mgr->render(render_ts_lf);
     FastLED.show();
+  }
+
+  unsigned long before_sensors = millis();
+  handlers.psensor_mgr->process_sensors(now);
+  unsigned long after_sensors = millis();
+  if (after_sensors - before_sensors > 10) {
+    DPRINTF("warning: large sensor processing time: %lu", after_sensors-before_sensors);
   }
 
   if (now - last_ts > 1000) {    

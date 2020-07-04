@@ -8,8 +8,8 @@
 
 
 typedef struct __attribute__((__packed__)) {
-  uint8_t trigger_pindnum;    // pin connected to trigger
-  uint8_t echo_pindnum;       // pin connected to echo   
+  uint8_t trigger_dpin;    // pin connected to trigger
+  uint8_t echo_dpin;       // pin connected to echo   
 } dist_params_t;
 
 
