@@ -66,5 +66,9 @@ void SensorDistance::_setup(void *params, unsigned int size)
 
 void SensorDistance::_process(handlers_t& handlers)
 {
+  if (_trig_pin == SENSOR_UNINITIALIZED_PIN ||
+      _echo_pin == SENSOR_UNINITIALIZED_PIN) {
+    return;
+  }
   _distance_cm = sensor_read_cm(_trig_pin, _echo_pin);
 }

@@ -30,6 +30,8 @@ static const char* dev_pin_map_str[11] = {
   "D0", "D1", "D2", "D3", "D4", "D5", "D6", "D7", "D8", "D9", "D10", 
 };
 
+#define SENSOR_UNINITIALIZED_PIN  99
+
 #define PUBLISH_RAW_TOPIC_LEN 64
 
 typedef enum {

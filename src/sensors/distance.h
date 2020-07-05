@@ -4,7 +4,6 @@
 #include <cstdio>
 
 #include "sensor.h"
-#include "sample.h"
 
 
 typedef struct __attribute__((__packed__)) {
@@ -16,7 +15,8 @@ typedef struct __attribute__((__packed__)) {
 class SensorDistance : public Sensor {
   
   public:
-    SensorDistance() : _trig_pin(0), _echo_pin(0) { }
+    SensorDistance() :  _trig_pin(SENSOR_UNINITIALIZED_PIN), 
+                        _echo_pin(SENSOR_UNINITIALIZED_PIN) { }
     virtual ~SensorDistance() { }
     
     virtual uint32_t header_size() const {
