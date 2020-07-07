@@ -4,3 +4,4 @@
 .travis.yml
 *__pycache__*
 *.swp
+src/secrets.h
