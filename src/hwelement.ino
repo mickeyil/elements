@@ -7,7 +7,7 @@
 #include <PubSubClient.h>
 
 #define FASTLED_ESP8266_DMA
-#include "FastLED/FastLED.h"
+#include "FastLED.h"
 
 // route requests for device by topic
 #include "requests.h"
