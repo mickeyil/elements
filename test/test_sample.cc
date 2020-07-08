@@ -2,13 +2,13 @@
 #include <cstdio>
 #include <cassert>
 #include <iostream>
-#include "sample.h"
+#include "sampling_window.h"
 
-template <typename T, int N>
-void print_samples(const Sample<T, N>& sample)
+template <typename T>
+void print_samples(const SamplingWindow<T>& sample)
 {
   std::cout << "print samples: ";
-  for (int i = 0; i < N; i++) {
+  for (unsigned int i = 0; i < sample.size(); i++) {
     std::cout << sample.get_item(i) << " ";
   }
   std::cout << std::endl;
@@ -16,7 +16,7 @@ void print_samples(const Sample<T, N>& sample)
 
 int main()
 {
-  Sample<int, 15> sample(0);
+  SamplingWindow<int> sample(15, 0);
   print_samples(sample);
   sample.sample(9);
   print_samples(sample);
