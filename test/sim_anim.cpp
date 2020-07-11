@@ -14,6 +14,7 @@
 
 #include "src/animation_manager.h"
 #include "src/sensor_manager.h"
+#include "src/event_manager.h"
 #include "src/handlers.h"
 #include "src/utils.h"
 #include "src/debug_helpers.h"
@@ -48,9 +49,10 @@ bool try_reconnect(mqtt::client& cli)
 
 /////////////////////////////////////////////////////////////////////////////
 // static values
-#define RGB_ARRAY_SIZE 150
+#define RGB_ARRAY_SIZE 50
 uint8_t rgb_array[RGB_ARRAY_SIZE*3];
-SensorManager *psnsmgr;
+SensorManager *psnsmgr = nullptr;
+EventManager *pevent_mgr = nullptr;
 
 AnimationManager anim_mgr((uint8_t*) rgb_array, RGB_ARRAY_SIZE);
 handlers_t handlers;
@@ -61,6 +63,7 @@ int main(int argc, char* argv[])
 {
 	// setup
 	psnsmgr = new SensorManager(&handlers);
+	pevent_mgr = new EventManager(&handlers);
 
 	memset(rgb_array, 0, RGB_ARRAY_SIZE*3);
 	topics.set_chipid("SIM-00000001");
@@ -68,6 +71,7 @@ int main(int argc, char* argv[])
 	handlers.ptopics = &topics;
   handlers.panim_mgr = &anim_mgr;
 	handlers.psensor_mgr = psnsmgr;
+	handlers.pevent_mgr = pevent_mgr;
 
 	// ***************
 	mqtt::connect_options connOpts;
@@ -108,6 +112,7 @@ int main(int argc, char* argv[])
 				unsigned long t_millis = static_cast<unsigned long>((render_ts_lf - 1593800000.0)* 1000.0); 
 				handlers.panim_mgr->render(render_ts_lf);
 				handlers.psensor_mgr->process_sensors(t_millis);
+				handlers.pevent_mgr->process_events(render_ts_lf);
 				
 				continue;
 			}

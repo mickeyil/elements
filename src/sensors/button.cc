@@ -60,4 +60,5 @@ void SensorButton::_process(handlers_t& handlers)
     return;
   }
   _state = sensor_read(_button_pin);
+  _val_as_int = static_cast<int16_t>(_state);
 }

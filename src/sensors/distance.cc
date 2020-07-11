@@ -71,4 +71,6 @@ void SensorDistance::_process(handlers_t& handlers)
     return;
   }
   _distance_cm = sensor_read_cm(_trig_pin, _echo_pin);
+
+  _val_as_int = static_cast<int16_t>(_distance_cm);
 }

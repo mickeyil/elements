@@ -14,6 +14,8 @@ class SensorManager
     void add_sensor(void* setup_data_buf, unsigned int size, const char **errstr);
 
     void process_sensors(unsigned long t_now_ms);
+
+    Sensor* get_sensor(unsigned int idx);
   private:
 
     Sensor* _sensors[MAX_SENSORS];

@@ -22,6 +22,23 @@ class SamplingWindow
     }
   }
 
+
+  T get_last_item() const
+  {
+    int idx = static_cast<int>(_head);
+    // head points to the next place to populate with a value
+    idx--;
+    
+    // circular buffer: may need to get to the end of the array for previous
+    // value
+    if (idx < 0) {
+      idx = _samples.size() - 1;
+    }
+
+    return _samples[idx];
+  }
+
+
   // returns the number of items in the sample window that are between low and high
   // looks no further than history_window elements (default: all sample window)
   unsigned int items_within_range(T low, T high, unsigned int history_window)
@@ -50,23 +67,33 @@ class SamplingWindow
     return iwr;
   }
 
+
   unsigned int items_within_range(T low, T high)
   {
     return items_within_range(low, high, _samples.size());
   }
 
+
   T get_median(int history) const
   {
     unsigned int N = _samples.size();
-    if (history > N) {
+    if ((unsigned int) history > N) {
       history = N;
     }
 
     // copy samples to a temporary array for median algorithm (modifies in place)
     std::vector<T> temp_samples(_samples);
 
+    // FIXME: BUG: history wraps on circular buffer
+    assert((unsigned int) history == _samples.size());   // remove when fixed
     return median(&temp_samples[0], history);
   }
+
+
+  T get_median() const {
+    return get_median(_samples.size());
+  }
+
 
   // for debugging/testing
   T get_item(unsigned int idx) const { return _samples[idx]; }

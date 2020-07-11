@@ -34,6 +34,7 @@ class SensorFreeHeap : public Sensor {
     virtual void _process(handlers_t& handlers)
     {
       _free_heap = get_free_heap();
+      _val_as_int = static_cast<int16_t>(_free_heap);
     }
 
     virtual const char * _publish_raw()

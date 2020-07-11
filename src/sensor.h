@@ -2,6 +2,7 @@
 #include <cstdint>
 
 #include "handlers.h"
+#include "sampling_window.h"
 
 #ifdef ARDUINO
 #include <Arduino.h>
@@ -46,7 +47,7 @@ static const char *sensor_types_str[] = {
 
 typedef struct __attribute__((__packed__)) {
     uint16_t sensor_type;
-    uint16_t id;    // sensor id to allow more than one on the same device
+    uint16_t id;    // sensor id enables using more than one sensor on the same device
     uint16_t min_interval_ms;   // min interval between two process() calls in milliseconds.
 
     // non zero publish_raw will cause a publish once in a #publish_raw times of
@@ -54,6 +55,11 @@ typedef struct __attribute__((__packed__)) {
     // example: publish_raw = 10 and min_interval_ms = 100 will cause a publish
     //          of raw reading every 1 second.
     uint16_t  publish_raw;
+
+    // sampling window size. 0 to disable.
+    // sampling window enables events with condition based on noise filtering techniques
+    // such as taking median value and majority votes (confidence).
+    uint8_t sampling_window;
 } sensor_params_t;
 
 
@@ -81,7 +87,10 @@ class Sensor
       return sensor_types_str[(uint16_t) _sensor_params.sensor_type]; 
     }
     
+    int16_t val_as_int() const { return _val_as_int; }
+    
   protected:
+    int16_t _val_as_int;
 
     // specific sensor setup function, called by setup()
     virtual void _setup(void *params, unsigned int size) = 0;

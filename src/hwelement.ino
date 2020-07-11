@@ -24,6 +24,7 @@
 #include "element_topics.h"
 #include "animation_manager.h"
 #include "sensor_manager.h"
+#include "event_manager.h"
 #include "syncedtime.h"
 #include "utils.h"
 #include "publisher.h"
@@ -89,6 +90,7 @@ CRGB rgb_array[RGB_ARRAY_SIZE];
 AnimationManager anim_mgr((uint8_t*) rgb_array, RGB_ARRAY_SIZE);
 
 SensorManager *psensor_mgr = nullptr;
+EventManager *pevent_mgr = nullptr;
 
 void setup() {
 
@@ -135,7 +137,9 @@ void setup() {
 
   // sensor related
   psensor_mgr = new SensorManager(&handlers);
+  pevent_mgr = new EventManager(&handlers);
   handlers.psensor_mgr = psensor_mgr;
+  handlers.pevent_mgr = pevent_mgr;
 
   static Publisher publisher(client);
   handlers.publisher = &publisher;

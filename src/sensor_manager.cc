@@ -87,3 +87,12 @@ void SensorManager::process_sensors(unsigned long t_now_ms)
     _sensors[i]->process(t_now_ms, *_phandlers);
   }
 }
+
+
+Sensor* SensorManager:: get_sensor(unsigned int idx)
+{
+  if (idx >= _size) {
+    return nullptr;
+  }
+  return _sensors[idx];
+}

@@ -1,4 +1,5 @@
 #include <cassert>
+#include <cstdio>
 #include <cstring>
 
 #include "element_topics.h"
@@ -7,7 +8,7 @@
 #include "utils.h"
 
 
-Sensor::Sensor() : _last_ts(0), _publish_raw_counter(1)
+Sensor::Sensor() : _val_as_int(0), _last_ts(0), _publish_raw_counter(1)
 { 
   bzero(&_sensor_params, sizeof(sensor_params_t));
   bzero(_publish_raw_topic, PUBLISH_RAW_TOPIC_LEN);
