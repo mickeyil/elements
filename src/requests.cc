@@ -5,6 +5,7 @@
 
 #include "op_animation.h"
 #include "op_sensor.h"
+#include "op_event.h"
 
 void process_operation(const TopicParser& tp, unsigned int topic_index, 
                        uint8_t* payload, unsigned int length, handlers_t& handlers, 
@@ -48,10 +49,14 @@ void process_operation(const TopicParser& tp, unsigned int topic_index,
     operation_handler_sensor(tp, 4, payload, length, handlers, errstr);
   }
   
+  else if (strncmp(operation, "events", MAXSTRLEN_OPERATION) == 0 ) {
+    operation_supported = true;
+    operation_handler_event(tp, 4, payload, length, handlers, errstr);
+  }
+  
   if (!operation_supported) {
     *errstr = "unsupported operation";
     return;
   }
 }
-
 

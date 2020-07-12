@@ -26,26 +26,34 @@ void EventRange::_setup(const void *params, unsigned int size)
 
 bool EventRange::_condition(SamplingWindow<int16_t> *p_sampling_window)
 {
+  #if 0
   int val;
-  if (p_sampling_window->size()>2) {
+  if (p_sampling_window->size()>1) {
     val = p_sampling_window->get_median();
   } else {
     val = p_sampling_window->get_last_item();
   }
+  #endif
 
   bool confidence_factor = false;
-  if (p_sampling_window->size() > 1 && _range_params.confidence < 1.0) {
-    assert(_range_params.confidence > 0.0);   // FIXME: check when event registers
+  if (p_sampling_window->size() > 1) {
+    assert(_range_params.confidence > 0.0 && _range_params.confidence <= 1.0);   // FIXME: check when event registers
     int votes_threshold = static_cast<int>(_range_params.confidence * p_sampling_window->size());
     int votes = p_sampling_window->items_within_range(_range_params.min, _range_params.max);
     if (votes >= votes_threshold) {
       confidence_factor = true;
     }
   } else {
-    confidence_factor = true;
+    confidence_factor = true;   // rely on cond value
   }
 
-  bool cond = in_range((uint16_t) val, _range_params.min, _range_params.max);
+  bool cond = false;
+  if (p_sampling_window->size() > 1) {
+    cond = true;    // rely on confidence factor
+  } else {
+    int val = p_sampling_window->get_last_item();
+    cond = in_range((uint16_t) val, _range_params.min, _range_params.max);
+  }
 
   return cond && confidence_factor;
 }

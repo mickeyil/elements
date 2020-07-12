@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdio>
 #include <vector>
 
 // for calculating median
@@ -20,6 +21,14 @@ class SamplingWindow
     if (_head == _samples.size()) {
       _head = 0;
     }
+    #ifdef DEBUG_HELPERS
+    printf("++ sampling window: ");
+    for (unsigned int i = 0; i < size(); i++) {
+      printf("%d ", get_item(i));
+    }
+    printf("\n");
+    fflush(stdout);
+    #endif
   }
 
 
@@ -101,9 +110,9 @@ class SamplingWindow
   unsigned int size() const { return _samples.size(); }
 
   private:
-  std::vector<T> _samples;
+    std::vector<T> _samples;
   
-  // head is the offset of the next place to populate in the ring buffer
-  unsigned int _head;
+    // head is the offset of the next place to populate in the ring buffer
+    unsigned int _head;
 
 };

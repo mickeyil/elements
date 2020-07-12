@@ -79,7 +79,14 @@ void EventManager::add_event(void* setup_data_buf, unsigned int size, const char
 void EventManager::process_events(double t_abs_now)
 {
   for (unsigned int i = 0; i < _size; i++) {
-    assert(_events[i] != nullptr);
-    _events[i]->process(t_abs_now, *_phandlers);
+    Event *event = _events[i];
+    assert(event != nullptr);
+    unsigned long sample_time = event->last_sample_time();
+    event->sample_sensor(*_phandlers);
+    
+    // process event only if sampling window contains new data
+    if (event->last_sample_time() != sample_time) {
+      event->process(t_abs_now, *_phandlers);
+    }
   }
 }

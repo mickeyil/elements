@@ -31,7 +31,10 @@ static int sensor_read_cm(uint8_t trig_pin, uint8_t echo_pin)
 }
 #else
 static const int sim_distance_values[] = {
-  55, 66, 77, 88
+  13, 13, 13, 13, 13, 55, 66, 77, 88,
+  // 55, 66, 77, 88, 23, 23, 23, 23, 23, 23, 23, 23, 23, 
+  // 66, 66, 66, 66, 66, 66, 66, 66, 66, 66, 66, 66, 66, 
+  // 12, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 
 };
 
 static void initialize_sensor_pins(uint8_t trig_pin, uint8_t echo_pin)

@@ -15,11 +15,12 @@ SENSOR_INTERVAL_MAX_MS = 10000
 DPIN_MIN = 0
 DPIN_MAX = 10
 
-SENSOR_SETUP_KEYS = ['type', 'min_interval_ms', 'publish_raw']
+SENSOR_SETUP_KEYS = ['type', 'min_interval_ms', 'publish_raw', 'sampling_window']
 DISTANCE_PARAMS_KEYS = ['trig_dpin', 'echo_dpin']
 
 SensorSetupHeader = namedtuple('SensorSetupHeader',
-                               ['sensor_type', 'id', 'min_interval_ms', 'publish_raw'])
+                               ['sensor_type', 'id', 'min_interval_ms', 'publish_raw',
+                                'sampling_window'])
 SensorDistanceParams = namedtuple('SensorDistanceParams', ['trig_dpin', 'echo_dpin'])
 
 
@@ -44,6 +45,7 @@ specific_sensor_parsers = {
 }
 
 
+
 def parse_sensor_config(params, sensor_id):
     if not all(key in params for key in SENSOR_SETUP_KEYS):
         raise ValueError('missing mandatory keys.')
@@ -61,9 +63,10 @@ def parse_sensor_config(params, sensor_id):
     setup_header = SensorSetupHeader(sensor_type=SENSOR_TYPES[params['type']],
                                      id=sensor_id,
                                      min_interval_ms=params['min_interval_ms'],
-                                     publish_raw=params['publish_raw'])
+                                     publish_raw=params['publish_raw'],
+                                     sampling_window=params['sampling_window'])
 
-    setup_header_bytes = struct.pack('<HHHH', *setup_header)
+    setup_header_bytes = struct.pack('<HHHHB', *setup_header)
     if 'params' in params.keys():
         return setup_header_bytes + specific_sensor_parsers[params['type']](params['params'])
     else:

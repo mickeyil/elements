@@ -101,10 +101,9 @@ int main(int argc, char* argv[])
 		// Consume messages
 
 		while (true) {
-			//auto msg = cli.consume_message();
 			
 			mqtt::const_message_ptr msg;
-			bool is_msg_recv = cli.try_consume_message_for(&msg, std::chrono::milliseconds(20));
+			bool is_msg_recv = cli.try_consume_message_for(&msg, std::chrono::milliseconds(100));
 			if (!is_msg_recv) {
 				// "loop()"
 

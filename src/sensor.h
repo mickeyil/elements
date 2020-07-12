@@ -89,6 +89,9 @@ class Sensor
     
     int16_t val_as_int() const { return _val_as_int; }
     
+    // last sensor processing timestamp
+    unsigned long get_last_ts() const { return _last_ts; }
+
   protected:
     int16_t _val_as_int;
 
