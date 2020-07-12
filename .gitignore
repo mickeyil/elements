@@ -6,3 +6,4 @@
 *.swp
 src/secrets.h
 *.vscode*
+bin/*
