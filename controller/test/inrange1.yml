@@ -1,11 +1,11 @@
 - event:
     event_type: in_range
     sensor_id: 0
-    suppress_time: 5.0
+    suppress_time: 0.5
     polarity: 1
-    sampling_window_size: 5
+    sampling_window_size: 6
     topic: "in_range"
     params:
         min: 50
         max: 80
-        confidence: 0.7
+        confidence: 0.5

@@ -159,8 +159,8 @@ void loop()
   unsigned long now = millis();
   loop_ticks += 1;
   
+  double render_ts_lf = psynced_time->get_time_lf();
   if (now - render_millis > 20) { 
-    double render_ts_lf = psynced_time->get_time_lf();
     handlers.panim_mgr->render(render_ts_lf);
     FastLED.show();
   }
@@ -168,6 +168,8 @@ void loop()
   unsigned long before_sensors = millis();
   handlers.psensor_mgr->process_sensors(now);
   unsigned long after_sensors = millis();
+  handlers.pevent_mgr->process_events(render_ts_lf);
+
   if (after_sensors - before_sensors > 10) {
     DPRINTF("warning: large sensor processing time: %lu", after_sensors-before_sensors);
   }

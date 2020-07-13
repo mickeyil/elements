@@ -20,7 +20,7 @@ server_addr = "192.168.5.5"
 device_id_3 = 'ESP-000B1277'
 device_id_sim = 'SIM-00000001'
 mclient = MClient(server_addr)
-sim = Element(device_id_sim, mclient)
+sim = Element(device_id_3, mclient)
 
 cfg_file = '/home/mickey/dev/elements/controller/test/sim1_cfg.yml'
 with open(cfg_file, 'r') as f:
@@ -35,6 +35,6 @@ with open(event_file, 'r') as f:
 event_add_bytes = parse_event_config(event_cfg[0]['event'], 510)
 
 print(get_hex_str(event_add_bytes))
-topic = f'elements/{device_id_sim}/operate/events/add'
+topic = f'elements/{device_id_3}/operate/events/add'
 
 mclient.publish(topic, event_add_bytes, 1, False)

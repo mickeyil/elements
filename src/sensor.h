@@ -2,7 +2,6 @@
 #include <cstdint>
 
 #include "handlers.h"
-#include "sampling_window.h"
 
 #ifdef ARDUINO
 #include <Arduino.h>
@@ -56,10 +55,6 @@ typedef struct __attribute__((__packed__)) {
     //          of raw reading every 1 second.
     uint16_t  publish_raw;
 
-    // sampling window size. 0 to disable.
-    // sampling window enables events with condition based on noise filtering techniques
-    // such as taking median value and majority votes (confidence).
-    uint8_t sampling_window;
 } sensor_params_t;
 
 

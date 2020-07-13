@@ -50,6 +50,7 @@ void Event::sample_sensor(handlers_t& handlers)
 
 void Event::process(double t_abs_now, handlers_t& handlers)
 {
+  DPRINTF("Event::process()");
   bool cond = _condition(_p_samping_window);
   if (_event_params.polarity == 0) {
     cond = !cond;

@@ -1,8 +1,7 @@
 - sensor:
     type: distance
-    min_interval_ms: 250
-    publish_raw: 1
-    sampling_window: 9
+    min_interval_ms: 60
+    publish_raw: 0
     params:
         trig_dpin: 6
         echo_dpin: 7
