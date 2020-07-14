@@ -12,8 +12,6 @@
 // route requests for device by topic
 #include "requests.h"
 
-//#include "sensors.h"
-
 // This file contains the #define statements for SECRET_* constants and should
 // not be uploaded to GitHub / src code repo.
 #include "secrets.h"
@@ -55,15 +53,7 @@ SyncedTime *psynced_time = nullptr; // (&timeClient);
 #define MSG_BUFFER_SIZE  512
 alignas(8) uint8_t payload_msg[MSG_BUFFER_SIZE];
 
-// topic for publishing status
-// String topic_status;
-
-// topic pattern to subscribe to
-// String topic_operate;
-
-// topic for publishing distance sensor reading
-// String topic_distance;
-
+// maximum number of reconnection attempts before a reboot is initiated
 #define MAX_MQTT_CONNECTION_ATTEMPTS 12
 
 // Element topics is a helper for getting full mqtt topics in elements formatting.
@@ -124,7 +114,6 @@ void setup() {
   timeClient.begin();
   psynced_time = new SyncedTime(&timeClient);
   psynced_time->sync();
-  // synced_time.sync();
 
   // FastLED Related
   FastLED.addLeds<NEOPIXEL, 3>(rgb_array, RGB_ARRAY_SIZE);
@@ -179,18 +168,11 @@ void loop()
     Serial.print("\n[");
     Serial.print(loop_ticks);
     Serial.print("] ");
-    // psynced_time->sync();
+    // psynced_time->sync();    // FIXME: accuracy issues bug when this is enabled.
     double t_now_lf = psynced_time->get_time_lf();
     Serial.println(t_now_lf);
     loop_ticks = 0;
   }
-
-  #if 0
-  if (sensor_type != SENSOR_NOT_AVAILABLE) {
-    process_sensor(sensor_type, client, now, topic_distance);
-  }
-  #endif
-
 }
 
 
@@ -261,14 +243,6 @@ void callback(char* topic, byte* payload, unsigned int length) {
   Serial.println(length);
   memcpy(payload_msg, payload, length);
 
-#if 0
-  // debug printing of the payload data
-  for (int i = 0; i < length; i++) {
-    Serial.print((char)payload[i]);
-  }
-  Serial.println();
-#endif
-
   double t_now = psynced_time->get_time_lf();
   DPRINTF("mqtt callback. t_now: %lf", t_now);
   handlers.t_now = t_now;
@@ -286,5 +260,3 @@ void callback(char* topic, byte* payload, unsigned int length) {
   Serial.print("callback process time [ms]: ");
   Serial.println(t_e-t_s);
 }
-
-
