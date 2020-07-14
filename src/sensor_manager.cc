@@ -58,18 +58,23 @@ void SensorManager::add_sensor(void* setup_data_buf, unsigned int size, const ch
   sensor_params_t sensor_params;
   memcpy(&sensor_params, setup_data_buf, sizeof(sensor_params_t));
 
-  // verify there's not already a sensor with the same id
+  // if sensor id already exists, reinitialize it.
+  Sensor * sensor = nullptr;
   for (unsigned int i = 0; i < _size; i++) {
     if (_sensors[i]->id() == sensor_params.id) {
-      *errstr = "sensor id exists";
-      return;
+      sensor = _sensors[i];
+      DPRINTF("reinitializing sensor %u", sensor->id());
+      break;
     }
   }
 
-  Sensor * sensor = create_sensor(static_cast<sensor_type_t>(sensor_params.sensor_type));
+  // no existing id was found, create a new instance
   if (sensor == nullptr) {
-    *errstr = "create_sensor() failed: invalid sensor type";
-    return;
+    sensor = create_sensor(static_cast<sensor_type_t>(sensor_params.sensor_type));
+    if (sensor == nullptr) {
+      *errstr = "create_sensor() failed: invalid sensor type";
+      return;
+    }
   }
 
   _sensors[_size] = sensor;

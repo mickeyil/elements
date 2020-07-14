@@ -55,17 +55,22 @@ void EventManager::add_event(void* setup_data_buf, unsigned int size, const char
   memcpy(&event_params, setup_data_buf, sizeof(event_params_t));
 
   // verify there's not already a sensor with the same id
+  Event* event = nullptr;
   for (unsigned int i = 0; i < _size; i++) {
     if (_events[i]->id() == event_params.event_id) {
-      *errstr = "event id already exists";
-      return;
+      event = _events[i];
+      DPRINTF("reinitializing event: %u", event->id());
+      break;
     }
   }
 
-  Event* event = create_event(static_cast<event_type_t>(event_params.event_type));
+  // no existing id was found, create a new instance
   if (event == nullptr) {
-    *errstr = "create_sensor() failed: invalid sensor type";
-    return;
+    event = create_event(static_cast<event_type_t>(event_params.event_type));
+    if (event == nullptr) {
+      *errstr = "create_sensor() failed: invalid sensor type";
+      return;
+    }
   }
 
   _events[_size] = event;

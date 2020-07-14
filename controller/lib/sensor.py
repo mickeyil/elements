@@ -3,6 +3,8 @@ import struct
 from lib.utils import get_hex_str
 from collections import namedtuple
 
+import logging
+
 SENSOR_TYPES = {
     'distance'  : 0,
     'button'    : 1,
@@ -71,7 +73,7 @@ def parse_sensor_config(params, sensor_id):
         return setup_header_bytes
 
 
-class Element:
+class Sensor:
     def __init__(self, device_id, mclient):
         self.device_id = device_id
         self.mclient = mclient
@@ -87,4 +89,4 @@ class Element:
                 print(get_hex_str(cfg_msg))
 
                 topic = f'elements/{self.device_id}/operate/sensors/add'
-                self.mclient.publish(topic, cfg_msg, 1, retain=True)
+                self.mclient.publish(topic, cfg_msg, 1, retain=False)

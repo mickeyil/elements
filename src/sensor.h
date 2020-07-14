@@ -63,6 +63,9 @@ class Sensor
   public:
 
     Sensor();
+    
+    // initialize sensor object
+    void init();
     virtual ~Sensor() { }
 
     // sensor setup

@@ -1,0 +1,9 @@
+event_type: in_range
+suppress_time: 3.0
+polarity: 1
+sampling_window_size: 6
+topic: "in_range"
+params:
+    min: 50
+    max: 90
+    confidence: 0.5

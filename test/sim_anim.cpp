@@ -103,7 +103,7 @@ int main(int argc, char* argv[])
 		while (true) {
 			
 			mqtt::const_message_ptr msg;
-			bool is_msg_recv = cli.try_consume_message_for(&msg, std::chrono::milliseconds(100));
+			bool is_msg_recv = cli.try_consume_message_for(&msg, std::chrono::milliseconds(250));
 			if (!is_msg_recv) {
 				// "loop()"
 
@@ -148,6 +148,7 @@ int main(int argc, char* argv[])
 			memcpy(payload_msg, msgstr.c_str(), msgstr.size());
 			
 			unsigned int length = msgstr.size();
+			DPRINTF("received msg: topic: %s size: %lu", topic, msgstr.size());
   		process_request(topic, payload_msg, length, handlers, &errstr);
   		if (errstr != nullptr) {
     		DPRINTF("error: %s", errstr);

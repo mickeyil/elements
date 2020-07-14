@@ -8,8 +8,17 @@
 #include "utils.h"
 
 
-Sensor::Sensor() : _val_as_int(0), _last_ts(0), _publish_raw_counter(1)
+Sensor::Sensor()
 { 
+  init();
+}
+
+
+void Sensor::init()
+{
+  _val_as_int = 0;
+  _last_ts = 0;
+  _publish_raw_counter = 1;
   bzero(&_sensor_params, sizeof(sensor_params_t));
   bzero(_publish_raw_topic, PUBLISH_RAW_TOPIC_LEN);
 }
@@ -18,7 +27,7 @@ Sensor::Sensor() : _val_as_int(0), _last_ts(0), _publish_raw_counter(1)
 void Sensor::setup(void *params, unsigned int size, handlers_t& handlers)
 {
   assert(header_size() == size);
-
+  init();
   memcpy(&_sensor_params, params, sizeof(sensor_params_t));
   
   // prepare topic string if needed

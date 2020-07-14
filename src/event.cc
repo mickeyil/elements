@@ -23,7 +23,16 @@ void Event::setup(const void *params, unsigned int size, handlers_t& handlers)
     _event_params.report_topic_len);
   _report_topic = std::string(handlers.ptopics->get_full_topic(stopic.c_str()));
   
-  _p_samping_window = new SamplingWindow<int16_t>(_event_params.sampling_window_size, 0);
+  if (_p_samping_window == nullptr) {
+    _p_samping_window = new SamplingWindow<int16_t>(_event_params.sampling_window_size, 0);
+  } else {
+    if (_event_params.sampling_window_size != _p_samping_window->size()) {
+      DPRINTF("sampling window resize: %u -> %u", _p_samping_window->size(),
+        _event_params.sampling_window_size);
+      delete _p_samping_window;
+      _p_samping_window = new SamplingWindow<int16_t>(_event_params.sampling_window_size, 0);
+    }
+  }
 
   DPRINTF("Event::setup(): params=%p size=%u", params, size);
 
