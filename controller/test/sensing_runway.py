@@ -29,11 +29,16 @@ sensor = Sensor(device_id, mclient)
 # configure sensor(s) on device
 cfg_file = '/home/mickey/dev/elements/controller/test/sim1_cfg.yml'
 with open(cfg_file, 'r') as f:
-    cfg = yaml.load(f.read())
+    cfg = yaml.safe_load(f.read())
 
 event_params_file = '/home/mickey/dev/elements/controller/test/inrange2.yml'
 with open(event_params_file, 'r') as f:
-    event_cfg = yaml.load(f.read())
+    event_cfg = yaml.safe_load(f.read())
 
 event_approaching = Event.create_event("in_range", 510, sensor.sensor_id, event_cfg, print_cb, "my prefix")
-print(event_approaching)
+print(get_hex_str(event_approaching.compile()))
+
+# next:
+# add some kind of event manager, connecting event parameters with a sensor instance
+# resolve meaning of sensor at sensor class. It actually configures multiple sensors.
+# design animation class?

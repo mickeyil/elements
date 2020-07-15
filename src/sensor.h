@@ -47,7 +47,7 @@ static const char *sensor_types_str[] = {
 typedef struct __attribute__((__packed__)) {
     uint16_t sensor_type;
     uint16_t id;    // sensor id enables using more than one sensor on the same device
-    uint16_t min_interval_ms;   // min interval between two process() calls in milliseconds.
+    uint16_t sample_inverval_ms;   // min interval between two process() calls in milliseconds.
 
     // non zero publish_raw will cause a publish once in a #publish_raw times of
     // the raw sensor reading to elemenes/<chip_id>/sensors/<id>/raw

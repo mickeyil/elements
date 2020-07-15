@@ -27,7 +27,6 @@
 #define DPRINTF
 #endif
 
-
 static const char * arr2str(uint8_t *arr, unsigned int len, bool hex=false)
 {
   static char sbuf[MAX_DPRINTF_BUF];

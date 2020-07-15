@@ -1,4 +1,5 @@
 #include <cassert>
+#include <cstdio>
 #include <cstring>
 
 #include "event.h"
@@ -19,8 +20,9 @@ void Event::setup(const void *params, unsigned int size, handlers_t& handlers)
 
   const char * p_topic = static_cast<const char *>(params) + sizeof(event_params_t);
   
-  std::string stopic = std::string("events/") + std::string(p_topic, p_topic + 
-    _event_params.report_topic_len);
+  char num_buf[16];
+  snprintf(num_buf, 16, "%d", _event_params.event_id);
+  std::string stopic = std::string("events/") + std::string(num_buf);
   _report_topic = std::string(handlers.ptopics->get_full_topic(stopic.c_str()));
   
   if (_p_samping_window == nullptr) {

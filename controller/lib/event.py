@@ -4,38 +4,27 @@ import struct
 from abc import ABC, abstractmethod
 from collections import namedtuple
 
-from lib.utils import get_hex_str
+from lib.utils import get_hex_str, is_in_range, validate_all_exist
 
 # limits
 SUPPRESS_TIME_RANGE = [0.0, 10000.0]
-POLARITY_VALUES = [0,1]
+POLARITY_VALUES = [0, 1]
 SAMPLING_WINDOW_RANGE = [1, 64]
 
-
 EVENT_TYPES = {
-    'in_range'  : 0,
+    'in_range': 0,
 }
 
 # event header members that will are parsed to binary members.
-# note: order matters here!
-EVENT_HEADER_MEMBERS = ['event_type', 'event_id',  'sensor_id', 'suppress_time', 'polarity',
-                    'sampling_window_size', 'report_topic_len']
+# note: order must match the c++ struct order.
+EVENT_HEADER_MEMBERS = ['event_type', 'event_id', 'sensor_id', 'suppress_time', 'polarity',
+                        'sampling_window_size', 'report_topic_len']
 
 # mandatory keys that need to appear in params
-EVENT_MANDATORY_KEYS = list(set(EVENT_HEADER_MEMBERS) - set(['event_id', 'report_topic_len', 'sensor_id'])) \
-                        + ['topic', 'params']
+EVENT_MANDATORY_KEYS = list(set(EVENT_HEADER_MEMBERS) - {'event_id', 'report_topic_len', 'sensor_id'}) \
+                       + ['topic', 'params']
 
 EventSetupHeader = namedtuple('EventSetupHeader', EVENT_HEADER_MEMBERS)
-
-
-def is_in_range(val, vrange):
-    return vrange[0] <= val <= vrange[1]
-
-
-def validate_all_exist(key_list, ref_list):
-    for key in ref_list:
-        if key not in key_list:
-            raise ValueError(f"missing mandatory key: {key}")
 
 
 # validates event parameters. ensures all relevant keys exist in params dictionary,
@@ -97,7 +86,7 @@ class Event(ABC):
         self.topic = params['topic']
 
     @abstractmethod
-    def compile(self, sensor_id):
+    def compile(self):
         """specific events parser. output is a transmittable binary msg"""
         pass
 
@@ -128,12 +117,11 @@ InRangeSetupHeader = namedtuple('InRangeSetupHeader', IN_RANGE_HEADER_MEMBERS)
 
 
 def validate_in_range_params(params):
-    if not all(key in params for key in IN_RANGE_MANDATORY_KEYS):
-        raise ValueError('missing mandatory keys.')
+    validate_all_exist(params.keys(), IN_RANGE_MANDATORY_KEYS)
 
     if not is_in_range(params['min'], IN_RANGE_DISTANCES) or \
-        not is_in_range(params['max'], IN_RANGE_DISTANCES) or \
-        params['min'] > params['max']:
+            not is_in_range(params['max'], IN_RANGE_DISTANCES) or \
+            params['min'] > params['max']:
         raise ValueError('invalid min/max values')
 
     if not is_in_range(params['confidence'], CONFIDENCE_RANGE):
@@ -161,7 +149,7 @@ class EventInRange(Event):
         super().update_params(params)
         self.header = in_range_header_params(params['params'])
 
-    def compile(self, sensor_id):
+    def compile(self):
         event_header_bytes = super()._compile_header()
         specific_header_bytes = struct.pack('<HHf', *self.header)
         return event_header_bytes + specific_header_bytes

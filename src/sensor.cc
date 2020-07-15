@@ -46,7 +46,7 @@ void Sensor::setup(void *params, unsigned int size, handlers_t& handlers)
 
 void Sensor::process(unsigned long t_now_ms, handlers_t& handlers)
 {
-  if (t_now_ms - _last_ts < _sensor_params.min_interval_ms) {
+  if (t_now_ms - _last_ts < _sensor_params.sample_inverval_ms) {
     return;
   }
 
