@@ -1,4 +1,5 @@
 event_type: in_range
+uid_label: "in medium range"
 suppress_time: 3.0
 polarity: 1
 sampling_window_size: 6

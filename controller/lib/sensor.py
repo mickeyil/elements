@@ -28,12 +28,18 @@ PUBLISH_RAW_RANGE = [0, 1000]
 # data pin range to check for. These match D0, D1, ... etc GPIO pins on the device.
 DPIN_RANGE = [0, 10]
 
+# device_id max string length.
+# defined to match the pattern DEV-XXXXXXXX where X's are the lower half of
+# the device's MAC address for ESP devices. Change here if more flexibility is
+# needed.
+DEVICE_ID_MAX_LEN = 12
+
 # sensor header members that will be parsed to binary members
 # note: order must match the c++ struct order.
 SENSOR_HEADER_MEMBERS = ['sensor_type', 'sensor_id', 'sample_interval_ms', 'publish_raw']
 
 # mandatory keys that need to appear in params
-SENSOR_MANDATORY_KEYS = list(set(SENSOR_HEADER_MEMBERS) - {'sensor_id'})
+SENSOR_MANDATORY_KEYS = list(set(SENSOR_HEADER_MEMBERS) - {'sensor_id'}) + ['device_id']
 
 SensorSetupHeader = namedtuple('SensorSetupHeader', SENSOR_HEADER_MEMBERS)
 
@@ -41,7 +47,7 @@ SensorSetupHeader = namedtuple('SensorSetupHeader', SENSOR_HEADER_MEMBERS)
 def validate_sensor_params(params):
     validate_all_exist(params.keys(), SENSOR_MANDATORY_KEYS)
 
-    if params['type'] not in SENSOR_TYPES.keys():
+    if params['sensor_type'] not in SENSOR_TYPES.keys():
         raise ValueError('invalid sensor type')
 
     if not is_in_range(params['sample_interval_ms'], SAMPLE_INTERVAL_RANGE_MS):
@@ -50,10 +56,13 @@ def validate_sensor_params(params):
     if not is_in_range(params['publish_raw'], PUBLISH_RAW_RANGE):
         raise ValueError('publish_raw out of bounds')
 
+    if not is_in_range(len(params['device_id']), [1, DEVICE_ID_MAX_LEN]):
+        raise ValueError('invalid device_id')
+
 
 def sensor_header_params(params, sensor_id):
     validate_sensor_params(params)
-    sensor_header = SensorSetupHeader(sensor_type=SENSOR_TYPES[params['type']],
+    sensor_header = SensorSetupHeader(sensor_type=SENSOR_TYPES[params['sensor_type']],
                                       sensor_id=sensor_id,
                                       sample_interval_ms=params['sample_interval_ms'],
                                       publish_raw=params['publish_raw'])
@@ -62,12 +71,18 @@ def sensor_header_params(params, sensor_id):
 
 class Sensor(ABC):
 
-    def __init__(self, sensor_id):
+    def __init__(self, sensor_id, device_id):
         self.sensor_id = sensor_id
+        self.device_id = device_id
         self.sensor_header = None
 
     def update_params(self, params):
         self.sensor_header = sensor_header_params(params, self.sensor_id)
+
+    def send_configuration(self, mclient):
+        config_msg = self.compile()
+        topic = f'elements/{self.device_id}/operate/sensors/add'
+        mclient.publish(topic, config_msg, 1, False)
 
     @abstractmethod
     def compile(self):
@@ -79,15 +94,18 @@ class Sensor(ABC):
         return sensor_header_bytes
 
     @staticmethod
-    def create_event(sensor_type, sensor_id, params):
-        args = (sensor_id, params)
+    def create_sensor(sensor_id, params, device_id):
+        if 'sensor_type' not in params:
+            raise ValueError('missing sensor type')
+        sensor_type = params['sensor_type']
+        args = (sensor_id, params, device_id)
         if sensor_type == 'distance':
             return SensorDistance(*args)
         if sensor_type == 'button':
             return SensorButton(*args)
         if sensor_type == 'freeheap':
             return SensorFreeHeap(*args)
-        raise ValueError('invalid event type')
+        raise ValueError('invalid sensor type')
 
 
 # sensor: distance - HC-SR04P
@@ -115,10 +133,10 @@ def distance_header_params(params):
 
 class SensorDistance(Sensor):
 
-    def __init__(self, sensor_id, params):
-        super().__init__(sensor_id)
+    def __init__(self, sensor_id, params, device_id):
+        super().__init__(sensor_id, device_id)
 
-        # validate and assign event header tuple
+        # validate and assign sensor header tuple
         self.header = None
         self.update_params(params)
 
@@ -151,10 +169,10 @@ def button_header_params(params):
 
 
 class SensorButton(Sensor):
-    def __init__(self, sensor_id, params):
-        super().__init__(sensor_id)
+    def __init__(self, sensor_id, params, device_id):
+        super().__init__(sensor_id, device_id)
 
-        # validate and assign event header tuple
+        # validate and assign sensor header tuple
         self.header = None
         self.update_params(params)
 

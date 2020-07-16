@@ -8,9 +8,8 @@ from context import lib
 from lib import logconfig
 from lib.utils import printable_bytes, get_hex_str
 from lib.mclient import MClient
-from lib.sensor import Sensor
 from lib.event import Event
-
+from lib.sensor_manager import SensorManager
 
 def print_cb(prefix):
     print(f"{prefix}: callback!")
@@ -19,11 +18,20 @@ def print_cb(prefix):
 logconfig.config_default_logger(level=logging.DEBUG)
 
 server_addr = "192.168.5.5"
-device_id = "SIM-00000001"
 
 # initialize mqtt client and connect to server
 mclient = MClient(server_addr)
 
+sensor_manager = SensorManager(mclient)
+
+# configure sensor(s) on device
+sensor_cfg_file = '/home/mickey/dev/elements/controller/test/sensor1.yml'
+with open(sensor_cfg_file, 'r') as f:
+    sensor_cfg = yaml.safe_load(f.read())
+
+sensor_manager.add(sensor_cfg)
+
+'''
 sensor = Sensor(device_id, mclient)
 
 # configure sensor(s) on device
@@ -42,3 +50,4 @@ print(get_hex_str(event_approaching.compile()))
 # add some kind of event manager, connecting event parameters with a sensor instance
 # resolve meaning of sensor at sensor class. It actually configures multiple sensors.
 # design animation class?
+'''

@@ -55,7 +55,7 @@ class MClient:
         self.client.publish(topic=topic, payload=payload, qos=qos, retain=retain)
 
     def publish_single(self, topic, payload, qos, retain):
-        logging.debug(f"publish single: topic: {topic} content: {get_hex_str(payload)}")
+        logging.debug(f"publish single: topic: {topic} -- content: {get_hex_str(payload)}")
         paho.mqtt.publish.single(topic, payload=payload, qos=qos, retain=retain,
             hostname=self.server_addr, client_id=self.client_id)
 

@@ -15,7 +15,7 @@ class SensorManager
 
     void process_sensors(unsigned long t_now_ms);
 
-    Sensor* get_sensor(unsigned int idx);
+    Sensor* get_sensor(unsigned int id);
   private:
 
     Sensor* _sensors[MAX_SENSORS];

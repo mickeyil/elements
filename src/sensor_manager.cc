@@ -94,10 +94,13 @@ void SensorManager::process_sensors(unsigned long t_now_ms)
 }
 
 
-Sensor* SensorManager:: get_sensor(unsigned int idx)
+Sensor* SensorManager::get_sensor(unsigned int id)
 {
-  if (idx >= _size) {
-    return nullptr;
+  Sensor* sensor = nullptr;
+  for (unsigned int i = 0; i < _size; i++) {
+    if (_sensors[i]->id() == id) {
+      sensor = _sensors[i];
+    }
   }
-  return _sensors[idx];
+  return sensor;
 }

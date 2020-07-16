@@ -46,9 +46,9 @@ void Event::setup(const void *params, unsigned int size, handlers_t& handlers)
 
 void Event::sample_sensor(handlers_t& handlers)
 {
-  unsigned int idx = _event_params.sensor_id;
+  unsigned int id = _event_params.sensor_id;
   SensorManager *psm = handlers.psensor_mgr;
-  Sensor *sensor = psm->get_sensor(idx);
+  Sensor *sensor = psm->get_sensor(id);
   assert(sensor != nullptr);  // FIXME
 
   // sample data only if there's new data to read, i.e. sensor process() did some work.
