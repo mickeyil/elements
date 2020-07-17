@@ -62,7 +62,7 @@ def event_header_params(params, event_id, sensor_id):
 
 class Event(ABC):
 
-    def __init__(self, event_id, sensor_id, callback, cbdata):
+    def __init__(self, event_id, sensor, callback, cbdata):
         """
         initialize Event object with event params, callback function and callback
         data variable that will be supplied when the callback function invocation
@@ -73,7 +73,7 @@ class Event(ABC):
                transit from sensor value to sampling_window.
         """
         self.event_id = event_id
-        self.sensor_id = sensor_id
+        self.sensor = sensor
         self.callback = callback
         self.cbdata = cbdata
 
@@ -82,8 +82,13 @@ class Event(ABC):
         self.topic = None
 
     def update_params(self, params):
-        self.event_header = event_header_params(params, self.event_id, self.sensor_id)
+        self.event_header = event_header_params(params, self.event_id, self.sensor.sensor_id)
         self.topic = params['topic']
+
+    def send_configuration(self, mclient):
+        config_msg = self.compile()
+        topic = f'elements/{self.sensor.device_id}/operate/events/add'
+        mclient.publish(topic, config_msg, 1, False)
 
     @abstractmethod
     def compile(self):

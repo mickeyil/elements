@@ -2,6 +2,7 @@ from lib.sensor import Sensor
 from lib.mclient import MClient
 from lib.utils import get_hex_str, validate_all_exist
 
+
 class SensorManager:
 
     def __init__(self, mclient):
