@@ -38,4 +38,4 @@ class SensorManager:
         if uid_label not in self.sensors:
             raise RuntimeError('uid_label does not exist')
 
-        return self.sensors['uid_label']['sensor']
+        return self.sensors[uid_label]

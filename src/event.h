@@ -7,7 +7,7 @@
 
 
 #define EVENT_MAX_MSG_BUF 64
-
+#define EVENT_MAX_TOPIC_LEN 48
 
 typedef enum {
   EVENT_TYPE_IN_RANGE = 0,
@@ -72,7 +72,7 @@ class Event
 
   private:
     event_params_t _event_params;
-    std::string _report_topic;
+    char _report_topic[EVENT_MAX_TOPIC_LEN];
     SamplingWindow<int16_t> *_p_samping_window;
     double _last_event_time;
     char _msgbuf[EVENT_MAX_MSG_BUF];

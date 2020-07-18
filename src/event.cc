@@ -20,10 +20,8 @@ void Event::setup(const void *params, unsigned int size, handlers_t& handlers)
 
   const char * p_topic = static_cast<const char *>(params) + sizeof(event_params_t);
   
-  char num_buf[16];
-  snprintf(num_buf, 16, "%d", _event_params.event_id);
-  std::string stopic = std::string("events/") + std::string(num_buf);
-  _report_topic = std::string(handlers.ptopics->get_full_topic(stopic.c_str()));
+  snprintf(_report_topic, EVENT_MAX_TOPIC_LEN, "%s%s/%d/%d", handlers.ptopics->get_prefix(),
+    "events", _event_params.event_id, _event_params.sensor_id);
   
   if (_p_samping_window == nullptr) {
     _p_samping_window = new SamplingWindow<int16_t>(_event_params.sampling_window_size, 0);
@@ -61,17 +59,16 @@ void Event::sample_sensor(handlers_t& handlers)
 
 void Event::process(double t_abs_now, handlers_t& handlers)
 {
-  DPRINTF("Event::process()");
   bool cond = _condition(_p_samping_window);
   if (_event_params.polarity == 0) {
     cond = !cond;
   }
   
   if (cond == true) {
-    DPRINTF("event %s occured at %lf. reporting to topic: %s", name(), t_abs_now,
-      _report_topic.c_str());
+    //DPRINTF("event %s occured at %lf. reporting to topic: %s", name(), t_abs_now,
+    //  _report_topic);
     
-    #ifdef DEBUG_HELPERS
+    #if 0
     printf(">> sampling window: ");
     for (unsigned int i = 0; i < _p_samping_window->size(); i++) {
       printf("%d ", _p_samping_window->get_item(i));
@@ -81,16 +78,15 @@ void Event::process(double t_abs_now, handlers_t& handlers)
     #endif
 
     if (t_abs_now - _last_event_time < _event_params.supress_time) {
-      DPRINTF("-- suppressed (%lf past).", t_abs_now - _last_event_time);
+      //DPRINTF("-- suppressed (%lf past).", t_abs_now - _last_event_time);
       return;
     }
     _last_event_time = t_abs_now;
     
     // write event id as a string to the msg buffer
-    snprintf(_msgbuf, EVENT_MAX_MSG_BUF, "{\"event_id\":%d,\"time\":%lf}", 
-      _event_params.event_id, t_abs_now);
+    snprintf(_msgbuf, EVENT_MAX_MSG_BUF, "{\"time\":%lf}", t_abs_now);
     
     // publish the event
-    handlers.publisher->publish(_report_topic.c_str(), _msgbuf);
+    handlers.publisher->publish(_report_topic, _msgbuf);
   }
 }

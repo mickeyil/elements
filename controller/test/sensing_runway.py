@@ -10,6 +10,7 @@ from lib.utils import printable_bytes, get_hex_str
 from lib.mclient import MClient
 from lib.event import Event
 from lib.sensor_manager import SensorManager
+from lib.event_manager import EventManager
 
 def print_cb(prefix):
     print(f"{prefix}: callback!")
@@ -30,14 +31,23 @@ with open(sensor_cfg_file, 'r') as f:
     sensor_cfg = yaml.safe_load(f.read())
 
 sensor_manager.add(sensor_cfg)
+sensor_owl = sensor_manager.get_sensor("owl")
+
+event_params_file = '/home/mickey/dev/elements/controller/test/inrange2.yml'
+with open(event_params_file, 'r') as f:
+    event_cfg = yaml.safe_load(f.read())
+
+event_manager = EventManager(mclient)
+event_manager.add_trigger(event_cfg)
+event_manager.add_event("in medium range", sensor_owl, print_cb, "in medium range")
+event_manager.subscribe_to_events()
+
+while True:
+    mclient.loop(timeout=1.0)
+    print(".",end="", flush=True)
+
 
 '''
-sensor = Sensor(device_id, mclient)
-
-# configure sensor(s) on device
-cfg_file = '/home/mickey/dev/elements/controller/test/sim1_cfg.yml'
-with open(cfg_file, 'r') as f:
-    cfg = yaml.safe_load(f.read())
 
 event_params_file = '/home/mickey/dev/elements/controller/test/inrange2.yml'
 with open(event_params_file, 'r') as f:

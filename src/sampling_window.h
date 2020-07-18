@@ -21,7 +21,7 @@ class SamplingWindow
     if (_head == _samples.size()) {
       _head = 0;
     }
-    #ifdef DEBUG_HELPERS
+    #if 0
     printf("++ sampling window: ");
     for (unsigned int i = 0; i < size(); i++) {
       printf("%d ", get_item(i));
