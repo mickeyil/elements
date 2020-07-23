@@ -11,9 +11,15 @@ from lib.mclient import MClient
 from lib.event import Event
 from lib.sensor_manager import SensorManager
 from lib.event_manager import EventManager
+from lib.animation_manager import AnimationManager
+
 
 def print_cb(prefix):
     print(f"{prefix}: callback!")
+
+
+def animate_cb(animation_manager, payload):
+    animation_manager.animate(time.time(), "runway")
 
 
 logconfig.config_default_logger(level=logging.DEBUG)
@@ -37,9 +43,17 @@ event_params_file = '/home/mickey/dev/elements/controller/test/inrange2.yml'
 with open(event_params_file, 'r') as f:
     event_cfg = yaml.safe_load(f.read())
 
+anim_params_file = '/home/mickey/dev/elements/controller/test/runway2.yml'
+with open(anim_params_file, 'r') as f:
+    anim_cfg = yaml.safe_load(f.read())
+
+animation_manager = AnimationManager('ESP-000DC374', mclient)
+animation_manager.setup('STRIP_RGB', 50)
+animation_manager.load_plan("runway", anim_cfg)
+
 event_manager = EventManager(mclient)
 event_manager.add_trigger(event_cfg)
-event_manager.add_event("in medium range", sensor_owl, print_cb, "in medium range")
+event_manager.add_event("in medium range", sensor_owl, animate_cb, animation_manager)
 event_manager.subscribe_to_events()
 
 while True:

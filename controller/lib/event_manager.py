@@ -14,11 +14,11 @@ def event_callback(topic, payload, cbdata):
         return
 
     device_id = topic_parts[1]
-    event_id = topic_parts[3]
-    sensor_id = topic_parts[4]
+    event_id = int(topic_parts[3])
+    sensor_id = int(topic_parts[4])
 
     event_manager = cbdata
-    event_manager.on_event(device_id, event_id, sensor_id, payload)
+    event_manager.on_event(event_id, device_id, sensor_id, payload)
 
 
 class EventManager:

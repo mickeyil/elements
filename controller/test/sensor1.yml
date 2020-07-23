@@ -1,8 +1,8 @@
 sensor_type: distance
-device_id: SIM-00000001
+device_id: ESP-000B11DB
 uid_label: owl
 sample_interval_ms: 60
-publish_raw: 1
+publish_raw: 0
 params:
     trig_dpin: 6
     echo_dpin: 7

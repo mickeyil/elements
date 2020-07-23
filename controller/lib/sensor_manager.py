@@ -1,6 +1,6 @@
 from lib.sensor import Sensor
 from lib.mclient import MClient
-from lib.utils import get_hex_str, validate_all_exist
+from lib.utils import get_hex_str, validate_in_list
 
 
 class SensorManager:
@@ -11,7 +11,7 @@ class SensorManager:
         self.sensors = {}
 
     def add(self, params):
-        validate_all_exist(params.keys(), ['uid_label', 'device_id'])
+        validate_in_list(params.keys(), ['uid_label', 'device_id'])
         device_id = params['device_id']
         uid_label = params['uid_label']
 

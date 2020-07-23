@@ -4,7 +4,7 @@ import struct
 from abc import ABC, abstractmethod
 from collections import namedtuple
 
-from lib.utils import get_hex_str, is_in_range, validate_all_exist
+from lib.utils import get_hex_str, is_in_range, validate_in_list
 
 # limits
 SUPPRESS_TIME_RANGE = [0.0, 10000.0]
@@ -30,7 +30,7 @@ EventSetupHeader = namedtuple('EventSetupHeader', EVENT_HEADER_MEMBERS)
 # validates event parameters. ensures all relevant keys exist in params dictionary,
 # and sanity-checks values
 def validate_event_params(params):
-    validate_all_exist(params.keys(), EVENT_MANDATORY_KEYS)
+    validate_in_list(params.keys(), EVENT_MANDATORY_KEYS)
 
     if params['event_type'] not in EVENT_TYPES.keys():
         raise ValueError('invalid event type')
@@ -122,7 +122,7 @@ InRangeSetupHeader = namedtuple('InRangeSetupHeader', IN_RANGE_HEADER_MEMBERS)
 
 
 def validate_in_range_params(params):
-    validate_all_exist(params.keys(), IN_RANGE_MANDATORY_KEYS)
+    validate_in_list(params.keys(), IN_RANGE_MANDATORY_KEYS)
 
     if not is_in_range(params['min'], IN_RANGE_DISTANCES) or \
             not is_in_range(params['max'], IN_RANGE_DISTANCES) or \

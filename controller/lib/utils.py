@@ -19,7 +19,7 @@ def is_in_range(val, vrange):
     return vrange[0] <= val <= vrange[1]
 
 
-def validate_all_exist(key_list, ref_list):
+def validate_in_list(key_list, ref_list):
     for key in ref_list:
         if key not in key_list:
             raise ValueError(f"missing mandatory key: {key}")

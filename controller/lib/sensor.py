@@ -2,7 +2,7 @@ import struct
 
 from abc import ABC, abstractmethod
 from collections import namedtuple
-from lib.utils import get_hex_str, is_in_range, validate_all_exist
+from lib.utils import get_hex_str, is_in_range, validate_in_list
 
 import logging
 
@@ -45,7 +45,7 @@ SensorSetupHeader = namedtuple('SensorSetupHeader', SENSOR_HEADER_MEMBERS)
 
 
 def validate_sensor_params(params):
-    validate_all_exist(params.keys(), SENSOR_MANDATORY_KEYS)
+    validate_in_list(params.keys(), SENSOR_MANDATORY_KEYS)
 
     if params['sensor_type'] not in SENSOR_TYPES.keys():
         raise ValueError('invalid sensor type')
@@ -115,7 +115,7 @@ DistanceSetupHeader = namedtuple('DistanceSetupHeader', DISTANCE_HEADER_MEMBERS)
 
 
 def validate_distance_params(params):
-    validate_all_exist(params.keys(), DISTANCE_MANDATORY_KEYS)
+    validate_in_list(params.keys(), DISTANCE_MANDATORY_KEYS)
 
     if not is_in_range(params['trig_dpin'], DPIN_RANGE):
         raise ValueError('trig_dpin oob')

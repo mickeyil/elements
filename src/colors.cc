@@ -16,6 +16,7 @@ static const uint8_t  gamma_correction_u8[] =
   215,218,220,223,225,228,231,233,236,239,241,244,247,249,252,255 
 };
 
+//#define NO_GAMMA_CORRECTION
 #ifndef NO_GAMMA_CORRECTION
 #define USE_GAMMA_CORRECTION
 #endif

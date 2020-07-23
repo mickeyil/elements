@@ -33,7 +33,7 @@ def on_message(client, userdata, msg):
     callbacks = userdata['callbacks']
     for c in callbacks:
         print(f"calling {c.name} callback.")
-        c.callback(msg.topic, msg.payload, c.cbdata)
+        c.function(msg.topic, msg.payload, c.cbdata)
 
 
 class MClient:

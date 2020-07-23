@@ -1,18 +1,18 @@
 import array
 import struct
+from lib.utils import validate_in_list
+
 from collections import namedtuple
 
 STRIP_TYPES = {
-    'rgb': 0,
-    'bgr': 1,
+    "STRIP_RGB": 0,
+    "STRIP_BGR": 1,
 }
 
 ANIMATION_TYPES = {
     'fill': 1000,
 }
 
-CHANNEL_SETUP_KEYS = ['strip_type', 'active_indices']
-ChannelSetupHeader = namedtuple('ChannelSetupHeader', ['strip_type', 'len'])
 AnimationSetupHeader = namedtuple('AnimationSetupHeader', ['id', 'anim_type'])
 AnimationParamsHeader = namedtuple('AnimationParamsHeader',
                                    ['t_start', 'duration'])
@@ -23,25 +23,6 @@ ANIMATION_SETUP_KEYS = ['type', 't_start', 'duration', 'params']
 # specific animations
 ANIMATION_FILL_SETUP_KEYS = ['color', 'slope', 'speed_factor']
 COLOR_KEYS = ('h', 's', 'v')
-
-
-def parse_channel_setup(params):
-    if not all(key in params for key in CHANNEL_SETUP_KEYS):
-        raise ValueError('missing mandatory keys.')
-
-    strip_type = params['strip_type']
-    if strip_type not in STRIP_TYPES:
-        raise ValueError(f'invalid strip type: {strip_type}')
-
-    indices = params['active_indices']
-    if not all(isinstance(x, int) for x in indices):
-        raise ValueError('active_indices field must contain only integers')
-
-    header = ChannelSetupHeader(strip_type=STRIP_TYPES[strip_type], len=len(indices))
-    header_bytes = struct.pack("<BB", *header)
-    msg = header_bytes + array.array('B', indices)
-    return msg
-
 
 def parse_animation(exec_time, seq_id, params):
     if not all(key in params for key in ANIMATION_SETUP_KEYS):
@@ -107,36 +88,28 @@ specific_animation_parsers = {
 }
 
 
-class Parser:
-
-    def __init__(self):
+class AnimationManager:
+    def __init__(self, device_id, mclient):
+        self.device_id = device_id
+        self.mclient = mclient
         self.seq_id = 0
+        self.plans = {}
 
-    def parse(self, exec_time, instructions):
-        ''' parses an array of animation instructions.
-            returns byte array ready to be sent over mqtt.
+    def setup(self, strip_type, strip_len):
+        header_bytes = struct.pack("<BB", STRIP_TYPES[strip_type], strip_len)
+        msg = header_bytes + array.array('B', list(range(strip_len)))
+        topic = f"elements/{self.device_id}/operate/animation/setup"
+        self.mclient.publish(topic, msg, 1, False)
 
-            exec_time: execution time in double precision floating point.
-                       accurate to the millisecond.
-            plan_data: array of dictionaries to parse. dictionary key calls
-                       the proper parser to its value.
-            '''
-        msgs_bytes = []
-        for ins in instructions:
-            print(f'parsing: {ins}')
+    def load_plan(self, name, anim_list):
+        self.plans[name] = anim_list
 
-            msg_bytes = None
-            if 'setup' in ins:
-                msg_bytes = parse_channel_setup(ins['setup'])
-            elif 'animation' in ins:
-                msg_bytes = parse_animation(exec_time, self.seq_id, ins['animation'])
-                self.seq_id += 1
-                if self.seq_id == 65000:
-                    self.seq_id = 0
-            else:
-                raise ValueError('unknown instruction')
+    def animate(self, exec_time, plan_name):
+        topic = f"elements/{self.device_id}/operate/animation/add"
+        for animation in self.plans[plan_name]:
+            msg = parse_animation(exec_time, self.seq_id, animation)
+            self.seq_id += 1
+            if self.seq_id == 65000:
+                self.seq_id = 0
 
-            msgs_bytes.append(msg_bytes)
-
-        return msgs_bytes
-
+            self.mclient.publish(topic, msg, 1, False)
