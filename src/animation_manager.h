@@ -1,22 +1,27 @@
 #pragma once
 #include <cstdint>
+#include <vector>
 
-#include "channel.h"
 #include "strip.h"
+#include "pixelarray.h"
+#include "renderable.h"
+
+typedef std::vector<uint8_t> vec_u8;
+
+#define MAX_PIXEL_OBJECTS 32
 
 class AnimationManager
 {
   public:
-    AnimationManager(uint8_t *rgb_arr, uint16_t n_pixels) : strip(rgb_arr, n_pixels) { }
+    AnimationManager(Strip& strip) : _strip(strip) { }
 
-    void setup_channel(void* setup_data_buf, unsigned int size, const char **errstr);
-    
-    void add_animation(void* setup_data_buf, unsigned int size, double t_abs_now, 
-      const char **errstr);
+    void execute(vec_u8& code, float progress, const char **errstr);
 
-    void render(double t_abs_now);
+    void render(double t_abs_now, const char **errstr);
+
+    std::vector<Renderable*> _renderables;
 
   private:
-    Strip strip;
-    Channel channel;
+    Strip _strip;
+    std::vector<PixelArray*> _pixel_objects;
 };

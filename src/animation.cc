@@ -1,39 +1,19 @@
+#include <cassert>
 #include "animation.h"
 
 
-void Animation::setup(void *params, unsigned int size, PixelArray& pa)
+void Animation::render(float t_rel, float duration)
 {
-  anim_params_t *anim_params = reinterpret_cast<anim_params_t*>(params);
-  DPRINTF("Animation::setup(): params=%p size=%u", params, size);
-  set_base_params(anim_params);
-
-  // call specific subclass setup
-  _setup((uint8_t*) params + sizeof(anim_params_t), size-sizeof(anim_params_t), pa);
-
-  _state = ANIMATION_STATE_PENDING;
-}
-
-
-void Animation::render(float t_rel, PixelArray& pa)
-{
-  // nothing to render if current time is before render time
-  if (t_rel < 0) {
-    return;
-  }
-
-  if (_state == ANIMATION_STATE_PENDING) {
-    _state = ANIMATION_STATE_RUNNING;
-    _first_activation(pa);
-  }
-
-  if (t_rel >= _animation_params.duration) {
-    _state = ANIMATION_STATE_DONE;
-
-    // from the animation perspective, t_rel must never exceed duration time
-    t_rel = _animation_params.duration;
-  }
+  assert(t_rel >= 0.0 && t_rel <= duration);
   
-  // call specific class rendering
-  _render(t_rel, pa);  
-}
+  // progress is the percent of relative time to the whole duration. 
+  // values in [0.0, 1.0]
+  float progress = 0.0;
+  if (duration > 0.0) {
+    progress = t_rel / duration;
+  }
 
+  const char *errstr = nullptr;
+  _panim_mgr->execute(_code, progress, &errstr);
+  assert(errstr == nullptr);   // CRUDE :/
+}

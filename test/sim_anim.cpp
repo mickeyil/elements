@@ -51,10 +51,11 @@ bool try_reconnect(mqtt::client& cli)
 // static values
 #define RGB_ARRAY_SIZE 50
 uint8_t rgb_array[RGB_ARRAY_SIZE*3];
+Strip strip(rgb_array, RGB_ARRAY_SIZE);
 SensorManager *psnsmgr = nullptr;
 EventManager *pevent_mgr = nullptr;
 
-AnimationManager anim_mgr((uint8_t*) rgb_array, RGB_ARRAY_SIZE);
+AnimationManager anim_mgr(strip);
 handlers_t handlers;
 ElementTopics topics;
 
