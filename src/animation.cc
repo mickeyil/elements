@@ -1,4 +1,5 @@
 #include <cassert>
+#include <cstring>
 #include "animation.h"
 
 
@@ -16,4 +17,11 @@ void Animation::render(float t_rel, float duration)
   const char *errstr = nullptr;
   _panim_mgr->execute(_code, progress, &errstr);
   assert(errstr == nullptr);   // CRUDE :/
+}
+
+
+void Animation::set(uint8_t* seqbuf, unsigned int len, const char **errstr)
+{
+  _code.resize(len);
+  memcpy(&_code[0], seqbuf, len);
 }
