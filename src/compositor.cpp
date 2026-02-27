@@ -61,6 +61,11 @@ void Compositor::render(float t)
             }
         }
     }
+
+    // Apply gamma correction once, after all blending is done
+    for (uint16_t i = 0; i < _strip.length(); i++) {
+        _strip.set_rgb(i, gamma_correct(_strip.get_rgb(i)));
+    }
 }
 
 // Simple insertion sort by priority (lowest first). Called on add.

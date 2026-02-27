@@ -23,8 +23,11 @@ struct rgb_t {
     rgb_t(uint8_t r, uint8_t g, uint8_t b) : r(r), g(g), b(b) {}
 };
 
-// Convert HSV (h: 0-360, s: 0-1, v: 0-1) to gamma-corrected RGB
+// Convert HSV (h: 0-360, s: 0-1, v: 0-1) to linear RGB
 rgb_t hsv_to_rgb(float h, float s, float v);
 
 // Linearly interpolate two RGB colors
 rgb_t rgb_lerp(const rgb_t& a, const rgb_t& b, float t);
+
+// Apply gamma correction to an RGB value (call once, at final output)
+rgb_t gamma_correct(const rgb_t& c);

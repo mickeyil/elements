@@ -20,10 +20,6 @@ static const uint8_t gamma_table[] = {
   215, 218, 220, 223, 225, 228, 231, 233, 236, 239, 241, 244, 247, 249, 252, 255
 };
 
-static inline uint8_t gamma_correct(uint8_t v) {
-    return gamma_table[v];
-}
-
 rgb_t hsv_to_rgb(float h, float s, float v)
 {
     // Normalize hue to 0-360
@@ -52,12 +48,17 @@ rgb_t hsv_to_rgb(float h, float s, float v)
         }
     }
 
-    // Convert to 0-255 and apply gamma correction
-    uint8_t r8 = gamma_correct((uint8_t)(r * 255.0f + 0.5f));
-    uint8_t g8 = gamma_correct((uint8_t)(g * 255.0f + 0.5f));
-    uint8_t b8 = gamma_correct((uint8_t)(b * 255.0f + 0.5f));
+    // Convert to 0-255 (linear, no gamma)
+    uint8_t r8 = (uint8_t)(r * 255.0f + 0.5f);
+    uint8_t g8 = (uint8_t)(g * 255.0f + 0.5f);
+    uint8_t b8 = (uint8_t)(b * 255.0f + 0.5f);
 
     return rgb_t(r8, g8, b8);
+}
+
+rgb_t gamma_correct(const rgb_t& c)
+{
+    return rgb_t(gamma_table[c.r], gamma_table[c.g], gamma_table[c.b]);
 }
 
 rgb_t rgb_lerp(const rgb_t& a, const rgb_t& b, float t)
