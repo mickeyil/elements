@@ -2,47 +2,29 @@
 
 #include <cstdint>
 
-struct hsv_t
-{
-  float h;
-  float s;
-  float v;
+// Internal color: HSV + Alpha, all floats.
+// H: 0-360 (degrees, wraps), S: 0-1, V: 0-1, A: 0-1
+struct hsva_t {
+    float h;
+    float s;
+    float v;
+    float a;
 
-  hsv_t() { }
-  hsv_t(float _h, float _s, float _v) : h(_h), s(_s), v(_v) { }
-  
-  // accessor by channel number. h=0, s=1, v=2
-  float value_by_ch(unsigned int ch) const {
-    switch (ch) {
-      case 0:
-        return h;
-      case 1:
-        return s;
-      case 2:
-        return v;
-    }
-    return 0.0;
-  }
+    hsva_t() : h(0), s(0), v(0), a(0) {}
+    hsva_t(float h, float s, float v, float a = 1.0f)
+        : h(h), s(s), v(v), a(a) {}
 };
 
-struct __attribute__((__packed__)) hsvu8_t
-{
-  uint8_t h;
-  uint8_t s;
-  uint8_t v;
+// Output color: 8-bit RGB
+struct rgb_t {
+    uint8_t r, g, b;
 
-  hsvu8_t() { }
-  hsvu8_t(uint8_t _h, uint8_t _s, uint8_t _v) : h(_h), s(_s), v(_v) { }
-  hsv_t to_hsv_t() const {
-    hsv_t hsv((float) h, (float) s, (float) v);
-    return hsv;
-  }
+    rgb_t() : r(0), g(0), b(0) {}
+    rgb_t(uint8_t r, uint8_t g, uint8_t b) : r(r), g(g), b(b) {}
 };
 
-typedef struct {
-  uint8_t r;
-  uint8_t g;
-  uint8_t b;
-} rgb_t;
+// Convert HSV (h: 0-360, s: 0-1, v: 0-1) to gamma-corrected RGB
+rgb_t hsv_to_rgb(float h, float s, float v);
 
-void hsv2rgb(int hue, int sat, int val, uint8_t& r_out, uint8_t& g_out, uint8_t& b_out);
+// Linearly interpolate two RGB colors
+rgb_t rgb_lerp(const rgb_t& a, const rgb_t& b, float t);

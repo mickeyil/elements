@@ -1,48 +1,34 @@
 #pragma once
 
 #include <cstdint>
+#include <cstring>
+#include "colors.h"
 
-#ifdef DEBUG_HELPERS
-#include "debug_helpers.h"
-#endif
+// Thin wrapper around the physical LED output buffer (FastLED's CRGB array).
+// Provides indexed RGB access. The compositor blends directly into this.
 
-typedef enum {
-  STRIP_RGB = 0,
-  STRIP_BGR,
-} strip_type_t;
+class Strip {
+public:
+    Strip(uint8_t* rgb_buf, uint16_t length)
+        : _buf(rgb_buf), _len(length) {}
 
-typedef enum {
-  PIXEL_R = 0,
-  PIXEL_G,
-  PIXEL_B,
-} pixel_color_t;
+    void clear() { memset(_buf, 0, _len * 3); }
 
+    void set_rgb(uint16_t idx, const rgb_t& c) {
+        uint8_t* p = &_buf[idx * 3];
+        p[0] = c.r;  // CRGB is RGB order; FastLED handles reorder to wire format
+        p[1] = c.g;
+        p[2] = c.b;
+    }
 
-class Strip
-{
-  public:
-    Strip(uint8_t *buf, uint16_t length, strip_type_t strip_type = STRIP_RGB) :
-      _buf(buf), _len(length), _strip_type(strip_type) { }
+    rgb_t get_rgb(uint16_t idx) const {
+        const uint8_t* p = &_buf[idx * 3];
+        return rgb_t(p[0], p[1], p[2]);
+    }
 
-    uint16_t len() const { return _len; }
-    
-    uint8_t * dataptr() { return _buf; }
+    uint16_t length() const { return _len; }
 
-    strip_type_t type() const { return _strip_type; }
-    void set_type(strip_type_t strip_type) { _strip_type = strip_type; } 
-
-    // direct access to pixel value
-    const uint8_t& pixel(int pixel_index, pixel_color_t pixel_color) const;
-          uint8_t& pixel(int pixel_index, pixel_color_t pixel_color);
-
-    #ifdef DEBUG_HELPERS
-    void print();
-    const char * get_channel_str(unsigned int ch) const;
-    #endif
-
-  private:
-    
-    uint8_t *_buf;
+private:
+    uint8_t* _buf;
     uint16_t _len;
-    strip_type_t _strip_type;
 };
