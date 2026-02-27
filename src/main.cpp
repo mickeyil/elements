@@ -11,13 +11,16 @@
 #define LED_PIN     13
 #define NUM_LEDS    2
 
+// --- Render config ---
+#define FRAME_PERIOD_MS  20   // 50Hz refresh rate
+
 // FastLED's output buffer
 CRGB crgb[NUM_LEDS];
 
 // --- Rendering pipeline ---
 Strip strip((uint8_t*)crgb, NUM_LEDS);
 
-// Layer 0: background hue wave on all LEDs
+// Layer 0: background sine wave on all LEDs
 static const uint8_t bg_indices[] = {0, 1};
 Layer bg_layer(0, bg_indices, NUM_LEDS, /*priority=*/0);
 
@@ -26,18 +29,19 @@ static const uint8_t spark_indices[] = {0, 1};
 Layer spark_layer(1, spark_indices, NUM_LEDS, /*priority=*/1);
 
 // Animations
-AnimHueWave hue_wave(
-    220.0f,   // center hue: deep blue
-    20.0f,    // hue range: ±20° oscillation
-    8.0f,     // period: 8 second full cycle
-    1.0f,     // phase spread: 1 radian between first and last pixel
-    1.0f,     // saturation: full
-    0.35f     // value: moderate (not too bright, chill)
+AnimSineWave sine_wave(
+    220.0f,       // hue: deep blue
+    1.0f,         // saturation: full
+    0.0f,         // v_min: off at trough
+    0.4f,         // v_max: moderate brightness at peak
+    8.0f,         // period: 8 second cycle
+    -M_PI / 2,    // phase0: pixel 0 starts at v_min (bottom of sine)
+    M_PI          // pixel_step: π — LEDs are opposite phase
 );
 
 AnimSpark spark(
-    4.0f,     // interval: every 4 seconds
-    1.0f      // fade time: 1 second decay
+    4.0f,         // interval: every 4 seconds
+    0.25f         // fade time: 250ms quick flash
 );
 
 Compositor compositor(strip);
@@ -47,7 +51,7 @@ void setup()
     FastLED.addLeds<WS2811, LED_PIN, GRB>(crgb, NUM_LEDS);
     FastLED.setBrightness(255);
 
-    bg_layer.set_animation(&hue_wave);
+    bg_layer.set_animation(&sine_wave);
     spark_layer.set_animation(&spark);
 
     compositor.add_layer(&bg_layer);
@@ -59,5 +63,5 @@ void loop()
     float t = millis() / 1000.0f;
     compositor.render(t);
     FastLED.show();
-    delay(10);  // ~100Hz
+    delay(FRAME_PERIOD_MS);
 }

@@ -3,40 +3,39 @@
 #include "animation.h"
 #include <cmath>
 
-// Slow hue oscillation around a center hue. Each pixel gets a slight phase
-// offset for visual interest. Saturation and value are constant.
+// Sine wave on brightness (V channel). H and S are fixed.
+// V oscillates between v_min and v_max with configurable period,
+// initial phase, and per-pixel phase offset.
+//
+// For pixel i at time t:
+//   phase = 2π·t/period + phase0 + i·pixel_step
+//   V = v_min + (v_max - v_min) · (sin(phase)·0.5 + 0.5)
 
-class AnimHueWave : public Animation {
+class AnimSineWave : public Animation {
 public:
-    // center_hue: base hue in degrees (e.g., 220 for deep blue)
-    // hue_range: oscillation amplitude in degrees (±hue_range around center)
-    // period: full cycle time in seconds
-    // phase_spread: phase offset between first and last pixel (in radians)
-    // sat, val: constant saturation and value (0-1)
-    AnimHueWave(float center_hue, float hue_range, float period,
-                float phase_spread, float sat, float val)
-        : _center_hue(center_hue), _hue_range(hue_range), _period(period),
-          _phase_spread(phase_spread), _sat(sat), _val(val) {}
+    AnimSineWave(float hue, float sat, float v_min, float v_max,
+                 float period, float phase0, float pixel_step)
+        : _hue(hue), _sat(sat), _v_min(v_min), _v_max(v_max),
+          _period(period), _phase0(phase0), _pixel_step(pixel_step) {}
 
     void render(hsva_t* buffer, uint8_t length, float t) override
     {
-        float base_phase = t / _period * 2.0f * M_PI;
+        float base_phase = (2.0f * M_PI * t / _period) + _phase0;
+        float v_range = _v_max - _v_min;
 
         for (uint8_t i = 0; i < length; i++) {
-            float pixel_phase = (length > 1)
-                ? _phase_spread * (float)i / (float)(length - 1)
-                : 0.0f;
-
-            float hue = _center_hue + _hue_range * sinf(base_phase + pixel_phase);
-            buffer[i] = hsva_t(hue, _sat, _val, 1.0f);
+            float phase = base_phase + i * _pixel_step;
+            float v = _v_min + v_range * (sinf(phase) * 0.5f + 0.5f);
+            buffer[i] = hsva_t(_hue, _sat, v, 1.0f);
         }
     }
 
 private:
-    float _center_hue;
-    float _hue_range;
-    float _period;
-    float _phase_spread;
+    float _hue;
     float _sat;
-    float _val;
+    float _v_min;
+    float _v_max;
+    float _period;
+    float _phase0;
+    float _pixel_step;
 };
