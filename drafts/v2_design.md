@@ -50,7 +50,7 @@ The core design principle: **tight timing sync over complex rendering**. Simple 
 │  ┌───────────────┴───────────────┐  │
 │  │ Animation VM                  │  │
 │  │ (bytecode interpreter)        │  │
-│  │ renders to pixel buffers      │  │
+│  │ renders to layer buffers      │  │
 │  └───────────────┬───────────────┘  │
 │                  │                  │
 │  ┌───────────────┴───────────────┐  │
@@ -76,7 +76,7 @@ Communication between the base station and the ESP32 device is minimal by design
 
 | Message | Direction | Description |
 |---------|-----------|-------------|
-| **LOAD** | base → device | Upload a bytecode program. Implicitly clears all device state (active groups, layers, animations, buffers). The device is in a fresh state ready to execute. |
+| **LOAD** | base → device | Upload a bytecode program. Implicitly clears all device state (active layers, animations, buffers). The device is in a fresh state ready to execute. |
 | **ACK** | device → base | Confirms program was received and loaded successfully. |
 | **START** | base → device | Begin executing the loaded program at absolute NTP timestamp T0. |
 
@@ -194,130 +194,107 @@ This is explicitly **not planned for v2 initial implementation** — NTP should 
 
 ## Rendering Abstractions
 
-The rendering pipeline has four core concepts: **Strip**, **Pixel Group**, **Layer**, and **Compositor**. These were designed bottom-up to support two key scenarios:
+The rendering pipeline has two data structures and a render loop: **Strip**, **Layer**, and **Compositor**.
 
-1. A continuous strip shaped into a physical form (e.g., a flower) where named subsets (center, petals) are animated independently
+These were designed bottom-up to support two key scenarios:
+
+1. A continuous strip shaped into a physical form (e.g., a flower) where subsets (center, petals) are animated independently
 2. Overlay effects (e.g., beat-synced white sparks) blended on top of a background animation
 
 ### Strip
 
-The physical LED output buffer.
+The physical LED output buffer. A thin wrapper around FastLED's CRGB array (or a plain RGB buffer for the PC simulator).
 
-- `uint8_t[]` in RGB or BGR byte order (determined by hardware wiring)
+- RGB or BGR byte order (determined by hardware wiring)
 - Length = total number of physical LEDs
-- **Write-only target** for the final composited result
-- Knows its color order and length. Nothing else.
-- One Strip instance per device.
-
-### Pixel Group
-
-A logical grouping of physical LEDs, identified by an ID. Provides the mapping between logical pixel indices (0, 1, 2, ...) and physical LED positions on the strip.
-
-**All pixel groups are dynamic.** There is no distinction between "static" and "ephemeral" groups at the type level. A group that persists for the entire program is simply one that's never discarded — its lifecycle is controlled entirely by the bytecode.
-
-**Properties:**
-- Numeric ID (assigned by bytecode)
-- Index mapping array: `logical_index → physical_strip_index`
-- Length (number of logical pixels in the group)
-
-**Lifecycle:** Created and destroyed by bytecode instructions.
-- `CREATE_GROUP id, indices[...]` — allocates the index mapping
-- `DISCARD_GROUP id` — frees the index mapping and any associated layers
-
-**Examples:**
-```
-CREATE_GROUP id=0, indices=[0..49]         → "all 50 LEDs"
-CREATE_GROUP id=1, indices=[0..9]          → "flower center"
-CREATE_GROUP id=2, indices=[4,11,21,25]    → "spark target pixels"
-```
-
-Pixel groups may overlap in their physical indices. This is by design — a background animation on "all LEDs" and a spark overlay on a subset of those LEDs will target overlapping physical pixels. The compositor resolves this via layer ordering.
-
-**Design rationale — why all dynamic:**
-- One concept instead of two (static vs ephemeral). Simpler mental model, simpler code.
-- The device firmware doesn't need a configuration phase. Everything comes from the bytecode.
-- The base station has full control over group lifecycle.
-- A "static" group is just a dynamic group that's never discarded.
+- One Strip instance per device
+- The compositor blends directly into this buffer — there is no separate composite buffer
 
 ### Layer
 
-A render surface attached to a pixel group. This is where animations write their output.
+A layer combines pixel addressing, color data, and compositing priority into a single concept. It is both "which physical pixels" and "what color/alpha values" in one object.
 
 **Properties:**
-- Associated pixel group (by ID)
-- **HSVA pixel buffer** — sized to the pixel group's length (not full strip length)
+- **Numeric ID** — assigned by bytecode
+- **Index mapping** — array of `logical_index → physical_strip_index`, defines which physical LEDs this layer addresses
+- **Length** — number of logical pixels in the layer
+- **HSVA pixel buffer** — sized to the layer's length (not full strip length)
   - H, S, V: `float` — internal color representation in HSV space
-  - A: `float` — alpha channel, range [0.0, 1.0]. Controls blending with layers below.
-- Blend mode: `REPLACE`, `ALPHA`, `ADDITIVE` (extensible)
-- Priority: determines compositing order (lower = rendered first = further back)
+  - A: `float` — alpha channel, range [0.0, 1.0]
+- **Priority** — determines compositing order (lower = further back, higher = on top)
+
+**Lifecycle:** Created and destroyed by bytecode instructions.
+```
+CREATE_LAYER id=0, indices=[0..49], priority=0     → background, all 50 LEDs
+CREATE_LAYER id=1, indices=[4,11,21,25], priority=1 → spark overlay, 4 LEDs
+DISCARD_LAYER id=1                                  → frees buffer + index mapping
+```
+
+**All layers are dynamic.** There is no distinction between "persistent" and "ephemeral" layers at the type level. A layer that lives for the entire program is simply one that's never discarded. A layer that lives for 468ms gets created, used, and discarded by the bytecode. The lifecycle is entirely controlled by the program.
+
+**Layers may overlap in physical indices.** A background layer on [0..49] and a spark layer on [4,11,21,25] both address physical LEDs 4, 11, 21, and 25. The compositor resolves this via priority ordering and alpha blending.
+
+**Why merged (not separate Pixel Group + Layer):**
+In every scenario we evaluated, pixel groups and layers had a 1:1 relationship — created together, destroyed together. Keeping them as separate concepts added an abstraction and extra bytecode instructions for no practical benefit. If two animations need the same pixel set, create two layers with the same indices — the duplicated index array is a few bytes.
 
 **Why HSVA:**
-- HSV is natural for LED animation — hue rotation produces rainbows, saturation/value control is intuitive.
-- Animations author in HSV. Conversion to RGB happens once, at composite time.
-- **Alpha is per-pixel**, not per-layer. This enables effects where individual pixels within a group have different opacity — e.g., a spark animation where each pixel fades independently, or cascading flashes where pixels fire in sequence.
+- HSV is natural for LED animation — hue rotation produces rainbows, saturation and value control is intuitive
+- Animations author in HSV. Conversion to RGB happens once at composite time.
+- **Alpha is per-pixel**, not per-layer. This enables effects where individual pixels within a layer have different opacity — e.g., cascading sparks where each pixel fires and fades independently.
 
-**Why per-pixel alpha (not per-layer coefficient):**
-A per-layer blend coefficient forces all pixels in the group to blend at the same ratio. This prevents effects like cascading sparks (pixel 0 at full brightness while pixel 3 is half-faded). Per-pixel alpha costs one float per pixel of extra memory but enables significantly richer animations with negligible performance impact.
+**Why per-pixel alpha:**
+A per-layer blend coefficient forces all pixels to blend at the same ratio. This prevents effects like cascading sparks (pixel 0 at full brightness while pixel 3 is half-faded). Per-pixel alpha costs one extra float per pixel but enables significantly richer animations with negligible performance impact.
 
 **Buffer sizing:**
-Layer buffers are pixel-group-sized, not full-strip-sized. A spark layer targeting 4 pixels allocates a 4-pixel HSVA buffer (64 bytes with float HSVA), not a 50-pixel buffer. This is efficient — most groups are small and most layers are short-lived.
+Layer buffers are sized to the layer's pixel count, not the full strip length. A 4-pixel spark layer = 4 × 16 bytes = 64 bytes. A 50-pixel background layer = 800 bytes. Memory is only allocated for pixels that are actually being animated.
 
-Memory estimate: `pixels × 16 bytes` (4 floats: H, S, V, A). A 50-pixel background layer = 800 bytes. Four simultaneous 4-pixel spark layers = 256 bytes. Well within ESP32 budget.
-
-**Lifecycle:** Created and destroyed alongside their pixel group, or by explicit bytecode instructions if multiple layers per group are needed.
+**Animations see an isolated world.** An animation targeting a 4-pixel layer sees a buffer of pixels [0, 1, 2, 3]. It has no knowledge that these map to physical LEDs 4, 11, 21, and 25. The index mapping is the layer's concern, resolved at composite time.
 
 ### Compositor
 
-The compositor runs every render frame (~100Hz target). It blends all active layers into the strip output buffer.
+The compositor runs every render frame (~100Hz target). It alpha-blends all active layers into the Strip.
+
+**There is only one blending mode: alpha.** The background layer simply sets A=1.0 on all its pixels, which fully writes its colors — no special "replace" mode needed. Overlay layers use intermediate alpha values for smooth blending. When alpha reaches 0.0, the pixel is fully transparent and the layer below shows through.
 
 **Pipeline:**
 
 ```
-1. Clear composite buffer (RGB, full strip length)
+1. Clear Strip to black (memset CRGB array to 0)
 
 2. For each active layer, ordered by priority (lowest first):
    a. Animation renders into the layer's HSVA buffer
-   b. For each pixel i in the layer's pixel group:
-      physical_idx = pixel_group.index_map[i]
+   b. For each pixel i in the layer:
+      physical_idx = layer.index_map[i]
       pixel_rgb = hsv_to_rgb(layer.buffer[i])
       alpha = layer.buffer[i].a
-      
-      if blend_mode == REPLACE:
-        composite[physical_idx] = pixel_rgb
-      elif blend_mode == ALPHA:
-        composite[physical_idx] = lerp(composite[physical_idx], pixel_rgb, alpha)
-      elif blend_mode == ADDITIVE:
-        composite[physical_idx] = clamp(composite[physical_idx] + pixel_rgb * alpha)
+      strip[physical_idx] = lerp(strip[physical_idx], pixel_rgb, alpha)
 
-3. Copy composite buffer → Strip (applying color order)
-4. FastLED.show()
+3. FastLED.show()
 ```
 
-**Blending happens in RGB space**, not HSV. This is a deliberate choice:
+**Why the compositor blends directly into the Strip (no intermediate buffer):**
+The first layer (background, A=1.0) writes `lerp(black, color, 1.0) = color`. Subsequent layers blend on top. Pixels not covered by any layer stay black. This is correct in all cases and eliminates a separate full-strip composite buffer.
 
-- HSV blending breaks down when saturation values differ greatly. Blending white (S=0) with deep blue (S=255) in HSV produces an unpredictable hue because the H component is meaningless at S=0 but still participates in interpolation.
-- RGB blending of white over deep blue correctly produces pale blue — which is what the eye expects.
-- Cost: one `hsv_to_rgb` conversion per active pixel per layer per frame. At 50 pixels, 3 layers, 100Hz = ~15,000 conversions/sec. Each is a few dozen integer ops. ESP32 at 240MHz handles this easily.
-
-**Composite buffer:** RGB, full strip length. 50 LEDs × 3 bytes = 150 bytes. This is the one full-strip-sized allocation. Individual layer buffers remain pixel-group-sized.
+**Blending happens in RGB space**, not HSV. This is deliberate:
+- HSV blending breaks down when saturation values differ. Blending white (S=0) with deep blue (S=255) in HSV produces unpredictable results because the hue component is meaningless at S=0 but still participates in interpolation.
+- RGB blending of white over deep blue correctly produces pale blue — which matches visual expectation.
+- Cost: one `hsv_to_rgb` conversion per active pixel per layer per frame. At 50 pixels, 3 layers, 100Hz = ~15,000 conversions/sec. Negligible on ESP32 at 240MHz.
 
 ### Worked Example: Flower with Beat-Synced Sparks
 
 **Physical setup:** 50 LEDs shaped as a flower. Center = LEDs 0-9, petals = LEDs 10-49.
 
-**Desired effect:** Slow hue wave across entire flower (background). On every 4th beat, a few random pixels flash white and fade out over ~1 beat.
+**Desired effect:** Slow hue wave across entire flower (background). On every 4th beat, a few pixels flash white and fade out over ~1 beat.
 
 **Bytecode execution (128 BPM, 1 beat = 468ms):**
 
 ```
 Program start:
-  CREATE_GROUP id=0, indices=[0..49]                    → all 50 LEDs
-  CREATE_LAYER group=0, priority=0, blend=REPLACE
-  START_ANIMATION layer=0, type=HUE_WAVE, params={...}  → runs continuously
+  CREATE_LAYER id=0, indices=[0..49], priority=0
+  START_ANIMATION layer=0, type=HUE_WAVE, params={...}    → runs continuously
 
 At t=12.500s (beat-aligned):
-  CREATE_GROUP id=1, indices=[4, 11, 21, 25]
-  CREATE_LAYER group=1, priority=1, blend=ALPHA
+  CREATE_LAYER id=1, indices=[4, 11, 21, 25], priority=1
   START_ANIMATION layer=1, type=SPARK, duration=468ms, params={color=white}
     → Animation writes HSVA per pixel:
       t+0ms:   H=0, S=0, V=255, A=1.0  (full white, fully opaque)
@@ -325,16 +302,15 @@ At t=12.500s (beat-aligned):
       t+468ms: H=0, S=0, V=255, A=0.0  (fully transparent → background shows through)
 
 At t=12.968s (animation ends):
-  DISCARD_GROUP id=1                                    → frees layer + buffer + indices
+  DISCARD_LAYER id=1                                      → frees buffer + indices
 
 At t=14.375s (next spark):
-  CREATE_GROUP id=2, indices=[7, 19, 33, 42, 48]
-  CREATE_LAYER group=2, priority=1, blend=ALPHA
+  CREATE_LAYER id=2, indices=[7, 19, 33, 42, 48], priority=1
   START_ANIMATION layer=2, type=SPARK, duration=468ms, params={color=white}
   ...
 
 At t=14.843s:
-  DISCARD_GROUP id=2
+  DISCARD_LAYER id=2
 ```
 
 **What the viewer sees:** A chill, slowly changing colorful flower. Every ~2 seconds, a handful of pixels flash bright white and smoothly fade back into the background animation. The flash lands exactly on the musical beat.
@@ -346,7 +322,7 @@ At t=14.843s:
 ### Design Philosophy
 
 - **Primitives are simple.** A small set of built-in animation functions (5-8), each parameterized.
-- **Composition creates complexity.** Layering, blending, and repetition of simple primitives produces visually rich results.
+- **Composition creates complexity.** Layering and repetition of simple primitives produces visually rich results.
 - **Programs are compact.** ESP32 has limited RAM (~320KB). A full song's animation timeline must fit comfortably. Target: <20KB for a 5-minute track.
 - **Rendering is local.** The ESP32 renders everything from its internal buffer. No streaming of pixel data over the network.
 
@@ -358,13 +334,13 @@ To be refined during implementation, but initial candidates:
 |-----------|-------------|
 | **fill** | Solid color fill, with optional fade in/out |
 | **gradient** | Linear gradient between two colors, mapped to pixel position |
-| **sweep** | Band of color moving along the pixel group |
+| **sweep** | Band of color moving along the layer's pixels |
 | **pulse** | Brightness oscillation (sine wave), parameterized by frequency and amplitude |
 | **sparkle** | Pixels flash at configurable density with per-pixel fade. Uses seeded PRNG for deterministic results (required for multi-device sync). |
-| **wave** | Sine-based color/brightness propagation along the pixel group |
+| **wave** | Sine-based color/brightness propagation along the layer's pixels |
 
 Each primitive:
-- Receives a pixel-group-sized HSVA buffer
+- Receives a layer's HSVA buffer (pixel-group-sized)
 - Sees an isolated 0..N-1 pixel world (no knowledge of physical layout)
 - Controls per-pixel alpha for blending
 - Receives `t_rel` (time relative to animation start) and its parameters
@@ -374,10 +350,10 @@ Each primitive:
 The animation system is a lightweight bytecode interpreter. The base station compiles animation descriptions into bytecode; the ESP32 executes it.
 
 **Key concepts:**
-- **Opcodes** reference built-in primitives, group management, and control flow
+- **Opcodes** reference built-in primitives, layer management, and control flow
 - **Control flow** supports repetition (`REPEAT N times`, `REPEAT for duration D`)
 - **Timing** is relative — offsets from program start or enclosing repeat block
-- **Group/layer management** is explicit in the bytecode (CREATE, DISCARD)
+- **Layer management** is explicit in the bytecode (CREATE_LAYER, DISCARD_LAYER)
 
 **Encoding goals:**
 - Compact: each instruction should be 4-20 bytes
@@ -394,7 +370,7 @@ The animation system is a lightweight bytecode interpreter. The base station com
 1. **Nested repeats.** Repeats inside repeats would massively improve compression for music (repeat 4-bar pattern 8 times, within each bar repeat beat pattern 4 times). Adds interpreter complexity. Recommend: yes, with a max nesting depth of 3-4.
 2. **Parameter interpolation over time.** Should primitives support changing parameters mid-animation (e.g., a sweep that accelerates)? Start without this; add as a modifier opcode later if needed.
 3. **Seeded PRNG for sparkle.** Multi-device sync requires deterministic randomness. Seed should be per-instruction so the same program produces identical results on every device.
-4. **Memory pool sizing.** Need to define max concurrent groups/layers and pre-allocate accordingly. Proposed budget: 4KB for ephemeral pixel group buffers (~250 float-HSVA pixels, or ~20 groups of ~12 pixels each).
+4. **Memory pool sizing.** Need to define max concurrent layers and pre-allocate accordingly. Proposed budget: 4KB for layer buffers (~250 float-HSVA pixels, or ~20 layers of ~12 pixels each).
 
 ---
 
@@ -402,12 +378,12 @@ The animation system is a lightweight bytecode interpreter. The base station com
 
 ### What to keep from v1 (master branch)
 
-- **PixelArray / Strip abstraction** — the core concept of logical-to-physical pixel mapping. Evolved into Pixel Group + Layer in v2.
+- **PixelArray / Strip abstraction** — the core concept of logical-to-physical pixel mapping. Evolved into the Layer abstraction in v2 (which merges index mapping + color buffer).
 - **HSV color space** with gamma correction — proper LED color handling. Extended with per-pixel alpha in v2.
 - **PC simulation path** — `#ifdef DEBUG_HELPERS` / `#ifdef ARDUINO` guards enabling desktop build and debug. Essential for development.
 - **Time representation** — `double` epoch time with ms fractions (seconds.milliseconds format).
 - **NTPClient fork** — millisecond-precision NTP sync.
-- **SlotsMM concept** — pre-allocated memory pool. Will be adapted for v2's dynamic pixel group/layer allocation.
+- **SlotsMM concept** — pre-allocated memory pool. Will be adapted for v2's dynamic layer allocation.
 
 ### What to change
 
@@ -417,7 +393,7 @@ The animation system is a lightweight bytecode interpreter. The base station com
 | Single channel, single animation type | Multi-layer, multiple primitives, per-pixel alpha |
 | C++ subclass per animation (compile-time) | Bytecode VM (runtime, primitives are built-in) |
 | Binary packed struct wire format | Bytecode programs compiled by base station |
-| Static channel setup via MQTT | All groups/layers dynamic, created by bytecode |
+| Static channel setup via MQTT | All layers dynamic, created by bytecode |
 | All config via MQTT at runtime, lost on reboot | Stored presets on flash + LOAD/START protocol |
 | `handlers_t` god struct passed everywhere | Cleaner dependency injection (TBD) |
 | Error handling via `const char **errstr` | TBD — consider error codes |
@@ -431,7 +407,7 @@ The branch introduced good ideas that were never completed:
 - **Renderable** interface — generic render contract. The concept survives in v2's animation primitives.
 - **AnimationSequence** — composable timeline of renderables. Replaced by bytecode control flow (REPEAT, timing offsets).
 - **`execute(code, progress)`** — the right API shape for the VM. Was never implemented.
-- **Deletion of Channel class** — correct instinct. Replaced by the more flexible Pixel Group + Layer model.
+- **Deletion of Channel class** — correct instinct. Replaced by the simpler Layer model.
 
 The branch stalled because the bytecode format was never defined. That remains the critical next design task.
 
@@ -471,7 +447,7 @@ Maintaining the ability to build and test animation logic on desktop (Linux) wit
 
 ### Phase 1: Foundation
 - Port to ESP32 + PlatformIO project structure
-- Implement core abstractions: Strip, Pixel Group, Layer, Compositor
+- Implement core abstractions: Strip, Layer, Compositor
 - Define bytecode format specification
 - Implement bytecode VM with 2-3 primitives
 - PC simulator for VM testing
