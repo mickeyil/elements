@@ -39,7 +39,7 @@ The core design principle: **tight timing sync over complex rendering**. Simple 
 │                  │                  │
 │  ┌───────────────┴───────────────┐  │
 │  │ MQTT Client                   │  │
-│  │ (config, programs, commands)  │  │
+│  │ (programs, commands)          │  │
 │  └───────────────┬───────────────┘  │
 │                  │                  │
 │  ┌───────────────┴───────────────┐  │
@@ -50,11 +50,11 @@ The core design principle: **tight timing sync over complex rendering**. Simple 
 │  ┌───────────────┴───────────────┐  │
 │  │ Animation VM                  │  │
 │  │ (bytecode interpreter)        │  │
-│  │ renders to pixel buffer       │  │
+│  │ renders to pixel buffers      │  │
 │  └───────────────┬───────────────┘  │
 │                  │                  │
 │  ┌───────────────┴───────────────┐  │
-│  │ FastLED → WS2812B strip       │  │
+│  │ Compositor → FastLED → strip  │  │
 │  └───────────────────────────────┘  │
 └─────────────────────────────────────┘
 ```
@@ -68,27 +68,62 @@ The core design principle: **tight timing sync over complex rendering**. Simple 
 
 ---
 
+## Base Station Protocol
+
+Communication between the base station and the ESP32 device is minimal by design. The base station does all the heavy lifting (analysis, compilation); the device is a dumb playback engine.
+
+### Messages
+
+| Message | Direction | Description |
+|---------|-----------|-------------|
+| **LOAD** | base → device | Upload a bytecode program. Implicitly clears all device state (active groups, layers, animations, buffers). The device is in a fresh state ready to execute. |
+| **ACK** | device → base | Confirms program was received and loaded successfully. |
+| **START** | base → device | Begin executing the loaded program at absolute NTP timestamp T0. |
+
+### Playback Flow
+
+**Song playback:**
+```
+Base station → ESP32: LOAD (song bytecode, ~3KB)
+ESP32 → Base station: ACK
+Base station → ESP32: START at T0
+Base station: begins audio playback timed to T0 (accounting for audio pipeline latency)
+ESP32: executes bytecode from T0
+  ... song plays ...
+Song ends. Program finishes. Device goes dark.
+Base station → ESP32: LOAD (ambient bytecode or next song)
+```
+
+**Stopping mid-song:**
+```
+Base station → ESP32: LOAD (ambient bytecode)
+```
+LOAD clears everything — the song's animations stop immediately, ambient program takes over. No explicit stop command needed.
+
+**Default behavior:** When a program finishes and no new program is loaded, the device goes dark. This is the expected state between songs — the base station sends the next program when ready.
+
+### Transport
+
+MQTT over the shared WiFi network. Programs are sent as binary payloads. MQTT topic structure TBD but will follow the v1 pattern: `elements/<device_id>/...`
+
+---
+
 ## Operating Modes
 
 ### Ambient Mode
 
-- Device powers on and immediately begins playing pre-stored animation programs
-- Programs are stored on device flash (LittleFS/SPIFFS)
-- Can be updated via MQTT without reflashing firmware
+- A bytecode program like any other, but designed to loop indefinitely
+- Can be stored on device flash (LittleFS) for power-on default
+- Can be replaced anytime via LOAD
 - Think: slow color waves, gentle breathing, gradient sweeps
-- Multiple programs stored, selectable via MQTT command
 
 ### Music Sync Mode
 
-The base station orchestrates everything:
-
-1. **Pre-analysis:** Before playback, the base station analyzes the audio track — beat detection, energy analysis, possibly frequency band decomposition (bass, mids, treble)
-2. **Compilation:** Analysis results are compiled into a bytecode animation program — a compact binary timeline referencing built-in animation primitives
-3. **Upload:** The compiled program is sent to the ESP32 via MQTT before playback begins
-4. **Playback trigger:** Base station sends a "start at T0" command, where T0 is an absolute NTP-synced timestamp accounting for audio pipeline latency
-5. **Rendering:** ESP32's animation VM walks the program against its NTP-synced clock
-
-The ESP32 is deliberately "dumb" in this mode — it receives a pre-compiled buffer and plays it back. All intelligence (beat analysis, animation design, compilation) lives on the base station where compute is abundant.
+1. **Pre-analysis:** Before playback, the base station analyzes the audio track offline — beat detection, energy analysis, frequency band decomposition
+2. **Compilation:** Results are compiled into a bytecode program (cached for reuse)
+3. **Upload:** LOAD bytecode to device, wait for ACK
+4. **Trigger:** START with absolute timestamp T0
+5. **Playback:** Device executes bytecode against its NTP-synced clock
 
 ---
 
@@ -144,7 +179,7 @@ Modern audio APIs (ALSA `snd_pcm_delay()`, PipeWire latency queries) provide thi
 
 Previous experimentation: Mickey's `wavplayer` project demonstrated precise control of Linux audio APIs with verified sync between audio output and visual events (confirmed via slow-motion video capture).
 
-### Drift Correction Strategy
+### Drift Correction Strategy (Future)
 
 If higher precision is needed in the future, the recommended approach is clock discipline (PLL-style):
 
@@ -154,6 +189,155 @@ If higher precision is needed in the future, the recommended approach is clock d
 4. This is how professional lighting systems handle it
 
 This is explicitly **not planned for v2 initial implementation** — NTP should be sufficient. Documented here for future reference.
+
+---
+
+## Rendering Abstractions
+
+The rendering pipeline has four core concepts: **Strip**, **Pixel Group**, **Layer**, and **Compositor**. These were designed bottom-up to support two key scenarios:
+
+1. A continuous strip shaped into a physical form (e.g., a flower) where named subsets (center, petals) are animated independently
+2. Overlay effects (e.g., beat-synced white sparks) blended on top of a background animation
+
+### Strip
+
+The physical LED output buffer.
+
+- `uint8_t[]` in RGB or BGR byte order (determined by hardware wiring)
+- Length = total number of physical LEDs
+- **Write-only target** for the final composited result
+- Knows its color order and length. Nothing else.
+- One Strip instance per device.
+
+### Pixel Group
+
+A logical grouping of physical LEDs, identified by an ID. Provides the mapping between logical pixel indices (0, 1, 2, ...) and physical LED positions on the strip.
+
+**All pixel groups are dynamic.** There is no distinction between "static" and "ephemeral" groups at the type level. A group that persists for the entire program is simply one that's never discarded — its lifecycle is controlled entirely by the bytecode.
+
+**Properties:**
+- Numeric ID (assigned by bytecode)
+- Index mapping array: `logical_index → physical_strip_index`
+- Length (number of logical pixels in the group)
+
+**Lifecycle:** Created and destroyed by bytecode instructions.
+- `CREATE_GROUP id, indices[...]` — allocates the index mapping
+- `DISCARD_GROUP id` — frees the index mapping and any associated layers
+
+**Examples:**
+```
+CREATE_GROUP id=0, indices=[0..49]         → "all 50 LEDs"
+CREATE_GROUP id=1, indices=[0..9]          → "flower center"
+CREATE_GROUP id=2, indices=[4,11,21,25]    → "spark target pixels"
+```
+
+Pixel groups may overlap in their physical indices. This is by design — a background animation on "all LEDs" and a spark overlay on a subset of those LEDs will target overlapping physical pixels. The compositor resolves this via layer ordering.
+
+**Design rationale — why all dynamic:**
+- One concept instead of two (static vs ephemeral). Simpler mental model, simpler code.
+- The device firmware doesn't need a configuration phase. Everything comes from the bytecode.
+- The base station has full control over group lifecycle.
+- A "static" group is just a dynamic group that's never discarded.
+
+### Layer
+
+A render surface attached to a pixel group. This is where animations write their output.
+
+**Properties:**
+- Associated pixel group (by ID)
+- **HSVA pixel buffer** — sized to the pixel group's length (not full strip length)
+  - H, S, V: `float` — internal color representation in HSV space
+  - A: `float` — alpha channel, range [0.0, 1.0]. Controls blending with layers below.
+- Blend mode: `REPLACE`, `ALPHA`, `ADDITIVE` (extensible)
+- Priority: determines compositing order (lower = rendered first = further back)
+
+**Why HSVA:**
+- HSV is natural for LED animation — hue rotation produces rainbows, saturation/value control is intuitive.
+- Animations author in HSV. Conversion to RGB happens once, at composite time.
+- **Alpha is per-pixel**, not per-layer. This enables effects where individual pixels within a group have different opacity — e.g., a spark animation where each pixel fades independently, or cascading flashes where pixels fire in sequence.
+
+**Why per-pixel alpha (not per-layer coefficient):**
+A per-layer blend coefficient forces all pixels in the group to blend at the same ratio. This prevents effects like cascading sparks (pixel 0 at full brightness while pixel 3 is half-faded). Per-pixel alpha costs one float per pixel of extra memory but enables significantly richer animations with negligible performance impact.
+
+**Buffer sizing:**
+Layer buffers are pixel-group-sized, not full-strip-sized. A spark layer targeting 4 pixels allocates a 4-pixel HSVA buffer (64 bytes with float HSVA), not a 50-pixel buffer. This is efficient — most groups are small and most layers are short-lived.
+
+Memory estimate: `pixels × 16 bytes` (4 floats: H, S, V, A). A 50-pixel background layer = 800 bytes. Four simultaneous 4-pixel spark layers = 256 bytes. Well within ESP32 budget.
+
+**Lifecycle:** Created and destroyed alongside their pixel group, or by explicit bytecode instructions if multiple layers per group are needed.
+
+### Compositor
+
+The compositor runs every render frame (~100Hz target). It blends all active layers into the strip output buffer.
+
+**Pipeline:**
+
+```
+1. Clear composite buffer (RGB, full strip length)
+
+2. For each active layer, ordered by priority (lowest first):
+   a. Animation renders into the layer's HSVA buffer
+   b. For each pixel i in the layer's pixel group:
+      physical_idx = pixel_group.index_map[i]
+      pixel_rgb = hsv_to_rgb(layer.buffer[i])
+      alpha = layer.buffer[i].a
+      
+      if blend_mode == REPLACE:
+        composite[physical_idx] = pixel_rgb
+      elif blend_mode == ALPHA:
+        composite[physical_idx] = lerp(composite[physical_idx], pixel_rgb, alpha)
+      elif blend_mode == ADDITIVE:
+        composite[physical_idx] = clamp(composite[physical_idx] + pixel_rgb * alpha)
+
+3. Copy composite buffer → Strip (applying color order)
+4. FastLED.show()
+```
+
+**Blending happens in RGB space**, not HSV. This is a deliberate choice:
+
+- HSV blending breaks down when saturation values differ greatly. Blending white (S=0) with deep blue (S=255) in HSV produces an unpredictable hue because the H component is meaningless at S=0 but still participates in interpolation.
+- RGB blending of white over deep blue correctly produces pale blue — which is what the eye expects.
+- Cost: one `hsv_to_rgb` conversion per active pixel per layer per frame. At 50 pixels, 3 layers, 100Hz = ~15,000 conversions/sec. Each is a few dozen integer ops. ESP32 at 240MHz handles this easily.
+
+**Composite buffer:** RGB, full strip length. 50 LEDs × 3 bytes = 150 bytes. This is the one full-strip-sized allocation. Individual layer buffers remain pixel-group-sized.
+
+### Worked Example: Flower with Beat-Synced Sparks
+
+**Physical setup:** 50 LEDs shaped as a flower. Center = LEDs 0-9, petals = LEDs 10-49.
+
+**Desired effect:** Slow hue wave across entire flower (background). On every 4th beat, a few random pixels flash white and fade out over ~1 beat.
+
+**Bytecode execution (128 BPM, 1 beat = 468ms):**
+
+```
+Program start:
+  CREATE_GROUP id=0, indices=[0..49]                    → all 50 LEDs
+  CREATE_LAYER group=0, priority=0, blend=REPLACE
+  START_ANIMATION layer=0, type=HUE_WAVE, params={...}  → runs continuously
+
+At t=12.500s (beat-aligned):
+  CREATE_GROUP id=1, indices=[4, 11, 21, 25]
+  CREATE_LAYER group=1, priority=1, blend=ALPHA
+  START_ANIMATION layer=1, type=SPARK, duration=468ms, params={color=white}
+    → Animation writes HSVA per pixel:
+      t+0ms:   H=0, S=0, V=255, A=1.0  (full white, fully opaque)
+      t+234ms: H=0, S=0, V=255, A=0.5  (white, half blended with background)
+      t+468ms: H=0, S=0, V=255, A=0.0  (fully transparent → background shows through)
+
+At t=12.968s (animation ends):
+  DISCARD_GROUP id=1                                    → frees layer + buffer + indices
+
+At t=14.375s (next spark):
+  CREATE_GROUP id=2, indices=[7, 19, 33, 42, 48]
+  CREATE_LAYER group=2, priority=1, blend=ALPHA
+  START_ANIMATION layer=2, type=SPARK, duration=468ms, params={color=white}
+  ...
+
+At t=14.843s:
+  DISCARD_GROUP id=2
+```
+
+**What the viewer sees:** A chill, slowly changing colorful flower. Every ~2 seconds, a handful of pixels flash bright white and smoothly fade back into the background animation. The flash lands exactly on the musical beat.
 
 ---
 
@@ -172,39 +356,45 @@ To be refined during implementation, but initial candidates:
 
 | Primitive | Description |
 |-----------|-------------|
-| **fill** | Solid color fill (entire strip or range), with optional fade in/out |
-| **gradient** | Linear gradient between two colors, mapped to strip position |
-| **sweep** | Color/brightness moves along the strip at a given speed |
+| **fill** | Solid color fill, with optional fade in/out |
+| **gradient** | Linear gradient between two colors, mapped to pixel position |
+| **sweep** | Band of color moving along the pixel group |
 | **pulse** | Brightness oscillation (sine wave), parameterized by frequency and amplitude |
-| **sparkle** | Random pixels flash at a configurable density and decay rate |
-| **wave** | Sine-based color/brightness propagation along the strip |
+| **sparkle** | Pixels flash at configurable density with per-pixel fade. Uses seeded PRNG for deterministic results (required for multi-device sync). |
+| **wave** | Sine-based color/brightness propagation along the pixel group |
 
-Each primitive operates on an internal pixel buffer. Composition is achieved by layering primitives with alpha blending.
+Each primitive:
+- Receives a pixel-group-sized HSVA buffer
+- Sees an isolated 0..N-1 pixel world (no knowledge of physical layout)
+- Controls per-pixel alpha for blending
+- Receives `t_rel` (time relative to animation start) and its parameters
 
 ### Bytecode VM
 
-The animation system is a lightweight bytecode interpreter — think of it as a tiny VM for LEDs. The base station compiles animation descriptions into bytecode; the ESP32 just executes it.
+The animation system is a lightweight bytecode interpreter. The base station compiles animation descriptions into bytecode; the ESP32 executes it.
 
-**Key bytecode concepts:**
-- **Opcodes** reference built-in primitive functions with parameters
-- **Control flow** supports repetition ("repeat N times", "loop for duration D")
-- **Timing** is relative — offsets from a start anchor, not absolute timestamps
-- **Composition** via render layers with blend modes (replace, additive, alpha)
+**Key concepts:**
+- **Opcodes** reference built-in primitives, group management, and control flow
+- **Control flow** supports repetition (`REPEAT N times`, `REPEAT for duration D`)
+- **Timing** is relative — offsets from program start or enclosing repeat block
+- **Group/layer management** is explicit in the bytecode (CREATE, DISCARD)
 
 **Encoding goals:**
-- Compact: each opcode + params should be 4-20 bytes
-- No dynamic memory allocation during playback
-- No string parsing — pure binary, pre-compiled by the base station
-- Parseable in a single linear pass (no backtracking)
+- Compact: each instruction should be 4-20 bytes
+- Pre-allocated memory pool for runtime buffers (no heap alloc during playback)
+- Pure binary, pre-compiled by the base station
+- Parseable in a single linear pass
 
-**Detailed bytecode specification is TBD** — this is the main design task before implementation begins.
+**Size estimate:** A 5-minute house track at 128 BPM with heavy use of repeat blocks: **2-5KB** for the full program. Well within ESP32 limits.
+
+**Detailed bytecode specification is TBD** — to be designed next.
 
 ### Open Questions (Animation System)
 
-1. **Stack-based VM vs. flat opcode list?** Stack-based is more flexible but more complex. A flat timeline with nested repeat blocks may be sufficient.
-2. **How many simultaneous layers?** More layers = more RAM for pixel buffers. 2-3 layers is probably the sweet spot for ESP32.
-3. **Color space:** v1 used HSV internally with RGB output. HSV makes interpolation prettier (hue rotation). Keep this?
-4. **Spatial mapping:** v1 supported index remapping (logical pixel → physical strip position). Needed for non-linear strip shapes. Keep and extend?
+1. **Nested repeats.** Repeats inside repeats would massively improve compression for music (repeat 4-bar pattern 8 times, within each bar repeat beat pattern 4 times). Adds interpreter complexity. Recommend: yes, with a max nesting depth of 3-4.
+2. **Parameter interpolation over time.** Should primitives support changing parameters mid-animation (e.g., a sweep that accelerates)? Start without this; add as a modifier opcode later if needed.
+3. **Seeded PRNG for sparkle.** Multi-device sync requires deterministic randomness. Seed should be per-instruction so the same program produces identical results on every device.
+4. **Memory pool sizing.** Need to define max concurrent groups/layers and pre-allocate accordingly. Proposed budget: 4KB for ephemeral pixel group buffers (~250 float-HSVA pixels, or ~20 groups of ~12 pixels each).
 
 ---
 
@@ -212,35 +402,38 @@ The animation system is a lightweight bytecode interpreter — think of it as a 
 
 ### What to keep from v1 (master branch)
 
-- **PixelArray / Strip abstraction** — clean separation of logical pixels from physical strip layout. Index remapping is useful.
-- **HSV color space** with gamma correction — proper LED color handling.
+- **PixelArray / Strip abstraction** — the core concept of logical-to-physical pixel mapping. Evolved into Pixel Group + Layer in v2.
+- **HSV color space** with gamma correction — proper LED color handling. Extended with per-pixel alpha in v2.
 - **PC simulation path** — `#ifdef DEBUG_HELPERS` / `#ifdef ARDUINO` guards enabling desktop build and debug. Essential for development.
 - **Time representation** — `double` epoch time with ms fractions (seconds.milliseconds format).
 - **NTPClient fork** — millisecond-precision NTP sync.
+- **SlotsMM concept** — pre-allocated memory pool. Will be adapted for v2's dynamic pixel group/layer allocation.
 
 ### What to change
 
 | v1 | v2 |
 |----|-----|
 | ESP8266 | ESP32 |
-| Single channel, single animation type | Multi-layer, multiple primitives |
-| C++ subclass per animation (compile-time) | Bytecode VM (runtime) |
-| Binary packed struct wire format | Still binary, but versioned and structured as bytecode |
-| All config via MQTT at runtime, lost on reboot | Stored presets on flash + MQTT overrides |
+| Single channel, single animation type | Multi-layer, multiple primitives, per-pixel alpha |
+| C++ subclass per animation (compile-time) | Bytecode VM (runtime, primitives are built-in) |
+| Binary packed struct wire format | Bytecode programs compiled by base station |
+| Static channel setup via MQTT | All groups/layers dynamic, created by bytecode |
+| All config via MQTT at runtime, lost on reboot | Stored presets on flash + LOAD/START protocol |
 | `handlers_t` god struct passed everywhere | Cleaner dependency injection (TBD) |
 | Error handling via `const char **errstr` | TBD — consider error codes |
 | Blocking NTP sync | Non-blocking NTP sync |
-| Mixed memory management (SlotsMM + new/malloc) | Consistent strategy (TBD — arena allocator?) |
+| Mixed memory management (SlotsMM + new/malloc) | Pre-allocated memory pool for all runtime buffers |
+| Blending: timeline trim (new animation cuts old) | Blending: per-pixel alpha compositing in RGB space |
 
 ### What to learn from the abandoned `new_animation_engine` branch
 
 The branch introduced good ideas that were never completed:
-- **Renderable** interface — generic render contract. Worth keeping.
-- **AnimationSequence** — composable timeline of renderables. The concept is sound but needs the bytecode VM underneath.
+- **Renderable** interface — generic render contract. The concept survives in v2's animation primitives.
+- **AnimationSequence** — composable timeline of renderables. Replaced by bytecode control flow (REPEAT, timing offsets).
 - **`execute(code, progress)`** — the right API shape for the VM. Was never implemented.
-- **Deletion of Channel class** — correct instinct. The channel abstraction from v1 was over-engineered for one animation type.
+- **Deletion of Channel class** — correct instinct. Replaced by the more flexible Pixel Group + Layer model.
 
-The branch stalled because the bytecode format was never defined. That's the critical design task.
+The branch stalled because the bytecode format was never defined. That remains the critical next design task.
 
 ---
 
@@ -254,7 +447,7 @@ The branch stalled because the bytecode format was never defined. That's the cri
 
 ### LED Strip
 
-Physical strip details (length, shape, placement) are TBD. The software should be parameterized for arbitrary strip lengths. Current test setup: 1 LED on pin 13. Previous v1 setup: 50 LEDs.
+Physical strip details (length, shape, placement) are TBD. The software is parameterized for arbitrary strip lengths. Current test setup: 1 LED on pin 13. Previous v1 setup: 50 LEDs.
 
 ---
 
@@ -277,23 +470,23 @@ Maintaining the ability to build and test animation logic on desktop (Linux) wit
 ## Project Phases (Proposed)
 
 ### Phase 1: Foundation
-- Port to ESP32 + PlatformIO
-- Establish project structure
+- Port to ESP32 + PlatformIO project structure
+- Implement core abstractions: Strip, Pixel Group, Layer, Compositor
 - Define bytecode format specification
 - Implement bytecode VM with 2-3 primitives
 - PC simulator for VM testing
+- Memory pool allocator
 
 ### Phase 2: Ambient Mode
 - Implement remaining primitives
-- Composition / layering
 - Store programs on flash (LittleFS)
-- MQTT interface for program upload and selection
+- MQTT interface for LOAD/START protocol
 - WiFi + NTP setup
+- Power-on default program
 
 ### Phase 3: Music Sync
-- Base station tooling (beat analysis, compiler)
+- Base station tooling (beat analysis, program compiler)
 - Audio playback with latency compensation
-- MQTT protocol for program upload + start trigger
 - End-to-end sync testing
 - Multi-device support
 
@@ -304,4 +497,4 @@ Maintaining the ability to build and test animation logic on desktop (Linux) wit
 - Mickey's NTPClient fork: https://github.com/mickeyil/NTPClient
 - Mickey's wavplayer experiment: audio latency testing with low-level Linux APIs
 - elements v1 (master branch): working distance-sensor-triggered fill animation
-- elements `new_animation_engine` branch: abandoned bytecode VM attempt (see `drafts/new_animation_engine_notes.md`)
+- elements `new_animation_engine` branch: abandoned bytecode VM attempt
