@@ -4,7 +4,7 @@
 #include "strip.h"
 #include "layer.h"
 #include "compositor.h"
-#include "anim_hue_wave.h"
+#include "anim_wave.h"
 #include "anim_spark.h"
 
 // --- Hardware config ---
@@ -29,14 +29,13 @@ static const uint8_t spark_indices[] = {0, 1};
 Layer spark_layer(1, spark_indices, NUM_LEDS, /*priority=*/1);
 
 // Animations
-AnimSineWave sine_wave(
-    220.0f,       // hue: deep blue
-    1.0f,         // saturation: full
-    0.0f,         // v_min: off at trough
-    0.4f,         // v_max: moderate brightness at peak
-    8.0f,         // period: 8 second cycle
-    -M_PI / 2,    // phase0: pixel 0 starts at v_min (bottom of sine)
-    M_PI          // pixel_step: π — LEDs are opposite phase
+AnimWave bg_wave(
+    WaveChannel::V,   // animate brightness
+    220.0f, 1.0f, 0,  // fixed H=220 (deep blue), S=1.0, V ignored (animated)
+    0.0f, 0.4f,       // V range: 0.0 – 0.4
+    8.0f,             // period: 8 second cycle
+    -M_PI / 2,        // phase0: pixel 0 starts at v_min
+    M_PI              // pixel_step: π — LEDs opposite phase
 );
 
 AnimSpark spark(
@@ -51,7 +50,7 @@ void setup()
     FastLED.addLeds<WS2811, LED_PIN, GRB>(crgb, NUM_LEDS);
     FastLED.setBrightness(255);
 
-    bg_layer.set_animation(&sine_wave);
+    bg_layer.set_animation(&bg_wave);
     spark_layer.set_animation(&spark);
 
     compositor.add_layer(&bg_layer);
