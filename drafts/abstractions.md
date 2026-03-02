@@ -88,9 +88,11 @@ public:
     virtual ~Animation() {}
 
     // Called once when the event activates.
-    // Can allocate internal state, copy params, snapshot other layers.
+    // Can copy params, snapshot other layers, store work_buffer pointer.
+    // work_buffer: pre-allocated buffer from the pool (null for stateless animations).
     virtual void init(const AnimParams& params, uint8_t length,
-                      Layer** layers, uint8_t layer_count) = 0;
+                      Layer** layers, uint8_t layer_count,
+                      hsva_t* work_buffer) = 0;
 
     // Called every frame while the event is active.
     // t_rel = time since this event's t_start (animation always sees time from 0).
@@ -100,7 +102,7 @@ public:
 
 **Stateless animations** (e.g., wave, spark): output is a pure function of `t_rel` and params. `init()` just copies params. No internal buffers.
 
-**Stateful animations** (e.g., shift): need initialization data — either constant values embedded in params, or a runtime snapshot of another layer's buffer. `init()` sets up internal state (from the pre-allocated buffer pool — see Memory below). `render()` computes output from init data + `t_rel`.
+**Stateful animations** (e.g., shift): need initialization data — either constant values embedded in params, or a runtime snapshot of another layer's buffer. The engine passes a pre-allocated work buffer via `init()` (see BufferPool below). The animation stores the pointer and uses it — no allocation. `render()` computes output from init data + `t_rel`.
 
 **Key points:**
 - Animations see an isolated pixel world: indices 0..N-1. No knowledge of physical layout.
@@ -307,7 +309,7 @@ void Compositor::render(Layer** layers, uint8_t count, uint8_t active_mask)
 
 ---
 
-## Memory
+## Memory & BufferPool
 
 No `malloc`/`free` during playback. All memory is allocated once when a program is loaded.
 
@@ -316,23 +318,60 @@ No `malloc`/`free` during playback. All memory is allocated once when a program 
 - Internal buffers for stateful animations (e.g., shift's init data)
 - Animation instances themselves
 
-**Compiler's role:** The base station compiler sees the full timeline. It knows:
-- How many layers and their sizes
+### BufferPool
+
+The base station compiler sees the full timeline. It knows:
 - Which animations need internal buffers and when
 - Which buffers can be reused (non-overlapping events can share a buffer)
 
-It performs buffer packing (like register allocation) and includes a **buffer pool spec** in the program: an array of buffer sizes. The ESP32 allocates all buffers at load time. Animation events reference buffers by pool index.
+It performs buffer packing (like register allocation) and includes a buffer pool spec in the program: an array of buffer sizes. The ESP32 allocates all buffers at load time.
 
+```cpp
+struct BufferPool {
+    hsva_t** buffers;       // array of pointers to pre-allocated HSVA arrays
+    uint8_t* sizes;         // size (in pixels) of each buffer
+    uint8_t  count;         // number of buffers in the pool
+};
 ```
-Buffer pool: [
-    { size: 10 },   // buffer 0: 10 HSVA pixels
-    { size: 4 },    // buffer 1: 4 HSVA pixels
-]
+
+The pool is part of the Program:
+
+```cpp
+struct Program {
+    Layer**       layers;
+    LayerEvents*  layer_events;
+    uint8_t       layer_count;
+    BufferPool    pool;
+};
 ```
 
-Animation events that need internal storage include a `buffer_id` in their params, pointing to their assigned pool slot.
+At program load, the engine allocates all buffers:
 
-**Animation instance pool:** Similarly, the compiler knows the max number of concurrent animations. The engine can pre-allocate a pool of Animation objects. Details TBD.
+```cpp
+for (uint8_t i = 0; i < program.pool.count; i++)
+    program.pool.buffers[i] = new hsva_t[program.pool.sizes[i]];
+```
+
+Animation events that need internal storage include a `buffer_id` in their params, pointing to their assigned pool slot. The engine looks up the buffer and passes it to the animation's `init()`:
+
+```cpp
+// On activation:
+hsva_t* work_buf = nullptr;
+if (needs_buffer(e.animation))
+    work_buf = _program->pool.buffers[e.params.shift.buffer_id];
+
+instance->init(e.params, layer->length(),
+               _program->layers, _program->layer_count,
+               work_buf);
+```
+
+The animation stores the pointer — no allocation, no freeing. When two non-overlapping events share a pool slot, one uses it, finishes, then the next one overwrites it.
+
+Stateless animations receive `nullptr` and ignore it.
+
+### Animation Instance Pool
+
+The compiler knows the max number of concurrent animations. The engine can pre-allocate a pool of Animation objects instead of `new`/`delete` per event activation. Details TBD — can be decided at implementation time based on typical concurrency.
 
 ---
 
