@@ -12,9 +12,9 @@ The rendering pipeline:
 
 ```
 Program (static data)
-  → Engine (scans timeline, manages animation lifecycle)
+  → Engine (scans per-layer timelines, manages animation lifecycle)
     → Animations (render into layer buffers)
-      → Compositor (blends layers into strip, bottom to top)
+      → Compositor (blends active layers into strip, bottom to top)
         → Strip (physical LED output)
 ```
 
@@ -50,11 +50,12 @@ A layer is a pixel buffer with a mapping to physical LED indices. It combines th
 - **No ID field.** A layer's position in the program's layer array is its identity and its priority. Layer 0 is the bottom (rendered first), layer N-1 is the top.
 - **No animation pointer.** The layer doesn't know what writes into it. The engine decides which animation renders into which layer based on the timeline. The layer is purely passive.
 - **No clear per frame.** If a layer has no active animation event, the compositor skips it. If it has an active event, the animation overwrites the buffer. No need to zero the buffer every frame.
+- **Buffer survives animation end.** When an animation finishes, the layer's buffer retains the last rendered values. A subsequent animation on the same layer can use this data (e.g., SNAPSHOT init mode for shift). The buffer is not cleared between events — ownership passes to the next animation.
 - **Layers are static.** All layers are defined at program load and live for the entire program. No creation or destruction during playback. The compiler determines the required layers; the engine allocates them once.
 - **Layers may overlap in physical indices.** A background layer on [0..49] and a spark layer on [4,11,21,25] both address physical LEDs 4, 11, 21, and 25. The compositor resolves this via priority ordering and alpha blending.
 - **Per-pixel alpha.** Alpha is in the HSVA buffer per pixel, not per layer. This enables effects like cascading sparks where each pixel fades independently.
 
-**Analogy:** Layers are like tracks in a DAW. Bottom layers are long-running backgrounds. Upper layers are sparse, short-lived effects aligned to beats or other events. The compiler packs animation events into layers (tracks) such that no two events on the same layer overlap in time.
+**Analogy:** Layers are like tracks in a DAW. Bottom layers are long-running backgrounds. Upper layers are sparse, short-lived effects aligned to beats or other events. The compiler packs animation events into layers such that no two events on the same layer overlap in time.
 
 ```cpp
 class Layer {
@@ -99,7 +100,7 @@ public:
 
 **Stateless animations** (e.g., wave, spark): output is a pure function of `t_rel` and params. `init()` just copies params. No internal buffers.
 
-**Stateful animations** (e.g., shift): need initialization data — either constant values embedded in params, or a runtime snapshot of another layer's buffer. `init()` allocates internal state (from the pre-allocated buffer pool — see Memory below). `render()` computes output from init data + `t_rel`.
+**Stateful animations** (e.g., shift): need initialization data — either constant values embedded in params, or a runtime snapshot of another layer's buffer. `init()` sets up internal state (from the pre-allocated buffer pool — see Memory below). `render()` computes output from init data + `t_rel`.
 
 **Key points:**
 - Animations see an isolated pixel world: indices 0..N-1. No knowledge of physical layout.
@@ -122,7 +123,7 @@ public:
 The shift animation needs initial pixel values to shift. Two modes:
 
 1. **CONST** — pixel values embedded in the animation event params. Predetermined by the compiler.
-2. **SNAPSHOT** — copies another layer's buffer at the moment the event activates. The source layer (referenced by index) must have an active event at that time — the compiler ensures this.
+2. **SNAPSHOT** — copies another layer's buffer at the moment the event activates. The source layer (referenced by index) must have an active event at that time — the compiler ensures this. This also works when the source animation has just ended on the same layer, since buffers are not cleared between events.
 
 ```cpp
 struct ShiftParams {
@@ -146,7 +147,6 @@ struct ShiftParams {
 A scheduled activation of an animation on a layer. Pure data — no runtime behavior.
 
 **Fields:**
-- **layer_id** — index into the program's layer array (= which layer to render into)
 - **animation** — which animation type (AnimType enum)
 - **t_start** — seconds relative to program start
 - **active** — duration in seconds (INFINITY for "runs until program ends")
@@ -154,7 +154,6 @@ A scheduled activation of an animation on a layer. Pure data — no runtime beha
 
 ```cpp
 struct AnimationEvent {
-    uint8_t    layer_id;
     AnimType   animation;
     float      t_start;
     float      active;
@@ -162,9 +161,24 @@ struct AnimationEvent {
 };
 ```
 
-Events are sorted by `t_start` in the program. The engine scans them with a cursor.
+Note: `layer_id` is not in the event struct — events are grouped per layer in `LayerEvents` (see Program below), so the layer association is structural.
 
 The compiler ensures that no two events on the same layer overlap in time. This is not enforced by the engine — it's a compiler invariant. If violated, later events overwrite earlier ones on the same layer (last write wins). Not an error, just visually wrong.
+
+---
+
+## LayerEvents
+
+The event timeline for a single layer. Events are sorted by `t_start`, with no overlaps (compiler invariant).
+
+```cpp
+struct LayerEvents {
+    const AnimationEvent* events;    // sorted by t_start
+    uint16_t              count;
+};
+```
+
+Each layer has exactly one `LayerEvents`. This enables per-layer cursor tracking in the engine — each layer's cursor advances independently, avoiding the problem of a global cursor being stuck behind a long-running event while short events on other layers have finished.
 
 ---
 
@@ -174,15 +188,14 @@ The complete animation program loaded onto the ESP32. Contains everything needed
 
 **Contents:**
 - Array of **Layers** (index = priority)
-- Array of **AnimationEvents** (sorted by `t_start`)
+- Array of **LayerEvents** — one per layer, same indexing
 - **Buffer pool spec** — sizes of pre-allocated buffers for stateful animations (see Memory)
 
 ```cpp
 struct Program {
-    Layer**                layers;
-    uint8_t                layer_count;
-    const AnimationEvent*  events;
-    uint16_t               event_count;
+    Layer**       layers;
+    LayerEvents*  layer_events;    // one per layer, same indexing
+    uint8_t       layer_count;
     // Buffer pool TBD
 };
 ```
@@ -197,46 +210,79 @@ One program at a time. Loading a new program replaces the current one entirely (
 
 The runtime that plays a program. Owns the lifecycle of animation instances.
 
-**Responsibilities per frame (`tick(t_program)`):**
+### Per-Layer State
 
-1. Scan the event timeline using a cursor
-2. For events that just became active (crossed `t_start`): create Animation instance, call `init()`
-3. For events that just ended (crossed `t_start + active`): destroy Animation instance
-4. For all currently active events: call `render(buffer, length, t_rel)` where `t_rel = t_program - event.t_start`
-5. Hand layers to the compositor
-
-**Cursor optimization:** Events are sorted by `t_start`. The cursor advances past events whose `t_start + active` is in the past — they'll never activate again. The scan only looks at events from the cursor forward, and stops when it hits an event whose `t_start` is in the future.
-
-**Animation instance tracking:** The engine maps active events to their Animation instances. Details TBD — likely a fixed-size array indexed by event index or layer index.
-
-**Factory:** A dispatch function creates the right Animation subclass from the AnimType enum.
+The engine tracks one active animation per layer:
 
 ```cpp
+struct TrackState {
+    uint16_t   cursor;       // index into this layer's events
+    Animation* instance;     // currently active animation (null = idle)
+};
+
 class Engine {
 public:
     Engine(Compositor& compositor);
 
-    void load(Program& program);     // set up layers, reset state
-    void tick(float t_program);      // per-frame update
+    void load(Program& program);
+    void tick(float t_program);
 
 private:
-    Compositor&    _compositor;
-    const Program* _program;
-    uint16_t       _cursor;
-    // Active animation instance tracking — TBD
+    Compositor&  _compositor;
+    Program*     _program;
+    TrackState   _state[MAX_LAYERS];   // one per layer
 };
+```
+
+The cursor for each layer advances independently. A long-running wave on layer 0 doesn't block the cursor on layer 1 from advancing past short spark events.
+
+### Tick Logic
+
+Each frame, the engine processes each layer independently:
+
+```
+for each layer i:
+    1. DEACTIVATE: if instance exists and event has ended → destroy instance
+    2. ADVANCE CURSOR: skip past fully elapsed events
+    3. ACTIVATE/RENDER: if event at cursor is in active window:
+       - if no instance → create, init(), render()
+       - if instance exists → render()
+       (t_rel = t_program - event.t_start)
+```
+
+### Factory
+
+A dispatch function creates the right Animation subclass from the AnimType enum:
+
+```cpp
+Animation* create_animation(AnimType type);  // switch on type, return new instance
+```
+
+Future optimization: pre-allocate an animation instance pool instead of new/delete per event (see Memory).
+
+### Active Layer Communication
+
+The engine communicates which layers are active to the compositor via a bitmask (`uint8_t`, supports up to 8 layers):
+
+```cpp
+uint8_t active_mask = 0;
+for (uint8_t i = 0; i < layer_count; i++) {
+    if (_state[i].instance != nullptr)
+        active_mask |= (1 << i);
+}
+_compositor.render(_program->layers, _program->layer_count, active_mask);
 ```
 
 ---
 
 ## Compositor
 
-Blends all active layers into the Strip, bottom to top.
+Blends active layers into the Strip, bottom to top.
 
 **Per-frame pipeline:**
 
 1. Clear Strip to black
-2. For each layer (index 0 to N-1), if the layer has an active animation this frame:
+2. For each layer (index 0 to N-1), if active (bit set in mask):
    - For each pixel `i` in the layer:
      - `physical_idx = layer.index_map[i]`
      - `pixel_rgb = hsv_to_rgb(layer.buffer[i])`
@@ -244,11 +290,20 @@ Blends all active layers into the Strip, bottom to top.
      - `strip[physical_idx] = lerp(strip[physical_idx], pixel_rgb, alpha)`
 3. `FastLED.show()`
 
+```cpp
+void Compositor::render(Layer** layers, uint8_t count, uint8_t active_mask)
+{
+    clear_strip();
+    for (uint8_t i = 0; i < count; i++) {
+        if (active_mask & (1 << i))
+            blend_layer(layers[i]);
+    }
+}
+```
+
 **Blending is always alpha.** Background layers set A=1.0 (full replace). Overlay layers use intermediate alpha for smooth blending. A=0.0 means fully transparent — the layer below shows through.
 
 **Blending happens in RGB space.** HSV blending breaks down when saturation differs. RGB produces visually correct results. Cost is one `hsv_to_rgb` per active pixel per layer per frame — negligible on ESP32.
-
-**"Active layer" detection:** The compositor needs to know which layers have active events this frame. The engine tells it (either via a bitmask, or by only passing active layers). Layers with no active event are skipped entirely — their stale buffer contents are ignored.
 
 ---
 
@@ -281,73 +336,95 @@ Animation events that need internal storage include a `buffer_id` in their param
 
 ---
 
-## Worked Example: Current Demo as a Program
+## Worked Example: Wave + Shift + Alternating Sparks
 
-The existing hardcoded wave + spark demo expressed as a program:
+BPM=120 (1 beat = 500ms). 10 LEDs. 4 beats total (2.0s).
 
-```cpp
-static const uint8_t bg_indices[] = {0, 1};
-static const uint8_t spark_indices[] = {0, 1};
+- Beats 1-2: wave on all pixels
+- Beats 3-4: shift on all pixels (initialized from wave's last frame)
+- Throughout: alternating white/yellow sparks, 2 per beat
 
-Layer bg_layer(bg_indices, 2);
-Layer spark_layer(spark_indices, 2);
+### Layers
 
-Layer* demo_layers[] = { &bg_layer, &spark_layer };
+| Index | Pixels | Role |
+|-------|--------|------|
+| 0 | [0-9] | background: wave then shift |
+| 1 | [0,4] | spark white |
+| 2 | [5,9] | spark yellow |
 
-static const AnimationEvent demo_events[] = {
-    // Layer 0: slow brightness wave, runs forever
-    {0, AnimType::WAVE, 0.0f, INFINITY,
-        {.wave = {WaveChannel::V, 220.0f, 1.0f, 0.0f,
-                  0.0f, 0.4f, 8.0f, -M_PI/2, M_PI}}},
-    // Layer 1: periodic spark, runs forever
-    {1, AnimType::SPARK, 0.0f, INFINITY,
-        {.spark = {0.25f}}},
-};
+### LayerEvents
 
-Program demo_program = {
-    demo_layers, 2,
-    demo_events, 2
-};
+**Layer 0:**
+```
+[0] WAVE   t_start=0.000  active=1.000  params={V channel, ...}
+[1] SHIFT  t_start=1.000  active=1.000  params={init=SNAPSHOT, source_layer=0}
 ```
 
-```cpp
-Engine engine(compositor);
-
-void setup() {
-    FastLED.addLeds<WS2811, LED_PIN, GRB>(crgb, NUM_LEDS);
-    FastLED.setBrightness(255);
-    engine.load(demo_program);
-}
-
-void loop() {
-    float t = millis() / 1000.0f;
-    engine.tick(t);
-    FastLED.show();
-    delay(FRAME_PERIOD_MS);
-}
+**Layer 1:**
+```
+[0] SPARK  t_start=0.000  active=0.100  params={white}
+[1] SPARK  t_start=0.500  active=0.100  params={white}
+[2] SPARK  t_start=1.000  active=0.100  params={white}
+[3] SPARK  t_start=1.500  active=0.100  params={white}
 ```
 
----
-
-## Worked Example: Music Sync — Sparks on Beats
-
-A 128 BPM track. Background wave on all 50 LEDs. Sparks on select pixels every 4th beat (every 1.875s). Each spark fades over one beat (468ms).
-
+**Layer 2:**
 ```
-Program:
-  Layers:
-    [0] indices=[0..49]                    // background, lowest priority
-    [1] indices=[4, 11, 21, 25]            // spark group A
-    [2] indices=[7, 19, 33, 42, 48]        // spark group B
-
-  Events (sorted by t_start):
-    WAVE  on layer 0, t_start=0.000, active=INF, params={hue wave}
-
-    SPARK on layer 1, t_start=12.500, active=0.468, params={fade=0.468}
-    SPARK on layer 2, t_start=14.375, active=0.468, params={fade=0.468}
-    SPARK on layer 1, t_start=16.250, active=0.468, params={fade=0.468}
-    SPARK on layer 2, t_start=18.125, active=0.468, params={fade=0.468}
-    ...
+[0] SPARK  t_start=0.250  active=0.100  params={yellow}
+[1] SPARK  t_start=0.750  active=0.100  params={yellow}
+[2] SPARK  t_start=1.250  active=0.100  params={yellow}
+[3] SPARK  t_start=1.750  active=0.100  params={yellow}
 ```
 
-Each spark event is a separate entry. The compiler generated them from the beat analysis. Layers 1 and 2 alternate — same concept as DAW tracks, the compiler packed non-overlapping events onto the minimum number of layers.
+### Engine Walkthrough
+
+```
+State at start:
+  track[0]: cursor=0, instance=null
+  track[1]: cursor=0, instance=null
+  track[2]: cursor=0, instance=null
+```
+
+**t=0.001:**
+```
+  track[0]: evt[0] WAVE, 0.0 ≤ 0.001 < 1.0 → CREATE AnimWave, render(t_rel=0.001)
+  track[1]: evt[0] SPARK, 0.0 ≤ 0.001 < 0.1 → CREATE AnimSpark, render(t_rel=0.001)
+  track[2]: evt[0] SPARK, 0.25 > 0.001 → idle
+
+  active_mask = 0b011  (layers 0,1 active)
+  compositor blends: layer 0 (wave), layer 1 (spark white)
+```
+
+**t=0.105:** (spark white ended)
+```
+  track[0]: AnimWave still active → render
+  track[1]: evt[0] ended (0.0+0.1=0.1 < 0.105) → DESTROY, advance cursor to 1
+            evt[1] t_start=0.5 > 0.105 → idle
+  track[2]: evt[0] t_start=0.25 > 0.105 → idle
+
+  active_mask = 0b001  (layer 0 only)
+```
+
+**t=0.260:** (spark yellow activates)
+```
+  track[0]: AnimWave → render
+  track[1]: idle
+  track[2]: evt[0] SPARK, 0.25 ≤ 0.26 < 0.35 → CREATE AnimSpark, render
+
+  active_mask = 0b101  (layers 0,2)
+```
+
+**t=1.001:** (wave→shift transition)
+```
+  track[0]: evt[0] WAVE ended (0.0+1.0=1.0 < 1.001) → DESTROY AnimWave
+            advance cursor to 1
+            evt[1] SHIFT, 1.0 ≤ 1.001 < 2.0 → CREATE AnimShift
+              init() snapshots layer 0 buffer (wave's last output still there)
+              render(t_rel=0.001)
+  track[1]: evt[2] SPARK, 1.0 ≤ 1.001 < 1.1 → CREATE AnimSpark, render
+  track[2]: idle (between sparks)
+
+  active_mask = 0b011  (layers 0,1)
+```
+
+Sparks continue alternating on layers 1 and 2 through beats 3-4. Shift runs on layer 0 until t=2.0.
