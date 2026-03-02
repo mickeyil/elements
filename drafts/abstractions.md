@@ -215,7 +215,7 @@ The runtime that plays a program. Owns the lifecycle of animation instances.
 The engine tracks one active animation per layer:
 
 ```cpp
-struct TrackState {
+struct LayerState {
     uint16_t   cursor;       // index into this layer's events
     Animation* instance;     // currently active animation (null = idle)
 };
@@ -230,7 +230,7 @@ public:
 private:
     Compositor&  _compositor;
     Program*     _program;
-    TrackState   _state[MAX_LAYERS];   // one per layer
+    LayerState   _state[MAX_LAYERS];   // one per layer
 };
 ```
 
@@ -380,16 +380,16 @@ BPM=120 (1 beat = 500ms). 10 LEDs. 4 beats total (2.0s).
 
 ```
 State at start:
-  track[0]: cursor=0, instance=null
-  track[1]: cursor=0, instance=null
-  track[2]: cursor=0, instance=null
+  layer[0]: cursor=0, instance=null
+  layer[1]: cursor=0, instance=null
+  layer[2]: cursor=0, instance=null
 ```
 
 **t=0.001:**
 ```
-  track[0]: evt[0] WAVE, 0.0 ≤ 0.001 < 1.0 → CREATE AnimWave, render(t_rel=0.001)
-  track[1]: evt[0] SPARK, 0.0 ≤ 0.001 < 0.1 → CREATE AnimSpark, render(t_rel=0.001)
-  track[2]: evt[0] SPARK, 0.25 > 0.001 → idle
+  layer[0]: evt[0] WAVE, 0.0 ≤ 0.001 < 1.0 → CREATE AnimWave, render(t_rel=0.001)
+  layer[1]: evt[0] SPARK, 0.0 ≤ 0.001 < 0.1 → CREATE AnimSpark, render(t_rel=0.001)
+  layer[2]: evt[0] SPARK, 0.25 > 0.001 → idle
 
   active_mask = 0b011  (layers 0,1 active)
   compositor blends: layer 0 (wave), layer 1 (spark white)
@@ -397,32 +397,32 @@ State at start:
 
 **t=0.105:** (spark white ended)
 ```
-  track[0]: AnimWave still active → render
-  track[1]: evt[0] ended (0.0+0.1=0.1 < 0.105) → DESTROY, advance cursor to 1
+  layer[0]: AnimWave still active → render
+  layer[1]: evt[0] ended (0.0+0.1=0.1 < 0.105) → DESTROY, advance cursor to 1
             evt[1] t_start=0.5 > 0.105 → idle
-  track[2]: evt[0] t_start=0.25 > 0.105 → idle
+  layer[2]: evt[0] t_start=0.25 > 0.105 → idle
 
   active_mask = 0b001  (layer 0 only)
 ```
 
 **t=0.260:** (spark yellow activates)
 ```
-  track[0]: AnimWave → render
-  track[1]: idle
-  track[2]: evt[0] SPARK, 0.25 ≤ 0.26 < 0.35 → CREATE AnimSpark, render
+  layer[0]: AnimWave → render
+  layer[1]: idle
+  layer[2]: evt[0] SPARK, 0.25 ≤ 0.26 < 0.35 → CREATE AnimSpark, render
 
   active_mask = 0b101  (layers 0,2)
 ```
 
 **t=1.001:** (wave→shift transition)
 ```
-  track[0]: evt[0] WAVE ended (0.0+1.0=1.0 < 1.001) → DESTROY AnimWave
+  layer[0]: evt[0] WAVE ended (0.0+1.0=1.0 < 1.001) → DESTROY AnimWave
             advance cursor to 1
             evt[1] SHIFT, 1.0 ≤ 1.001 < 2.0 → CREATE AnimShift
               init() snapshots layer 0 buffer (wave's last output still there)
               render(t_rel=0.001)
-  track[1]: evt[2] SPARK, 1.0 ≤ 1.001 < 1.1 → CREATE AnimSpark, render
-  track[2]: idle (between sparks)
+  layer[1]: evt[2] SPARK, 1.0 ≤ 1.001 < 1.1 → CREATE AnimSpark, render
+  layer[2]: idle (between sparks)
 
   active_mask = 0b011  (layers 0,1)
 ```
