@@ -1,6 +1,6 @@
 from elements.dsl import *
 
-def program(beat):
+def program(beat, duration):
     strip1 = strip("main", length=10, type="RGB")
     all_pixels = strip1.pixels("0-9")
     left_group1 = strip1.pixels("0,4")
@@ -34,4 +34,4 @@ def program(beat):
         spark_white.schedule(left_group1, at=i, duration=sec(0.1))
         spark_yellow.schedule(right_group1, at=i + 0.5, duration=sec(0.1))
 
-    return compile(beat=beat)
+    return compile(beat=beat, duration=duration)
