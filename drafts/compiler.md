@@ -147,60 +147,91 @@ After this pass, beats are gone. Everything downstream works in seconds.
 
 ## 3. Layer Inference
 
-Goal: assign events to layers, minimizing layer count, such that no two events on the same layer overlap in time.
+Goal: assign events to layers, minimizing layer count, such that no two events on the same layer overlap in time. Max 32 layers (`uint32_t` bitmask in the engine).
 
-**Constraint:** two events can share a layer only if:
-1. Same pixel group (identical index list)
-2. Non-overlapping in time (`e1.end_sec <= e2.at_sec`)
+**Constraint:** two events can share a layer if:
+1. Non-overlapping in time
+2. Pixel groups can differ — the layer's index map becomes the union of all its events' pixel groups
 
-**Algorithm — greedy interval assignment:**
+This means events with different pixel groups can share a layer when their times don't overlap. The compiler merges index maps and stores a per-event remap so each animation knows which logical buffer positions to write to.
+
+**Algorithm — greedy bin-packing with index map merging:**
 
 ```python
-from collections import defaultdict
-
-def infer_layers(events):
-    # Group by pixel group
-    groups = defaultdict(list)
-    for e in events:
-        key = tuple(e["pixels"].indices)  # hashable
-        groups[key].append(e)
-
+def infer_layers(events, max_layers=32):
+    events.sort(key=lambda e: e["at_sec"])
     layers = []
-    for indices_key, group_events in groups.items():
-        group_events.sort(key=lambda e: e["at_sec"])
 
-        # Greedy: try to fit into existing slot, else open new one
-        slots = []  # each slot: list of events
-        for e in group_events:
-            placed = False
-            for slot in slots:
-                if e["at_sec"] >= slot[-1]["end_sec"]:  # no overlap
-                    slot.append(e)
-                    placed = True
-                    break
-            if not placed:
-                slots.append([e])
+    for e in events:
+        best = None
+        best_size = float('inf')
 
-        for slot in slots:
-            layers.append({
-                "index_map": list(indices_key),
-                "events": slot,
-            })
+        for layer in layers:
+            # Check time overlap
+            if any(overlaps(e, existing) for existing in layer["events"]):
+                continue
+
+            # Prefer smallest merged index map
+            merged = set(layer["indices"]) | set(e["pixels"].indices)
+            if len(merged) < best_size:
+                best = layer
+                best_size = len(merged)
+
+        if best:
+            best["indices"] = sorted(set(best["indices"]) | set(e["pixels"].indices))
+            best["events"].append(e)
+            # Store per-event remap: logical index in merged map
+            e["index_remap"] = [best["indices"].index(i) for i in e["pixels"].indices]
+        else:
+            if len(layers) >= max_layers:
+                raise CompileError(f"exceeded {max_layers} layer limit")
+            new_layer = {
+                "indices": list(e["pixels"].indices),
+                "events": [e],
+            }
+            layers.append(new_layer)
+            e["index_remap"] = list(range(len(e["pixels"].indices)))
 
     return layers
+
+
+def overlaps(a, b):
+    return a["at_sec"] < b["end_sec"] and b["at_sec"] < a["end_sec"]
 ```
 
-**Test animation result — 3 layers:**
+**Walkthrough — test animation:**
+
+Events sorted by start time:
 
 ```
-Layer 0: index_map=[0..9]  events=[wave(0.0-1.0), shift(1.0-2.0)]
-Layer 1: index_map=[0,4]   events=[spark_w(0.0-0.1), spark_w(0.5-0.6), ...]
-Layer 2: index_map=[5,9]   events=[spark_y(0.25-0.35), spark_y(0.75-0.85), ...]
+wave       [0-9]  0.0-1.0  → new layer 0, indices=[0..9]
+spark_w    [0,4]  0.0-0.1  → overlaps wave on L0 → new layer 1, indices=[0,4]
+spark_y    [5,9]  0.25-0.35 → L0: overlaps wave → no
+                             → L1: 0.25 >= 0.1 ✓, merge → indices=[0,4,5,9]
+spark_w    [0,4]  0.5-0.6  → L0: overlaps wave → no
+                             → L1: 0.5 >= 0.35 ✓ → fits
+spark_y    [5,9]  0.75-0.85 → L0: overlaps wave → no
+                             → L1: 0.75 >= 0.6 ✓ → fits
+shift      [0-9]  1.0-2.0  → L0: 1.0 >= 1.0 ✓ → fits
+spark_w    [0,4]  1.0-1.1  → L0: overlaps shift → no
+                             → L1: 1.0 >= 0.85 ✓ → fits
+... (remaining sparks fit in L1)
 ```
 
-This maps directly to the C++ `Layer` + `LayerEvents` structs. Layer index = priority in the compositor (layer 0 = bottom).
+**Result: 2 layers instead of 3.**
 
-**Overlapping events on same pixel group** are placed on separate layers — the compositor blends them during the overlap period. This is valid and intentional (e.g. wave fading into shift with a crossfade overlap).
+```
+Layer 0: index_map=[0..9]      events=[wave(0.0-1.0), shift(1.0-2.0)]
+Layer 1: index_map=[0,4,5,9]   events=[all sparks interleaved]
+```
+
+Per-event index remap for layer 1 (`[0,4,5,9]`):
+- spark_white targets `[0,4]` → remap `[0,1]`
+- spark_yellow targets `[5,9]` → remap `[2,3]`
+
+The remap tells the engine which positions in the layer's HSVA buffer each animation writes to.
+
+**Overlapping events** that can't fit in any existing layer get a new layer. The compositor blends them during the overlap period (e.g. wave fading into shift with a crossfade).
 
 ---
 
