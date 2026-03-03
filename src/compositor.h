@@ -3,7 +3,7 @@
 #include "strip.h"
 #include "layer.h"
 
-#define MAX_LAYERS 8
+#define MAX_LAYERS 32
 
 // The compositor blends all active layers into the strip every frame.
 // Layers are composited by priority (lowest first). All blending is alpha-based.

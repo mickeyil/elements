@@ -11,6 +11,8 @@ import struct
 from elements.dsl import *
 from elements.blob import decode_blob, ANIM_WAVE, ANIM_SHIFT, ANIM_SPARK
 from elements.compiler import CompileError
+from pathlib import Path
+import re
 
 
 # ---------------------------------------------------------------------------
@@ -239,3 +241,39 @@ class TestValidation:
         w.schedule(px, at=0, duration=1)
         with pytest.raises(CompileError, match="missing required param"):
             build(beat=0.5, duration=2.0)
+
+
+def _extract_int(pattern: str, text: str, description: str) -> int:
+    m = re.search(pattern, text)
+    if not m:
+        raise AssertionError(f"could not find {description}")
+    return int(m.group(1))
+
+
+def test_layer_limit_contract():
+    repo_root = Path(__file__).resolve().parents[2]
+    compiler_path = repo_root / "compiler" / "elements" / "compiler.py"
+    compositor_path = repo_root / "src" / "compositor.h"
+    decoder_path = repo_root / "src" / "decoder.cpp"
+
+    compiler_src = compiler_path.read_text(encoding="utf-8")
+    compositor_src = compositor_path.read_text(encoding="utf-8")
+    decoder_src = decoder_path.read_text(encoding="utf-8")
+
+    compiler_limit = _extract_int(
+        r"def _infer_layers\(.*max_layers:\s*int\s*=\s*(\d+)\)",
+        compiler_src,
+        "_infer_layers default max_layers",
+    )
+    decoder_limit = _extract_int(
+        r"if\s*\(layer_count\s*>\s*(\d+)\)",
+        decoder_src,
+        "decoder layer_count upper bound",
+    )
+    compositor_limit = _extract_int(
+        r"#define\s+MAX_LAYERS\s+(\d+)",
+        compositor_src,
+        "compositor MAX_LAYERS",
+    )
+
+    assert compiler_limit == decoder_limit == compositor_limit == 32
