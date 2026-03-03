@@ -12,4 +12,5 @@ compiler/.venv/
 compiler/.pytest_cache/
 *.egg-info/
 __pycache__/
+build/
 test/build/

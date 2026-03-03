@@ -19,7 +19,7 @@ from elements.compiler import CompileError
 
 @pytest.fixture(scope="module")
 def test_blob():
-    """The test animation from drafts/dsl_example.py, built once."""
+    """The test animation from docs/dsl_example.py, built once."""
     strip1 = strip("main", length=10, type="RGB")
     all_pixels = strip1.pixels("0-9")
     left_group1 = strip1.pixels("0,4")

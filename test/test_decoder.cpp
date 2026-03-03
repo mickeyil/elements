@@ -33,7 +33,7 @@ static std::vector<uint8_t> load_blob(const char* path) {
 static Program* get_test_program() {
     static Program* prog = nullptr;
     if (!prog) {
-        auto blob = load_blob("test/test_animation.bin");
+        auto blob = load_blob("test/fixtures/test_animation.bin");
         prog = decode_program(blob.data(), blob.size());
         REQUIRE(prog != nullptr);
     }
@@ -268,7 +268,7 @@ TEST_CASE("Wrong version returns nullptr", "[invalid]") {
 // ---------------------------------------------------------------------------
 
 TEST_CASE("free_program on valid program", "[free]") {
-    auto blob_data = load_blob("test/test_animation.bin");
+    auto blob_data = load_blob("test/fixtures/test_animation.bin");
     Program* p = decode_program(blob_data.data(), blob_data.size());
     REQUIRE(p != nullptr);
     free_program(p);  // should not crash or leak
