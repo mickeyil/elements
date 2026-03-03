@@ -206,6 +206,8 @@ The DSL and compiler design are in separate documents:
 
 **→ [compiler.md](compiler.md)** — Compiler pipeline: parser, time resolution, layer inference, buffer packing, blob emission
 
+**→ [decoder.md](decoder.md)** — C++ decoder: arena allocation, tagged union params, decode flow
+
 ---
 
 ## Comparison with v1
