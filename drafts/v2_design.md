@@ -200,6 +200,12 @@ Detailed design of all core abstractions — Strip, Layer, Animation, AnimationE
 
 This covers terminology, data structures, code snippets, worked examples, and design rationale.
 
+The DSL and compiler design are in separate documents:
+
+**→ [dsl_example.py](dsl_example.py)** — DSL example: wave+shift+sparks test animation
+
+**→ [compiler.md](compiler.md)** — Compiler pipeline: parser, time resolution, layer inference, buffer packing, blob emission
+
 ---
 
 ## Comparison with v1
