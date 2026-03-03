@@ -1,42 +1,24 @@
 """Elements v2 compiler — the full pipeline.
 
 Pipeline:
-    1. Time resolution   — beats/sec → absolute seconds
-    2. Layer inference    — events → layers (bin-packing with index merging)
-    3. Buffer packing    — stateful animations → shared buffer slots
-    4. Validation        — bounds, references, timing checks
-    5. Blob emission     — serialize to binary
+    1. Validation (early) — bounds, params completeness
+    2. Time resolution    — beats/sec → absolute seconds
+    3. Layer inference     — events → layers (bin-packing with index merging)
+    4. Buffer packing     — stateful animations → shared buffer slots
+    5. Validation (late)  — snapshot references, timing checks
+    6. Blob emission      — serialize to binary
 """
 
 from __future__ import annotations
 import warnings
 from typing import Any
 
-from .types import SecMarker, AnimDef, PixelGroup, StripDef, COLORS
+from .types import (
+    SecMarker, AnimDef, PixelGroup, StripDef, COLORS,
+    ANIM_TYPES, TIME_PARAMS, REQUIRED_PARAMS, STATEFUL_TYPES,
+    CHANNELS, DIRECTIONS,
+)
 from .blob import emit_blob
-
-
-# ---------------------------------------------------------------------------
-# Animation type constants
-# ---------------------------------------------------------------------------
-
-ANIM_TYPES = {"wave": 0, "shift": 1, "spark": 2, "fill": 3}
-
-# Which animation params are time-based (beats → seconds)
-TIME_PARAMS = {
-    "wave":  ["period"],
-    "spark": ["fade"],
-    "shift": [],  # velocity is pixels/beat → pixels/sec, handled specially
-}
-
-# Which animation types need work buffers
-STATEFUL_TYPES = {"shift"}
-
-# Channel name → uint8
-CHANNELS = {"H": 0, "S": 1, "V": 2}
-
-# Direction name → uint8
-DIRECTIONS = {"left": 0, "right": 1}
 
 
 class CompileError(Exception):
@@ -44,7 +26,54 @@ class CompileError(Exception):
 
 
 # ---------------------------------------------------------------------------
-# 1. Time resolution
+# 1a. Early validation (before any processing)
+# ---------------------------------------------------------------------------
+
+def _validate_early(events: list[dict], strips: list[StripDef]):
+    """Validate pixel bounds and param completeness before processing."""
+    strip_map = {s.name: s for s in strips}
+
+    # Duplicate strip names
+    seen_names = set()
+    for s in strips:
+        if s.name in seen_names:
+            raise CompileError(f"duplicate strip name '{s.name}'")
+        seen_names.add(s.name)
+
+    # Empty program
+    if not events:
+        raise CompileError("empty program: no events")
+
+    for e in events:
+        px = e["pixels"]
+
+        # Unknown strip
+        if px.strip_name not in strip_map:
+            raise CompileError(f"unknown strip '{px.strip_name}'")
+
+        # Pixel bounds
+        strip_len = strip_map[px.strip_name].length
+        for idx in px.indices:
+            if idx < 0 or idx >= strip_len:
+                raise CompileError(
+                    f"pixel index {idx} out of bounds for strip "
+                    f"'{px.strip_name}' (length {strip_len})"
+                )
+
+        # Param completeness
+        anim = e["anim"]
+        required = REQUIRED_PARAMS.get(anim.anim_type)
+        if required is None:
+            raise CompileError(f"unknown animation type '{anim.anim_type}'")
+        for param_name in required:
+            if param_name not in anim.params:
+                raise CompileError(
+                    f"{anim.anim_type} missing required param '{param_name}'"
+                )
+
+
+# ---------------------------------------------------------------------------
+# 2. Time resolution
 # ---------------------------------------------------------------------------
 
 def _resolve_times(events: list[dict], beat: float, duration: float):
@@ -87,7 +116,7 @@ def _resolve_times(events: list[dict], beat: float, duration: float):
 
 
 # ---------------------------------------------------------------------------
-# 2. Layer inference — bin-packing with index map merging
+# 3. Layer inference — bin-packing with index map merging
 # ---------------------------------------------------------------------------
 
 def _overlaps(a: dict, b: dict) -> bool:
@@ -132,11 +161,21 @@ def _infer_layers(events: list[dict], max_layers: int = 32) -> list[dict]:
     for layer in layers:
         layer["events"].sort(key=lambda e: e["at_sec"])
 
+    # Set remap_is_identity flag per event
+    for layer in layers:
+        layer_len = len(layer["indices"])
+        for e in layer["events"]:
+            remap = e["index_remap"]
+            e["remap_is_identity"] = (
+                len(remap) == layer_len
+                and remap == list(range(layer_len))
+            )
+
     return layers
 
 
 # ---------------------------------------------------------------------------
-# 3. Buffer packing
+# 4. Buffer packing
 # ---------------------------------------------------------------------------
 
 def _needs_buffer(anim_type: str) -> bool:
@@ -187,39 +226,13 @@ def _pack_buffers(layers: list[dict]) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# 4. Validation
+# 5. Late validation (after layer inference)
 # ---------------------------------------------------------------------------
 
-def _validate(events: list[dict], layers: list[dict], strips: list[StripDef],
-              buffer_pool: list[dict], duration: float):
-    """Run all validation checks."""
-    strip_map = {s.name: s for s in strips}
-
-    # Check for duplicate strip names
-    seen_names = set()
-    for s in strips:
-        if s.name in seen_names:
-            raise CompileError(f"duplicate strip name '{s.name}'")
-        seen_names.add(s.name)
-
-    # Empty program
-    if not events:
-        raise CompileError("empty program: no events")
-
+def _validate_late(events: list[dict], layers: list[dict],
+                   buffer_pool: list[dict], duration: float):
+    """Validate timing and snapshot references after processing."""
     for e in events:
-        px = e["pixels"]
-
-        # Pixel bounds
-        if px.strip_name not in strip_map:
-            raise CompileError(f"unknown strip '{px.strip_name}'")
-        strip_len = strip_map[px.strip_name].length
-        for idx in px.indices:
-            if idx < 0 or idx >= strip_len:
-                raise CompileError(
-                    f"pixel index {idx} out of bounds for strip "
-                    f"'{px.strip_name}' (length {strip_len})"
-                )
-
         # Event starts after duration → error
         if e["at_sec"] > duration:
             raise CompileError(
@@ -267,7 +280,6 @@ def _validate(events: list[dict], layers: list[dict], strips: list[StripDef],
                 f"with covering pixels"
             )
 
-    # Layer limit already enforced in _infer_layers
     # Buffer pool sanity
     for layer in layers:
         for e in layer["events"]:
@@ -280,7 +292,7 @@ def _validate(events: list[dict], layers: list[dict], strips: list[StripDef],
 
 
 # ---------------------------------------------------------------------------
-# 5. Resolve animation params to binary-ready values
+# 6. Resolve animation params to binary-ready values
 # ---------------------------------------------------------------------------
 
 def _resolve_color(name: str) -> tuple[float, float, float]:
@@ -317,12 +329,10 @@ def _resolve_anim_params(event: dict) -> dict:
     elif anim_type == "shift":
         fill_h, fill_s, fill_v = _resolve_color(p.get("fill", "transparent"))
         fill_a = 0.0 if p.get("fill") == "transparent" else 1.0
-        # Determine init_mode and source_layer
         init_mode = 0  # CONST
         source_layer = 0
         if "snapshot" in event:
             init_mode = 1  # SNAPSHOT
-            # source_layer resolved after layer inference
             source_layer = event.get("_source_layer", 0)
         return {
             "direction": DIRECTIONS[p["direction"]],
@@ -353,7 +363,6 @@ def _resolve_anim_params(event: dict) -> dict:
 
 def _resolve_snapshot_layers(events: list[dict], layers: list[dict]):
     """For shift events with snapshot, find which layer the source anim is on."""
-    # Build anim → layer index mapping (using the last event of that anim)
     anim_to_layer = {}
     for li, layer in enumerate(layers):
         for e in layer["events"]:
@@ -376,22 +385,25 @@ def compile_program(strips: list[StripDef], events: list[dict],
     # Deep copy events so we don't mutate the builder's originals
     events = [dict(e) for e in events]
 
-    # 1. Time resolution
+    # 1. Early validation (bounds, params)
+    _validate_early(events, strips)
+
+    # 2. Time resolution
     _resolve_times(events, beat, duration)
 
-    # 2. Layer inference
+    # 3. Layer inference
     layers = _infer_layers(events)
 
-    # 3. Buffer packing
+    # 4. Buffer packing
     buffer_pool = _pack_buffers(layers)
 
     # Resolve snapshot source layers (needs layer info)
     _resolve_snapshot_layers(events, layers)
 
-    # 4. Validation
-    _validate(events, layers, strips, buffer_pool, duration)
+    # 5. Late validation (timing, snapshots)
+    _validate_late(events, layers, buffer_pool, duration)
 
-    # 5. Resolve animation params to binary-ready values
+    # 6. Resolve animation params to binary-ready values
     for layer in layers:
         for e in layer["events"]:
             e["binary_params"] = _resolve_anim_params(e)
@@ -402,5 +414,5 @@ def compile_program(strips: list[StripDef], events: list[dict],
         for e in layer["events"]:
             max_remap = max(max_remap, len(e["index_remap"]))
 
-    # 6. Blob emission
+    # 7. Blob emission
     return emit_blob(layers, buffer_pool, duration, max_remap)

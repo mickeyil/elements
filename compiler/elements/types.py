@@ -7,6 +7,36 @@ from typing import Any
 
 PI = math.pi
 
+# ---------------------------------------------------------------------------
+# Animation type constants
+# ---------------------------------------------------------------------------
+
+ANIM_TYPES = {"wave": 0, "shift": 1, "spark": 2, "fill": 3}
+
+# Which animation params are time-based (beats → seconds)
+TIME_PARAMS = {
+    "wave":  ["period"],
+    "spark": ["fade"],
+    "shift": [],  # velocity is pixels/beat → pixels/sec, handled specially
+}
+
+# Required params per animation type
+REQUIRED_PARAMS = {
+    "wave":  ["channel", "h", "s", "min_val", "max_val", "period", "phase0", "pixel_step"],
+    "spark": ["color", "fade"],
+    "shift": ["direction", "velocity"],
+    "fill":  ["color"],
+}
+
+# Which animation types need work buffers
+STATEFUL_TYPES = {"shift"}
+
+# Channel name → uint8
+CHANNELS = {"H": 0, "S": 1, "V": 2}
+
+# Direction name → uint8
+DIRECTIONS = {"left": 0, "right": 1}
+
 
 # ---------------------------------------------------------------------------
 # Lazy time marker

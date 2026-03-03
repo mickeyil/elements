@@ -6,7 +6,7 @@ Usage:
     def program(beat, duration):
         strip1 = strip("main", length=10, type="RGB")
         ...
-        return compile(beat=beat, duration=duration)
+        return build(beat=beat, duration=duration)
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from .types import PI, SecMarker, PixelGroup, StripDef, AnimDef
 from .compiler import compile_program
 
 # Re-export for `from elements.dsl import *`
-__all__ = ["PI", "sec", "strip", "wave", "shift", "spark", "fill", "compile"]
+__all__ = ["PI", "sec", "strip", "wave", "shift", "spark", "fill", "build"]
 
 
 def sec(value: float) -> SecMarker:
@@ -87,7 +87,7 @@ def fill(**params) -> AnimDef:
     return _make_anim("fill", params)
 
 
-def compile(beat: float, duration: float) -> bytes:
+def build(beat: float, duration: float) -> bytes:
     """Compile the accumulated program into a binary blob."""
     try:
         blob = compile_program(_builder.strips, _builder.events, beat, duration)

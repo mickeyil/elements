@@ -34,4 +34,4 @@ def program(beat, duration):
         spark_white.schedule(left_group1, at=i, duration=sec(0.1))
         spark_yellow.schedule(right_group1, at=i + 0.5, duration=sec(0.1))
 
-    return compile(beat=beat, duration=duration)
+    return build(beat=beat, duration=duration)

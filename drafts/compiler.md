@@ -69,7 +69,7 @@ class _ProgramBuilder:
         self.animations = []
         self.events = []
 
-    def compile(self, beat, duration):
+    def build(self, beat, duration):
         blob = self._emit(beat, duration)
         self.reset()
         return blob
@@ -77,7 +77,7 @@ class _ProgramBuilder:
 _builder = _ProgramBuilder()
 ```
 
-`compile()` at the end of the DSL file triggers the whole pipeline and resets the builder.
+`build()` at the end of the DSL file triggers the whole pipeline and resets the builder.
 
 ---
 
@@ -397,7 +397,7 @@ The blob is the binary format the C++ decoder reads to reconstruct a `Program` s
 └─────────────────────────┘
 ```
 
-### Header (11 bytes)
+### Header (12 bytes)
 
 ```
 magic:            4 bytes   "ELEM"
@@ -427,18 +427,19 @@ events:           Event[event_count]
 ### Event
 
 ```
-anim_type:    uint8     (WAVE=0, SHIFT=1, SPARK=2, FILL=3, ...)
-t_start:      float32   (seconds)
-duration:     float32   (seconds)
-remap_length: uint8     (how many pixels this event writes)
-remap:        uint8[remap_length]  (positions in layer buffer)
-params_size:  uint8
-params:       uint8[params_size]   (animation-specific)
+anim_type:         uint8     (WAVE=0, SHIFT=1, SPARK=2, FILL=3, ...)
+t_start:           float32   (seconds)
+duration:          float32   (seconds)
+remap_is_identity: uint8     (1 = full layer, skip scatter copy)
+remap_length:      uint8     (how many pixels this event writes)
+remap:             uint8[remap_length]  (positions in layer buffer)
+params_size:       uint8
+params:            uint8[params_size]   (animation-specific)
 ```
 
 The `remap` tells the engine which positions in the layer's HSVA buffer this animation writes to. When a layer has a merged index map (e.g. `[0,4,5,9]` from combining two pixel groups), spark_white targeting `[0,4]` gets remap `[0,1]` and spark_yellow targeting `[5,9]` gets remap `[2,3]`.
 
-The compiler sets a `remap_is_identity` flag when remap covers the full layer buffer in order. The engine uses this to skip the scatter copy (see Render Strategy below).
+Each event includes a `remap_is_identity` flag (uint8) set by the compiler when the remap covers the full layer buffer in order. The engine uses this to skip the scatter copy (see Render Strategy below).
 
 ### Animation params (all floats are float32)
 
@@ -462,7 +463,7 @@ color_v:  float32
 fade:     float32
 ```
 
-**Shift (22 bytes):**
+**Shift (25 bytes):**
 ```
 direction:    uint8    (LEFT=0, RIGHT=1)
 velocity:     float32
