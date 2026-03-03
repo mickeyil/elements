@@ -377,4 +377,139 @@ Runs after time resolution, layer inference, and buffer packing — has the full
 
 ## 6. Blob Emission
 
-_(TBD)_
+The blob is the binary format the C++ decoder reads to reconstruct a `Program` struct. Design goals: simple to decode on ESP32, no parsing overhead, little-endian (ESP32 native), single linear pass.
+
+### Overall structure
+
+```
+┌─────────────────────────┐
+│ Header                  │  magic + version + metadata
+├─────────────────────────┤
+│ Buffer Pool             │  sizes for pre-allocation
+├─────────────────────────┤
+│ Layer 0                 │  index map + events
+│   Event 0              │    type + timing + remap + params
+│   Event 1              │
+│   ...                  │
+├─────────────────────────┤
+│ Layer 1                 │
+│   ...                  │
+└─────────────────────────┘
+```
+
+### Header (11 bytes)
+
+```
+magic:            4 bytes   "ELEM"
+version:          uint8     1
+layer_count:      uint8
+buffer_count:     uint8
+max_remap_length: uint8     (for pre-allocating temp render buffer)
+duration:         float32   (seconds)
+```
+
+### Buffer pool (1 byte per buffer)
+
+```
+for each buffer:
+    size: uint8   (pixel count)
+```
+
+### Layer
+
+```
+index_map_length: uint8
+index_map:        uint8[index_map_length]   (physical strip indices)
+event_count:      uint16
+events:           Event[event_count]
+```
+
+### Event
+
+```
+anim_type:    uint8     (WAVE=0, SHIFT=1, SPARK=2, FILL=3, ...)
+t_start:      float32   (seconds)
+duration:     float32   (seconds)
+remap_length: uint8     (how many pixels this event writes)
+remap:        uint8[remap_length]  (positions in layer buffer)
+params_size:  uint8
+params:       uint8[params_size]   (animation-specific)
+```
+
+The `remap` tells the engine which positions in the layer's HSVA buffer this animation writes to. When a layer has a merged index map (e.g. `[0,4,5,9]` from combining two pixel groups), spark_white targeting `[0,4]` gets remap `[0,1]` and spark_yellow targeting `[5,9]` gets remap `[2,3]`.
+
+The compiler sets a `remap_is_identity` flag when remap covers the full layer buffer in order. The engine uses this to skip the scatter copy (see Render Strategy below).
+
+### Animation params (all floats are float32)
+
+**Wave (29 bytes):**
+```
+channel:    uint8    (H=0, S=1, V=2)
+h:          float32
+s:          float32
+min_val:    float32
+max_val:    float32
+period:     float32
+phase0:     float32
+pixel_step: float32
+```
+
+**Spark (16 bytes):**
+```
+color_h:  float32
+color_s:  float32
+color_v:  float32
+fade:     float32
+```
+
+**Shift (22 bytes):**
+```
+direction:    uint8    (LEFT=0, RIGHT=1)
+velocity:     float32
+circular:     uint8
+fill_h:       float32
+fill_s:       float32
+fill_v:       float32
+fill_a:       float32
+init_mode:    uint8    (CONST=0, SNAPSHOT=1)
+source_layer: uint8    (for SNAPSHOT)
+buffer_id:    uint8    (index into buffer pool)
+```
+
+### Render strategy — zero allocation during playback
+
+The engine pre-allocates a single temp buffer at program load, sized to `max_remap_length` (from header). At render time:
+
+```cpp
+if (event.remap_is_identity) {
+    // Full layer — render directly into layer buffer
+    anim->render(layer->buffer(), layer->length(), t_rel);
+} else {
+    // Partial layer — render to temp, scatter copy
+    anim->render(_temp, event.remap_length, t_rel);
+    for (uint8_t i = 0; i < event.remap_length; i++)
+        layer->buffer()[event.remap[i]] = _temp[i];
+}
+```
+
+No `malloc`/`free` during playback. One temp buffer, reused every frame. Works because the engine processes one animation at a time — never two renders concurrently.
+
+### Test animation blob size estimate
+
+```
+Header:                           11 bytes
+Buffer pool (1 buffer):            1 byte
+Layer 0 (10 indices, 2 events):
+  index_map:                      1 + 10 = 11
+  event_count:                    2
+  wave event:                     1+4+4+1+10+1+29 = 50
+  shift event:                    1+4+4+1+10+1+22 = 43
+Layer 1 (4 indices, 8 events):
+  index_map:                      1 + 4 = 5
+  event_count:                    2
+  8 spark events:                 8 × (1+4+4+1+2+1+16) = 232
+                                  ─────
+Total:                            ~357 bytes
+```
+
+Fits in a single MQTT message.
