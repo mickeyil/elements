@@ -10,6 +10,7 @@ Pipeline:
 """
 
 from __future__ import annotations
+import math
 import warnings
 from typing import Any
 
@@ -23,6 +24,21 @@ from .blob import emit_blob
 
 class CompileError(Exception):
     pass
+
+
+def _ensure_finite_positive(value: Any, field: str, *, allow_zero: bool = False) -> float:
+    """Validate and normalize user-facing timing inputs."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise CompileError(f"{field} must be a number")
+
+    value_f = float(value)
+    if not math.isfinite(value_f):
+        raise CompileError(f"{field} must be finite")
+
+    if value_f < 0 or (not allow_zero and value_f == 0.0):
+        raise CompileError(f"{field} must be > 0")
+
+    return value_f
 
 
 # ---------------------------------------------------------------------------
@@ -78,12 +94,30 @@ def _validate_early(events: list[dict], strips: list[StripDef]):
 
 def _resolve_times(events: list[dict], beat: float, duration: float):
     """Resolve SecMarkers to beats, then convert all times to seconds."""
+    beat = _ensure_finite_positive(beat, "beat")
+    _ensure_finite_positive(duration, "program duration")
+
     for e in events:
+        at = e["at"]
+        ev_dur = e["duration"]
+        sec_to_beats = 1.0 / beat
+
+        if isinstance(at, SecMarker):
+            at = _ensure_finite_positive(at.seconds * sec_to_beats, "event start time",
+                                         allow_zero=True)
+        else:
+            at = _ensure_finite_positive(at, "event start time", allow_zero=True)
+
+        if isinstance(ev_dur, SecMarker):
+            ev_dur = _ensure_finite_positive(ev_dur.seconds * sec_to_beats, "event duration")
+        else:
+            ev_dur = _ensure_finite_positive(ev_dur, "event duration")
+
+        e["at"] = at
+        e["duration"] = ev_dur
+
         # Resolve SecMarkers to beats
-        if isinstance(e["at"], SecMarker):
-            e["at"] = e["at"].seconds / beat
-        if isinstance(e["duration"], SecMarker):
-            e["duration"] = e["duration"].seconds / beat
+        # (timing already normalized to beats above)
 
         # Convert beats → seconds
         e["at_sec"] = e["at"] * beat
