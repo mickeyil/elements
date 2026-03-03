@@ -237,7 +237,83 @@ The remap tells the engine which positions in the layer's HSVA buffer each anima
 
 ## 4. Buffer Packing
 
-_(TBD)_
+Stateful animations (like shift) need work buffers for init data (e.g. snapshot of another layer's pixels). The compiler knows which events need buffers, how big, and when they're active — so non-overlapping stateful events can share a buffer slot.
+
+**Key points:**
+- Independent of layer assignment — packing is purely about time overlaps between stateful events
+- Buffer size = number of pixels the animation writes to (`len(event.pixels.indices)`), not the full layer size
+- Only stateful animations participate (currently just shift). Wave, spark, fill are stateless — no buffer.
+- Non-overlapping stateful events can share a slot. The buffer contents are meaningless between usages — the next animation overwrites entirely at init.
+
+**Algorithm — greedy bin-packing by time:**
+
+```python
+def pack_buffers(layers):
+    # Collect all events that need work buffers
+    stateful = []
+    for layer in layers:
+        for e in layer["events"]:
+            if needs_buffer(e["anim"].anim_type):
+                stateful.append({
+                    "event": e,
+                    "at_sec": e["at_sec"],
+                    "end_sec": e["end_sec"],
+                    "size": len(e["pixels"].indices),
+                })
+
+    if not stateful:
+        return []  # no buffers needed
+
+    stateful.sort(key=lambda s: s["at_sec"])
+    slots = []
+
+    for s in stateful:
+        placed = False
+        for slot in slots:
+            if s["at_sec"] >= slot["end"]:  # no overlap
+                slot["end"] = s["end_sec"]
+                slot["size"] = max(slot["size"], s["size"])  # grow if needed
+                slot["usages"].append(s)
+                s["event"]["buffer_id"] = slot["id"]
+                placed = True
+                break
+
+        if not placed:
+            slot_id = len(slots)
+            slots.append({
+                "id": slot_id,
+                "end": s["end_sec"],
+                "size": s["size"],
+                "usages": [s],
+            })
+            s["event"]["buffer_id"] = slot_id
+
+    return [{"id": s["id"], "size": s["size"]} for s in slots]
+```
+
+**Test animation walkthrough:**
+
+Only one stateful event: shift (1.0-2.0s, 10 pixels).
+- → 1 buffer slot, size 10
+- `shift.buffer_id = 0`
+
+ESP32 allocates one `hsva_t[10]` at program load. Done.
+
+**Complex example — overlapping stateful events:**
+
+```
+shift_a  [0..9]   0.0-2.0s  (10 pixels)
+shift_b  [0..4]   1.0-1.5s  (5 pixels)   ← overlaps shift_a
+shift_c  [5..9]   2.5-3.0s  (5 pixels)
+```
+
+- shift_a → slot 0 (size 10, end 2.0)
+- shift_b → slot 0: `1.0 >= 2.0`? No → new slot 1 (size 5, end 1.5)
+- shift_c → slot 0: `2.5 >= 2.0`? ✓ → reuse slot 0, size stays 10
+
+Result: 2 buffers `[10, 5]`. shift_a and shift_c share slot 0, shift_b gets slot 1. ESP32 allocates `hsva_t[10]` + `hsva_t[5]` at load time.
+
+**Output:** a `BufferPool` spec — array of `{id, size}`. Goes into the Program struct. The engine allocates all buffers once at load, passes the right pointer to each animation's `init()` via its `buffer_id`.
 
 ---
 
