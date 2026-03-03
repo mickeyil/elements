@@ -8,3 +8,7 @@ src/secrets.h
 *.vscode*
 bin/*
 .pio/
+compiler/.venv/
+compiler/.pytest_cache/
+*.egg-info/
+__pycache__/
