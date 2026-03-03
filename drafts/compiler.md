@@ -319,7 +319,59 @@ Result: 2 buffers `[10, 5]`. shift_a and shift_c share slot 0, shift_b gets slot
 
 ## 5. Validation
 
-_(TBD)_
+Runs after time resolution, layer inference, and buffer packing — has the full picture. Catches errors that would be silent bugs on the ESP32.
+
+**Checks:**
+
+1. **Pixel bounds** — every index in every pixel group must be `< strip.length`. Error if not.
+
+2. **Event timing vs program duration:**
+   - Event *starts* after duration → **error** (dead code, definitely a mistake)
+   - Event *extends* past duration → **warning**, clamp `end_sec` to `duration` (song ends when it ends, event just gets cut short — no harm)
+
+3. **Snapshot references** — when shift says `snapshot=wave1`, verify that wave1 has an event that ends `<= shift.at_sec` with a pixel group that covers the shift's pixels. Otherwise shift would snapshot an uninitialized buffer.
+
+   ```python
+   def validate_snapshot(event, all_events):
+       if "snapshot" not in event:
+           return
+
+       source_anim = event["snapshot"]
+       shift_start = event["at_sec"]
+       shift_pixels = set(event["pixels"].indices)
+
+       source_events = [e for e in all_events if e["anim"] is source_anim]
+
+       if not source_events:
+           raise CompileError(
+               f"snapshot references {source_anim.anim_type} "
+               f"but it has no scheduled events"
+           )
+
+       valid = False
+       for se in source_events:
+           if se["end_sec"] <= shift_start:
+               if shift_pixels.issubset(set(se["pixels"].indices)):
+                   valid = True
+                   break
+
+       if not valid:
+           raise CompileError(
+               f"shift at {shift_start}s snapshots {source_anim.anim_type} "
+               f"but no matching event ends before shift starts "
+               f"with covering pixels"
+           )
+   ```
+
+4. **Animation params completeness** — each animation type has required params. Missing `period` on a wave → compile error, not a runtime mystery.
+
+5. **Layer limit** — already enforced in layer inference (`max_layers=32`), surfaced here with context about which events caused the overflow.
+
+6. **Duplicate strip names** → error.
+
+7. **Empty program** — no strips, no events → error or warning.
+
+8. **Buffer pool sanity** — no `buffer_id` outside pool bounds. Internal assertion.
 
 ---
 
