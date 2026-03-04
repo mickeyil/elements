@@ -39,6 +39,22 @@ if(BUILD_TESTS)
     add_executable(test_engine test/test_engine.cpp)
     target_link_libraries(test_engine elements_core Catch2::Catch2WithMain)
 
+    # Auto-generate test fixture if missing
+    find_program(PYTHON3 python3)
+    if(PYTHON3)
+        add_custom_command(
+            OUTPUT ${CMAKE_SOURCE_DIR}/test/fixtures/test_animation.bin
+            COMMAND ${PYTHON3} ${CMAKE_SOURCE_DIR}/test/fixtures/generate.py
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            COMMENT "Generating test fixture test_animation.bin"
+        )
+        add_custom_target(test_fixtures
+            DEPENDS ${CMAKE_SOURCE_DIR}/test/fixtures/test_animation.bin
+        )
+        add_dependencies(test_decoder test_fixtures)
+        add_dependencies(test_engine test_fixtures)
+    endif()
+
     add_test(NAME test_decoder COMMAND test_decoder
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_engine COMMAND test_engine
