@@ -343,6 +343,7 @@ def _resolve_anim_params(event: dict) -> dict:
             "channel": CHANNELS[p["channel"]],
             "h": float(p["h"]),
             "s": float(p["s"]),
+            "v": float(p["v"]),
             "min_val": float(p["min_val"]),
             "max_val": float(p["max_val"]),
             "period": float(p["period"]),

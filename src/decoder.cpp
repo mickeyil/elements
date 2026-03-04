@@ -43,10 +43,11 @@ struct BlobReader {
 };
 
 bool parse_wave_params(BlobReader& r, WaveParams& p) {
-    if (!r.has(29)) return false;
+    if (!r.has(33)) return false;
     p.channel    = r.read_u8();
     p.h          = r.read_f32();
     p.s          = r.read_f32();
+    p.v          = r.read_f32();
     p.min_val    = r.read_f32();
     p.max_val    = r.read_f32();
     p.period     = r.read_f32();

@@ -22,7 +22,7 @@ TIME_PARAMS = {
 
 # Required params per animation type
 REQUIRED_PARAMS = {
-    "wave":  ["channel", "h", "s", "min_val", "max_val", "period", "phase0", "pixel_step"],
+    "wave":  ["channel", "h", "s", "v", "min_val", "max_val", "period", "phase0", "pixel_step"],
     "spark": ["color", "fade"],
     "shift": ["direction", "velocity"],
     "fill":  ["color"],

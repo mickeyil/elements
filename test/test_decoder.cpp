@@ -192,6 +192,7 @@ TEST_CASE("Wave params", "[params]") {
     CHECK(wp.channel == 2);  // V
     CHECK(Catch::Approx(wp.h).epsilon(1e-6) == 220.0f);
     CHECK(Catch::Approx(wp.s).epsilon(1e-6) == 1.0f);
+    CHECK(Catch::Approx(wp.v).epsilon(1e-6) == 0.0f);
     CHECK(Catch::Approx(wp.min_val).epsilon(1e-6) == 0.0f);
     CHECK(Catch::Approx(wp.max_val).epsilon(1e-6) == 0.4f);
     // period=8 beats * 0.5 = 4.0s

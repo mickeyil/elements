@@ -29,8 +29,8 @@ Per event:
     params:            (animation-specific bytes)
 
 Animation params:
-    Wave (29 bytes):
-        channel uint8, h f32, s f32, min_val f32, max_val f32,
+    Wave (33 bytes):
+        channel uint8, h f32, s f32, v f32, min_val f32, max_val f32,
         period f32, phase0 f32, pixel_step f32
 
     Spark (16 bytes):
@@ -58,9 +58,9 @@ BLOB_VERSION = 1
 
 
 def _pack_wave_params(p: dict) -> bytes:
-    return struct.pack("<B7f",
+    return struct.pack("<B8f",
         p["channel"],
-        p["h"], p["s"],
+        p["h"], p["s"], p["v"],
         p["min_val"], p["max_val"],
         p["period"], p["phase0"], p["pixel_step"],
     )
@@ -247,9 +247,9 @@ def _decode_params(anim_type: int, raw: bytes) -> dict:
     """Decode animation-specific params from raw bytes."""
     if anim_type == ANIM_WAVE:
         ch = struct.unpack_from("<B", raw, 0)[0]
-        h, s, mn, mx, period, phase0, pstep = struct.unpack_from("<7f", raw, 1)
+        h, s, v, mn, mx, period, phase0, pstep = struct.unpack_from("<8f", raw, 1)
         return {
-            "channel": ch, "h": h, "s": s,
+            "channel": ch, "h": h, "s": s, "v": v,
             "min_val": mn, "max_val": mx,
             "period": period, "phase0": phase0, "pixel_step": pstep,
         }

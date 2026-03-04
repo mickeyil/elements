@@ -28,7 +28,7 @@ enum AnimType : uint8_t {
 
 struct WaveParams {
     uint8_t channel;  // 0=H, 1=S, 2=V
-    float h, s;
+    float h, s, v;
     float min_val, max_val;
     float period, phase0, pixel_step;
 };

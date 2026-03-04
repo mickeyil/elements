@@ -31,7 +31,7 @@ def test_blob():
 
     wave1 = wave(
         channel="V",
-        h=blue_hue, s=1.0,
+        h=blue_hue, s=1.0, v=0.0,
         min_val=0.0, max_val=0.4,
         period=8,
         phase0=-PI/2,
@@ -216,7 +216,7 @@ class TestValidation:
     def test_negative_beat_rejected(self):
         strip1 = strip("test_beat", length=10, type="RGB")
         px = strip1.pixels("0-9")
-        w = wave(channel="V", h=0, s=1.0, min_val=0.0, max_val=1.0,
+        w = wave(channel="V", h=0, s=1.0, v=0.0, min_val=0.0, max_val=1.0,
                  period=4, phase0=0, pixel_step=0)
         w.schedule(px, at=0, duration=1)
         with pytest.raises(CompileError, match="beat must be > 0"):
@@ -225,7 +225,7 @@ class TestValidation:
     def test_nonfinite_beat_rejected(self):
         strip1 = strip("test_beat_nonfinite", length=10, type="RGB")
         px = strip1.pixels("0-9")
-        w = wave(channel="V", h=0, s=1.0, min_val=0.0, max_val=1.0,
+        w = wave(channel="V", h=0, s=1.0, v=0.0, min_val=0.0, max_val=1.0,
                  period=4, phase0=0, pixel_step=0)
         w.schedule(px, at=0, duration=1)
         with pytest.raises(CompileError, match="beat must be finite"):
@@ -234,7 +234,7 @@ class TestValidation:
     def test_zero_or_negative_duration_rejected(self):
         strip1 = strip("test_dur", length=10, type="RGB")
         px = strip1.pixels("0-9")
-        w = wave(channel="V", h=0, s=1.0, min_val=0.0, max_val=1.0,
+        w = wave(channel="V", h=0, s=1.0, v=0.0, min_val=0.0, max_val=1.0,
                  period=4, phase0=0, pixel_step=0)
         w.schedule(px, at=0, duration=1)
         with pytest.raises(CompileError, match="program duration must be > 0"):
@@ -243,7 +243,7 @@ class TestValidation:
     def test_nonfinite_program_duration_rejected(self):
         strip1 = strip("test_dur_nonfinite", length=10, type="RGB")
         px = strip1.pixels("0-9")
-        w = wave(channel="V", h=0, s=1.0, min_val=0.0, max_val=1.0,
+        w = wave(channel="V", h=0, s=1.0, v=0.0, min_val=0.0, max_val=1.0,
                  period=4, phase0=0, pixel_step=0)
         w.schedule(px, at=0, duration=1)
         with pytest.raises(CompileError, match="program duration must be finite"):
@@ -252,7 +252,7 @@ class TestValidation:
     def test_negative_event_start_rejected(self):
         strip1 = strip("test_neg_start", length=10, type="RGB")
         px = strip1.pixels("0-9")
-        w = wave(channel="V", h=0, s=1.0, min_val=0.0, max_val=1.0,
+        w = wave(channel="V", h=0, s=1.0, v=0.0, min_val=0.0, max_val=1.0,
                  period=4, phase0=0, pixel_step=0)
         w.schedule(px, at=-1, duration=1)
         with pytest.raises(CompileError, match="event start time must be"):
@@ -261,7 +261,7 @@ class TestValidation:
     def test_zero_event_duration_rejected(self):
         strip1 = strip("test_zero_dur", length=10, type="RGB")
         px = strip1.pixels("0-9")
-        w = wave(channel="V", h=0, s=1.0, min_val=0.0, max_val=1.0,
+        w = wave(channel="V", h=0, s=1.0, v=0.0, min_val=0.0, max_val=1.0,
                  period=4, phase0=0, pixel_step=0)
         w.schedule(px, at=0, duration=0)
         with pytest.raises(CompileError, match="event duration must be > 0"):
@@ -270,7 +270,7 @@ class TestValidation:
     def test_nan_event_times_rejected(self):
         strip1 = strip("test_nan", length=10, type="RGB")
         px = strip1.pixels("0-9")
-        w = wave(channel="V", h=0, s=1.0, min_val=0.0, max_val=1.0,
+        w = wave(channel="V", h=0, s=1.0, v=0.0, min_val=0.0, max_val=1.0,
                  period=4, phase0=0, pixel_step=0)
         w.schedule(px, at=sec(math.nan), duration=1)
         with pytest.raises(CompileError, match="event start time must be"):
@@ -279,7 +279,7 @@ class TestValidation:
     def test_nan_event_duration_rejected(self):
         strip1 = strip("test_nan_duration", length=10, type="RGB")
         px = strip1.pixels("0-9")
-        w = wave(channel="V", h=0, s=1.0, min_val=0.0, max_val=1.0,
+        w = wave(channel="V", h=0, s=1.0, v=0.0, min_val=0.0, max_val=1.0,
                  period=4, phase0=0, pixel_step=0)
         w.schedule(px, at=0, duration=sec(math.nan))
         with pytest.raises(CompileError, match="event duration"):
@@ -288,7 +288,7 @@ class TestValidation:
     def test_pixel_out_of_bounds(self):
         strip1 = strip("test_oob", length=10, type="RGB")
         bad_pixels = strip1.pixels("0,11")
-        w = wave(channel="V", h=0, s=1.0, min_val=0.0, max_val=1.0,
+        w = wave(channel="V", h=0, s=1.0, v=0.0, min_val=0.0, max_val=1.0,
                  period=4, phase0=0, pixel_step=0)
         w.schedule(bad_pixels, at=0, duration=1)
         with pytest.raises(CompileError, match="out of bounds"):
@@ -297,10 +297,10 @@ class TestValidation:
     def test_event_starts_after_duration(self):
         strip1 = strip("test_dur", length=10, type="RGB")
         px = strip1.pixels("0-9")
-        w = wave(channel="V", h=0, s=1.0, min_val=0.0, max_val=1.0,
+        w = wave(channel="V", h=0, s=1.0, v=0.0, min_val=0.0, max_val=1.0,
                  period=4, phase0=0, pixel_step=0)
         w.schedule(px, at=0, duration=1)
-        w2 = wave(channel="V", h=0, s=1.0, min_val=0.0, max_val=1.0,
+        w2 = wave(channel="V", h=0, s=1.0, v=0.0, min_val=0.0, max_val=1.0,
                   period=4, phase0=0, pixel_step=0)
         w2.schedule(px, at=10, duration=1)  # at=10 beats = 5.0s > 2.0s
         with pytest.raises(CompileError, match="starts at"):
