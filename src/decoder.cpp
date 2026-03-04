@@ -175,7 +175,7 @@ Program* decode_program(const uint8_t* blob, size_t len) {
     }
 
     // Layers
-    prog->layers = new (std::nothrow) LayerDef[layer_count];
+    prog->layers = new (std::nothrow) LayerDef[layer_count]();
     if (!prog->layers) goto fail;
 
     for (uint8_t li = 0; li < layer_count; li++) {
@@ -198,7 +198,7 @@ Program* decode_program(const uint8_t* blob, size_t len) {
         layer.event_count = r.read_u16();
 
         // Events
-        layer.events = new (std::nothrow) AnimationEvent[layer.event_count];
+        layer.events = new (std::nothrow) AnimationEvent[layer.event_count]();
         if (!layer.events) goto fail;
 
         for (uint16_t ei = 0; ei < layer.event_count; ei++) {

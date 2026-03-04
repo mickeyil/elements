@@ -52,6 +52,8 @@ static Animation* create_animation(const AnimationEvent& e, Program* prog,
                     // Compiler guarantees pixel subset — si should never be 0xFF
                     work[i] = (si != 0xFF) ? src_layer.buffer[si] : hsva_t();
                 }
+            } else {
+                memset(work, 0, shift_len * sizeof(hsva_t));
             }
 
             return new AnimShift(e.params.shift, work, shift_len);
