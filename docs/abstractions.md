@@ -205,6 +205,22 @@ One program at a time. Loading a new program replaces the current one entirely (
 
 ---
 
+## Multi-Strip
+
+Multiple physical strips run on separate ESP32 devices. The compiler partitions events by strip and emits **one blob per strip**. Each blob is completely self-contained — an ESP32 loads its blob, allocates memory, and plays back without any knowledge of other strips.
+
+**Synchronization:** All devices sync their clocks to the base station (NTP or similar) and receive a `START` command with a shared absolute timestamp `T0`. Because all blobs share the same `duration` and all devices start at the same `t_program`, the animations appear synchronized.
+
+**Compiler output:** `build()` returns `dict[str, bytes]` keyed by strip name. The base station routes each blob to the correct device.
+
+**Layer independence:** Layer inference runs per-strip. Events on different strips never share layers, even if they target the same pixel indices or the same time window. This fixes the previous bug where events from two strips with overlapping numeric indices could be silently merged into one layer.
+
+**Cross-strip restrictions:**
+- Stateless animations (wave, spark, fill): can be scheduled independently on each strip. Full cross-strip splitting (a single wave spanning N strips as one continuous effect) is a future compiler feature.
+- Stateful animations (shift): cross-strip is a compile error. Shift needs a complete pixel snapshot at activation time; this can't be split across independent blobs.
+
+---
+
 ## Engine
 
 The runtime that plays a program. Owns the lifecycle of animation instances.

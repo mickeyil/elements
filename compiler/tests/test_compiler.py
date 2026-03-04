@@ -55,7 +55,8 @@ def test_blob():
         spark_white.schedule(left_group1, at=i, duration=sec(0.1))
         spark_yellow.schedule(right_group1, at=i + 0.5, duration=sec(0.1))
 
-    return build(beat=0.5, duration=2.0)
+    blobs = build(beat=0.5, duration=2.0)
+    return blobs["main"]
 
 
 @pytest.fixture(scope="module")
@@ -313,6 +314,71 @@ class TestValidation:
         w.schedule(px, at=0, duration=1)
         with pytest.raises(CompileError, match="missing required param"):
             build(beat=0.5, duration=2.0)
+
+
+# ---------------------------------------------------------------------------
+# Multi-strip tests
+# ---------------------------------------------------------------------------
+
+class TestMultiStrip:
+    def _make_wave(self, **extra):
+        params = dict(channel="V", h=220, s=1.0, v=0.0, min_val=0.0, max_val=1.0,
+                      period=4, phase0=0.0, pixel_step=0.1)
+        params.update(extra)
+        return wave(**params)
+
+    def test_two_strips_produce_two_blobs(self):
+        strip_a = strip("left", length=10)
+        strip_b = strip("right", length=10)
+        w1 = self._make_wave()
+        w2 = self._make_wave(h=120)
+        w1.schedule(strip_a.pixels("0-9"), at=0, duration=2)
+        w2.schedule(strip_b.pixels("0-9"), at=0, duration=2)
+        blobs = build(beat=0.5, duration=1.0)
+        assert set(blobs.keys()) == {"left", "right"}
+        assert blobs["left"][:4] == b"ELEM"
+        assert blobs["right"][:4] == b"ELEM"
+
+    def test_strips_have_independent_layers(self):
+        """Events on strip_a don't affect layer count on strip_b."""
+        strip_a = strip("ind_a", length=10)
+        strip_b = strip("ind_b", length=10)
+        w1 = self._make_wave()
+        w2 = self._make_wave(h=120)
+        sp = spark(color="white", fade=0.1)
+        w1.schedule(strip_a.pixels("0-9"), at=0, duration=2)
+        w2.schedule(strip_b.pixels("0-9"), at=0, duration=2)
+        # Overlapping spark on strip_a forces a second layer on strip_a only
+        sp.schedule(strip_a.pixels("0,2,4"), at=0, duration=sec(0.1))
+        blobs = build(beat=0.5, duration=1.0)
+        dec_a = decode_blob(blobs["ind_a"])
+        dec_b = decode_blob(blobs["ind_b"])
+        assert dec_a["header"]["layer_count"] == 2
+        assert dec_b["header"]["layer_count"] == 1
+
+    def test_overlapping_indices_different_strips_not_merged(self):
+        """Simultaneous events on different strips with same indices get separate blobs."""
+        strip_a = strip("oi_a", length=5)
+        strip_b = strip("oi_b", length=5)
+        w1 = self._make_wave()
+        w2 = self._make_wave(h=120)
+        # Same pixel indices [0-4], same time window — different strips
+        w1.schedule(strip_a.pixels("0-4"), at=0, duration=2)
+        w2.schedule(strip_b.pixels("0-4"), at=0, duration=2)
+        blobs = build(beat=0.5, duration=1.0)
+        assert set(blobs.keys()) == {"oi_a", "oi_b"}
+        # Each strip gets exactly 1 layer — no cross-strip merging
+        assert decode_blob(blobs["oi_a"])["header"]["layer_count"] == 1
+        assert decode_blob(blobs["oi_b"])["header"]["layer_count"] == 1
+
+    def test_single_strip_still_works(self):
+        """Single-strip programs return a dict with one entry."""
+        strip1 = strip("solo", length=5)
+        w = self._make_wave()
+        w.schedule(strip1.pixels("0-4"), at=0, duration=2)
+        blobs = build(beat=0.5, duration=1.0)
+        assert list(blobs.keys()) == ["solo"]
+        assert blobs["solo"][:4] == b"ELEM"
 
 
 def _extract_int(pattern: str, text: str, description: str) -> int:

@@ -411,29 +411,30 @@ def _resolve_snapshot_layers(events: list[dict], layers: list[dict]):
 # Main compile entry point
 # ---------------------------------------------------------------------------
 
-def compile_program(strips: list[StripDef], events: list[dict],
-                    beat: float, duration: float) -> bytes:
-    """Full compile pipeline: returns binary blob."""
-    # Deep copy events so we don't mutate the builder's originals
-    events = [dict(e) for e in events]
+def _partition_by_strip(events: list[dict]) -> dict[str, list[dict]]:
+    """Group events by strip name, preserving insertion order."""
+    by_strip: dict[str, list[dict]] = {}
+    for e in events:
+        name = e["pixels"].strip_name
+        if name not in by_strip:
+            by_strip[name] = []
+        by_strip[name].append(e)
+    return by_strip
 
-    # 1. Early validation (bounds, params)
-    _validate_early(events, strips)
 
-    # 2. Time resolution
-    _resolve_times(events, beat, duration)
-
+def _compile_strip(strip_events: list[dict], duration: float) -> bytes:
+    """Run the per-strip pipeline (layers → buffers → validation → blob)."""
     # 3. Layer inference
-    layers = _infer_layers(events)
+    layers = _infer_layers(strip_events)
 
     # 4. Buffer packing
     buffer_pool = _pack_buffers(layers)
 
     # Resolve snapshot source layers (needs layer info)
-    _resolve_snapshot_layers(events, layers)
+    _resolve_snapshot_layers(strip_events, layers)
 
     # 5. Late validation (timing, snapshots)
-    _validate_late(events, layers, buffer_pool, duration)
+    _validate_late(strip_events, layers, buffer_pool, duration)
 
     # 6. Resolve animation params to binary-ready values
     for layer in layers:
@@ -441,10 +442,30 @@ def compile_program(strips: list[StripDef], events: list[dict],
             e["binary_params"] = _resolve_anim_params(e)
 
     # Compute max remap length
-    max_remap = 0
-    for layer in layers:
-        for e in layer["events"]:
-            max_remap = max(max_remap, len(e["index_remap"]))
+    max_remap = max(
+        (len(e["index_remap"]) for layer in layers for e in layer["events"]),
+        default=0,
+    )
 
     # 7. Blob emission
     return emit_blob(layers, buffer_pool, duration, max_remap)
+
+
+def compile_program(strips: list[StripDef], events: list[dict],
+                    beat: float, duration: float) -> dict[str, bytes]:
+    """Full compile pipeline: returns one binary blob per strip."""
+    # Deep copy events so we don't mutate the builder's originals
+    events = [dict(e) for e in events]
+
+    # 1. Early validation (bounds, params) — across all strips
+    _validate_early(events, strips)
+
+    # 2. Time resolution — global, strip-independent
+    _resolve_times(events, beat, duration)
+
+    # 3–7. Per-strip: layer inference → buffer packing → validation → blob
+    by_strip = _partition_by_strip(events)
+    return {
+        name: _compile_strip(strip_events, duration)
+        for name, strip_events in by_strip.items()
+    }

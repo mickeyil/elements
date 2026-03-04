@@ -1,18 +1,31 @@
 # Elements v2 — Compiler Design
 
-The compiler takes a DSL program and emits a binary blob. It runs on the base station (PC), not the ESP32. All heavy lifting — time resolution, layer inference, buffer packing — happens here.
+The compiler takes a DSL program and emits one binary blob per strip. It runs on the base station (PC), not the ESP32. All heavy lifting — time resolution, layer inference, buffer packing — happens here.
 
 ## Pipeline
 
 ```
 DSL (.py)
-  → 1. Parser       — DSL calls → structured data
-  → 2. Time resolution  — beats/sec → absolute seconds
-  → 3. Layer inference  — events → layers (interval graph coloring)
-  → 4. Buffer packing   — stateful animations → shared buffer slots
-  → 5. Validation       — bounds, references, timing checks
-  → 6. Blob emission    — serialize to binary
+  → 1. Parser            — DSL calls → structured data
+  → 2. Time resolution   — beats/sec → absolute seconds (global, all strips)
+  → 3. Strip partition   — events split by strip_name
+  → [per strip:]
+  → 4. Layer inference   — events → layers (interval graph coloring)
+  → 5. Buffer packing    — stateful animations → shared buffer slots
+  → 6. Validation        — bounds, references, timing checks
+  → 7. Blob emission     — serialize to binary
+  → dict[strip_name, bytes]
 ```
+
+Steps 1–3 run once across all events. Steps 4–7 run independently per strip. `build()` returns `dict[str, bytes]` — one entry per strip.
+
+### Multi-strip
+
+One blob per physical strip/ESP32. Each blob is self-contained — the ESP doesn't know about other strips. The base station sends each blob to its respective device. Since clocks are synced and all devices start at the same `t_program`, they play in sync.
+
+Events are partitioned by `strip_name` before layer inference, so strips never share layers. Two events on different strips with the same pixel indices are not merged — each goes into its own blob.
+
+**Cross-strip stateful animations** (e.g., shift spanning two strips) are a compile error — shift needs a complete snapshot of its source pixels, which can't be split across two independent blobs. Cross-strip stateless animations (wave, spark, fill) splitting is a future feature; for now, schedule each strip independently.
 
 ---
 

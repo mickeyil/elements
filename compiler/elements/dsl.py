@@ -87,10 +87,9 @@ def fill(**params) -> AnimDef:
     return _make_anim("fill", params)
 
 
-def build(beat: float, duration: float) -> bytes:
-    """Compile the accumulated program into a binary blob."""
+def build(beat: float, duration: float) -> dict[str, bytes]:
+    """Compile the accumulated program. Returns one binary blob per strip."""
     try:
-        blob = compile_program(_builder.strips, _builder.events, beat, duration)
-        return blob
+        return compile_program(_builder.strips, _builder.events, beat, duration)
     finally:
         _builder.reset()
