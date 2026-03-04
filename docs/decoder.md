@@ -87,8 +87,6 @@ struct AnimParams {
             float velocity;
             uint8_t circular;
             float fill_h, fill_s, fill_v, fill_a;
-            uint8_t init_mode;    // 0=CONST, 1=SNAPSHOT
-            uint8_t source_layer;
             uint8_t buffer_id;
         } shift;
 
@@ -107,6 +105,7 @@ struct AnimationEvent {
     AnimParams params;
     float t_start;         // seconds
     float duration;        // seconds
+    uint8_t source_layer;  // 0xFF = SOURCE_NONE
     uint8_t remap_length;
     bool remap_is_identity;
     uint8_t* remap;        // → points into arena
@@ -254,7 +253,7 @@ static_assert(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__,
 
 Minimal — the Python compiler already validates. But add safety checks:
 - Magic == "ELEM"
-- Version == 1
+- Version == 2
 - Blob length sufficient for declared contents
 - layer_count <= 32
 - No index_map entry >= 255 (uint8 strip limit)
@@ -275,7 +274,7 @@ Tests:
 - Layer 0 index map == [0..9], 2 events (wave + shift)
 - Layer 1 index map == [0,4,5,9], 8 events (all sparks)
 - Wave params (channel, h, s, period, etc.)
-- Shift params (direction, velocity, init_mode=SNAPSHOT, source_layer=0)
+- Shift params (direction, velocity, source_layer event header, buffer_id)
 - Spark remaps ([0,1] for white, [2,3] for yellow)
 - remap_is_identity flags
 - Buffer pool == [10]

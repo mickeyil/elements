@@ -128,16 +128,16 @@ The engine doesn't distinguish between these modes — it just hands the buffer
 pointer to the constructor. The animation decides internally whether to copy
 or hold a reference.
 
-**Ordering invariant:** `source_layer < dependent_layer`. The engine renders
-layers in order 0, 1, 2, ... so the source layer is always fully rendered
-before the dependent layer reads it. The compiler enforces this invariant at
-compile time.
+**Ordering invariant:** `source_layer <= dependent_layer`. The engine renders
+layers in order 0, 1, 2, ... so the source layer is always rendered before or
+at the dependent layer. Equal layers are valid when the source event has already
+ended before the dependent event starts.
 
-**Buffer clobber edge case:** if the source event has ended and a new event
-starts on the source layer at or before the dependent event's start time, the
-source buffer may contain unexpected data. The compiler emits a **warning**
-(not an error) for this case — the program is still valid, but the snapshot
-may not contain what the author intended.
+**Buffer clobber edge case:** if the source event has ended and another event on
+the source layer is active before the dependent event starts, the source buffer
+may contain unexpected data. The compiler emits a **warning** (not an error) for
+this case — the program is still valid, but the snapshot may not contain what
+the author intended.
 
 ---
 

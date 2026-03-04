@@ -49,7 +49,7 @@ def test_blob():
     spark_yellow = spark(color="yellow", fade=0.1)
 
     wave1.schedule(all_pixels, at=0, duration=2)
-    shift1.schedule(all_pixels, at=2, duration=2, snapshot=wave1)
+    shift1.schedule(all_pixels, at=2, duration=2, source=wave1)
 
     for i in range(4):
         spark_white.schedule(left_group1, at=i, duration=sec(0.1))
@@ -74,7 +74,7 @@ class TestHeader:
         assert test_blob[:4] == b"ELEM"
 
     def test_version(self, test_blob):
-        assert test_blob[4] == 1
+        assert test_blob[4] == 2
 
     def test_layer_count(self, decoded):
         assert decoded["header"]["layer_count"] == 2
@@ -196,14 +196,14 @@ class TestShiftAndBuffers:
         shift_evt = decoded["layers"][0]["events"][1]
         assert shift_evt["params"]["buffer_id"] == 0
 
-    def test_shift_init_mode_snapshot(self, decoded):
-        shift_evt = decoded["layers"][0]["events"][1]
-        assert shift_evt["params"]["init_mode"] == 1  # SNAPSHOT
-
     def test_shift_source_layer(self, decoded):
-        """Shift snapshots wave, which is on layer 0."""
+        """Shift sources wave, which is on layer 0."""
         shift_evt = decoded["layers"][0]["events"][1]
-        assert shift_evt["params"]["source_layer"] == 0
+        assert shift_evt["source_layer"] == 0
+
+    def test_source_none_for_non_source_events(self, decoded):
+        wave_evt = decoded["layers"][0]["events"][0]
+        assert wave_evt["source_layer"] == 0xFF
 
     def test_buffer_pool_size(self, decoded):
         assert decoded["buffer_pool"] == [10]  # 10 pixels for shift
@@ -314,6 +314,82 @@ class TestValidation:
         w.schedule(px, at=0, duration=1)
         with pytest.raises(CompileError, match="missing required param"):
             build(beat=0.5, duration=2.0)
+
+    def test_snapshot_key_rejected(self):
+        strip1 = strip("test_snapshot", length=10)
+        px = strip1.pixels("0-9")
+        w = wave(channel="V", h=0, s=1.0, v=0.0, min_val=0.0, max_val=1.0,
+                 period=4, phase0=0, pixel_step=0)
+        s = shift(direction="right", velocity=2, circular=False, fill="transparent")
+        s.schedule(px, at=0, duration=1, snapshot=w)
+        with pytest.raises(CompileError, match="snapshot is not supported"):
+            build(beat=0.5, duration=2.0)
+
+    def test_source_compiles_correctly(self):
+        strip1 = strip("test_source_ok", length=10)
+        px = strip1.pixels("0-9")
+        source = wave(
+            channel="V",
+            h=0, s=1.0, v=0.0,
+            min_val=0.0, max_val=0.4,
+            period=4, phase0=0, pixel_step=0,
+        )
+        sh = shift(direction="right", velocity=2, circular=False, fill="transparent")
+        source.schedule(px, at=0, duration=2)
+        sh.schedule(px, at=2, duration=2, source=source)
+        blobs = build(beat=0.5, duration=3.0)
+        dec = decode_blob(blobs["test_source_ok"])
+        assert dec["layers"][0]["events"][1]["source_layer"] == 0
+
+    def test_source_missing_event_error(self):
+        strip1 = strip("test_source_missing", length=10)
+        px = strip1.pixels("0-9")
+        w = wave(channel="V", h=0, s=1.0, v=0.0, min_val=0.0, max_val=1.0,
+                 period=4, phase0=0, pixel_step=0)
+        s = shift(direction="right", velocity=2, circular=False, fill="transparent")
+        s.schedule(px, at=0, duration=1, source=w)
+        with pytest.raises(CompileError, match="has no scheduled events"):
+            build(beat=0.5, duration=2.0)
+
+    def test_source_ambiguous_anim_error(self):
+        strip1 = strip("test_source_ambiguous", length=10)
+        px = strip1.pixels("0-9")
+        source = wave(
+            channel="V",
+            h=0, s=1.0, v=0.0,
+            min_val=0.0, max_val=1.0,
+            period=4, phase0=0, pixel_step=0,
+        )
+        sh = shift(direction="right", velocity=2, circular=False, fill="transparent")
+        source.schedule(strip1.pixels("0-4"), at=0, duration=3)
+        source.schedule(strip1.pixels("5-9"), at=1, duration=3)
+        sh.schedule(px, at=7, duration=1, source=source)
+        with pytest.raises(CompileError, match="appears on multiple layers"):
+            build(beat=0.5, duration=5.0)
+
+    def test_source_higher_layer_error(self):
+        strip1 = strip("test_source_order", length=10)
+        px = strip1.pixels("0-9")
+        anchor = wave(
+            channel="V",
+            h=60, s=1.0, v=0.0,
+            min_val=0.0, max_val=1.0,
+            period=4, phase0=0, pixel_step=0,
+        )
+        source = wave(
+            channel="V",
+            h=120, s=1.0, v=0.0,
+            min_val=0.0, max_val=1.0,
+            period=4, phase0=0, pixel_step=0,
+        )
+        sh = shift(direction="right", velocity=2, circular=False, fill="transparent")
+        anchor.schedule(px, at=0, duration=4)
+        # Force source onto layer 1 by overlapping with anchor on the same pixels
+        source.schedule(px, at=0.5, duration=3)
+        # Source is on a higher layer than shift
+        sh.schedule(px, at=4.5, duration=1, source=source)
+        with pytest.raises(CompileError, match="must be <= dependent layer"):
+            build(beat=0.5, duration=6.0)
 
 
 # ---------------------------------------------------------------------------

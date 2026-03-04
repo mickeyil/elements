@@ -124,7 +124,8 @@ The engine doesn't distinguish — it just passes the pointer. No separate init 
 
 The shift animation needs initial pixel values to shift. It declares `source=` in the DSL, which sets the event-level `source_layer` field. When the event activates, the engine passes the source layer's buffer to the `AnimShift` constructor, which copies it into its pre-allocated work buffer. This is a frozen read — the shift operates on the snapshot, not the live source.
 
-The source layer must have rendered before the shift's layer. The compiler enforces `source_layer < shift's layer index`.
+The source layer must be rendered before the shift reads it. The compiler enforces
+`source_layer <= shift's layer index`.
 
 ```cpp
 struct ShiftParams {

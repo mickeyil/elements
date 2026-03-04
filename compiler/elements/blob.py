@@ -4,7 +4,7 @@ Blob format (little-endian):
 
 Header (12 bytes):
     magic:            4 bytes   "ELEM"
-    version:          uint8     1
+    version:          uint8     2
     layer_count:      uint8
     buffer_count:     uint8
     max_remap_length: uint8
@@ -22,6 +22,7 @@ Per event:
     anim_type:         uint8
     t_start:           float32
     duration:          float32
+    source_layer:      uint8    (0xFF = none)
     remap_is_identity: uint8    (1 = identity, skip scatter copy)
     remap_length:      uint8
     remap:             uint8[remap_length]
@@ -36,10 +37,10 @@ Animation params:
     Spark (16 bytes):
         color_h f32, color_s f32, color_v f32, fade f32
 
-    Shift (25 bytes):
+    Shift (23 bytes):
         direction uint8, velocity f32, circular uint8,
         fill_h f32, fill_s f32, fill_v f32, fill_a f32,
-        init_mode uint8, source_layer uint8, buffer_id uint8
+        buffer_id uint8
 """
 
 from __future__ import annotations
@@ -54,7 +55,7 @@ ANIM_SPARK = ANIM_TYPES["spark"]
 ANIM_FILL  = ANIM_TYPES["fill"]
 
 BLOB_MAGIC = b"ELEM"
-BLOB_VERSION = 1
+BLOB_VERSION = 2
 
 
 def _pack_wave_params(p: dict) -> bytes:
@@ -74,13 +75,11 @@ def _pack_spark_params(p: dict) -> bytes:
 
 
 def _pack_shift_params(p: dict) -> bytes:
-    return struct.pack("<BfB4fBBB",
+    return struct.pack("<BfB4fB",
         p["direction"],
         p["velocity"],
         p["circular"],
         p["fill_h"], p["fill_s"], p["fill_v"], p["fill_a"],
-        p["init_mode"],
-        p["source_layer"],
         p["buffer_id"],
     )
 
@@ -137,6 +136,9 @@ def emit_blob(layers: list[dict], buffer_pool: list[dict],
 
             # t_start, duration
             buf += struct.pack("<ff", e["at_sec"], e["duration_sec"])
+
+            # source_layer (0xFF means none)
+            buf += struct.pack("<B", e.get("source_layer", 0xFF))
 
             # remap_is_identity flag
             buf += struct.pack("<B", 1 if e.get("remap_is_identity", False) else 0)
@@ -207,6 +209,9 @@ def decode_blob(data: bytes) -> dict:
             t_start, dur = struct.unpack_from("<ff", data, pos)
             pos += 8
 
+            source_layer = struct.unpack_from("<B", data, pos)[0]
+            pos += 1
+
             remap_is_identity = struct.unpack_from("<B", data, pos)[0]
             pos += 1
 
@@ -226,6 +231,7 @@ def decode_blob(data: bytes) -> dict:
                 "anim_type": anim_type,
                 "t_start": t_start,
                 "duration": dur,
+                "source_layer": source_layer,
                 "remap_is_identity": bool(remap_is_identity),
                 "remap": remap,
                 "params": params,
@@ -261,11 +267,10 @@ def _decode_params(anim_type: int, raw: bytes) -> dict:
         vel = struct.unpack_from("<f", raw, 1)[0]
         circ = struct.unpack_from("<B", raw, 5)[0]
         fh, fs, fv, fa = struct.unpack_from("<4f", raw, 6)
-        im, sl, bid = struct.unpack_from("<BBB", raw, 22)
         return {
             "direction": d, "velocity": vel, "circular": circ,
             "fill_h": fh, "fill_s": fs, "fill_v": fv, "fill_a": fa,
-            "init_mode": im, "source_layer": sl, "buffer_id": bid,
+            "buffer_id": struct.unpack_from("<B", raw, 22)[0],
         }
     else:
         return {"raw": raw}

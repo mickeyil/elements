@@ -28,7 +28,7 @@ def program(beat, duration):
     spark_yellow = spark(color="yellow", fade=0.1)
 
     wave1.schedule(all_pixels, at=0, duration=2)
-    shift1.schedule(all_pixels, at=2, duration=2, snapshot=wave1)
+    shift1.schedule(all_pixels, at=2, duration=2, source=wave1)
 
     for i in range(4):
         spark_white.schedule(left_group1, at=i, duration=sec(0.1))

@@ -208,11 +208,10 @@ TEST_CASE("Shift params", "[params]") {
     // velocity=2 pixels/beat → 4.0 pixels/sec
     CHECK(Catch::Approx(sp.velocity).epsilon(1e-6) == 4.0f);
     CHECK(sp.circular == 0);
-    CHECK(sp.init_mode == 1);    // SNAPSHOT
-    CHECK(sp.source_layer == 0);
     CHECK(sp.buffer_id == 0);
     // fill = transparent → H=0, S=0, V=0, A=0
     CHECK(Catch::Approx(sp.fill_a).epsilon(1e-6) == 0.0f);
+    CHECK(p->layers[0].events[1].source_layer == 0);
 }
 
 TEST_CASE("Spark params", "[params]") {

@@ -38,8 +38,6 @@ struct ShiftParams {
     float velocity;
     uint8_t circular;
     float fill_h, fill_s, fill_v, fill_a;
-    uint8_t init_mode;    // 0=CONST, 1=SNAPSHOT
-    uint8_t source_layer;
     uint8_t buffer_id;
 };
 
@@ -70,6 +68,7 @@ struct AnimationEvent {
     AnimParams params;
     float t_start;          // seconds
     float duration;         // seconds
+    uint8_t source_layer;   // 0xFF = SOURCE_NONE
     uint8_t remap_length;
     bool remap_is_identity;
     uint8_t* remap;         // heap-allocated array
@@ -102,7 +101,8 @@ struct Program {
 // API
 // ---------------------------------------------------------------------------
 
-static constexpr uint8_t BLOB_VERSION = 1;
+static constexpr uint8_t BLOB_VERSION = 2;
+static constexpr uint8_t SOURCE_NONE = 0xFF;
 
 /// Decode a binary blob into a Program. Returns nullptr on failure.
 Program* decode_program(const uint8_t* blob, size_t len);

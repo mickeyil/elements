@@ -70,7 +70,7 @@ class StripEngine:
 
 Key implementation notes:
 - Animation instances are plain dicts or dataclasses (no class hierarchy needed in Python)
-- Shift: snapshot the source layer's buffer at activation (same logic as C++ `AnimShift` constructor)
+- Shift: read the source layer's buffer at activation (same logic as C++ `AnimShift` constructor)
 - HSV→RGB: use `colorsys.hsv_to_rgb(h/360, s, v)` (h is 0-360 in params, colorsys expects 0-1)
 - Alpha blend: `out_rgb = lerp(below_rgb, pixel_rgb, alpha)` per pixel
 

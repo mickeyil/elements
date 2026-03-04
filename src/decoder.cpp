@@ -66,7 +66,7 @@ bool parse_spark_params(BlobReader& r, SparkParams& p) {
 }
 
 bool parse_shift_params(BlobReader& r, ShiftParams& p) {
-    if (!r.has(25)) return false;
+    if (!r.has(23)) return false;
     p.direction    = r.read_u8();
     p.velocity     = r.read_f32();
     p.circular     = r.read_u8();
@@ -74,8 +74,6 @@ bool parse_shift_params(BlobReader& r, ShiftParams& p) {
     p.fill_s       = r.read_f32();
     p.fill_v       = r.read_f32();
     p.fill_a       = r.read_f32();
-    p.init_mode    = r.read_u8();
-    p.source_layer = r.read_u8();
     p.buffer_id    = r.read_u8();
     return true;
 }
@@ -186,13 +184,15 @@ Program* decode_program(const uint8_t* blob, size_t len) {
             AnimationEvent& event = layer.events[ei];
             event.remap = nullptr;
 
-            // anim_type (1) + t_start (4) + duration (4) + remap_is_identity (1) = 10
-            if (!r.has(10)) goto fail;
+            // anim_type (1) + t_start (4) + duration (4) + source_layer (1) +
+            // remap_is_identity (1) = 11
+            if (!r.has(11)) goto fail;
 
             uint8_t anim_type = r.read_u8();
             event.params.type = static_cast<AnimType>(anim_type);
             event.t_start     = r.read_f32();
             event.duration    = r.read_f32();
+            event.source_layer = r.read_u8();
             event.remap_is_identity = (r.read_u8() != 0);
 
             // Remap

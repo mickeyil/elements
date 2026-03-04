@@ -342,7 +342,7 @@ Runs after time resolution, layer inference, and buffer packing — has the full
    - Event *starts* after duration → **error** (dead code, definitely a mistake)
    - Event *extends* past duration → **warning**, clamp `end_sec` to `duration` (song ends when it ends, event just gets cut short — no harm)
 
-3. **Source layer ordering** — after layer inference, for each event with a `source` field, verify that the source animation's layer index is less than the dependent event's layer index. The engine renders layers in order, so a source layer must come first.
+3. **Source layer ordering** — after layer inference, for each event with a `source` field, verify that the source animation's layer index is less than or equal to the dependent event's layer index. The engine renders layers in order, so the source layer must be ready.
 
    ```python
    def validate_source_ordering(layers):
@@ -352,27 +352,29 @@ Runs after time resolution, layer inference, and buffer packing — has the full
                    continue
                source_anim = e["source"]
                source_li = find_layer_of(source_anim, layers)
-               if source_li >= li:
+               if source_li > li:
                    raise CompileError(
                        f"{e['anim'].anim_type} on layer {li} declares "
                        f"source={source_anim.anim_type} on layer {source_li}, "
-                       f"but source_layer must be < dependent layer"
+                       f"but source_layer must be <= dependent layer"
                    )
                e["source_layer"] = source_li
    ```
 
-4. **Buffer clobber warning** — if the source event has ended (`source end_sec <= dependent at_sec`) and a *different* event on the source layer starts at or before `dependent at_sec`, the source buffer may have been overwritten. Emit a warning.
+4. **Buffer clobber warning** — if the source event has ended and a *different* event on the source layer is active before the shift starts, the source buffer may have been overwritten. Emit a warning.
 
    ```python
    def warn_buffer_clobber(event, source_layer_events):
        if "source" not in event:
            return
+       source_end = find_source_end_sec(event)
        dep_start = event["at_sec"]
        for se in source_layer_events:
            if se["anim"] is event["source"]:
                continue  # skip the source event itself
-           if se["at_sec"] <= dep_start and se["end_sec"] > dep_start:
-               warn(f"event on source layer active at {dep_start}s — "
+           if se["at_sec"] <= dep_start and se["end_sec"] > source_end:
+               warn(f"event on source layer active between {source_end}s and "
+                    f"{dep_start}s — "
                     f"buffer may not contain expected snapshot data")
    ```
 
@@ -414,7 +416,7 @@ The blob is the binary format the C++ decoder reads to reconstruct a `Program` s
 
 ```
 magic:            4 bytes   "ELEM"
-version:          uint8     1
+version:          uint8     2
 layer_count:      uint8
 buffer_count:     uint8
 max_remap_length: uint8     (for pre-allocating temp render buffer)
@@ -515,19 +517,19 @@ No `malloc`/`free` during playback. One temp buffer, reused every frame. Works b
 ### Test animation blob size estimate
 
 ```
-Header:                           11 bytes
+Header:                           12 bytes
 Buffer pool (1 buffer):            1 byte
 Layer 0 (10 indices, 2 events):
   index_map:                      1 + 10 = 11
   event_count:                    2
-  wave event:                     1+4+4+1+1+10+1+33 = 55
-  shift event:                    1+4+4+1+1+10+1+23 = 45
+  wave event:                     1+4+4+1+1+1+10+1+33 = 56
+  shift event:                    1+4+4+1+1+1+10+1+23 = 46
 Layer 1 (4 indices, 8 events):
   index_map:                      1 + 4 = 5
   event_count:                    2
-  8 spark events:                 8 × (1+4+4+1+1+2+1+16) = 240
+  8 spark events:                 8 × (1+4+4+1+1+1+2+1+16) = 248
                                   ─────
-Total:                            ~372 bytes
+Total:                            383 bytes
 ```
 
 Fits in a single MQTT message.

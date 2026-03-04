@@ -5,7 +5,7 @@ Pipeline:
     2. Time resolution    — beats/sec → absolute seconds
     3. Layer inference     — events → layers (bin-packing with index merging)
     4. Buffer packing     — stateful animations → shared buffer slots
-    5. Validation (late)  — snapshot references, timing checks
+    5. Validation (late)  — source references, timing checks
     6. Blob emission      — serialize to binary
 """
 
@@ -24,6 +24,9 @@ from .blob import emit_blob
 
 class CompileError(Exception):
     pass
+
+
+SOURCE_NONE = 0xFF
 
 
 def _ensure_finite_positive(value: Any, field: str, *, allow_zero: bool = False) -> float:
@@ -86,6 +89,18 @@ def _validate_early(events: list[dict], strips: list[StripDef]):
                 raise CompileError(
                     f"{anim.anim_type} missing required param '{param_name}'"
                 )
+
+        # Event-level kwargs
+        allowed_event_keys = {"anim", "pixels", "at", "duration", "source"}
+        for key in e:
+            if key in allowed_event_keys:
+                continue
+            if key == "snapshot":
+                raise CompileError(
+                    "snapshot is not supported; use source= when providing a "
+                    "source event dependency"
+                )
+            raise CompileError(f"unknown event option '{key}'")
 
 
 # ---------------------------------------------------------------------------
@@ -262,7 +277,7 @@ def _pack_buffers(layers: list[dict]) -> list[dict]:
 
 def _validate_late(events: list[dict], layers: list[dict],
                    buffer_pool: list[dict], duration: float):
-    """Validate timing and snapshot references after processing."""
+    """Validate timing and buffer assignment after processing."""
     for e in events:
         # Event starts after duration → error
         if e["at_sec"] > duration:
@@ -280,36 +295,6 @@ def _validate_late(events: list[dict], layers: list[dict],
             )
             e["end_sec"] = duration
             e["duration_sec"] = duration - e["at_sec"]
-
-    # Snapshot validation
-    for e in events:
-        if "snapshot" not in e:
-            continue
-
-        source_anim = e["snapshot"]
-        shift_start = e["at_sec"]
-        shift_pixels = set(e["pixels"].indices)
-
-        source_events = [ev for ev in events if ev["anim"] is source_anim]
-        if not source_events:
-            raise CompileError(
-                f"snapshot references {source_anim.anim_type} "
-                f"but it has no scheduled events"
-            )
-
-        valid = False
-        for se in source_events:
-            if se["end_sec"] <= shift_start + 1e-6:
-                if shift_pixels.issubset(set(se["pixels"].indices)):
-                    valid = True
-                    break
-
-        if not valid:
-            raise CompileError(
-                f"shift at {shift_start}s snapshots {source_anim.anim_type} "
-                f"but no matching event ends before shift starts "
-                f"with covering pixels"
-            )
 
     # Buffer pool sanity
     for layer in layers:
@@ -361,11 +346,6 @@ def _resolve_anim_params(event: dict) -> dict:
     elif anim_type == "shift":
         fill_h, fill_s, fill_v = _resolve_color(p.get("fill", "transparent"))
         fill_a = 0.0 if p.get("fill") == "transparent" else 1.0
-        init_mode = 0  # CONST
-        source_layer = 0
-        if "snapshot" in event:
-            init_mode = 1  # SNAPSHOT
-            source_layer = event.get("_source_layer", 0)
         return {
             "direction": DIRECTIONS[p["direction"]],
             "velocity": float(p["velocity"]),
@@ -374,8 +354,6 @@ def _resolve_anim_params(event: dict) -> dict:
             "fill_s": fill_s,
             "fill_v": fill_v,
             "fill_a": fill_a,
-            "init_mode": init_mode,
-            "source_layer": source_layer,
             "buffer_id": event.get("buffer_id", 0),
         }
     elif anim_type == "fill":
@@ -390,21 +368,98 @@ def _resolve_anim_params(event: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Resolve snapshot source layers
+# Resolve source-layer dependencies
 # ---------------------------------------------------------------------------
 
-def _resolve_snapshot_layers(events: list[dict], layers: list[dict]):
-    """For shift events with snapshot, find which layer the source anim is on."""
-    anim_to_layer = {}
+def _resolve_and_validate_source_layers(events: list[dict], layers: list[dict]):
+    """Resolve event['source'] references into event['source_layer']."""
+    anim_to_layers: dict[int, list[int]] = {}
     for li, layer in enumerate(layers):
         for e in layer["events"]:
-            anim_to_layer[id(e["anim"])] = li
+            anim_to_layers.setdefault(id(e["anim"]), []).append(li)
+
+    event_to_layer = {}
+    for li, layer in enumerate(layers):
+        for e in layer["events"]:
+            event_to_layer[id(e)] = li
+
+    anim_to_events: dict[int, list[dict]] = {}
+    for e in events:
+        anim_to_events.setdefault(id(e["anim"]), []).append(e)
 
     for e in events:
-        if "snapshot" in e:
-            source_anim = e["snapshot"]
-            if id(source_anim) in anim_to_layer:
-                e["_source_layer"] = anim_to_layer[id(source_anim)]
+        source_anim = e.get("source")
+        if source_anim is None:
+            e["source_layer"] = SOURCE_NONE
+            continue
+
+        if not isinstance(source_anim, AnimDef):
+            raise CompileError(
+                f"{e['anim'].anim_type} event at {e['at_sec']}s has invalid source "
+                f"value {source_anim!r}; expected an AnimDef"
+            )
+
+        source_aid = id(source_anim)
+        if source_aid not in anim_to_layers:
+            raise CompileError(
+                f"{e['anim'].anim_type} at {e['at_sec']}s uses source= "
+                f"{source_anim.anim_type}, but it has no scheduled events"
+            )
+
+        source_layers = sorted(set(anim_to_layers[source_aid]))
+        if len(source_layers) > 1:
+            raise CompileError(
+                f"source AnimDef {source_anim.anim_type} appears on multiple layers "
+                f"({', '.join(map(str, source_layers))}); use a separate "
+                f"AnimDef per source reference"
+            )
+
+        source_li = source_layers[0]
+        dep_li = event_to_layer[id(e)]
+
+        source_events = [se for se in anim_to_events[source_aid]
+                         if event_to_layer[id(se)] == source_li]
+        source_evt = max(
+            (se for se in source_events if se["end_sec"] <= e["at_sec"]),
+            key=lambda se: se["end_sec"],
+            default=None,
+        )
+        if source_evt is None:
+            raise CompileError(
+                f"{e['anim'].anim_type} at {e['at_sec']}s uses source= "
+                f"{source_anim.anim_type} on layer {source_li}, but no source event "
+                f"has ended by the shift start"
+            )
+
+        if not set(e["pixels"].indices).issubset(set(source_evt["pixels"].indices)):
+            missing = sorted(set(e["pixels"].indices) - set(source_evt["pixels"].indices))
+            raise CompileError(
+                f"{e['anim'].anim_type} at {e['at_sec']}s uses source= "
+                f"{source_anim.anim_type}, but source event (ended at "
+                f"{source_evt['end_sec']}s) does not cover pixels {missing}"
+            )
+
+        if source_li > dep_li:
+            raise CompileError(
+                f"{e['anim'].anim_type} on layer {dep_li} declares source= "
+                f"{source_anim.anim_type} on layer {source_li}, but source_layer "
+                f"must be <= dependent layer"
+            )
+
+        e["source_layer"] = source_li
+
+        source_end = source_evt["end_sec"]
+        dep_start = e["at_sec"]
+        for se in layers[source_li]["events"]:
+            if se is source_evt:
+                continue
+            if se["at_sec"] <= dep_start and se["end_sec"] > source_end:
+                warnings.warn(
+                    f"event on source layer {source_li} between {source_end}s and {dep_start}s "
+                    f"may overwrite source buffer before shift starts",
+                    stacklevel=2,
+                )
+                break
 
 
 # ---------------------------------------------------------------------------
@@ -430,10 +485,10 @@ def _compile_strip(strip_events: list[dict], duration: float) -> bytes:
     # 4. Buffer packing
     buffer_pool = _pack_buffers(layers)
 
-    # Resolve snapshot source layers (needs layer info)
-    _resolve_snapshot_layers(strip_events, layers)
+    # Resolve source-layer dependencies (needs layer info)
+    _resolve_and_validate_source_layers(strip_events, layers)
 
-    # 5. Late validation (timing, snapshots)
+    # 5. Late validation (timing, dependencies)
     _validate_late(strip_events, layers, buffer_pool, duration)
 
     # 6. Resolve animation params to binary-ready values
