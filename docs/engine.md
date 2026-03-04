@@ -14,8 +14,7 @@ and every frame:
 - `main.cpp` manually creates animations and wires them to layers — no
   scheduling, no lifecycle
 - `Layer`, `Compositor`, `Strip` — the rendering stack works
-- `AnimWave`, `AnimSpark` — as classes with virtual `render()`, will become
-  free functions
+- `AnimWave`, `AnimSpark` — as classes with virtual `render()`
 
 ## What the engine needs
 
@@ -49,8 +48,8 @@ one event is active at any time. One cursor per layer is sufficient.
 
 ```cpp
 struct LayerState {
-    uint16_t cursor;    // index into events array
-    bool has_active;    // is an event currently rendering?
+    uint16_t   cursor;    // index into events array
+    Animation* instance;  // currently active (null = idle)
 };
 
 void Engine::tick(float t) {
@@ -64,24 +63,33 @@ void Engine::tick(float t) {
             AnimationEvent& e = layer.events[state.cursor];
             float end = e.t_start + e.duration;
 
-            if (t < e.t_start) {
-                // Haven't reached this event yet
-                state.has_active = false;
-                break;
-            }
+            if (t < e.t_start) break;
+
             if (t < end) {
-                // This event is active
-                state.has_active = true;
+                // Event is active — create instance on first frame
+                if (!state.instance)
+                    state.instance = create_animation(e, prog);
+
                 float t_rel = t - e.t_start;
-                render_event(e, layer, t_rel);
+                uint8_t len = e.remap_length;
+                hsva_t* buf = e.remap_is_identity
+                    ? layer.buffer : prog->temp_buffer;
+
+                state.instance->render(buf, len, t_rel);
+
+                if (!e.remap_is_identity)
+                    scatter_copy(prog->temp_buffer, layer.buffer,
+                                 e.remap, len);
                 break;
             }
-            // Event finished — advance cursor
+
+            // Event finished — destroy instance, advance cursor
+            delete state.instance;
+            state.instance = nullptr;
             state.cursor++;
-            state.has_active = false;
         }
 
-        if (state.has_active) active_mask |= (1u << li);
+        if (state.instance) active_mask |= (1u << li);
     }
 
     compositor.composite(active_mask);
@@ -106,74 +114,88 @@ for (uint16_t i = 1; i < layer.event_count; i++) {
 ### 2. Shift init/snapshot
 
 When a shift event activates, it needs to snapshot another layer's buffer.
-At what exact moment? On the first frame where `t >= t_start`.
+This happens in the `AnimShift` constructor — the engine creates the instance
+on the first frame where `t >= t_start`, and the constructor copies the
+source layer's buffer into the pre-allocated work buffer. No separate init
+step, no `first_frame` flag.
 
 **Constraint:** the source layer must be fully rendered before the shift reads
 it. This implies a **layer rendering order dependency** — source layer must
 render before the shift's layer.
 
-The compiler stores `source_layer` in the shift params. The engine should
-render layers in order 0, 1, 2, ... which naturally satisfies this if the
-compiler places source layers before dependent layers.
+The compiler stores `source_layer` in the shift params. The engine renders
+layers in order 0, 1, 2, ... which naturally satisfies this if the compiler
+places source layers before dependent layers.
 
 _(TBD: verify compiler assigns layer indices such that source_layer < shift's layer index)_
 
 ---
 
-### 3. Render function signatures
+### 3. Animation class hierarchy
 
-Current `AnimWave::render(hsva_t* buf, uint8_t len, float t)` takes absolute
-time. Engine should pass `t_rel` (time since event start).
-
-Shift also needs access to the buffer pool (for its work buffer) and the
-source layer's buffer (for snapshot).
-
-Proposed unified approach — free functions, not virtual methods:
+Animations are subclasses of `Animation` with virtual `render()`. The engine
+passes `t_rel` (time since event start). Initialization happens in the
+constructor — no separate `init()` method.
 
 ```cpp
-void render_wave(const WaveParams& p, hsva_t* buf, uint8_t len, float t_rel);
+class Animation {
+public:
+    virtual ~Animation() {}
+    virtual void render(hsva_t* buffer, uint8_t length, float t_rel) = 0;
+};
 
-void render_spark(const SparkParams& p, hsva_t* buf, uint8_t len, float t_rel);
+class AnimWave : public Animation {
+    WaveParams p;
+public:
+    AnimWave(const WaveParams& params) : p(params) {}
+    void render(hsva_t* buffer, uint8_t length, float t_rel) override;
+};
 
-void render_shift(const ShiftParams& p, hsva_t* buf, uint8_t len,
-                  float t_rel, hsva_t* work_buf,
-                  const hsva_t* source_buf, uint8_t source_len,
-                  bool first_frame);
+class AnimSpark : public Animation {
+    SparkParams p;
+public:
+    AnimSpark(const SparkParams& params) : p(params) {}
+    void render(hsva_t* buffer, uint8_t length, float t_rel) override;
+};
+
+class AnimShift : public Animation {
+    ShiftParams p;
+    hsva_t* work_buf;
+public:
+    // Constructor snapshots source_buf into work_buf
+    AnimShift(const ShiftParams& params, hsva_t* work_buf,
+              const hsva_t* source_buf, uint8_t source_len);
+    void render(hsva_t* buffer, uint8_t length, float t_rel) override;
+};
 ```
 
-Dispatch in engine:
+Factory function — the engine calls this when an event first becomes active:
 
 ```cpp
-void render_event(const AnimationEvent& e, LayerDef& layer,
-                  float t_rel, Program* prog) {
-    uint8_t len = e.remap_length;
-    hsva_t* buf = e.remap_is_identity
-        ? layer.buffer
-        : prog->temp_buffer;
-
+Animation* create_animation(const AnimationEvent& e, Program* prog) {
     switch (e.params.type) {
         case ANIM_WAVE:
-            render_wave(e.params.wave, buf, len, t_rel);
-            break;
+            return new AnimWave(e.params.wave);
         case ANIM_SPARK:
-            render_spark(e.params.spark, buf, len, t_rel);
-            break;
+            return new AnimSpark(e.params.spark);
         case ANIM_SHIFT: {
-            hsva_t* work = prog->pool.buffers[e.params.shift.buffer_id];
             uint8_t sl = e.params.shift.source_layer;
-            render_shift(e.params.shift, buf, len, t_rel,
-                         work, prog->layers[sl].buffer,
-                         prog->layers[sl].index_map_length,
-                         /* first_frame= */ t_rel == 0.0f);
-            break;
+            return new AnimShift(
+                e.params.shift,
+                prog->pool.buffers[e.params.shift.buffer_id],
+                prog->layers[sl].buffer,
+                prog->layers[sl].index_map_length);
         }
-    }
-
-    if (!e.remap_is_identity) {
-        scatter_copy(prog->temp_buffer, layer.buffer, e.remap, len);
+        default:
+            return nullptr;
     }
 }
 ```
+
+Remap/scatter logic is in the engine tick loop (see Section 1), not inside
+the animation. Animations always render into a contiguous buffer of length
+`remap_length`. The engine handles the scatter copy when `remap_is_identity`
+is false.
 
 ---
 
@@ -236,16 +258,17 @@ hsva_t* buffer;  // allocated by Engine, not decoder
 
 // New in engine.h:
 struct LayerState {
-    uint16_t cursor;
-    bool has_active;
+    uint16_t   cursor;    // index into events array
+    Animation* instance;  // currently active (null = idle)
 };
 
 class Engine {
     Program* prog;
     LayerState* layer_states;  // [layer_count]
+    Compositor& compositor;
     // Layer buffers are in prog->layers[i].buffer
 public:
-    Engine(Program* prog);
+    Engine(Program* prog, Compositor& compositor);
     ~Engine();
     void tick(float t);
 };

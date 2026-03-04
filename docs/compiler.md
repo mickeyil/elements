@@ -443,11 +443,12 @@ Each event includes a `remap_is_identity` flag (uint8) set by the compiler when 
 
 ### Animation params (all floats are float32)
 
-**Wave (29 bytes):**
+**Wave (33 bytes):**
 ```
 channel:    uint8    (H=0, S=1, V=2)
 h:          float32
 s:          float32
+v:          float32
 min_val:    float32
 max_val:    float32
 period:     float32
@@ -503,14 +504,14 @@ Buffer pool (1 buffer):            1 byte
 Layer 0 (10 indices, 2 events):
   index_map:                      1 + 10 = 11
   event_count:                    2
-  wave event:                     1+4+4+1+10+1+29 = 50
+  wave event:                     1+4+4+1+10+1+33 = 54
   shift event:                    1+4+4+1+10+1+22 = 43
 Layer 1 (4 indices, 8 events):
   index_map:                      1 + 4 = 5
   event_count:                    2
   8 spark events:                 8 × (1+4+4+1+2+1+16) = 232
                                   ─────
-Total:                            ~357 bytes
+Total:                            ~361 bytes
 ```
 
 Fits in a single MQTT message.

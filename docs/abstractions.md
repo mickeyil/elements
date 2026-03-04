@@ -87,22 +87,15 @@ class Animation {
 public:
     virtual ~Animation() {}
 
-    // Called once when the event activates.
-    // Can copy params, snapshot other layers, store work_buffer pointer.
-    // work_buffer: pre-allocated buffer from the pool (null for stateless animations).
-    virtual void init(const AnimParams& params, uint8_t length,
-                      Layer** layers, uint8_t layer_count,
-                      hsva_t* work_buffer) = 0;
-
     // Called every frame while the event is active.
     // t_rel = time since this event's t_start (animation always sees time from 0).
     virtual void render(hsva_t* buffer, uint8_t length, float t_rel) = 0;
 };
 ```
 
-**Stateless animations** (e.g., wave, spark): output is a pure function of `t_rel` and params. `init()` just copies params. No internal buffers.
+**Stateless animations** (e.g., wave, spark): output is a pure function of `t_rel` and params. The constructor copies params. No internal buffers.
 
-**Stateful animations** (e.g., shift): need initialization data — either constant values embedded in params, or a runtime snapshot of another layer's buffer. The engine passes a pre-allocated work buffer via `init()` (see BufferPool below). The animation stores the pointer and uses it — no allocation. `render()` computes output from init data + `t_rel`.
+**Stateful animations** (e.g., shift): need initialization data — either constant values embedded in params, or a runtime snapshot of another layer's buffer. The constructor receives a pre-allocated work buffer and source buffer (see BufferPool below). It copies the snapshot immediately — no separate init step. `render()` computes output from init data + `t_rel`.
 
 **Key points:**
 - Animations see an isolated pixel world: indices 0..N-1. No knowledge of physical layout.
@@ -247,17 +240,19 @@ for each layer i:
     1. DEACTIVATE: if instance exists and event has ended → destroy instance
     2. ADVANCE CURSOR: skip past fully elapsed events
     3. ACTIVATE/RENDER: if event at cursor is in active window:
-       - if no instance → create, init(), render()
+       - if no instance → create (constructor does init), render()
        - if instance exists → render()
        (t_rel = t_program - event.t_start)
 ```
 
 ### Factory
 
-A dispatch function creates the right Animation subclass from the AnimType enum:
+A dispatch function creates the right Animation subclass from the event params.
+Stateful animations (like shift) receive their work buffer and source buffer
+in the constructor:
 
 ```cpp
-Animation* create_animation(AnimType type);  // switch on type, return new instance
+Animation* create_animation(const AnimationEvent& e, Program* prog);
 ```
 
 Future optimization: pre-allocate an animation instance pool instead of new/delete per event (see Memory).
@@ -352,22 +347,14 @@ for (uint8_t i = 0; i < program.pool.count; i++)
     program.pool.buffers[i] = new hsva_t[program.pool.sizes[i]];
 ```
 
-Animation events that need internal storage include a `buffer_id` in their params, pointing to their assigned pool slot. The engine looks up the buffer and passes it to the animation's `init()`:
+Animation events that need internal storage include a `buffer_id` in their params, pointing to their assigned pool slot. The factory function `create_animation()` looks up the buffer and passes it to the animation's constructor:
 
 ```cpp
-// On activation:
-hsva_t* work_buf = nullptr;
-if (needs_buffer(e.animation))
-    work_buf = _program->pool.buffers[e.params.shift.buffer_id];
-
-instance->init(e.params, layer->length(),
-               _program->layers, _program->layer_count,
-               work_buf);
+// On activation — factory handles buffer lookup:
+Animation* instance = create_animation(e, _program);
 ```
 
-The animation stores the pointer — no allocation, no freeing. When two non-overlapping events share a pool slot, one uses it, finishes, then the next one overwrites it.
-
-Stateless animations receive `nullptr` and ignore it.
+The animation stores the buffer pointer — no allocation, no freeing. When two non-overlapping events share a pool slot, one uses it, finishes, then the next one overwrites it.
 
 ### Animation Instance Pool
 
@@ -458,7 +445,7 @@ State at start:
   layer[0]: evt[0] WAVE ended (0.0+1.0=1.0 < 1.001) → DESTROY AnimWave
             advance cursor to 1
             evt[1] SHIFT, 1.0 ≤ 1.001 < 2.0 → CREATE AnimShift
-              init() snapshots layer 0 buffer (wave's last output still there)
+              constructor snapshots layer 0 buffer (wave's last output still there)
               render(t_rel=0.001)
   layer[1]: evt[2] SPARK, 1.0 ≤ 1.001 < 1.1 → CREATE AnimSpark, render
   layer[2]: idle (between sparks)
