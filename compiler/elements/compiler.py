@@ -451,9 +451,9 @@ def _resolve_and_validate_source_layers(events: list[dict], layers: list[dict]):
         source_end = source_evt["end_sec"]
         dep_start = e["at_sec"]
         for se in layers[source_li]["events"]:
-            if se is source_evt:
+            if se is source_evt or se is e:
                 continue
-            if se["at_sec"] <= dep_start and se["end_sec"] > source_end:
+            if se["at_sec"] < dep_start and se["end_sec"] > source_end:
                 warnings.warn(
                     f"event on source layer {source_li} between {source_end}s and {dep_start}s "
                     f"may overwrite source buffer before shift starts",
