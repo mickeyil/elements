@@ -2,7 +2,7 @@
 #include "anim_wave.h"
 #include "anim_spark.h"
 #include "anim_shift.h"
-#include "anim_fill.h"
+#include "anim_paint.h"
 
 #include <cstring>
 
@@ -27,8 +27,8 @@ static Animation* create_animation(const AnimationEvent& e, Program* prog,
         case ANIM_SPARK:
             return new AnimSpark(e.params.spark);
 
-        case ANIM_FILL:
-            return new AnimFill(e.params.fill);
+        case ANIM_PAINT:
+            return new AnimPaint(e.params.paint);
 
         case ANIM_SHIFT: {
             hsva_t* work = prog->pool.buffers[e.params.shift.buffer_id];

@@ -12,7 +12,7 @@ enum AnimType : uint8_t {
     ANIM_WAVE  = 0,
     ANIM_SHIFT = 1,
     ANIM_SPARK = 2,
-    ANIM_FILL  = 3,
+    ANIM_PAINT = 3,
 };
 
 // ---------------------------------------------------------------------------
@@ -39,8 +39,11 @@ struct SparkParams {
     float fade;
 };
 
-struct FillParams {
-    float color_h, color_s, color_v;
+struct PaintParams {
+    uint8_t mode;         // 0=solid, 1=per_pixel
+    float color_h, color_s, color_v, color_a;  // solid mode
+    uint8_t pixel_count;  // per_pixel mode
+    hsva_t* pixels;       // heap-allocated (per_pixel mode), nullptr for solid
 };
 
 struct AnimParams {
@@ -49,7 +52,7 @@ struct AnimParams {
         WaveParams  wave;
         ShiftParams shift;
         SparkParams spark;
-        FillParams  fill;
+        PaintParams paint;
     };
 };
 

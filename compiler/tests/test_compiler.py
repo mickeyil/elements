@@ -9,7 +9,7 @@ import pytest
 import struct
 
 from elements.dsl import *
-from elements.blob import decode_blob, ANIM_WAVE, ANIM_SHIFT, ANIM_SPARK
+from elements.blob import decode_blob, ANIM_WAVE, ANIM_SHIFT, ANIM_SPARK, ANIM_PAINT
 from elements.compiler import CompileError
 from pathlib import Path
 import re
@@ -462,6 +462,104 @@ def _extract_int(pattern: str, text: str, description: str) -> int:
     if not m:
         raise AssertionError(f"could not find {description}")
     return int(m.group(1))
+
+
+# ---------------------------------------------------------------------------
+# Paint tests
+# ---------------------------------------------------------------------------
+
+class TestPaint:
+    def _build_paint(self, **kw):
+        """Helper: build a single paint event and decode it."""
+        strip1 = strip("p", length=3)
+        px = strip1.pixels("0-2")
+        p = paint(**kw)
+        p.schedule(px, at=0, duration=1)
+        blobs = build(beat=1.0, duration=1.0)
+        return decode_blob(blobs["p"])
+
+    def test_paint_solid_compiles(self):
+        dec = self._build_paint(color="red")
+        evt = dec["layers"][0]["events"][0]
+        assert evt["anim_type"] == ANIM_PAINT
+        p = evt["params"]
+        assert p["mode"] == 0
+        assert abs(p["color_h"] - 0.0) < 1e-6
+        assert abs(p["color_s"] - 1.0) < 1e-6
+        assert abs(p["color_v"] - 1.0) < 1e-6
+        assert abs(p["color_a"] - 1.0) < 1e-6
+
+    def test_paint_per_pixel_compiles(self):
+        dec = self._build_paint(colors=[(0, 1.0, 1.0), (120, 1.0, 0.5), (240, 0.5, 0.8)])
+        evt = dec["layers"][0]["events"][0]
+        p = evt["params"]
+        assert p["mode"] == 1
+        assert p["pixel_count"] == 3
+        assert abs(p["pixels"][0]["h"] - 0.0) < 1e-6
+        assert abs(p["pixels"][1]["h"] - 120.0) < 1e-6
+        assert abs(p["pixels"][2]["v"] - 0.8) < 1e-6
+
+    def test_paint_alpha_default(self):
+        dec = self._build_paint(color=(60, 1.0, 1.0))
+        p = dec["layers"][0]["events"][0]["params"]
+        assert abs(p["color_a"] - 1.0) < 1e-6
+
+    def test_paint_missing_both_error(self):
+        strip1 = strip("pm", length=3)
+        px = strip1.pixels("0-2")
+        p = paint()
+        p.schedule(px, at=0, duration=1)
+        with pytest.raises(CompileError, match="requires either"):
+            build(beat=1.0, duration=1.0)
+
+    def test_paint_both_error(self):
+        strip1 = strip("pb", length=3)
+        px = strip1.pixels("0-2")
+        p = paint(color="red", colors=[(0, 1, 1), (0, 1, 1), (0, 1, 1)])
+        p.schedule(px, at=0, duration=1)
+        with pytest.raises(CompileError, match="cannot have both"):
+            build(beat=1.0, duration=1.0)
+
+    def test_paint_wrong_pixel_count(self):
+        strip1 = strip("pw", length=3)
+        px = strip1.pixels("0-2")
+        p = paint(colors=[(0, 1, 1)])  # 1 color, 3 pixels
+        p.schedule(px, at=0, duration=1)
+        with pytest.raises(CompileError, match="length 1 != pixel group size 3"):
+            build(beat=1.0, duration=1.0)
+
+    def test_paint_rgb_format(self):
+        dec = self._build_paint(color=(255, 0, 0), format="rgb")
+        p = dec["layers"][0]["events"][0]["params"]
+        assert abs(p["color_h"] - 0.0) < 1e-6
+        assert abs(p["color_s"] - 1.0) < 1e-6
+        assert abs(p["color_v"] - 1.0) < 1e-6
+
+    def test_paint_invalid_format(self):
+        strip1 = strip("pf", length=3)
+        px = strip1.pixels("0-2")
+        p = paint(color="red", format="xyz")
+        p.schedule(px, at=0, duration=1)
+        with pytest.raises(CompileError, match="format must be"):
+            build(beat=1.0, duration=1.0)
+
+    def test_paint_per_pixel_alpha(self):
+        dec = self._build_paint(colors=[(0, 1, 1, 0.5), (120, 1, 0.5, 0.8), (240, 0.5, 0.8, 0.3)])
+        p = dec["layers"][0]["events"][0]["params"]
+        assert abs(p["pixels"][0]["a"] - 0.5) < 1e-6
+        assert abs(p["pixels"][1]["a"] - 0.8) < 1e-6
+        assert abs(p["pixels"][2]["a"] - 0.3) < 1e-6
+
+    def test_paint_rgb_per_pixel(self):
+        dec = self._build_paint(colors=[(255, 0, 0), (0, 255, 0), (0, 0, 255)], format="rgb")
+        p = dec["layers"][0]["events"][0]["params"]
+        # Red: H=0, S=1, V=1
+        assert abs(p["pixels"][0]["h"] - 0.0) < 1e-6
+        assert abs(p["pixels"][0]["s"] - 1.0) < 1e-6
+        # Green: H=120, S=1, V=1
+        assert abs(p["pixels"][1]["h"] - 120.0) < 1e-6
+        # Blue: H=240, S=1, V=1
+        assert abs(p["pixels"][2]["h"] - 240.0) < 1e-6
 
 
 def test_layer_limit_contract():

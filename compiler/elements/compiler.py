@@ -10,6 +10,7 @@ Pipeline:
 """
 
 from __future__ import annotations
+import colorsys
 import math
 import warnings
 from typing import Any
@@ -89,6 +90,38 @@ def _validate_early(events: list[dict], strips: list[StripDef]):
                 raise CompileError(
                     f"{anim.anim_type} missing required param '{param_name}'"
                 )
+
+        # Paint-specific validation
+        if anim.anim_type == "paint":
+            has_color = "color" in anim.params
+            has_colors = "colors" in anim.params
+            if not has_color and not has_colors:
+                raise CompileError("paint requires either 'color' or 'colors'")
+            if has_color and has_colors:
+                raise CompileError("paint cannot have both 'color' and 'colors'")
+            fmt = anim.params.get("format", "hsv")
+            if fmt not in ("hsv", "rgb"):
+                raise CompileError(f"paint format must be 'hsv' or 'rgb', got '{fmt}'")
+            if has_colors:
+                colors = anim.params["colors"]
+                if not isinstance(colors, list):
+                    raise CompileError("paint 'colors' must be a list")
+                expected = len(px.indices)
+                if len(colors) != expected:
+                    raise CompileError(
+                        f"paint 'colors' length {len(colors)} != pixel group "
+                        f"size {expected}"
+                    )
+                for ci, c in enumerate(colors):
+                    if not isinstance(c, (list, tuple)) or len(c) not in (3, 4):
+                        raise CompileError(
+                            f"paint colors[{ci}] must be a 3- or 4-tuple"
+                        )
+                    for vi, v in enumerate(c):
+                        if not isinstance(v, (int, float)):
+                            raise CompileError(
+                                f"paint colors[{ci}][{vi}] must be numeric"
+                            )
 
         # Event-level kwargs
         allowed_event_keys = {"anim", "pixels", "at", "duration", "source"}
@@ -311,6 +344,17 @@ def _validate_late(events: list[dict], layers: list[dict],
 # 6. Resolve animation params to binary-ready values
 # ---------------------------------------------------------------------------
 
+def _convert_color_tuple(t: tuple, fmt: str) -> tuple[float, float, float, float]:
+    """Convert a 3- or 4-tuple to (H, S, V, A) in HSV. H is 0-360."""
+    a = float(t[3]) if len(t) == 4 else 1.0
+    if fmt == "rgb":
+        r, g, b = float(t[0]) / 255.0, float(t[1]) / 255.0, float(t[2]) / 255.0
+        h, s, v = colorsys.rgb_to_hsv(r, g, b)
+        return (h * 360.0, s, v, a)
+    else:  # hsv
+        return (float(t[0]), float(t[1]), float(t[2]), a)
+
+
 def _resolve_color(name: str) -> tuple[float, float, float]:
     """Resolve a color name to (H, S, V)."""
     if name in COLORS:
@@ -356,13 +400,19 @@ def _resolve_anim_params(event: dict) -> dict:
             "fill_a": fill_a,
             "buffer_id": event.get("buffer_id", 0),
         }
-    elif anim_type == "fill":
-        color_h, color_s, color_v = _resolve_color(p["color"])
-        return {
-            "color_h": color_h,
-            "color_s": color_s,
-            "color_v": color_v,
-        }
+    elif anim_type == "paint":
+        fmt = p.get("format", "hsv")
+        if "colors" in p:
+            pixels = [_convert_color_tuple(c, fmt) for c in p["colors"]]
+            return {"mode": 1, "pixels": pixels}
+        else:
+            color = p["color"]
+            if isinstance(color, str):
+                h, s, v = _resolve_color(color)
+                return {"mode": 0, "color_h": h, "color_s": s, "color_v": v, "color_a": 1.0}
+            else:
+                h, s, v, a = _convert_color_tuple(color, fmt)
+                return {"mode": 0, "color_h": h, "color_s": s, "color_v": v, "color_a": a}
     else:
         raise CompileError(f"unknown animation type '{anim_type}'")
 

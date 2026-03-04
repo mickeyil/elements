@@ -25,7 +25,7 @@ One blob per physical strip/ESP32. Each blob is self-contained — the ESP doesn
 
 Events are partitioned by `strip_name` before layer inference, so strips never share layers. Two events on different strips with the same pixel indices are not merged — each goes into its own blob.
 
-**Cross-strip stateful animations** (e.g., shift spanning two strips) are a compile error — shift needs a complete snapshot of its source pixels, which can't be split across two independent blobs. Cross-strip stateless animations (wave, spark, fill) splitting is a future feature; for now, schedule each strip independently.
+**Cross-strip stateful animations** (e.g., shift spanning two strips) are a compile error — shift needs a complete snapshot of its source pixels, which can't be split across two independent blobs. Cross-strip stateless animations (wave, spark, paint) splitting is a future feature; for now, schedule each strip independently.
 
 ---
 
@@ -255,7 +255,7 @@ Stateful animations (like shift) need work buffers for init data (e.g. snapshot 
 **Key points:**
 - Independent of layer assignment — packing is purely about time overlaps between stateful events
 - Buffer size = number of pixels the animation writes to (`len(event.pixels.indices)`), not the full layer size
-- Only stateful animations participate (currently just shift). Wave, spark, fill are stateless — no buffer.
+- Only stateful animations participate (currently just shift). Wave, spark, paint are stateless — no buffer.
 - Non-overlapping stateful events can share a slot. The buffer contents are meaningless between usages — the next animation overwrites entirely at init.
 
 **Algorithm — greedy bin-packing by time:**

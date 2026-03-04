@@ -115,7 +115,7 @@ The engine doesn't distinguish — it just passes the pointer. No separate init 
 |-----------|-------------|-----------|
 | **wave** | Sine wave on a single HSV channel. Other channels fixed. | No |
 | **spark** | Flash to a color, fade out via alpha decay. | No |
-| **fill** | Solid color fill. | No |
+| **paint** | Solid color or per-pixel color array. | No |
 | **shift** | Shift pixel pattern left/right at a given velocity. Circular or fill with constant. | Yes (init data) |
 | **gradient** | Linear gradient between two colors. | No |
 | **sweep** | Band of color moving along the pixels. | No |
@@ -217,7 +217,7 @@ Multiple physical strips run on separate ESP32 devices. The compiler partitions 
 **Layer independence:** Layer inference runs per-strip. Events on different strips never share layers, even if they target the same pixel indices or the same time window. This fixes the previous bug where events from two strips with overlapping numeric indices could be silently merged into one layer.
 
 **Cross-strip restrictions:**
-- Stateless animations (wave, spark, fill): can be scheduled independently on each strip. Full cross-strip splitting (a single wave spanning N strips as one continuous effect) is a future compiler feature.
+- Stateless animations (wave, spark, paint): can be scheduled independently on each strip. Full cross-strip splitting (a single wave spanning N strips as one continuous effect) is a future compiler feature.
 - Stateful animations (shift): cross-strip is a compile error. Shift needs a complete pixel snapshot at activation time; this can't be split across independent blobs.
 
 ---

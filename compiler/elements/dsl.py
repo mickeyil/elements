@@ -16,7 +16,7 @@ from .types import PI, SecMarker, PixelGroup, StripDef, AnimDef
 from .compiler import compile_program
 
 # Re-export for `from elements.dsl import *`
-__all__ = ["PI", "sec", "strip", "wave", "shift", "spark", "fill", "build"]
+__all__ = ["PI", "sec", "strip", "wave", "shift", "spark", "paint", "build"]
 
 
 def sec(value: float) -> SecMarker:
@@ -83,8 +83,8 @@ def spark(**params) -> AnimDef:
     return _make_anim("spark", params)
 
 
-def fill(**params) -> AnimDef:
-    return _make_anim("fill", params)
+def paint(**params) -> AnimDef:
+    return _make_anim("paint", params)
 
 
 def build(beat: float, duration: float) -> dict[str, bytes]:

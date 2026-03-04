@@ -41,6 +41,13 @@ Animation params:
         direction uint8, velocity f32, circular uint8,
         fill_h f32, fill_s f32, fill_v f32, fill_a f32,
         buffer_id uint8
+
+    Paint solid (17 bytes):
+        mode uint8 (0), color_h f32, color_s f32, color_v f32, color_a f32
+
+    Paint per-pixel (2 + count*16 bytes):
+        mode uint8 (1), pixel_count uint8,
+        pixels: hsva_t[pixel_count] (each: h f32, s f32, v f32, a f32)
 """
 
 from __future__ import annotations
@@ -52,7 +59,7 @@ from .types import ANIM_TYPES
 ANIM_WAVE  = ANIM_TYPES["wave"]
 ANIM_SHIFT = ANIM_TYPES["shift"]
 ANIM_SPARK = ANIM_TYPES["spark"]
-ANIM_FILL  = ANIM_TYPES["fill"]
+ANIM_PAINT = ANIM_TYPES["paint"]
 
 BLOB_MAGIC = b"ELEM"
 BLOB_VERSION = 2
@@ -84,10 +91,24 @@ def _pack_shift_params(p: dict) -> bytes:
     )
 
 
+def _pack_paint_params(p: dict) -> bytes:
+    if p["mode"] == 0:
+        return struct.pack("<B4f",
+            0, p["color_h"], p["color_s"], p["color_v"], p["color_a"],
+        )
+    else:
+        pixels = p["pixels"]
+        buf = struct.pack("<BB", 1, len(pixels))
+        for h, s, v, a in pixels:
+            buf += struct.pack("<4f", h, s, v, a)
+        return buf
+
+
 PARAM_PACKERS = {
     "wave":  _pack_wave_params,
     "shift": _pack_shift_params,
     "spark": _pack_spark_params,
+    "paint": _pack_paint_params,
 }
 
 
@@ -272,5 +293,18 @@ def _decode_params(anim_type: int, raw: bytes) -> dict:
             "fill_h": fh, "fill_s": fs, "fill_v": fv, "fill_a": fa,
             "buffer_id": struct.unpack_from("<B", raw, 22)[0],
         }
+    elif anim_type == ANIM_PAINT:
+        mode = struct.unpack_from("<B", raw, 0)[0]
+        if mode == 0:
+            h, s, v, a = struct.unpack_from("<4f", raw, 1)
+            return {"mode": 0, "color_h": h, "color_s": s, "color_v": v, "color_a": a}
+        else:
+            count = struct.unpack_from("<B", raw, 1)[0]
+            pixels = []
+            for i in range(count):
+                off = 2 + i * 16
+                h, s, v, a = struct.unpack_from("<4f", raw, off)
+                pixels.append({"h": h, "s": s, "v": v, "a": a})
+            return {"mode": 1, "pixel_count": count, "pixels": pixels}
     else:
         return {"raw": raw}

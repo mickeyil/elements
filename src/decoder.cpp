@@ -78,11 +78,31 @@ bool parse_shift_params(BlobReader& r, ShiftParams& p) {
     return true;
 }
 
-bool parse_fill_params(BlobReader& r, FillParams& p) {
-    if (!r.has(12)) return false;
-    p.color_h = r.read_f32();
-    p.color_s = r.read_f32();
-    p.color_v = r.read_f32();
+bool parse_paint_params(BlobReader& r, PaintParams& p) {
+    if (!r.has(1)) return false;
+    p.mode = r.read_u8();
+    if (p.mode == 0) {
+        if (!r.has(16)) return false;
+        p.color_h = r.read_f32();
+        p.color_s = r.read_f32();
+        p.color_v = r.read_f32();
+        p.color_a = r.read_f32();
+        p.pixel_count = 0;
+        p.pixels = nullptr;
+    } else {
+        if (!r.has(1)) return false;
+        p.pixel_count = r.read_u8();
+        if (!r.has(p.pixel_count * 16)) return false;
+        p.pixels = new (std::nothrow) hsva_t[p.pixel_count];
+        if (!p.pixels) return false;
+        for (uint8_t i = 0; i < p.pixel_count; i++) {
+            p.pixels[i].h = r.read_f32();
+            p.pixels[i].s = r.read_f32();
+            p.pixels[i].v = r.read_f32();
+            p.pixels[i].a = r.read_f32();
+        }
+        p.color_h = p.color_s = p.color_v = p.color_a = 0;
+    }
     return true;
 }
 
@@ -194,6 +214,8 @@ Program* decode_program(const uint8_t* blob, size_t len) {
             event.t_start     = r.read_f32();
             event.duration    = r.read_f32();
             event.source_layer = r.read_u8();
+            if (event.source_layer != SOURCE_NONE && event.source_layer >= layer_count)
+                goto fail;
             event.remap_is_identity = (r.read_u8() != 0);
 
             // Remap
@@ -217,10 +239,14 @@ Program* decode_program(const uint8_t* blob, size_t len) {
                 case ANIM_WAVE:  ok = parse_wave_params(r, event.params.wave);   break;
                 case ANIM_SHIFT: ok = parse_shift_params(r, event.params.shift); break;
                 case ANIM_SPARK: ok = parse_spark_params(r, event.params.spark); break;
-                case ANIM_FILL:  ok = parse_fill_params(r, event.params.fill);   break;
+                case ANIM_PAINT: ok = parse_paint_params(r, event.params.paint); break;
                 default: goto fail;
             }
             if (!ok) goto fail;
+
+            if (event.params.type == ANIM_SHIFT &&
+                event.params.shift.buffer_id >= buffer_count)
+                goto fail;
 
             // Advance to end of params (in case of padding)
             r.pos = params_start + params_size;
@@ -247,6 +273,8 @@ void free_program(Program* prog) {
             if (layer.events) {
                 for (uint16_t ei = 0; ei < layer.event_count; ei++) {
                     delete[] layer.events[ei].remap;
+                    if (layer.events[ei].params.type == ANIM_PAINT)
+                        delete[] layer.events[ei].params.paint.pixels;
                 }
                 delete[] layer.events;
             }

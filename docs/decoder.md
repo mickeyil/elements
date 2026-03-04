@@ -68,7 +68,7 @@ enum AnimType : uint8_t {
     ANIM_WAVE  = 0,
     ANIM_SHIFT = 1,
     ANIM_SPARK = 2,
-    ANIM_FILL  = 3,
+    ANIM_PAINT = 3,
 };
 
 // Animation params — tagged union, no vtables
@@ -96,8 +96,11 @@ struct AnimParams {
         } spark;
 
         struct {
-            float color_h, color_s, color_v;
-        } fill;
+            uint8_t mode;         // 0=solid, 1=per_pixel
+            float color_h, color_s, color_v, color_a;  // solid mode
+            uint8_t pixel_count;  // per_pixel mode
+            hsva_t* pixels;       // heap-allocated (per_pixel), nullptr for solid
+        } paint;
     };
 };
 

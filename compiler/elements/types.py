@@ -11,7 +11,7 @@ PI = math.pi
 # Animation type constants
 # ---------------------------------------------------------------------------
 
-ANIM_TYPES = {"wave": 0, "shift": 1, "spark": 2, "fill": 3}
+ANIM_TYPES = {"wave": 0, "shift": 1, "spark": 2, "paint": 3}
 
 # Which animation params are time-based (beats → seconds)
 TIME_PARAMS = {
@@ -25,7 +25,7 @@ REQUIRED_PARAMS = {
     "wave":  ["channel", "h", "s", "v", "min_val", "max_val", "period", "phase0", "pixel_step"],
     "spark": ["color", "fade"],
     "shift": ["direction", "velocity"],
-    "fill":  ["color"],
+    "paint": [],
 }
 
 # Which animation types need work buffers
