@@ -116,9 +116,6 @@ def _resolve_times(events: list[dict], beat: float, duration: float):
         e["at"] = at
         e["duration"] = ev_dur
 
-        # Resolve SecMarkers to beats
-        # (timing already normalized to beats above)
-
         # Convert beats → seconds
         e["at_sec"] = e["at"] * beat
         e["duration_sec"] = e["duration"] * beat
