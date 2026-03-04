@@ -56,7 +56,7 @@ An event in the builder looks like:
     "at": 0,               # raw from DSL (beats or SecMarker)
     "duration": 2,         # raw from DSL (beats or SecMarker)
     # optional:
-    "snapshot": wave1,     # for shift
+    "source": wave1,       # layer dependency (e.g. shift reads source layer's buffer)
 }
 ```
 
@@ -329,49 +329,49 @@ Runs after time resolution, layer inference, and buffer packing — has the full
    - Event *starts* after duration → **error** (dead code, definitely a mistake)
    - Event *extends* past duration → **warning**, clamp `end_sec` to `duration` (song ends when it ends, event just gets cut short — no harm)
 
-3. **Snapshot references** — when shift says `snapshot=wave1`, verify that wave1 has an event that ends `<= shift.at_sec` with a pixel group that covers the shift's pixels. Otherwise shift would snapshot an uninitialized buffer.
+3. **Source layer ordering** — after layer inference, for each event with a `source` field, verify that the source animation's layer index is less than the dependent event's layer index. The engine renders layers in order, so a source layer must come first.
 
    ```python
-   def validate_snapshot(event, all_events):
-       if "snapshot" not in event:
-           return
-
-       source_anim = event["snapshot"]
-       shift_start = event["at_sec"]
-       shift_pixels = set(event["pixels"].indices)
-
-       source_events = [e for e in all_events if e["anim"] is source_anim]
-
-       if not source_events:
-           raise CompileError(
-               f"snapshot references {source_anim.anim_type} "
-               f"but it has no scheduled events"
-           )
-
-       valid = False
-       for se in source_events:
-           if se["end_sec"] <= shift_start:
-               if shift_pixels.issubset(set(se["pixels"].indices)):
-                   valid = True
-                   break
-
-       if not valid:
-           raise CompileError(
-               f"shift at {shift_start}s snapshots {source_anim.anim_type} "
-               f"but no matching event ends before shift starts "
-               f"with covering pixels"
-           )
+   def validate_source_ordering(layers):
+       for li, layer in enumerate(layers):
+           for e in layer["events"]:
+               if "source" not in e:
+                   continue
+               source_anim = e["source"]
+               source_li = find_layer_of(source_anim, layers)
+               if source_li >= li:
+                   raise CompileError(
+                       f"{e['anim'].anim_type} on layer {li} declares "
+                       f"source={source_anim.anim_type} on layer {source_li}, "
+                       f"but source_layer must be < dependent layer"
+                   )
+               e["source_layer"] = source_li
    ```
 
-4. **Animation params completeness** — each animation type has required params. Missing `period` on a wave → compile error, not a runtime mystery.
+4. **Buffer clobber warning** — if the source event has ended (`source end_sec <= dependent at_sec`) and a *different* event on the source layer starts at or before `dependent at_sec`, the source buffer may have been overwritten. Emit a warning.
 
-5. **Layer limit** — already enforced in layer inference (`max_layers=32`), surfaced here with context about which events caused the overflow.
+   ```python
+   def warn_buffer_clobber(event, source_layer_events):
+       if "source" not in event:
+           return
+       dep_start = event["at_sec"]
+       for se in source_layer_events:
+           if se["anim"] is event["source"]:
+               continue  # skip the source event itself
+           if se["at_sec"] <= dep_start and se["end_sec"] > dep_start:
+               warn(f"event on source layer active at {dep_start}s — "
+                    f"buffer may not contain expected snapshot data")
+   ```
 
-6. **Duplicate strip names** → error.
+5. **Animation params completeness** — each animation type has required params. Missing `period` on a wave → compile error, not a runtime mystery.
 
-7. **Empty program** — no strips, no events → error or warning.
+6. **Layer limit** — already enforced in layer inference (`max_layers=32`), surfaced here with context about which events caused the overflow.
 
-8. **Buffer pool sanity** — no `buffer_id` outside pool bounds. Internal assertion.
+7. **Duplicate strip names** → error.
+
+8. **Empty program** — no strips, no events → error or warning.
+
+9. **Buffer pool sanity** — no `buffer_id` outside pool bounds. Internal assertion.
 
 ---
 
@@ -430,6 +430,7 @@ events:           Event[event_count]
 anim_type:         uint8     (WAVE=0, SHIFT=1, SPARK=2, FILL=3, ...)
 t_start:           float32   (seconds)
 duration:          float32   (seconds)
+source_layer:      uint8     (0xFF = none)
 remap_is_identity: uint8     (1 = full layer, skip scatter copy)
 remap_length:      uint8     (how many pixels this event writes)
 remap:             uint8[remap_length]  (positions in layer buffer)
@@ -464,7 +465,7 @@ color_v:  float32
 fade:     float32
 ```
 
-**Shift (25 bytes):**
+**Shift (23 bytes):**
 ```
 direction:    uint8    (LEFT=0, RIGHT=1)
 velocity:     float32
@@ -473,10 +474,12 @@ fill_h:       float32
 fill_s:       float32
 fill_v:       float32
 fill_a:       float32
-init_mode:    uint8    (CONST=0, SNAPSHOT=1)
-source_layer: uint8    (for SNAPSHOT)
 buffer_id:    uint8    (index into buffer pool)
 ```
+
+Note: `source_layer` is in the event header, not in shift params. `init_mode`
+has been removed — the animation decides internally whether to freeze or
+live-read the source buffer.
 
 ### Render strategy — zero allocation during playback
 
@@ -504,14 +507,14 @@ Buffer pool (1 buffer):            1 byte
 Layer 0 (10 indices, 2 events):
   index_map:                      1 + 10 = 11
   event_count:                    2
-  wave event:                     1+4+4+1+10+1+33 = 54
-  shift event:                    1+4+4+1+10+1+22 = 43
+  wave event:                     1+4+4+1+1+10+1+33 = 55
+  shift event:                    1+4+4+1+1+10+1+23 = 45
 Layer 1 (4 indices, 8 events):
   index_map:                      1 + 4 = 5
   event_count:                    2
-  8 spark events:                 8 × (1+4+4+1+2+1+16) = 232
+  8 spark events:                 8 × (1+4+4+1+1+2+1+16) = 240
                                   ─────
-Total:                            ~361 bytes
+Total:                            ~372 bytes
 ```
 
 Fits in a single MQTT message.

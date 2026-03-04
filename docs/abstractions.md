@@ -50,7 +50,7 @@ A layer is a pixel buffer with a mapping to physical LED indices. It combines th
 - **No ID field.** A layer's position in the program's layer array is its identity and its priority. Layer 0 is the bottom (rendered first), layer N-1 is the top.
 - **No animation pointer.** The layer doesn't know what writes into it. The engine decides which animation renders into which layer based on the timeline. The layer is purely passive.
 - **No clear per frame.** If a layer has no active animation event, the compositor skips it. If it has an active event, the animation overwrites the buffer. No need to zero the buffer every frame.
-- **Buffer survives animation end.** When an animation finishes, the layer's buffer retains the last rendered values. A subsequent animation on the same layer can use this data (e.g., SNAPSHOT init mode for shift). The buffer is not cleared between events — ownership passes to the next animation.
+- **Buffer survives animation end.** When an animation finishes, the layer's buffer retains the last rendered values. A subsequent animation can read this data via a source layer dependency (e.g., shift snapshots the source layer's buffer). The buffer is not cleared between events — ownership passes to the next animation.
 - **Layers are static.** All layers are defined at program load and live for the entire program. No creation or destruction during playback. The compiler determines the required layers; the engine allocates them once.
 - **Layers may overlap in physical indices.** A background layer on [0..49] and a spark layer on [4,11,21,25] both address physical LEDs 4, 11, 21, and 25. The compositor resolves this via priority ordering and alpha blending.
 - **Per-pixel alpha.** Alpha is in the HSVA buffer per pixel, not per layer. This enables effects like cascading sparks where each pixel fades independently.
@@ -95,7 +95,14 @@ public:
 
 **Stateless animations** (e.g., wave, spark): output is a pure function of `t_rel` and params. The constructor copies params. No internal buffers.
 
-**Stateful animations** (e.g., shift): need initialization data — either constant values embedded in params, or a runtime snapshot of another layer's buffer. The constructor receives a pre-allocated work buffer and source buffer (see BufferPool below). It copies the snapshot immediately — no separate init step. `render()` computes output from init data + `t_rel`.
+**Stateful animations** (e.g., shift): need initialization data and a pre-allocated work buffer (see BufferPool below). `render()` computes output from init data + `t_rel`.
+
+**Source layer dependencies:** any animation can declare a dependency on another layer's buffer via the event-level `source_layer` field. The engine passes the source buffer pointer to the animation's constructor. What happens next is the animation's choice:
+
+- **Frozen read:** shift copies the source buffer into its work buffer in the constructor. Later changes to the source layer don't affect it.
+- **Live read:** a future animation (e.g., mirror) would store the pointer and re-read the source buffer every frame.
+
+The engine doesn't distinguish — it just passes the pointer. No separate init step or mode flag.
 
 **Key points:**
 - Animations see an isolated pixel world: indices 0..N-1. No knowledge of physical layout.
@@ -113,12 +120,11 @@ public:
 | **gradient** | Linear gradient between two colors. | No |
 | **sweep** | Band of color moving along the pixels. | No |
 
-### Shift Animation — Init Modes
+### Shift Animation
 
-The shift animation needs initial pixel values to shift. Two modes:
+The shift animation needs initial pixel values to shift. It declares `source=` in the DSL, which sets the event-level `source_layer` field. When the event activates, the engine passes the source layer's buffer to the `AnimShift` constructor, which copies it into its pre-allocated work buffer. This is a frozen read — the shift operates on the snapshot, not the live source.
 
-1. **CONST** — pixel values embedded in the animation event params. Predetermined by the compiler.
-2. **SNAPSHOT** — copies another layer's buffer at the moment the event activates. The source layer (referenced by index) must have an active event at that time — the compiler ensures this. This also works when the source animation has just ended on the same layer, since buffers are not cleared between events.
+The source layer must have rendered before the shift's layer. The compiler enforces `source_layer < shift's layer index`.
 
 ```cpp
 struct ShiftParams {
@@ -126,14 +132,11 @@ struct ShiftParams {
     float     velocity;         // pixels per second
     bool      circular;         // wrap around?
     hsva_t    fill_color;       // for non-circular: what fills vacated pixels
-    InitMode  init_mode;        // CONST or SNAPSHOT
-    // CONST: init_pixels[] in pre-allocated buffer
-    // SNAPSHOT: source_layer index + offset
-    uint8_t   source_layer;
-    uint8_t   source_offset;
     uint8_t   buffer_id;        // index into pre-allocated buffer pool
 };
 ```
+
+Note: `source_layer` is on the `AnimationEvent`, not in `ShiftParams`. This keeps the dependency mechanism generic — any animation type can use it.
 
 ---
 
@@ -152,6 +155,7 @@ struct AnimationEvent {
     AnimType   animation;
     float      t_start;
     float      active;
+    uint8_t    source_layer;   // 0xFF (SOURCE_NONE) = no dependency
     AnimParams params;
 };
 ```
@@ -248,8 +252,8 @@ for each layer i:
 ### Factory
 
 A dispatch function creates the right Animation subclass from the event params.
-Stateful animations (like shift) receive their work buffer and source buffer
-in the constructor:
+If the event has a `source_layer` (not `SOURCE_NONE`), the factory looks up
+the source layer's buffer and passes it to the animation's constructor:
 
 ```cpp
 Animation* create_animation(const AnimationEvent& e, Program* prog);
@@ -383,7 +387,7 @@ BPM=120 (1 beat = 500ms). 10 LEDs. 4 beats total (2.0s).
 **Layer 0:**
 ```
 [0] WAVE   t_start=0.000  active=1.000  params={V channel, ...}
-[1] SHIFT  t_start=1.000  active=1.000  params={init=SNAPSHOT, source_layer=0}
+[1] SHIFT  t_start=1.000  active=1.000  source_layer=0  params={...}
 ```
 
 **Layer 1:**
@@ -445,7 +449,8 @@ State at start:
   layer[0]: evt[0] WAVE ended (0.0+1.0=1.0 < 1.001) → DESTROY AnimWave
             advance cursor to 1
             evt[1] SHIFT, 1.0 ≤ 1.001 < 2.0 → CREATE AnimShift
-              constructor snapshots layer 0 buffer (wave's last output still there)
+              source_layer=0 → engine passes layer 0 buffer to constructor
+              constructor copies it into work_buf (frozen read)
               render(t_rel=0.001)
   layer[1]: evt[2] SPARK, 1.0 ≤ 1.001 < 1.1 → CREATE AnimSpark, render
   layer[2]: idle (between sparks)

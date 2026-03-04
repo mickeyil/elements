@@ -111,23 +111,33 @@ for (uint16_t i = 1; i < layer.event_count; i++) {
 
 ---
 
-### 2. Shift init/snapshot
+### 2. Source layer dependencies
 
-When a shift event activates, it needs to snapshot another layer's buffer.
-This happens in the `AnimShift` constructor — the engine creates the instance
-on the first frame where `t >= t_start`, and the constructor copies the
-source layer's buffer into the pre-allocated work buffer. No separate init
-step, no `first_frame` flag.
+Any animation can declare a dependency on another layer's buffer via the
+event-level `source_layer` field (`0xFF` = none). The engine looks up the
+source layer's buffer and passes it to the animation's constructor. What the
+animation does with that buffer is its own business:
 
-**Constraint:** the source layer must be fully rendered before the shift reads
-it. This implies a **layer rendering order dependency** — source layer must
-render before the shift's layer.
+- **Frozen read (copy once):** `AnimShift` copies the source buffer into its
+  pre-allocated work buffer in the constructor. Subsequent changes to the
+  source layer don't affect it.
+- **Live read (pointer):** a future animation (e.g., mirror) could store the
+  pointer and re-read the source buffer every frame.
 
-The compiler stores `source_layer` in the shift params. The engine renders
-layers in order 0, 1, 2, ... which naturally satisfies this if the compiler
-places source layers before dependent layers.
+The engine doesn't distinguish between these modes — it just hands the buffer
+pointer to the constructor. The animation decides internally whether to copy
+or hold a reference.
 
-_(TBD: verify compiler assigns layer indices such that source_layer < shift's layer index)_
+**Ordering invariant:** `source_layer < dependent_layer`. The engine renders
+layers in order 0, 1, 2, ... so the source layer is always fully rendered
+before the dependent layer reads it. The compiler enforces this invariant at
+compile time.
+
+**Buffer clobber edge case:** if the source event has ended and a new event
+starts on the source layer at or before the dependent event's start time, the
+source buffer may contain unexpected data. The compiler emits a **warning**
+(not an error) for this case — the program is still valid, but the snapshot
+may not contain what the author intended.
 
 ---
 
@@ -173,19 +183,27 @@ Factory function — the engine calls this when an event first becomes active:
 
 ```cpp
 Animation* create_animation(const AnimationEvent& e, Program* prog) {
+    // Look up source buffer if this event declares a source layer dependency
+    hsva_t*  src_buf = nullptr;
+    uint8_t  src_len = 0;
+    if (e.source_layer != SOURCE_NONE) {
+        src_buf = prog->layers[e.source_layer].buffer;
+        src_len = prog->layers[e.source_layer].index_map_length;
+    }
+
     switch (e.params.type) {
         case ANIM_WAVE:
             return new AnimWave(e.params.wave);
         case ANIM_SPARK:
             return new AnimSpark(e.params.spark);
-        case ANIM_SHIFT: {
-            uint8_t sl = e.params.shift.source_layer;
+        case ANIM_SHIFT:
+            // Shift copies src_buf into work_buf in constructor (frozen read)
             return new AnimShift(
                 e.params.shift,
                 prog->pool.buffers[e.params.shift.buffer_id],
-                prog->layers[sl].buffer,
-                prog->layers[sl].index_map_length);
-        }
+                src_buf, src_len);
+        // Future: a live-read animation (e.g., mirror) would receive the
+        // same src_buf pointer but read it each frame instead of copying.
         default:
             return nullptr;
     }
@@ -253,6 +271,10 @@ The engine owns layer buffers. The decoder owns params/events/remaps.
 ## Struct additions needed
 
 ```cpp
+// In decoder.h — add to AnimationEvent:
+uint8_t source_layer;  // 0xFF (SOURCE_NONE) = no dependency
+constexpr uint8_t SOURCE_NONE = 0xFF;
+
 // In decoder.h — add to LayerDef:
 hsva_t* buffer;  // allocated by Engine, not decoder
 
