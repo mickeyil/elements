@@ -6,7 +6,7 @@ This document defines the core abstractions for the v2 animation engine. It is t
 
 ## Overview
 
-The ESP32 is a dumb playback engine. All heavy lifting — analysis, scheduling, memory planning — happens on the base station, which compiles a **Program** and sends it to the device. The device loads the program, allocates memory once, and plays it back with zero runtime allocation.
+The ESP32 is a dumb playback engine. All heavy lifting — analysis, scheduling, memory planning — happens on the base station, which compiles a **Program** and sends it to the device. The device loads the program, pre-allocates buffers, and plays it back. Animation instances are `new`/`delete` per event activation (near-zero allocation; impact to be measured with a full song).
 
 The rendering pipeline:
 
@@ -327,7 +327,7 @@ void Compositor::render(Layer** layers, uint8_t count, uint8_t active_mask)
 
 ## Memory & BufferPool
 
-No `malloc`/`free` during playback. All memory is allocated once when a program is loaded.
+Buffers, pool, and temp are allocated once when a program is loaded. Animation instances are `new`/`delete` per event activation — a small allocation per transition, not per frame. Future optimization: placement-new into pre-allocated per-layer storage.
 
 **What needs allocation:**
 - Layer index maps and HSVA buffers (from layer definitions)

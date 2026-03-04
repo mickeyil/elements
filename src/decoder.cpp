@@ -162,6 +162,7 @@ Program* decode_program(const uint8_t* blob, size_t len) {
         LayerDef& layer = prog->layers[li];
         layer.index_map = nullptr;
         layer.events    = nullptr;
+        layer.buffer    = nullptr;
 
         // Index map
         if (!r.has(1)) goto fail;
@@ -250,6 +251,7 @@ void free_program(Program* prog) {
                 delete[] layer.events;
             }
             delete[] layer.index_map;
+            delete[] layer.buffer;
         }
         delete[] prog->layers;
     }

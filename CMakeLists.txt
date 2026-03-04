@@ -10,6 +10,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_library(elements_core STATIC
     src/decoder.cpp
+    src/engine.cpp
+    src/compositor.cpp
+    src/colors.cpp
 )
 target_include_directories(elements_core PUBLIC src)
 
@@ -33,7 +36,12 @@ if(BUILD_TESTS)
     add_executable(test_decoder test/test_decoder.cpp)
     target_link_libraries(test_decoder elements_core Catch2::Catch2WithMain)
 
+    add_executable(test_engine test/test_engine.cpp)
+    target_link_libraries(test_engine elements_core Catch2::Catch2WithMain)
+
     add_test(NAME test_decoder COMMAND test_decoder
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    add_test(NAME test_engine COMMAND test_engine
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
     # Valgrind memcheck (optional)
@@ -46,6 +54,15 @@ if(BUILD_TESTS)
                     --error-exitcode=1 $<TARGET_FILE:test_decoder>
         )
         set_tests_properties(test_decoder_memcheck PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        )
+        add_test(
+            NAME test_engine_memcheck
+            COMMAND ${VALGRIND} --leak-check=full
+                    --errors-for-leak-kinds=definite,indirect,possible
+                    --error-exitcode=1 $<TARGET_FILE:test_engine>
+        )
+        set_tests_properties(test_engine_memcheck PROPERTIES
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         )
     endif()

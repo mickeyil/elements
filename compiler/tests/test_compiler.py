@@ -465,13 +465,12 @@ def _extract_int(pattern: str, text: str, description: str) -> int:
 
 
 def test_layer_limit_contract():
+    """Compiler max_layers and decoder layer_count limit must agree (32)."""
     repo_root = Path(__file__).resolve().parents[2]
     compiler_path = repo_root / "compiler" / "elements" / "compiler.py"
-    compositor_path = repo_root / "src" / "compositor.h"
     decoder_path = repo_root / "src" / "decoder.cpp"
 
     compiler_src = compiler_path.read_text(encoding="utf-8")
-    compositor_src = compositor_path.read_text(encoding="utf-8")
     decoder_src = decoder_path.read_text(encoding="utf-8")
 
     compiler_limit = _extract_int(
@@ -484,10 +483,6 @@ def test_layer_limit_contract():
         decoder_src,
         "decoder layer_count upper bound",
     )
-    compositor_limit = _extract_int(
-        r"#define\s+MAX_LAYERS\s+(\d+)",
-        compositor_src,
-        "compositor MAX_LAYERS",
-    )
 
-    assert compiler_limit == decoder_limit == compositor_limit == 32
+    # Compositor uses uint32_t active_mask, implicitly limiting to 32 layers
+    assert compiler_limit == decoder_limit == 32

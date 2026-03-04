@@ -2,14 +2,7 @@
 
 #include <cstdint>
 #include <cstddef>
-
-// HSVA color type (matches existing colors.h)
-#ifndef HSVA_T_DEFINED
-#define HSVA_T_DEFINED
-struct hsva_t {
-    float h, s, v, a;
-};
-#endif
+#include "colors.h"
 
 // ---------------------------------------------------------------------------
 // Animation type IDs (match blob format)
@@ -79,6 +72,7 @@ struct LayerDef {
     uint8_t* index_map;      // heap-allocated array
     uint16_t event_count;
     AnimationEvent* events;  // heap-allocated array
+    hsva_t* buffer;          // engine-allocated, size = index_map_length
 };
 
 struct BufferPool {

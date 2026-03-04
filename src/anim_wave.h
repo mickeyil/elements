@@ -1,27 +1,16 @@
 #pragma once
 
 #include "animation.h"
+#include "decoder.h"
 #include <cmath>
-
-// Which HSVA channel the wave acts on
-enum class WaveChannel : uint8_t { H, S, V };
-
-// Sine wave on a single HSV channel. The other channels are fixed.
-//
-// For pixel i at time t:
-//   phase = 2π·t/period + phase0 + i·pixel_step
-//   channel_value = min + (max - min) · (sin(phase)·0.5 + 0.5)
 
 class AnimWave : public Animation {
 public:
-    AnimWave(WaveChannel channel,
-             float fixed_h, float fixed_s, float fixed_v,
-             float min, float max,
-             float period, float phase0, float pixel_step)
-        : _channel(channel),
-          _fixed_h(fixed_h), _fixed_s(fixed_s), _fixed_v(fixed_v),
-          _val_min(min), _range(max - min),
-          _period(period), _phase0(phase0), _pixel_step(pixel_step) {}
+    AnimWave(const WaveParams& p)
+        : _channel(p.channel),
+          _fixed_h(p.h), _fixed_s(p.s), _fixed_v(p.v),
+          _val_min(p.min_val), _range(p.max_val - p.min_val),
+          _period(p.period), _phase0(p.phase0), _pixel_step(p.pixel_step) {}
 
     void render(hsva_t* buffer, uint8_t length, float t) override
     {
@@ -33,16 +22,16 @@ public:
 
             float h = _fixed_h, s = _fixed_s, v = _fixed_v;
             switch (_channel) {
-                case WaveChannel::H: h = val; break;
-                case WaveChannel::S: s = val; break;
-                case WaveChannel::V: v = val; break;
+                case 0: h = val; break;  // H
+                case 1: s = val; break;  // S
+                case 2: v = val; break;  // V
             }
             buffer[i] = hsva_t(h, s, v, 1.0f);
         }
     }
 
 private:
-    WaveChannel _channel;
+    uint8_t _channel;
     float _fixed_h, _fixed_s, _fixed_v;
     float _val_min, _range;
     float _period, _phase0, _pixel_step;

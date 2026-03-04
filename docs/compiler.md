@@ -496,7 +496,7 @@ Note: `source_layer` is in the event header, not in shift params. `init_mode`
 has been removed — the animation decides internally whether to freeze or
 live-read the source buffer.
 
-### Render strategy — zero allocation during playback
+### Render strategy — near-zero allocation during playback
 
 The engine pre-allocates a single temp buffer at program load, sized to `max_remap_length` (from header). At render time:
 
@@ -512,7 +512,7 @@ if (event.remap_is_identity) {
 }
 ```
 
-No `malloc`/`free` during playback. One temp buffer, reused every frame. Works because the engine processes one animation at a time — never two renders concurrently.
+Buffers are pre-allocated — no per-frame allocation. Animation instances are `new`/`delete` per event activation (once per transition, not per frame). One temp buffer, reused every frame. Works because the engine processes one animation at a time — never two renders concurrently.
 
 ### Test animation blob size estimate
 

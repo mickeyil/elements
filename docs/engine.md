@@ -254,7 +254,7 @@ When `t > program.duration`:
 - **Stop** — engine stops calling render, leaves last frame on strip
 - **Loop** — engine wraps t: `t_rel = fmod(t, program.duration)`, resets cursors
 
-_(TBD: decide based on use case. Default: stop.)_
+**Decision: stop.** Engine returns `false` from `tick()` when `t >= duration`. Loop support is future work, controlled by a blob header field.
 
 ---
 
