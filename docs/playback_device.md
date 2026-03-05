@@ -28,7 +28,7 @@ Rather than duplicate this logic, a base class `PlaybackDevice` captures the sha
         (real hardware)         (desktop process)
         - controller-synced clock - desktop monotonic clock
         - FastLED output        - sends rgb over network
-        - MQTT/UDP commands     - same protocol + debug extensions
+        - UDP commands          - same protocol + debug extensions
         - sends telemetry       - sends telemetry + rgb frames
 ```
 
@@ -760,12 +760,7 @@ Browser                   Controller                ESPSimulated
 
 ### 1. Transport protocol
 
-The sync protocol uses raw UDP. The command/telemetry transport is undecided. Options under consideration:
-- Raw UDP for everything (simplest, already used by sync)
-- MQTT for commands/telemetry (adds broker dependency but gives pub/sub for free)
-- UDP for commands, MQTT for telemetry (hybrid)
-
-This affects the `receive_command()` / `send_telemetry()` virtual methods and the controller's transport layer. **Decision deferred.**
+**Provisional decision: raw UDP for everything.** The sync protocol already uses UDP, all code snippets and architecture diagrams assume UDP, and adding an MQTT broker is unnecessary complexity for a single-controller LAN setup. MQTT could be reconsidered later if pub/sub semantics prove useful for multi-controller or cloud scenarios, but UDP is the starting point.
 
 ### 2. Controller ↔ Web UI relationship
 

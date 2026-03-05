@@ -98,7 +98,7 @@ LOAD clears everything — the song's animations stop immediately, ambient progr
 
 ### Transport
 
-UDP over the shared WiFi network. Programs are sent as binary payloads. Transport protocol details (raw UDP vs MQTT) TBD — see open issues in `docs/playback_device.md`.
+UDP over the shared WiFi network. Programs are sent as binary payloads. See `docs/playback_device.md` for the full command and sync protocol.
 
 ---
 

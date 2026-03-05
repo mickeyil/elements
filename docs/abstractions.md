@@ -193,7 +193,7 @@ One program at a time. Loading a new program replaces the current one entirely (
 
 Multiple physical strips run on separate ESP32 devices. The compiler partitions events by strip and emits **one blob per strip**. Each blob is completely self-contained — an ESP32 loads its blob, allocates memory, and plays back without any knowledge of other strips.
 
-**Synchronization:** All devices sync their clocks to the base station (NTP or similar) and receive a `START` command with a shared absolute timestamp `T0`. Because all blobs share the same `duration` and all devices start at the same `t_program`, the animations appear synchronized.
+**Synchronization:** All devices sync their clocks to the base station via a custom controller-led sync protocol (see `docs/playback_device.md`) and receive a `START` command with a shared absolute timestamp `T0`. Because all blobs share the same `duration` and all devices start at the same `t_program`, the animations appear synchronized.
 
 **Compiler output:** `build()` returns `dict[str, bytes]` keyed by strip name. The base station routes each blob to the correct device.
 

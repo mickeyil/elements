@@ -532,4 +532,4 @@ Layer 1 (4 indices, 8 events):
 Total:                            383 bytes
 ```
 
-Fits in a single MQTT message.
+Fits in a single UDP packet.
