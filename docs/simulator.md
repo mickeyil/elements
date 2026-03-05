@@ -1,4 +1,4 @@
-# Elements v2 — Simulator Design
+# Elements — Simulator Design
 
 The simulator is a Python/pygame tool that visualizes a multi-strip program without hardware. It decodes compiled blobs, runs animation rendering in Python (mirroring the C++ engine), and displays the strips as a side-by-side LED grid updated at 50Hz.
 

@@ -1,8 +1,8 @@
-# Elements v2 — Design Document
+# Elements — Design Document
 
 ## Overview
 
-Elements v2 is a rewrite of the elements LED control system. The target hardware is ESP32 (replacing the original ESP8266). The device drives a WS2812B (NeoPixel) LED strip and operates in two modes:
+Elements is an LED animation engine. The target hardware is ESP32. The device drives a WS2812B (NeoPixel) LED strip and operates in two modes:
 
 1. **Ambient mode** — standalone playback of pre-programmed, chill background animations
 2. **Music sync mode** — precise beat-synced animations driven by a base station that performs audio analysis and compiles animation timelines
@@ -131,9 +131,9 @@ UDP over the shared WiFi network. Programs are sent as binary payloads. Transpor
 
 ### Solution: Custom controller-led sync protocol
 
-Replaces the v1 NTP approach. The controller performs a lightweight SYNC_REQ/SYNC_RESP exchange with each ESP over the existing UDP command channel. ESPs are passive responders (timestamp and echo); all filtering, quality tracking, and correction logic lives on the controller.
+The controller performs a lightweight SYNC_REQ/SYNC_RESP exchange with each ESP over the existing UDP command channel. ESPs are passive responders (timestamp and echo); all filtering, quality tracking, and correction logic lives on the controller.
 
-**Why not NTP:** The v1 NTPClient approach was fragile — `forceUpdate()` blocks for up to 1s, `getEpochTime()` loses sub-second precision via integer division, and each ESP must manage its own NTP state. The custom protocol is simpler on the ESP side (~15 lines), non-blocking by design, and gives the controller full visibility into sync quality per device.
+**Why not NTP:** A generic NTP client on ESP is fragile — `forceUpdate()` blocks for up to 1s, `getEpochTime()` loses sub-second precision via integer division, and each ESP must manage its own NTP state. The custom protocol is simpler on the ESP side (~15 lines), non-blocking by design, and gives the controller full visibility into sync quality per device.
 
 **Full design and implementation details:** See `docs/playback_device.md`, section "Custom sync protocol".
 
@@ -169,45 +169,6 @@ The DSL and compiler design are in separate documents:
 
 ---
 
-## Comparison with v1
-
-### What to keep from v1 (master branch)
-
-- **PixelArray / Strip abstraction** — the core concept of logical-to-physical pixel mapping. Evolved into the Layer abstraction in v2 (which merges index mapping + color buffer).
-- **HSV color space** with gamma correction — proper LED color handling. Extended with per-pixel alpha in v2.
-- **PC simulation path** — `#ifdef DEBUG_HELPERS` / `#ifdef ARDUINO` guards enabling desktop build and debug. Essential for development.
-- **Time representation** — `double` epoch time with ms fractions (seconds.milliseconds format).
-- **NTPClient fork** — millisecond-precision NTP sync (superseded by custom sync protocol in v2, see `docs/playback_device.md`).
-- **SlotsMM concept** — pre-allocated memory pool. Will be adapted for v2's dynamic layer allocation.
-
-### What to change
-
-| v1 | v2 |
-|----|-----|
-| ESP8266 | ESP32 |
-| Single channel, single animation type | Multi-layer, multiple primitives, per-pixel alpha |
-| C++ subclass per animation (compile-time) | Bytecode VM (runtime, primitives are built-in) |
-| Binary packed struct wire format | Bytecode programs compiled by base station |
-| Static channel setup via MQTT | All layers dynamic, created by bytecode |
-| All config via MQTT at runtime, lost on reboot | Stored presets on flash + LOAD/START protocol |
-| `handlers_t` god struct passed everywhere | Cleaner dependency injection (TBD) |
-| Error handling via `const char **errstr` | TBD — consider error codes |
-| Blocking NTP sync | Custom controller-led sync protocol (see `docs/playback_device.md`) |
-| Mixed memory management (SlotsMM + new/malloc) | Pre-allocated memory pool for all runtime buffers |
-| Blending: timeline trim (new animation cuts old) | Blending: per-pixel alpha compositing in RGB space |
-
-### What to learn from the abandoned `new_animation_engine` branch
-
-The branch introduced good ideas that were never completed:
-- **Renderable** interface — generic render contract. The concept survives in v2's animation primitives.
-- **AnimationSequence** — composable timeline of renderables. Replaced by bytecode control flow (REPEAT, timing offsets).
-- **`execute(code, progress)`** — the right API shape for the VM. Was never implemented.
-- **Deletion of Channel class** — correct instinct. Replaced by the simpler Layer model.
-
-The branch stalled because the bytecode format was never defined. That remains the critical next design task.
-
----
-
 ## Hardware
 
 ### Current Setup
@@ -218,7 +179,7 @@ The branch stalled because the bytecode format was never defined. That remains t
 
 ### LED Strip
 
-Physical strip details (length, shape, placement) are TBD. The software is parameterized for arbitrary strip lengths. Current test setup: 1 LED on pin 13. Previous v1 setup: 50 LEDs.
+Physical strip details (length, shape, placement) are TBD. The software is parameterized for arbitrary strip lengths. Current test setup: 1 LED on pin 13.
 
 ---
 
@@ -226,7 +187,7 @@ Physical strip details (length, shape, placement) are TBD. The software is param
 
 ### PlatformIO
 
-v2 uses PlatformIO (replacing Arduino CLI from v1). Verified working with:
+Uses PlatformIO. Verified working with:
 - Platform: espressif32
 - Board: esp32dev
 - Framework: Arduino
@@ -234,7 +195,7 @@ v2 uses PlatformIO (replacing Arduino CLI from v1). Verified working with:
 
 ### PC Simulator
 
-Maintaining the ability to build and test animation logic on desktop (Linux) without hardware. v1 had this via conditional compilation. v2 should preserve and improve it — especially important for developing and testing the bytecode VM.
+Build and test animation logic on desktop (Linux) without hardware via conditional compilation. Important for developing and testing the animation engine.
 
 ---
 
@@ -265,7 +226,4 @@ Maintaining the ability to build and test animation logic on desktop (Linux) wit
 
 ## References
 
-- Mickey's NTPClient fork: https://github.com/mickeyil/NTPClient
 - Mickey's wavplayer experiment: audio latency testing with low-level Linux APIs
-- elements v1 (master branch): working distance-sensor-triggered fill animation
-- elements `new_animation_engine` branch: abandoned bytecode VM attempt

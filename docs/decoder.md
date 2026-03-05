@@ -1,4 +1,4 @@
-# Elements v2 — C++ Decoder Design
+# Elements — C++ Decoder Design
 
 The decoder reads a binary blob (produced by the Python compiler) and builds
 a `Program` struct in memory. Runs on ESP32. One program loaded at a time.

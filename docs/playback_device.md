@@ -2,7 +2,7 @@
 
 ## Motivation
 
-The Elements v2 system has two runtime targets for the animation engine:
+The Elements system has two runtime targets for the animation engine:
 
 1. **Real ESP32 hardware** — receives a blob over the network, decodes it, runs the engine, drives physical LEDs via FastLED.
 2. **Simulated ESP** — a desktop process that runs the same engine locally, sends its RGB strip buffer back over the network as telemetry.
@@ -744,10 +744,10 @@ Browser                   Controller                ESPSimulated
 
 ### 1. Transport protocol
 
-The production path uses MQTT (per `docs/v2_design.md`). For the simulator on localhost, MQTT adds a broker dependency. Options under consideration:
-- MQTT everywhere (mosquitto is lightweight)
-- Raw UDP for both
-- MQTT for production, UDP for simulator (same message format, different transport)
+The sync protocol uses raw UDP. The command/telemetry transport is undecided. Options under consideration:
+- Raw UDP for everything (simplest, already used by sync)
+- MQTT for commands/telemetry (adds broker dependency but gives pub/sub for free)
+- UDP for commands, MQTT for telemetry (hybrid)
 
 This affects the `receive_command()` / `send_telemetry()` virtual methods and the controller's transport layer. **Decision deferred.**
 
