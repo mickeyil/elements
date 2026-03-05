@@ -47,7 +47,7 @@ static Engine* make_engine(TestStrip& ts) {
     auto blob = load_blob("test/fixtures/test_animation.bin");
     Program* prog = decode_program(blob.data(), blob.size());
     REQUIRE(prog != nullptr);
-    return new Engine(prog, ts.strip);
+    return new Engine(prog, ts.strip, true);
 }
 
 // ---------------------------------------------------------------------------
@@ -181,5 +181,68 @@ TEST_CASE("Engine destructor cleans up without leaks", "[engine]") {
     Engine* engine = make_engine(ts);
     engine->tick(0.5f);
     engine->tick(1.5f);
+    delete engine;
+}
+
+TEST_CASE("Reset restores initial state", "[engine][reset]") {
+    TestStrip ts;
+    Engine* engine = make_engine(ts);
+
+    // First pass: tick to t=0.5
+    engine->tick(0.5f);
+    uint8_t first_pass[STRIP_LEN * 3];
+    memcpy(first_pass, ts.rgb, sizeof(first_pass));
+
+    // Reset and replay
+    engine->reset();
+    memset(ts.rgb, 0, sizeof(ts.rgb));
+    engine->tick(0.5f);
+
+    // Output must be identical
+    for (uint16_t i = 0; i < STRIP_LEN * 3; i++) {
+        CHECK(ts.rgb[i] == first_pass[i]);
+    }
+
+    delete engine;
+}
+
+TEST_CASE("Reset + replay reproduces source dependencies", "[engine][reset]") {
+    TestStrip ts;
+    Engine* engine = make_engine(ts);
+
+    // First pass: render wave then shift (shift snapshots wave)
+    engine->tick(0.99f);  // wave active
+    engine->tick(1.0f);   // shift activates, snapshots wave
+    engine->tick(1.5f);   // shift mid-animation
+    uint8_t first_pass[STRIP_LEN * 3];
+    memcpy(first_pass, ts.rgb, sizeof(first_pass));
+
+    // Reset and replay the same sequence
+    engine->reset();
+    memset(ts.rgb, 0, sizeof(ts.rgb));
+    engine->tick(0.99f);
+    engine->tick(1.0f);
+    engine->tick(1.5f);
+
+    for (uint16_t i = 0; i < STRIP_LEN * 3; i++) {
+        CHECK(ts.rgb[i] == first_pass[i]);
+    }
+
+    delete engine;
+}
+
+TEST_CASE("Reset from ENDED state", "[engine][reset]") {
+    TestStrip ts;
+    Engine* engine = make_engine(ts);
+
+    // Tick past duration — engine reports ended
+    CHECK_FALSE(engine->tick(2.5f));
+
+    // Reset and tick from beginning — should work as if freshly constructed
+    engine->reset();
+    memset(ts.rgb, 0, sizeof(ts.rgb));
+    bool active = engine->tick(0.0f);
+    CHECK(active);
+
     delete engine;
 }

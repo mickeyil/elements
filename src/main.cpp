@@ -26,7 +26,7 @@ void setup()
 
     // TODO: receive blob via MQTT. For now, no embedded blob.
     // Program* prog = decode_program(blob_data, blob_len);
-    // if (prog) engine = new Engine(prog, strip);
+    // if (prog) engine = new Engine(prog, strip, true);
 }
 
 void loop()

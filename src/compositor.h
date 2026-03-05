@@ -5,7 +5,7 @@
 
 class Compositor {
 public:
-    Compositor(Strip& strip);
+    Compositor(Strip& strip, bool gamma_enabled);
 
     // Blend active layers into the strip.
     // Layers are composited in index order (0 = bottom, N-1 = top).
@@ -13,4 +13,5 @@ public:
 
 private:
     Strip& _strip;
+    bool _gamma_enabled;
 };

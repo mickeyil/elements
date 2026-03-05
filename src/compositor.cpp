@@ -1,7 +1,7 @@
 #include "compositor.h"
 
-Compositor::Compositor(Strip& strip)
-    : _strip(strip) {}
+Compositor::Compositor(Strip& strip, bool gamma_enabled)
+    : _strip(strip), _gamma_enabled(gamma_enabled) {}
 
 void Compositor::composite(LayerDef* layers, uint8_t count, uint32_t active_mask)
 {
@@ -31,7 +31,9 @@ void Compositor::composite(LayerDef* layers, uint8_t count, uint32_t active_mask
     }
 
     // Gamma correction once, after all blending
-    for (uint16_t i = 0; i < _strip.length(); i++) {
-        _strip.set_rgb(i, gamma_correct(_strip.get_rgb(i)));
+    if (_gamma_enabled) {
+        for (uint16_t i = 0; i < _strip.length(); i++) {
+            _strip.set_rgb(i, gamma_correct(_strip.get_rgb(i)));
+        }
     }
 }

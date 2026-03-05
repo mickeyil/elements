@@ -68,8 +68,8 @@ static Animation* create_animation(const AnimationEvent& e, Program* prog,
 // Engine
 // ---------------------------------------------------------------------------
 
-Engine::Engine(Program* prog, Strip& strip)
-    : _prog(prog), _compositor(strip), _states(nullptr)
+Engine::Engine(Program* prog, Strip& strip, bool gamma_enabled)
+    : _prog(prog), _compositor(strip, gamma_enabled), _states(nullptr)
 {
     // Allocate layer buffers
     for (uint8_t i = 0; i < prog->layer_count; i++) {
@@ -145,4 +145,20 @@ bool Engine::tick(float t)
 
     _compositor.composite(_prog->layers, _prog->layer_count, active_mask);
     return true;
+}
+
+void Engine::reset()
+{
+    for (uint8_t i = 0; i < _prog->layer_count; i++) {
+        delete _states[i].instance;
+        _states[i].instance = nullptr;
+        _states[i].cursor = 0;
+        memset(_prog->layers[i].buffer, 0,
+               _prog->layers[i].index_map_length * sizeof(hsva_t));
+    }
+    // Zero buffer pool (shift work buffers)
+    for (uint8_t i = 0; i < _prog->pool.count; i++) {
+        memset(_prog->pool.buffers[i], 0,
+               _prog->pool.sizes[i] * sizeof(hsva_t));
+    }
 }
