@@ -121,12 +121,14 @@ protected:
     uint8_t* _rgb_buf;       // owned, allocated in constructor
     Strip* _strip;            // view over _rgb_buf
     Engine* _engine;          // owns Program*, created on handle_load
-    State _state;
-    int64_t _t0;              // absolute start time from handle_start (µs)
-    int64_t _sync_offset;     // controller-provided offset (µs), 0 for simulator
+    State _state = IDLE;
+    int64_t _t0 = 0;              // absolute start time from handle_start (µs)
+    int64_t _sync_offset = 0;     // controller-provided offset (µs), 0 until first SYNC_RESULT
     bool _gamma_enabled;
 };
 ```
+
+`_sync_offset = 0` means uncorrected local monotonic time — safe as a default since playback won't start until after `handle_start()`, and by that point the controller should have completed at least one sync round. If sync hasn't happened yet, playback proceeds with uncorrected local time (drift accumulates but no crash or garbage values).
 
 ### Key method implementations
 
@@ -241,7 +243,7 @@ void setup() {
 }
 
 void loop() {
-    poll_commands();       // check MQTT for LOAD/START, call device.handle_load/start
+    poll_commands();       // check UDP for LOAD/START/SYNC, call device handlers
     device.tick_once();
     // Arduino yields between loop() calls — no explicit sleep
 }
@@ -443,13 +445,15 @@ Packet format (all fields little-endian):
 ```
 SYNC_REQ:   [type: u8 = 0x01] [seq: u16] [boot_seq: u32] [t1: i64]     → 15 bytes
 SYNC_RESP:  [type: u8 = 0x02] [seq: u16] [boot_seq: u32] [t1: i64] [t2: i64] [t3: i64]  → 31 bytes
-SYNC_RESULT:[type: u8 = 0x03] [offset: i64]                             → 9 bytes
+SYNC_RESULT:[type: u8 = 0x03] [seq: u16] [boot_seq: u32] [offset: i64]  → 15 bytes
 ```
 
 #### ESP implementation (minimal, non-blocking)
 
 ```cpp
 int64_t _sync_offset = 0;    // set by controller via SYNC_RESULT
+uint32_t _boot_seq = 0;     // incremented on each boot
+uint16_t _last_sync_seq = 0; // last applied SYNC_RESULT seq
 
 void handle_sync_req(const uint8_t* pkt) {
     int64_t t2 = esp_timer_get_time();
@@ -464,7 +468,17 @@ void handle_sync_req(const uint8_t* pkt) {
 }
 
 void handle_sync_result(const uint8_t* pkt) {
-    memcpy(&_sync_offset, pkt + 1, 8);
+    uint16_t seq;
+    uint32_t boot_seq;
+    memcpy(&seq, pkt + 1, 2);
+    memcpy(&boot_seq, pkt + 3, 4);
+
+    // Drop stale: wrong boot epoch or old/reordered sequence
+    if (boot_seq != _boot_seq || seq < _last_sync_seq)
+        return;
+
+    _last_sync_seq = seq;
+    memcpy(&_sync_offset, pkt + 7, 8);
 }
 
 int64_t now_epoch_approx() {
@@ -585,7 +599,7 @@ For mixed real+simulated setups: the controller can derive a trivial offset for 
 When ESPSimulated receives a debug_seek command, it:
 1. Calls `engine->reset()` (zeros cursors, instances, buffers)
 2. Replays from t=0 to target in dt steps (tight C++ loop, microseconds)
-3. Adjusts `_steady_start` so that `steady_now() - _steady_start == target_t_rel`
+3. Adjusts `_t0` so that `(now_mono() + _sync_offset - _t0) / 1e6 == target_t_rel`
 
 If the device resumes playing after seek, the clock continues naturally from the seek point. If it's paused, `_paused_t_rel` tracks the virtual position.
 
