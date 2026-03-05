@@ -153,19 +153,21 @@ Previous experimentation: Mickey's `wavplayer` project demonstrated precise cont
 
 ## Rendering Abstractions & Animation System
 
-Detailed design of all core abstractions — Strip, Layer, Animation, AnimationEvent, Program, Engine, Compositor, and memory management — is in the dedicated document:
+Detailed design documents:
 
-**→ [abstractions.md](abstractions.md)**
+**→ [abstractions.md](abstractions.md)** — Core abstractions: Strip, Layer, Animation, Program, Engine, Compositor, memory management
 
-This covers terminology, data structures, code snippets, worked examples, and design rationale.
+**→ [engine.md](engine.md)** — Engine runtime: tick loop, cursor design, factory, source layer dependencies
 
-The DSL and compiler design are in separate documents:
+**→ [decoder.md](decoder.md)** — C++ decoder: blob parsing, struct layout, free_program
+
+**→ [compiler.md](compiler.md)** — Python compiler pipeline: parser, time resolution, layer inference, buffer packing, blob emission
+
+**→ [playback_device.md](playback_device.md)** — PlaybackDevice hierarchy, custom clock sync protocol, simulator debug extensions *(planned)*
+
+**→ [draft_simulator_proposal.md](draft_simulator_proposal.md)** — Simulator: pybind11 + Flask + browser visualization *(early draft)*
 
 **→ [dsl_example.py](dsl_example.py)** — DSL example: wave+shift+sparks test animation
-
-**→ [compiler.md](compiler.md)** — Compiler pipeline: parser, time resolution, layer inference, buffer packing, blob emission
-
-**→ [decoder.md](decoder.md)** — C++ decoder: arena allocation, tagged union params, decode flow
 
 ---
 

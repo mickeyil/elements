@@ -1,7 +1,36 @@
-# elements
-In this playground project LEDs and sensors that are connected to a wifi based board - ESP8266 are called 'elements'. 
-The elements communicate via wifi & MQTT and are controlled by a device on their local network (raspberry pi).
+# Elements
 
-Currently one scenario is implemented: distance sensor triggering an animation on a LED strip (ws2812) when someone gets near.
+Beat-synced LED animation engine targeting ESP32. Work in progress.
 
-test/sim_anim is a C++ simulation intended for easier debugging on a PC rathen than the ESP device.
+**[Design document](docs/design.md)** — architecture, abstractions, and links to all detailed docs.
+
+## Build
+
+```bash
+cmake -B build
+cmake --build build
+```
+
+Requires C++17 and Python 3 (for test fixture generation).
+
+## Test
+
+```bash
+cd build && ctest
+```
+
+Or run individually:
+
+```bash
+./build/test_decoder
+./build/test_engine
+```
+
+## Project structure
+
+```
+src/          C++ engine (decoder, engine, compositor, animations)
+test/         Catch2 tests
+compiler/     Python compiler (DSL → binary blob)
+docs/         Design documents
+```
