@@ -58,21 +58,16 @@ A layer is a pixel buffer with a mapping to physical LED indices. It combines th
 **Analogy:** Layers are like tracks in a DAW. Bottom layers are long-running backgrounds. Upper layers are sparse, short-lived effects aligned to beats or other events. The compiler packs animation events into layers such that no two events on the same layer overlap in time.
 
 ```cpp
-class Layer {
-public:
-    Layer(const uint8_t* index_map, uint8_t length);
-    ~Layer();
-
-    uint8_t length() const;
-    const uint8_t* index_map() const;
-    hsva_t* buffer();
-
-private:
-    uint8_t  _length;
-    uint8_t* _index_map;
-    hsva_t*  _buffer;
+struct LayerDef {
+    uint8_t index_map_length;
+    uint8_t* index_map;      // heap-allocated array (decoder)
+    uint16_t event_count;
+    AnimationEvent* events;  // heap-allocated array (decoder), sorted by t_start
+    hsva_t* buffer;          // engine-allocated, size = index_map_length
 };
 ```
+
+`LayerDef` is a plain struct decoded from the blob. Events are embedded per layer (not in a separate `LayerEvents` struct). The buffer is allocated by the engine at load time, not the decoder.
 
 ---
 
@@ -146,39 +141,25 @@ Note: `source_layer` is on the `AnimationEvent`, not in `ShiftParams`. This keep
 A scheduled activation of an animation on a layer. Pure data — no runtime behavior.
 
 **Fields:**
-- **animation** — which animation type (AnimType enum)
+- **params** — animation-specific parameters (AnimParams tagged union)
 - **t_start** — seconds relative to program start
-- **active** — duration in seconds (INFINITY for "runs until program ends")
-- **params** — animation-specific parameters (AnimParams union)
+- **duration** — seconds
+- **source_layer** — index of source layer for dependencies (`0xFF` = `SOURCE_NONE`)
+- **remap_length** / **remap_is_identity** / **remap** — pixel remapping for sub-layer events
 
 ```cpp
 struct AnimationEvent {
-    AnimType   animation;
-    float      t_start;
-    float      active;
-    uint8_t    source_layer;   // 0xFF (SOURCE_NONE) = no dependency
     AnimParams params;
+    float t_start;          // seconds
+    float duration;         // seconds
+    uint8_t source_layer;   // 0xFF = SOURCE_NONE
+    uint8_t remap_length;
+    bool remap_is_identity;
+    uint8_t* remap;         // heap-allocated array
 };
 ```
 
-Note: `layer_id` is not in the event struct — events are grouped per layer in `LayerEvents` (see Program below), so the layer association is structural.
-
-The compiler ensures that no two events on the same layer overlap in time. This is not enforced by the engine — it's a compiler invariant. If violated, later events overwrite earlier ones on the same layer (last write wins). Not an error, just visually wrong.
-
----
-
-## LayerEvents
-
-The event timeline for a single layer. Events are sorted by `t_start`, with no overlaps (compiler invariant).
-
-```cpp
-struct LayerEvents {
-    const AnimationEvent* events;    // sorted by t_start
-    uint16_t              count;
-};
-```
-
-Each layer has exactly one `LayerEvents`. This enables per-layer cursor tracking in the engine — each layer's cursor advances independently, avoiding the problem of a global cursor being stuck behind a long-running event while short events on other layers have finished.
+Events are embedded in `LayerDef` (not in a separate struct). The layer association is structural — events are grouped per layer. The compiler ensures no two events on the same layer overlap in time.
 
 ---
 
@@ -187,22 +168,24 @@ Each layer has exactly one `LayerEvents`. This enables per-layer cursor tracking
 The complete animation program loaded onto the ESP32. Contains everything needed for playback.
 
 **Contents:**
-- Array of **Layers** (index = priority)
-- Array of **LayerEvents** — one per layer, same indexing
-- **Buffer pool spec** — sizes of pre-allocated buffers for stateful animations (see Memory)
+- **duration** — total program length in seconds
+- **layers** — array of `LayerDef` (index = priority), each containing its own events
+- **pool** — pre-allocated buffer pool for stateful animations
+- **temp_buffer** — scratch buffer for remap scatter operations
 
 ```cpp
 struct Program {
-    Layer**       layers;
-    LayerEvents*  layer_events;    // one per layer, same indexing
-    uint8_t       layer_count;
-    // Buffer pool TBD
+    float duration;
+    uint8_t layer_count;
+    uint8_t max_remap_length;
+
+    LayerDef* layers;        // heap-allocated array
+    BufferPool pool;
+    hsva_t* temp_buffer;     // heap-allocated, size = max_remap_length
 };
 ```
 
-One program at a time. Loading a new program replaces the current one entirely (clears all state, re-allocates layers and buffers).
-
-**Current representation:** hardcoded C structs. Binary serialization (for MQTT transport) is a future step — the struct layout is designed to map cleanly to a binary format.
+One program at a time. Loading a new program replaces the current one entirely (clears all state, re-allocates layers and buffers). Decoded from a binary blob by `decode_program()`.
 
 ---
 
@@ -224,78 +207,48 @@ Multiple physical strips run on separate ESP32 devices. The compiler partitions 
 
 ## Engine
 
-The runtime that plays a program. Owns the lifecycle of animation instances.
-
-### Per-Layer State
-
-The engine tracks one active animation per layer:
+The runtime that plays a program. Owns the lifecycle of animation instances and the Compositor.
 
 ```cpp
-struct LayerState {
-    uint16_t   cursor;       // index into this layer's events
-    Animation* instance;     // currently active animation (null = idle)
-};
-
 class Engine {
 public:
-    Engine(Compositor& compositor);
+    Engine(Program* prog, Strip& strip);  // takes ownership of prog
+    ~Engine();                             // frees prog via free_program()
 
-    void load(Program& program);
-    void tick(float t_program);
-
-private:
-    Compositor&  _compositor;
-    Program*     _program;
-    LayerState   _state[MAX_LAYERS];   // one per layer
+    bool tick(float t);                    // returns false when t >= duration
 };
 ```
 
-The cursor for each layer advances independently. A long-running wave on layer 0 doesn't block the cursor on layer 1 from advancing past short spark events.
+The engine tracks one active animation per layer via an internal `LayerState` (cursor + instance pointer). The cursor for each layer advances independently.
 
-### Tick Logic
+### Tick logic
 
-Each frame, the engine processes each layer independently:
+Each frame, for each layer:
+1. While cursor points to a finished event → delete instance, advance cursor
+2. If cursor points to a future event → break (idle)
+3. If cursor points to an active event → create instance on first frame, render
 
-```
-for each layer i:
-    1. DEACTIVATE: if instance exists and event has ended → destroy instance
-    2. ADVANCE CURSOR: skip past fully elapsed events
-    3. ACTIVATE/RENDER: if event at cursor is in active window:
-       - if no instance → create (constructor does init), render()
-       - if instance exists → render()
-       (t_rel = t_program - event.t_start)
-```
+The engine communicates active layers to the compositor via a `uint32_t` bitmask (supports up to 32 layers).
 
 ### Factory
 
-A dispatch function creates the right Animation subclass from the event params.
-If the event has a `source_layer` (not `SOURCE_NONE`), the factory looks up
-the source layer's buffer and passes it to the animation's constructor:
+`create_animation(event, prog, dep_layer)` dispatches on `AnimType`. For shifts, the engine pre-fills the work buffer with source pixels before constructing the `AnimShift`.
 
-```cpp
-Animation* create_animation(const AnimationEvent& e, Program* prog);
-```
-
-Future optimization: pre-allocate an animation instance pool instead of new/delete per event (see Memory).
-
-### Active Layer Communication
-
-The engine communicates which layers are active to the compositor via a bitmask (`uint8_t`, supports up to 8 layers):
-
-```cpp
-uint8_t active_mask = 0;
-for (uint8_t i = 0; i < layer_count; i++) {
-    if (_state[i].instance != nullptr)
-        active_mask |= (1 << i);
-}
-_compositor.render(_program->layers, _program->layer_count, active_mask);
-```
+See `docs/engine.md` for full tick loop, factory, and scatter-copy implementation details.
 
 ---
 
 ## Compositor
 
 Blends active layers into the Strip, bottom to top.
+
+```cpp
+class Compositor {
+public:
+    Compositor(Strip& strip);
+    void composite(LayerDef* layers, uint8_t count, uint32_t active_mask);
+};
+```
 
 **Per-frame pipeline:**
 
@@ -306,18 +259,7 @@ Blends active layers into the Strip, bottom to top.
      - `pixel_rgb = hsv_to_rgb(layer.buffer[i])`
      - `alpha = layer.buffer[i].a`
      - `strip[physical_idx] = lerp(strip[physical_idx], pixel_rgb, alpha)`
-3. `FastLED.show()`
-
-```cpp
-void Compositor::render(Layer** layers, uint8_t count, uint8_t active_mask)
-{
-    clear_strip();
-    for (uint8_t i = 0; i < count; i++) {
-        if (active_mask & (1 << i))
-            blend_layer(layers[i]);
-    }
-}
-```
+3. Apply gamma correction (if enabled)
 
 **Blending is always alpha.** Background layers set A=1.0 (full replace). Overlay layers use intermediate alpha for smooth blending. A=0.0 means fully transparent — the layer below shows through.
 
@@ -344,36 +286,13 @@ It performs buffer packing (like register allocation) and includes a buffer pool
 
 ```cpp
 struct BufferPool {
-    hsva_t** buffers;       // array of pointers to pre-allocated HSVA arrays
-    uint8_t* sizes;         // size (in pixels) of each buffer
-    uint8_t  count;         // number of buffers in the pool
+    uint8_t count;
+    uint8_t* sizes;          // heap-allocated array of sizes
+    hsva_t** buffers;        // heap-allocated array of pointers to heap-allocated hsva_t arrays
 };
 ```
 
-The pool is part of the Program:
-
-```cpp
-struct Program {
-    Layer**       layers;
-    LayerEvents*  layer_events;
-    uint8_t       layer_count;
-    BufferPool    pool;
-};
-```
-
-At program load, the engine allocates all buffers:
-
-```cpp
-for (uint8_t i = 0; i < program.pool.count; i++)
-    program.pool.buffers[i] = new hsva_t[program.pool.sizes[i]];
-```
-
-Animation events that need internal storage include a `buffer_id` in their params, pointing to their assigned pool slot. The factory function `create_animation()` looks up the buffer and passes it to the animation's constructor:
-
-```cpp
-// On activation — factory handles buffer lookup:
-Animation* instance = create_animation(e, _program);
-```
+The pool is part of the Program (see Program section above). The decoder allocates pool buffers at decode time. Animation events that need internal storage include a `buffer_id` in their params (e.g., `ShiftParams.buffer_id`), pointing to their assigned pool slot. The engine's factory function looks up the buffer and passes it to the animation's constructor.
 
 The animation stores the buffer pointer — no allocation, no freeing. When two non-overlapping events share a pool slot, one uses it, finishes, then the next one overwrites it.
 
@@ -399,28 +318,28 @@ BPM=120 (1 beat = 500ms). 10 LEDs. 4 beats total (2.0s).
 | 1 | [0,4] | spark white |
 | 2 | [5,9] | spark yellow |
 
-### LayerEvents
+### Events per layer
 
 **Layer 0:**
 ```
-[0] WAVE   t_start=0.000  active=1.000  params={V channel, ...}
-[1] SHIFT  t_start=1.000  active=1.000  source_layer=0  params={...}
+[0] WAVE   t_start=0.000  duration=1.000  params={V channel, ...}
+[1] SHIFT  t_start=1.000  duration=1.000  source_layer=0  params={...}
 ```
 
 **Layer 1:**
 ```
-[0] SPARK  t_start=0.000  active=0.100  params={white}
-[1] SPARK  t_start=0.500  active=0.100  params={white}
-[2] SPARK  t_start=1.000  active=0.100  params={white}
-[3] SPARK  t_start=1.500  active=0.100  params={white}
+[0] SPARK  t_start=0.000  duration=0.100  params={white}
+[1] SPARK  t_start=0.500  duration=0.100  params={white}
+[2] SPARK  t_start=1.000  duration=0.100  params={white}
+[3] SPARK  t_start=1.500  duration=0.100  params={white}
 ```
 
 **Layer 2:**
 ```
-[0] SPARK  t_start=0.250  active=0.100  params={yellow}
-[1] SPARK  t_start=0.750  active=0.100  params={yellow}
-[2] SPARK  t_start=1.250  active=0.100  params={yellow}
-[3] SPARK  t_start=1.750  active=0.100  params={yellow}
+[0] SPARK  t_start=0.250  duration=0.100  params={yellow}
+[1] SPARK  t_start=0.750  duration=0.100  params={yellow}
+[2] SPARK  t_start=1.250  duration=0.100  params={yellow}
+[3] SPARK  t_start=1.750  duration=0.100  params={yellow}
 ```
 
 ### Engine Walkthrough

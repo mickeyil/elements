@@ -9,215 +9,219 @@ and every frame:
 4. Tells the compositor which layers are active
 5. Compositor blends layers → strip → LEDs
 
-## What exists today
+---
 
-- `main.cpp` manually creates animations and wires them to layers — no
-  scheduling, no lifecycle
-- `Layer`, `Compositor`, `Strip` — the rendering stack works
-- `AnimWave`, `AnimSpark` — as classes with virtual `render()`
+## Class interface
 
-## What the engine needs
+```cpp
+// engine.h
+class Engine {
+public:
+    // Takes ownership of prog (freed on destroy).
+    Engine(Program* prog, Strip& strip);
+    ~Engine();
 
+    // Advance to time t (seconds since program start).
+    // Returns false if program has ended (t >= duration).
+    bool tick(float t);
+
+private:
+    struct LayerState {
+        uint16_t cursor;
+        Animation* instance;
+    };
+
+    Program* _prog;
+    Compositor _compositor;   // owned, constructed with Strip&
+    LayerState* _states;      // heap-allocated, one per layer
+};
 ```
-Engine::tick(float t)
-    for each layer:
-        walk event list with cursor
-        activate events whose t_start <= t
-        deactivate events whose t_start + duration <= t
-        for each active event:
-            compute t_rel = t - event.t_start
-            render into layer buffer (direct or scatter)
-        update active_mask bit
-    compositor.composite(active_mask)
-    strip.show()
-```
+
+Key design decisions:
+- **Engine owns the Compositor** (value member, not reference). Constructed from the Strip in Engine's constructor.
+- **Engine takes ownership of Program*** — `free_program()` is called in the destructor.
+- **LayerState is private** — the cursor and instance are internal to the engine.
+- **Layer buffers** are allocated by the engine at construction time (`prog->layers[i].buffer`), not by the decoder.
 
 ---
 
-## Open Questions
+## Cursor design
 
-### 1. Cursor design
-
-Each layer has a sorted event list. We need a cursor (index) to track
-"where are we" so we don't scan from the beginning every frame.
-
-**Decision: single cursor per layer.**
+Each layer has a sorted event list. A single cursor per layer tracks "where are we"
+so we don't scan from the beginning every frame.
 
 Layer inference guarantees no overlapping events within a layer, so at most
 one event is active at any time. One cursor per layer is sufficient.
 
-```cpp
-struct LayerState {
-    uint16_t   cursor;    // index into events array
-    Animation* instance;  // currently active (null = idle)
-};
+Cursor moves forward monotonically. O(1) per layer per frame.
 
-void Engine::tick(float t) {
+---
+
+## Tick logic
+
+```cpp
+bool Engine::tick(float t) {
+    if (t >= _prog->duration)
+        return false;
+
     uint32_t active_mask = 0;
 
-    for (uint8_t li = 0; li < prog->layer_count; li++) {
-        LayerDef& layer = prog->layers[li];
-        LayerState& state = layer_states[li];
+    for (uint8_t li = 0; li < _prog->layer_count; li++) {
+        LayerDef& layer = _prog->layers[li];
+        LayerState& state = _states[li];
 
         while (state.cursor < layer.event_count) {
             AnimationEvent& e = layer.events[state.cursor];
             float end = e.t_start + e.duration;
 
-            if (t < e.t_start) break;
+            if (t < e.t_start)
+                break;  // future event
 
             if (t < end) {
-                // Event is active — create instance on first frame
+                // Active — create instance on first frame
                 if (!state.instance)
-                    state.instance = create_animation(e, prog);
+                    state.instance = create_animation(e, _prog, layer);
 
                 float t_rel = t - e.t_start;
-                uint8_t len = e.remap_length;
+                uint8_t len = e.remap_is_identity
+                    ? layer.index_map_length : e.remap_length;
                 hsva_t* buf = e.remap_is_identity
-                    ? layer.buffer : prog->temp_buffer;
+                    ? layer.buffer : _prog->temp_buffer;
 
                 state.instance->render(buf, len, t_rel);
 
                 if (!e.remap_is_identity)
-                    scatter_copy(prog->temp_buffer, layer.buffer,
-                                 e.remap, len);
+                    scatter_copy(_prog->temp_buffer, layer.buffer,
+                                 e.remap, e.remap_length);
                 break;
             }
 
-            // Event finished — destroy instance, advance cursor
+            // Event finished
             delete state.instance;
             state.instance = nullptr;
             state.cursor++;
         }
 
-        if (state.instance) active_mask |= (1u << li);
+        if (state.instance)
+            active_mask |= (1u << li);
     }
 
-    compositor.composite(active_mask);
+    _compositor.composite(_prog->layers, _prog->layer_count, active_mask);
+    return true;
 }
-```
-
-Cursor moves forward monotonically. O(1) per layer per frame.
-
-Add a debug assertion at load time to verify the compiler's guarantee:
-
-```cpp
-#ifndef NDEBUG
-for (uint16_t i = 1; i < layer.event_count; i++) {
-    assert(layer.events[i].t_start >=
-           layer.events[i-1].t_start + layer.events[i-1].duration);
-}
-#endif
 ```
 
 ---
 
-### 2. Source layer dependencies
+## Source layer dependencies
 
 Any animation can declare a dependency on another layer's buffer via the
-event-level `source_layer` field (`0xFF` = none). The engine looks up the
+event-level `source_layer` field (`0xFF` = `SOURCE_NONE`). The engine looks up the
 source layer's buffer and passes it to the animation's constructor. What the
 animation does with that buffer is its own business:
 
-- **Frozen read (copy once):** `AnimShift` copies the source buffer into its
-  pre-allocated work buffer in the constructor. Subsequent changes to the
-  source layer don't affect it.
+- **Frozen read (copy once):** `AnimShift` — the engine pre-fills the shift's
+  work buffer with source pixels in the dependent's pixel order. The shift
+  operates on this snapshot.
 - **Live read (pointer):** a future animation (e.g., mirror) could store the
   pointer and re-read the source buffer every frame.
 
-The engine doesn't distinguish between these modes — it just hands the buffer
-pointer to the constructor. The animation decides internally whether to copy
-or hold a reference.
-
-**Ordering invariant:** `source_layer <= dependent_layer`. The engine renders
-layers in order 0, 1, 2, ... so the source layer is always rendered before or
-at the dependent layer. Equal layers are valid when the source event has already
-ended before the dependent event starts.
+**Ordering invariant:** `source_layer < dependent_layer`. The engine renders
+layers in order 0, 1, 2, ... so the source layer is always rendered before the
+dependent. The compiler enforces this.
 
 **Buffer clobber edge case:** if the source event has ended and another event on
-the source layer is active before the dependent event starts, the source buffer
-may contain unexpected data. The compiler emits a **warning** (not an error) for
-this case — the program is still valid, but the snapshot may not contain what
-the author intended.
+the source layer is active, the source buffer may contain unexpected data. The
+compiler emits a **warning** (not an error) for this case.
 
 ---
 
-### 3. Animation class hierarchy
+## Animation class hierarchy
 
-Animations are subclasses of `Animation` with virtual `render()`. The engine
-passes `t_rel` (time since event start). Initialization happens in the
-constructor — no separate `init()` method.
+Animations are subclasses of `Animation` with virtual `render()`. Initialization
+happens in the constructor — no separate `init()` method.
 
 ```cpp
+// animation.h
 class Animation {
 public:
     virtual ~Animation() {}
-    virtual void render(hsva_t* buffer, uint8_t length, float t_rel) = 0;
-};
-
-class AnimWave : public Animation {
-    WaveParams p;
-public:
-    AnimWave(const WaveParams& params) : p(params) {}
-    void render(hsva_t* buffer, uint8_t length, float t_rel) override;
-};
-
-class AnimSpark : public Animation {
-    SparkParams p;
-public:
-    AnimSpark(const SparkParams& params) : p(params) {}
-    void render(hsva_t* buffer, uint8_t length, float t_rel) override;
-};
-
-class AnimShift : public Animation {
-    ShiftParams p;
-    hsva_t* work_buf;
-public:
-    // Constructor snapshots source_buf into work_buf
-    AnimShift(const ShiftParams& params, hsva_t* work_buf,
-              const hsva_t* source_buf, uint8_t source_len);
-    void render(hsva_t* buffer, uint8_t length, float t_rel) override;
+    virtual void render(hsva_t* buffer, uint8_t length, float t) = 0;
 };
 ```
 
-Factory function — the engine calls this when an event first becomes active:
+Concrete subclasses:
+
+| Class | Params | State |
+|-------|--------|-------|
+| `AnimWave` | `WaveParams` | Stateless |
+| `AnimSpark` | `SparkParams` | Stateless |
+| `AnimPaint` | `PaintParams` | Stateless |
+| `AnimShift` | `ShiftParams` + work buffer | Stateful (work buffer pre-filled by engine) |
+
+---
+
+## Factory function
+
+The engine calls this when an event first becomes active:
 
 ```cpp
-Animation* create_animation(const AnimationEvent& e, Program* prog) {
-    // Look up source buffer if this event declares a source layer dependency
-    hsva_t*  src_buf = nullptr;
-    uint8_t  src_len = 0;
-    if (e.source_layer != SOURCE_NONE) {
-        src_buf = prog->layers[e.source_layer].buffer;
-        src_len = prog->layers[e.source_layer].index_map_length;
-    }
-
+static Animation* create_animation(const AnimationEvent& e, Program* prog,
+                                   const LayerDef& dep_layer)
+{
     switch (e.params.type) {
-        case ANIM_WAVE:
-            return new AnimWave(e.params.wave);
-        case ANIM_SPARK:
-            return new AnimSpark(e.params.spark);
-        case ANIM_SHIFT:
-            // Shift copies src_buf into work_buf in constructor (frozen read)
-            return new AnimShift(
-                e.params.shift,
-                prog->pool.buffers[e.params.shift.buffer_id],
-                src_buf, src_len);
-        // Future: a live-read animation (e.g., mirror) would receive the
-        // same src_buf pointer but read it each frame instead of copying.
-        default:
-            return nullptr;
+        case ANIM_WAVE:  return new AnimWave(e.params.wave);
+        case ANIM_SPARK: return new AnimSpark(e.params.spark);
+        case ANIM_PAINT: return new AnimPaint(e.params.paint);
+
+        case ANIM_SHIFT: {
+            hsva_t* work = prog->pool.buffers[e.params.shift.buffer_id];
+            uint8_t shift_len = e.remap_is_identity
+                ? dep_layer.index_map_length : e.remap_length;
+
+            if (e.source_layer != SOURCE_NONE) {
+                const LayerDef& src_layer = prog->layers[e.source_layer];
+                // Build physical→source_logical lookup, copy source
+                // pixels in dependent's pixel order into work buffer
+                // (see engine.cpp for full implementation)
+                ...
+            } else {
+                memset(work, 0, shift_len * sizeof(hsva_t));
+            }
+
+            return new AnimShift(e.params.shift, work, shift_len);
+        }
+        default: return nullptr;
     }
 }
 ```
 
-Remap/scatter logic is in the engine tick loop (see Section 1), not inside
-the animation. Animations always render into a contiguous buffer of length
-`remap_length`. The engine handles the scatter copy when `remap_is_identity`
-is false.
+Note: `AnimShift` takes 3 arguments — `(ShiftParams, work_buf, work_len)`.
+The engine pre-fills the work buffer with source pixels before constructing
+the shift. The shift doesn't know about source layers — it just operates
+on whatever is in its work buffer.
 
 ---
 
-### 4. Layer buffer clearing
+## Remap and scatter
+
+Animations always render into a contiguous buffer of length `remap_length`.
+When `remap_is_identity` is true, the animation writes directly into the
+layer buffer. When false, it writes into `prog->temp_buffer`, and the engine
+scatter-copies back:
+
+```cpp
+static inline void scatter_copy(const hsva_t* src, hsva_t* dst,
+                                const uint8_t* remap, uint8_t len)
+{
+    for (uint8_t i = 0; i < len; i++)
+        dst[remap[i]] = src[i];
+}
+```
+
+---
+
+## Layer buffer clearing
 
 When no event is active on a layer, the compositor skips it entirely (active
 mask bit is 0). No need to zero the buffer — compositor ignores it.
@@ -227,71 +231,14 @@ will overwrite it. If no event follows, the layer is inactive.
 
 ---
 
-### 5. Multiple active events per layer
-
-Layer inference prevents this. At most one event active per layer at any time.
-Enforced by the debug assertion in #1.
-
----
-
-### 6. Clock source
+## Clock source
 
 Engine takes `float t` (seconds) as a parameter — doesn't own the clock.
-
-```cpp
-// ESP32 (Arduino)
-engine.tick(millis() / 1000.0f);
-
-// Desktop / SDL
-engine.tick(SDL_GetTicks() / 1000.0f);
-```
+The PlaybackDevice computes `t_rel` from its clock subsystem and passes it in.
 
 ---
 
-### 7. Program end policy
+## Program end policy
 
-When `t > program.duration`:
-- **Stop** — engine stops calling render, leaves last frame on strip
-- **Loop** — engine wraps t: `t_rel = fmod(t, program.duration)`, resets cursors
-
-**Decision: stop.** Engine returns `false` from `tick()` when `t >= duration`. Loop support is future work, controlled by a blob header field.
-
----
-
-## Layer buffer ownership
-
-Each `LayerDef` needs an `hsva_t* buffer` field — not currently in the
-decoded struct. Size = `index_map_length`. Allocated by the engine at load
-time (not the decoder — the decoder doesn't know about render buffers).
-
-The engine owns layer buffers. The decoder owns params/events/remaps.
-
----
-
-## Struct additions needed
-
-```cpp
-// In decoder.h — add to AnimationEvent:
-uint8_t source_layer;  // 0xFF (SOURCE_NONE) = no dependency
-constexpr uint8_t SOURCE_NONE = 0xFF;
-
-// In decoder.h — add to LayerDef:
-hsva_t* buffer;  // allocated by Engine, not decoder
-
-// New in engine.h:
-struct LayerState {
-    uint16_t   cursor;    // index into events array
-    Animation* instance;  // currently active (null = idle)
-};
-
-class Engine {
-    Program* prog;
-    LayerState* layer_states;  // [layer_count]
-    Compositor& compositor;
-    // Layer buffers are in prog->layers[i].buffer
-public:
-    Engine(Program* prog, Compositor& compositor);
-    ~Engine();
-    void tick(float t);
-};
-```
+When `t >= program.duration`, `tick()` returns `false`. The engine stops
+rendering. Loop support is future work, controlled at the PlaybackDevice level.
