@@ -1,6 +1,6 @@
 # Elements — Abstractions
 
-This document defines the core abstractions for the animation engine. It is the result of iterative design discussion and supersedes the "Rendering Abstractions" and "Animation System" sections in [v2_design.md](v2_design.md) where they conflict.
+This document defines the core abstractions for the animation engine. It is the result of iterative design discussion and supersedes the "Rendering Abstractions" and "Animation System" sections in [design.md](design.md) where they conflict.
 
 ---
 
