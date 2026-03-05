@@ -1,5 +1,7 @@
 # Simulator Design — pybind11 + Flask + Browser
 
+> **Status: Early draft.** Partially superseded by `docs/playback_device.md` which defines the PlaybackDevice hierarchy and controller architecture. This document retains useful detail on the pybind11 binding layer and browser visualization approach. Neither document is implemented yet.
+
 ## Goal
 
 Run the **actual C++ engine pipeline** (decoder → engine → compositor → strip) without LED hardware, and visualize output as colored squares in a browser. A local dev tool for previewing and debugging animations.

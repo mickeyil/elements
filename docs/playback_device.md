@@ -1,5 +1,7 @@
 # PlaybackDevice — Shared Device Abstraction
 
+> **Status: Design document.** Not yet implemented. Describes planned architecture for the PlaybackDevice hierarchy, custom clock sync protocol, and simulator debug extensions. Prerequisites include `Engine::reset()` and Compositor gamma control, which are also not yet in the codebase (see plan file for implementation details).
+
 ## Motivation
 
 The Elements system has two runtime targets for the animation engine:
