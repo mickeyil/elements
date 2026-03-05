@@ -288,9 +288,18 @@ public:
 
     void debug_seek(float target_t_rel) {
         if (!_engine) return;
+
+        // Clamp to valid range
+        float dur = duration();
+        if (target_t_rel < 0.0f) target_t_rel = 0.0f;
+        if (target_t_rel > dur) target_t_rel = dur;
+
         _engine->reset();
 
-        // Replay frame-by-frame from 0 to target
+        // Replay frame-by-frame from 0 to target.
+        // At target == duration the final tick() returns false, but
+        // the strip buffer still holds the last rendered frame — this
+        // is intentional (seek-to-end shows the final frame, not blank).
         float dt = 1.0f / 50.0f;
         for (float t = dt; t < target_t_rel; t += dt)
             _engine->tick(t);
@@ -309,11 +318,13 @@ public:
     }
 
     void debug_step(int direction) {
-        // Step only makes sense when paused
-        if (_state != PAUSED) return;
+        // Step from PAUSED or LOADED (LOADED treated as "paused at t=0")
+        if (_state != PAUSED && _state != LOADED) return;
 
+        float dur = duration();
         float target = _paused_t_rel + direction * (1.0f / 50.0f);
         if (target < 0.0f) target = 0.0f;
+        if (target > dur) target = dur;
 
         _engine->reset();
         float dt = 1.0f / 50.0f;
@@ -322,6 +333,7 @@ public:
         _engine->tick(target);
 
         _paused_t_rel = target;
+        _state = PAUSED;  // LOADED → PAUSED on first step
         output_frame();
     }
 
