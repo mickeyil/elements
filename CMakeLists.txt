@@ -39,6 +39,15 @@ if(BUILD_TESTS)
     add_executable(test_engine test/test_engine.cpp)
     target_link_libraries(test_engine elements_core Catch2::Catch2WithMain)
 
+    add_executable(test_colors test/test_colors.cpp)
+    target_link_libraries(test_colors elements_core Catch2::Catch2WithMain)
+
+    add_executable(test_compositor test/test_compositor.cpp)
+    target_link_libraries(test_compositor elements_core Catch2::Catch2WithMain)
+
+    add_executable(test_animations test/test_animations.cpp)
+    target_link_libraries(test_animations elements_core Catch2::Catch2WithMain)
+
     # Auto-generate test fixture if missing
     find_program(PYTHON3 python3)
     if(PYTHON3)
@@ -58,6 +67,12 @@ if(BUILD_TESTS)
     add_test(NAME test_decoder COMMAND test_decoder
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_engine COMMAND test_engine
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    add_test(NAME test_colors COMMAND test_colors
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    add_test(NAME test_compositor COMMAND test_compositor
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    add_test(NAME test_animations COMMAND test_animations
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
     # Valgrind memcheck (optional)
@@ -79,6 +94,33 @@ if(BUILD_TESTS)
                     --error-exitcode=1 $<TARGET_FILE:test_engine>
         )
         set_tests_properties(test_engine_memcheck PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        )
+        add_test(
+            NAME test_colors_memcheck
+            COMMAND ${VALGRIND} --leak-check=full
+                    --errors-for-leak-kinds=definite,indirect,possible
+                    --error-exitcode=1 $<TARGET_FILE:test_colors>
+        )
+        set_tests_properties(test_colors_memcheck PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        )
+        add_test(
+            NAME test_compositor_memcheck
+            COMMAND ${VALGRIND} --leak-check=full
+                    --errors-for-leak-kinds=definite,indirect,possible
+                    --error-exitcode=1 $<TARGET_FILE:test_compositor>
+        )
+        set_tests_properties(test_compositor_memcheck PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        )
+        add_test(
+            NAME test_animations_memcheck
+            COMMAND ${VALGRIND} --leak-check=full
+                    --errors-for-leak-kinds=definite,indirect,possible
+                    --error-exitcode=1 $<TARGET_FILE:test_animations>
+        )
+        set_tests_properties(test_animations_memcheck PROPERTIES
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         )
     endif()

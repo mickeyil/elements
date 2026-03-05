@@ -246,3 +246,78 @@ TEST_CASE("Reset from ENDED state", "[engine][reset]") {
 
     delete engine;
 }
+
+// ---------------------------------------------------------------------------
+// Edge cases: event boundaries, gamma flag, time jumps
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Tick at exact event start activates event", "[engine][boundary]") {
+    TestStrip ts;
+    Engine* engine = make_engine(ts);
+
+    // Wave starts at t=0.0 — should be active
+    CHECK(engine->tick(0.0f));
+
+    // Shift starts at t=1.0 — should be active
+    CHECK(engine->tick(1.0f));
+
+    delete engine;
+}
+
+TEST_CASE("Tick at exact event end finishes event", "[engine][boundary]") {
+    TestStrip ts;
+    Engine* engine = make_engine(ts);
+
+    // Program duration is 2.0, so tick at exactly 2.0 should report ended
+    // (engine: t >= duration -> return false)
+    CHECK_FALSE(engine->tick(2.0f));
+
+    delete engine;
+}
+
+TEST_CASE("Gamma disabled produces different output", "[engine][gamma]") {
+    auto blob1 = load_blob("test/fixtures/test_animation.bin");
+    auto blob2 = load_blob("test/fixtures/test_animation.bin");
+
+    TestStrip ts_on, ts_off;
+    Program* prog_on  = decode_program(blob1.data(), blob1.size());
+    Program* prog_off = decode_program(blob2.data(), blob2.size());
+    REQUIRE(prog_on  != nullptr);
+    REQUIRE(prog_off != nullptr);
+
+    Engine* engine_on  = new Engine(prog_on,  ts_on.strip,  true);
+    Engine* engine_off = new Engine(prog_off, ts_off.strip, false);
+
+    engine_on->tick(0.5f);
+    engine_off->tick(0.5f);
+
+    bool differs = false;
+    for (uint16_t i = 0; i < STRIP_LEN * 3; i++) {
+        if (ts_on.rgb[i] != ts_off.rgb[i]) { differs = true; break; }
+    }
+    CHECK(differs);
+
+    delete engine_on;
+    delete engine_off;
+}
+
+TEST_CASE("Large time jump skips finished events", "[engine]") {
+    TestStrip ts;
+    Engine* engine = make_engine(ts);
+
+    // Tick once at t=0 so wave renders (fills layer 0 buffer)
+    engine->tick(0.0f);
+
+    // Jump directly to t=1.5 — wave should be skipped, shift should render
+    bool active = engine->tick(1.5f);
+    CHECK(active);
+
+    // Strip should have some output from shift animation
+    bool any_nonzero = false;
+    for (uint16_t i = 0; i < STRIP_LEN * 3; i++) {
+        if (ts.rgb[i] != 0) { any_nonzero = true; break; }
+    }
+    CHECK(any_nonzero);
+
+    delete engine;
+}
