@@ -133,39 +133,15 @@ MQTT over the shared WiFi network. Programs are sent as binary payloads. MQTT to
 
 - Audio-visual sync tolerance: **±10ms** (human perception threshold for beat-sync is ~20ms; we target half that for margin)
 - Must hold sync over the duration of a song (3-7 minutes)
-- No custom sync protocol — use NTP pointed at the base station
+- ESP32 crystal oscillator drift: ~20-40 ppm → 6-12ms over 5 minutes
 
-### Solution: NTP on LAN
+### Solution: Custom controller-led sync protocol
 
-The base station runs a standard NTP server (chrony or ntpd). The ESP32 runs a forked NTPClient library with millisecond-precision support (extracts NTP fractional seconds field, bytes 44-47 of the NTP response).
+Replaces the v1 NTP approach. The controller performs a lightweight SYNC_REQ/SYNC_RESP exchange with each ESP over the existing UDP command channel. ESPs are passive responders (timestamp and echo); all filtering, quality tracking, and correction logic lives on the controller.
 
-**Why NTP is sufficient:**
-- On a local WiFi network with no hops, NTP achieves ±1-5ms accuracy
-- This is well within the ±10ms budget
-- No custom protocol to build or maintain
-- Standard, well-understood, battle-tested
+**Why not NTP:** The v1 NTPClient approach was fragile — `forceUpdate()` blocks for up to 1s, `getEpochTime()` loses sub-second precision via integer division, and each ESP must manage its own NTP state. The custom protocol is simpler on the ESP side (~15 lines), non-blocking by design, and gives the controller full visibility into sync quality per device.
 
-**Why not a custom UDP sync protocol:**
-- NTP already uses UDP
-- NTP already handles round-trip estimation, jitter filtering, clock discipline
-- A custom protocol would need to reimplement all of this to be better
-- YAGNI — if NTP proves insufficient later, a precision layer can be added
-
-### Implementation Details
-
-**Existing work:** Mickey's fork of arduino-libraries/NTPClient ([mickeyil/NTPClient](https://github.com/mickeyil/NTPClient)) adds millisecond extraction from the NTP fractional seconds field. This is already used in elements v1 via the `SyncedTime` wrapper class.
-
-**NTP sync frequency during playback:**
-- ESP32 crystal oscillator drift: ~20-40 ppm (20-40 µs/sec)
-- Over 5 minutes: 6-12ms drift — right at the edge of perceptible
-- Recommendation: re-sync every 10-30 seconds during playback
-- Note: v1 has a `// FIXME: accuracy issues bug when this is enabled` comment on periodic sync — this must be investigated and fixed in v2
-
-**Inter-sync interpolation:**
-Between NTP updates, the device interpolates time using `millis()`. The current `getEpochTime()` method in the NTPClient fork loses sub-second precision in this interpolation (integer division). v2 must ensure the `SyncedTime` wrapper returns proper `double` epoch time with ms fractions at all times, not just immediately after an NTP update.
-
-**Non-blocking sync:**
-The current `forceUpdate()` blocks for up to 1 second (polling with `delay(10)` in a loop). For v2, this should be made non-blocking so the render loop isn't stalled during NTP sync. Fire the NTP request, continue rendering, process the response when it arrives.
+**Full design and implementation details:** See `docs/playback_device.md`, section "Custom sync protocol".
 
 ### Audio Playback Latency Compensation
 
@@ -178,17 +154,6 @@ T_speaker = T_write_to_buffer + (buffered_frames / sample_rate)
 Modern audio APIs (ALSA `snd_pcm_delay()`, PipeWire latency queries) provide this information. The base station uses `T_speaker` (not `T_write`) as the reference time in the animation program.
 
 Previous experimentation: Mickey's `wavplayer` project demonstrated precise control of Linux audio APIs with verified sync between audio output and visual events (confirmed via slow-motion video capture).
-
-### Drift Correction Strategy (Future)
-
-If higher precision is needed in the future, the recommended approach is clock discipline (PLL-style):
-
-1. Base station sends periodic sync pulses (could be NTP, could be custom UDP)
-2. ESP32 measures offset between its clock and the base station's
-3. Instead of jumping the clock (which causes visible glitches), slightly adjust the playback rate (±0.1-0.5%) to converge over a few seconds
-4. This is how professional lighting systems handle it
-
-This is explicitly **not planned for v2 initial implementation** — NTP should be sufficient. Documented here for future reference.
 
 ---
 
@@ -218,7 +183,7 @@ The DSL and compiler design are in separate documents:
 - **HSV color space** with gamma correction — proper LED color handling. Extended with per-pixel alpha in v2.
 - **PC simulation path** — `#ifdef DEBUG_HELPERS` / `#ifdef ARDUINO` guards enabling desktop build and debug. Essential for development.
 - **Time representation** — `double` epoch time with ms fractions (seconds.milliseconds format).
-- **NTPClient fork** — millisecond-precision NTP sync.
+- **NTPClient fork** — millisecond-precision NTP sync (superseded by custom sync protocol in v2, see `docs/playback_device.md`).
 - **SlotsMM concept** — pre-allocated memory pool. Will be adapted for v2's dynamic layer allocation.
 
 ### What to change

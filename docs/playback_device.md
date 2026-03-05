@@ -24,7 +24,7 @@ Rather than duplicate this logic, a base class `PlaybackDevice` captures the sha
                 /                    \
         ESPDevice #1            ESPSimulated #1
         (real hardware)         (desktop process)
-        - NTP-synced clock      - desktop clock (or NTP)
+        - controller-synced clock - desktop monotonic clock
         - FastLED output        - sends rgb over network
         - MQTT/UDP commands     - same protocol + debug extensions
         - sends telemetry       - sends telemetry + rgb frames
@@ -77,9 +77,12 @@ public:
     // Returns true on success, false on decode error.
     bool handle_load(const uint8_t* blob, size_t blob_len);
 
-    // Begin playback. t0_epoch is the absolute start time (epoch seconds, double).
-    // The device computes t_rel = now_epoch() - t0_epoch each frame.
-    void handle_start(double t0_epoch);
+    // Begin playback. t0 is the absolute start time (int64_t, microseconds).
+    // The device computes t_rel = (now_mono() + _sync_offset - t0) / 1e6 each frame.
+    void handle_start(int64_t t0);
+
+    // Update sync offset (from controller SYNC_RESULT).
+    void handle_sync_result(int64_t offset);
 
     // --- Per-iteration logic (called from platform loop) ---
 
@@ -98,10 +101,10 @@ public:
 protected:
     // --- Platform-specific (virtual, implemented by subclasses) ---
 
-    // Return current time as epoch seconds (double precision).
-    // Real ESP: millis()-based NTP-synced clock.
-    // Simulator: clock_gettime() or similar.
-    virtual double now_epoch() = 0;
+    // Return current monotonic time in microseconds (int64_t).
+    // Real ESP: esp_timer_get_time().
+    // Simulator: steady_clock.
+    virtual int64_t now_mono() = 0;
 
     // Output the current frame.
     // Real ESP: FastLED.show()
@@ -119,7 +122,8 @@ protected:
     Strip* _strip;            // view over _rgb_buf
     Engine* _engine;          // owns Program*, created on handle_load
     State _state;
-    double _t0_epoch;         // absolute start time from handle_start
+    int64_t _t0;              // absolute start time from handle_start (µs)
+    int64_t _sync_offset;     // controller-provided offset (µs), 0 for simulator
     bool _gamma_enabled;
 };
 ```
@@ -159,10 +163,14 @@ bool PlaybackDevice::handle_load(const uint8_t* blob, size_t blob_len) {
 Records the absolute start time. Playback begins on the next `tick_once()`.
 
 ```cpp
-void PlaybackDevice::handle_start(double t0_epoch) {
+void PlaybackDevice::handle_start(int64_t t0) {
     if (_state != LOADED && _state != PAUSED && _state != ENDED)
         return;  // ignore if no program loaded
-    _t0_epoch = t0_epoch;
+
+    if (_state == PAUSED || _state == ENDED)
+        _engine->reset();
+
+    _t0 = t0;
     _state = PLAYING;
     send_telemetry(PLAYING, 0.0f);
 }
@@ -177,8 +185,8 @@ bool PlaybackDevice::tick_once() {
     if (_state != PLAYING)
         return _state != IDLE;  // LOADED, PAUSED, or ENDED: still "active" but not ticking
 
-    double now = now_epoch();                  // virtual — platform clock
-    float t_rel = (float)(now - _t0_epoch);
+    int64_t now = now_mono() + _sync_offset;    // virtual mono + controller offset
+    float t_rel = (float)(now - _t0) / 1e6f;  // µs → seconds
 
     if (!_engine->tick(t_rel)) {
         _state = ENDED;
@@ -195,20 +203,19 @@ bool PlaybackDevice::tick_once() {
 
 ## ESPDevice (real hardware subclass)
 
-Runs on ESP32 under Arduino framework. Uses NTP-synced `millis()` for time, FastLED for output, MQTT or UDP for commands.
+Runs on ESP32 under Arduino framework. Uses `esp_timer_get_time()` (monotonic µs) + controller-provided sync offset for time, FastLED for output, UDP for commands.
 
 ```cpp
 class ESPDevice : public PlaybackDevice {
 public:
     ESPDevice(uint16_t strip_length)
         : PlaybackDevice(strip_length, /*gamma_enabled=*/true) {
-        // Hardware init: FastLED, WiFi, NTP, MQTT
+        // Hardware init: FastLED, WiFi, UDP
     }
 
 protected:
-    double now_epoch() override {
-        // millis() gives ms since boot. NTP offset gives epoch alignment.
-        return _ntp_epoch_offset + (millis() / 1000.0);
+    int64_t now_mono() override {
+        return esp_timer_get_time();  // microseconds, monotonic
     }
 
     void output_frame() override {
@@ -218,7 +225,7 @@ protected:
     }
 
     void send_telemetry(State state, float t_rel, const char* error) override {
-        // Send status over MQTT/UDP to controller
+        // Send status over UDP to controller
     }
 };
 ```
@@ -229,7 +236,7 @@ Arduino integration:
 ESPDevice device(NUM_LEDS);
 
 void setup() {
-    // WiFi, NTP, MQTT init
+    // WiFi, UDP init (no NTP needed — controller handles sync)
     // FastLED.addLeds<WS2811, PIN, GRB>((CRGB*)device.rgb_buf(), NUM_LEDS);
 }
 
@@ -244,7 +251,7 @@ void loop() {
 
 ## ESPSimulated (simulator subclass)
 
-Runs as a desktop process. Uses `clock_gettime()` for time, sends rgb buffer over network, gamma disabled.
+Runs as a desktop process. Uses `steady_clock` (monotonic) for time, sends rgb buffer over network, gamma disabled.
 
 ```cpp
 class ESPSimulated : public PlaybackDevice {
@@ -253,10 +260,9 @@ public:
         : PlaybackDevice(strip_length, /*gamma_enabled=*/false) {}
 
 protected:
-    double now_epoch() override {
-        struct timespec ts;
-        clock_gettime(CLOCK_REALTIME, &ts);
-        return ts.tv_sec + ts.tv_nsec / 1e9;
+    int64_t now_mono() override {
+        auto now = steady_clock::now();
+        return duration_cast<microseconds>(now.time_since_epoch()).count();
     }
 
     void output_frame() override {
@@ -280,8 +286,8 @@ public:
 
     void debug_resume() {
         if (_state == PAUSED) {
-            // Adjust t0 so that now_epoch() - _t0_epoch == _paused_t_rel
-            _t0_epoch = now_epoch() - (double)_paused_t_rel;
+            // Adjust t0 so that (now_mono() + offset - t0) / 1e6 == _paused_t_rel
+            _t0 = now_mono() + _sync_offset - (int64_t)(_paused_t_rel * 1e6f);
             _state = PLAYING;
         }
     }
@@ -309,7 +315,7 @@ public:
 
         if (_state == PLAYING) {
             // Adjust t0 so playback continues from seek point
-            _t0_epoch = now_epoch() - (double)target_t_rel;
+            _t0 = now_mono() + _sync_offset - (int64_t)(target_t_rel * 1e6f);
         } else {
             // PAUSED or LOADED — stay paused at seek point
             _paused_t_rel = target_t_rel;
@@ -377,30 +383,209 @@ int main() {
 
 ## Clock and time model
 
+This is a clock subsystem and command-protocol feature. The engine is not involved — it still receives only `float t_rel` and knows nothing about synchronization. Only the time origination path changes.
+
 ### Absolute vs relative time
 
 Two time representations serve different purposes:
 
-- **Absolute time (double, epoch seconds):** Used in the protocol between controller and devices. The START command carries a `t0_epoch` value. Devices compute `t_rel = now_epoch - t0_epoch`. This is what enables multi-device synchronization — all devices derive the same `t_rel` from the same absolute reference.
+- **Absolute time (int64_t, microseconds):** Used in the protocol between controller and devices. The START command carries a `t0` value. Devices compute `t_rel = (now_mono + sync_offset - t0) / 1e6`. This is what enables multi-device synchronization — all devices derive the same `t_rel` from the same reference.
 
 - **Relative time (float, seconds since program start):** Used inside the engine. `engine.tick(t_rel)` takes a float. This is fine for durations up to hours — float32 precision at 600 seconds (10 min) is ~40 microseconds, far below the 20ms frame interval.
 
-### Why double for epoch timestamps
+### Clock architecture
 
-Current epoch is ~1.74 billion seconds. float32 has ~7 significant digits, giving a minimum step of ~128 seconds at current epoch — useless for millisecond precision. float64 (double) has ~15 significant digits, giving sub-microsecond precision. The conversion to float happens only when computing `t_rel`, where the magnitude is small enough for float32.
+Each device maintains a monotonic local clock and a sync offset provided by the controller:
+
+```
+now_epoch_approx = now_mono + sync_offset
+t_rel = (now_epoch_approx - t0) / 1e6        (microseconds → float seconds)
+```
+
+- **ESP:** `now_mono` = `esp_timer_get_time()` (microsecond monotonic). No epoch knowledge needed — the controller provides `sync_offset`.
+- **Simulator:** `now_mono` = `steady_clock` (monotonic, immune to wall-clock/NTP jumps on host). For local-only use, `sync_offset = 0` — the controller and simulator share the same clock domain.
+- **Controller:** uses its own monotonic clock as the reference. Epoch alignment is irrelevant — what matters is stability and consistency across devices.
+
+All protocol timestamps are **int64_t microseconds** — avoids float byte-order issues and keeps deterministic precision.
+
+### Custom sync protocol (replaces NTP on ESP)
+
+Instead of each ESP running an NTP client, the controller performs a lightweight sync exchange over the existing UDP command channel.
+
+**Why not NTP:**
+- NTPClient on ESP is fragile: `forceUpdate()` blocks up to 1s, `getEpochTime()` loses sub-second precision via integer division, managing the library is unnecessary complexity.
+- The controller already talks to every device. Adding sync to the existing protocol is natural.
+- The controller can centrally track sync quality per device and make informed decisions.
+
+#### Sync exchange
+
+```
+Controller                           ESP
+    │                                 │
+    │  SYNC_REQ { seq, t1 }         │
+    │────────────────────────────────>│
+    │                                 │  t2 = esp_timer_get_time()
+    │  SYNC_RESP { seq, t1, t2, t3 }│  t3 = esp_timer_get_time()
+    │<────────────────────────────────│
+    │  t4 = mono_now()               │
+    │                                 │
+    │  rtt = (t4 - t1) - (t3 - t2)
+    │  offset = ((t2 - t1) + (t3 - t4)) / 2
+```
+
+- **T1, T4:** controller monotonic timestamps (int64_t µs).
+- **T2, T3:** ESP monotonic timestamps (int64_t µs) — both from `esp_timer_get_time()`, same clock source.
+- **seq:** uint16_t sequence number — controller ignores stale/mismatched replies.
+- **boot_seq:** uint32_t boot counter — ensures offsets from a pre-reboot timer are not reused.
+
+Packet format (all fields little-endian):
+
+```
+SYNC_REQ:   [type: u8 = 0x01] [seq: u16] [boot_seq: u32] [t1: i64]     → 15 bytes
+SYNC_RESP:  [type: u8 = 0x02] [seq: u16] [boot_seq: u32] [t1: i64] [t2: i64] [t3: i64]  → 31 bytes
+SYNC_RESULT:[type: u8 = 0x03] [offset: i64]                             → 9 bytes
+```
+
+#### ESP implementation (minimal, non-blocking)
+
+```cpp
+int64_t _sync_offset = 0;    // set by controller via SYNC_RESULT
+
+void handle_sync_req(const uint8_t* pkt) {
+    int64_t t2 = esp_timer_get_time();
+
+    SyncResp resp;
+    memcpy(&resp.seq, pkt + 1, 2);
+    memcpy(&resp.boot_seq, pkt + 3, 4);
+    memcpy(&resp.t1, pkt + 7, 8);
+    resp.t2 = t2;
+    resp.t3 = esp_timer_get_time();
+    send_udp(&resp, sizeof(resp));
+}
+
+void handle_sync_result(const uint8_t* pkt) {
+    memcpy(&_sync_offset, pkt + 1, 8);
+}
+
+int64_t now_epoch_approx() {
+    return esp_timer_get_time() + _sync_offset;
+}
+```
+
+No NTP library. No blocking. No state machine. The ESP is a passive responder — it timestamps and echoes. The controller owns all filtering and correction logic.
+
+#### Controller sync policy
+
+**Startup (before first LOAD):**
+
+1. Send 8 SYNC_REQ rounds at 1-second intervals.
+2. For each round, compute RTT and offset.
+3. Filter: discard samples where `rtt > rtt_max` or `rtt < 0`.
+4. Sort remaining by RTT, keep lowest K (e.g., K=3–4) — low RTT means less asymmetric jitter.
+5. Compute median offset of those K candidates.
+6. Send SYNC_RESULT to ESP.
+
+**Steady-state (during and between playback):**
+
+Periodic probes at an adaptive interval:
+
+| Condition | Probe interval |
+|-----------|---------------|
+| Startup calibration | 1s (8 rounds) |
+| Steady, good confidence | 15s |
+| Poor confidence or high variance | 5–10s |
+| Idle (no playback, low priority) | 20–30s |
+
+At ~10 ESP devices, even 10s intervals are negligible network load (~31 bytes per probe).
+
+#### Controller filter model
+
+```python
+class DeviceSync:
+    WINDOW_SIZE = 5
+
+    def __init__(self):
+        self.window = []            # median window of filtered offsets
+        self.applied_offset = 0     # currently sent to ESP
+        self.prev_delta_sign = 0    # for sustained-move guard
+
+    def on_sync_sample(self, samples_from_round):
+        """Called with (rtt, offset) pairs from one or more recent probes."""
+        # 1. Discard invalid
+        valid = [(rtt, off) for rtt, off in samples_from_round
+                 if 0 < rtt < RTT_MAX]
+        if not valid:
+            return
+
+        # 2. Sort by RTT, keep lowest K
+        by_rtt = sorted(valid, key=lambda s: s[0])
+        best = by_rtt[:min(4, len(by_rtt))]
+
+        # 3. Median offset of best candidates
+        offsets = sorted(s[1] for s in best)
+        candidate = offsets[len(offsets) // 2]
+
+        # 4. Feed into sliding median window
+        self.window.append(candidate)
+        if len(self.window) > self.WINDOW_SIZE:
+            self.window.pop(0)
+        if len(self.window) < 3:
+            return  # not enough data
+
+        smoothed = median(self.window)
+        delta = smoothed - self.applied_offset
+
+        # 5. Ignore noise floor
+        if abs(delta) < 2000:   # < 2ms in µs
+            self.prev_delta_sign = 0
+            return
+
+        # 6. Sustained-move guard: require 2 consecutive deltas
+        #    in the same direction before applying
+        sign = 1 if delta > 0 else -1
+        if sign != self.prev_delta_sign:
+            self.prev_delta_sign = sign
+            return  # first move in this direction — wait for confirmation
+
+        # 7. Apply
+        self.applied_offset = smoothed
+        send_sync_result(device, smoothed)
+        self.prev_delta_sign = 0
+
+    def is_stale(self, max_age_s=60):
+        """True if no successful sync in max_age_s — trigger full re-sync."""
+        ...
+```
+
+Key properties of this filter:
+- **Low-RTT selection** removes WiFi retransmit noise.
+- **Median window** (N=5) makes a single outlier unable to move the output.
+- **Sustained-move guard** requires two consecutive deltas in the same direction before applying — prevents toggling from a jitter spike that happens to survive the median.
+- **Staleness timeout** triggers a full re-sync if samples are consistently bad.
+
+#### Correction behavior during playback
+
+When the ESP receives a SYNC_RESULT with an updated offset:
+
+- **ESP clock is early** (offset correction makes `t_rel` smaller → animation was ahead): next `tick_once()` produces a smaller `t_rel` than expected. The engine effectively stalls for one frame (renders the same visual position twice). Invisible at 20ms frame intervals.
+- **ESP clock is late** (offset correction makes `t_rel` larger → animation was behind): next `tick_once()` produces a larger `t_rel` jump. The engine's cursor naturally skips past finished events — this is a single `tick()` call, no replay needed.
+
+Both directions are handled gracefully by the existing engine design. Corrections filtered through the median window + sustained-move guard are small (a few ms), so the frame-to-frame timing perturbation is imperceptible.
 
 ### Simulator clock
 
-ESPSimulated uses `clock_gettime(CLOCK_REALTIME)` which returns epoch time. It can optionally sync to the same NTP server as real ESPs, enabling mixed real+simulated setups on a LAN where timing accuracy matters.
+ESPSimulated uses `steady_clock` (monotonic) for its tick loop. This is immune to wall-clock jumps from NTP adjustments on the host machine.
 
-For pure local preview (no real ESPs), the absolute epoch value doesn't matter — the device just computes `t_rel = now - t0` and the offset cancels out.
+For local-only use (no real ESPs): `sync_offset = 0`. The controller and simulator share the same clock domain, so no sync exchange is needed.
+
+For mixed real+simulated setups: the controller can derive a trivial offset for the simulator from the identity relationship (same machine = same monotonic base). Real ESPs go through the full sync protocol.
 
 ### Seek and virtual time
 
 When ESPSimulated receives a debug_seek command, it:
 1. Calls `engine->reset()` (zeros cursors, instances, buffers)
 2. Replays from t=0 to target in dt steps (tight C++ loop, microseconds)
-3. Adjusts `_t0_epoch` so that `now_epoch() - _t0_epoch == target_t_rel`
+3. Adjusts `_steady_start` so that `steady_now() - _steady_start == target_t_rel`
 
 If the device resumes playing after seek, the clock continues naturally from the seek point. If it's paused, `_paused_t_rel` tracks the virtual position.
 
@@ -456,13 +641,14 @@ After reset, the engine is in the same state as immediately after construction. 
 
 The controller is a separate component that orchestrates all devices. It:
 
-1. **Holds the blobs** — produced by the compiler, one per strip.
-2. **Maps blobs to devices** — knows which device runs which strip.
-3. **Sends LOAD** — delivers blob bytes to each device.
-4. **Sends START with shared T0** — all devices begin playback from the same absolute time, so animations synchronize across strips.
-5. **Receives telemetry** — health, errors, timing from all devices.
-6. **Receives rgb frames from simulators** — forwards to the web UI for display.
-7. **Hosts the web UI** (open issue — see below).
+1. **Syncs clocks** — runs the custom sync protocol (SYNC_REQ/RESP) with each ESP, maintains filtered offsets, sends SYNC_RESULT.
+2. **Holds the blobs** — produced by the compiler, one per strip.
+3. **Maps blobs to devices** — knows which device runs which strip.
+4. **Sends LOAD** — delivers blob bytes to each device.
+5. **Sends START with shared T0** — all devices begin playback from the same absolute time, so animations synchronize across strips.
+6. **Receives telemetry** — health, errors, timing from all devices.
+7. **Receives rgb frames from simulators** — forwards to the web UI for display.
+8. **Hosts the web UI** (open issue — see below).
 
 The controller uses the same protocol for real and simulated devices. It knows which devices are simulated and can:
 - Send debug extensions (pause/seek/step) to simulators
@@ -489,10 +675,10 @@ Controller                     ESPSimulated (separate process)
    │                              │    create Engine(prog, strip, gamma=false)
    │                              │    state = LOADED
    │                              │
-   │  START(t0_epoch=1741203600.0)│
+   │  START(t0)                   │
    │─────────────────────────────>│
-   │                              │  handle_start(t0_epoch):
-   │                              │    _t0_epoch = 1741203600.0
+   │                              │  handle_start(t0):
+   │                              │    _t0 = t0
    │                              │    state = PLAYING
 ```
 
@@ -501,8 +687,8 @@ Controller                     ESPSimulated (separate process)
 ```
 ESPSimulated loop iteration:
    │
-   │  now = clock_gettime() → 1741203600.3
-   │  t_rel = 1741203600.3 - 1741203600.0 = 0.3
+   │  now = now_mono() + _sync_offset
+   │  t_rel = (now - _t0) / 1e6 → 0.3
    │
    │  engine.tick(0.3)
    │    → AnimWave::render() fills layer buffer
@@ -541,7 +727,7 @@ Browser                   Controller                ESPSimulated
    │                         │                         │  debug_seek(2.5):
    │                         │                         │    engine.reset()
    │                         │                         │    replay 0→2.5
-   │                         │                         │    adjust t0_epoch
+   │                         │                         │    adjust _t0
    │                         │                         │    output_frame()
    │                         │                         │
    │                         │  [rgb + t_rel=2.5]      │
