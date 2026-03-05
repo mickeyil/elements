@@ -18,33 +18,27 @@ The core design principle: **tight timing sync over complex rendering**. Simple 
 │          Base Station               │
 │  (NUC / Raspberry Pi / Linux box)   │
 │                                     │
-│  ┌──────────┐  ┌────────────────┐   │
-│  │ NTP      │  │ Audio Engine   │   │
-│  │ Server   │  │ (ALSA/Pipe)    │   │
-│  │ (chrony) │  │                │   │
-│  └──────────┘  └───────┬────────┘   │
-│                        │            │
-│  ┌─────────────────────┴─────────┐  │
+│  ┌──────────────┐  ┌──────────────┐  │
+│  │ Controller   │  │ Audio Engine │  │
+│  │ (sync, LOAD, │  │ (ALSA/Pipe)  │  │
+│  │  START, telem│  │              │  │
+│  └──────┬───────┘  └──────┬───────┘  │
+│         │                 │          │
+│  ┌──────┴─────────────────┴───────┐  │
 │  │ Beat Analyzer + Compiler      │  │
 │  │ (offline analysis → bytecode) │  │
 │  └───────────────┬───────────────┘  │
 │                  │                  │
-│  ┌───────────────┴───────────────┐  │
-│  │ MQTT Broker (mosquitto)       │  │
-│  └───────────────┬───────────────┘  │
+│              UDP │ (commands, sync, │
+│                  │  blobs, telemetry│
 └──────────────────┼──────────────────┘
                    │ WiFi (same LAN)
 ┌──────────────────┼──────────────────┐
 │  ESP32 Device    │                  │
 │                  │                  │
 │  ┌───────────────┴───────────────┐  │
-│  │ MQTT Client                   │  │
-│  │ (programs, commands)          │  │
-│  └───────────────┬───────────────┘  │
-│                  │                  │
-│  ┌───────────────┴───────────────┐  │
-│  │ NTP Client → base station     │  │
-│  │ (ms-precision fork)           │  │
+│  │ UDP command handler           │  │
+│  │ (LOAD, START, SYNC_REQ)      │  │
 │  └───────────────┬───────────────┘  │
 │                  │                  │
 │  ┌───────────────┴───────────────┐  │
@@ -63,7 +57,7 @@ The core design principle: **tight timing sync over complex rendering**. Simple 
 
 - Base station and ESP32 share the same WiFi network
 - No firewall or routing restrictions between them
-- Base station runs NTP server + MQTT broker
+- Base station runs controller (UDP commands + custom clock sync)
 - Future: potentially multiple ESP32 devices synced to the same base station
 
 ---
@@ -78,7 +72,7 @@ Communication between the base station and the ESP32 device is minimal by design
 |---------|-----------|-------------|
 | **LOAD** | base → device | Upload a bytecode program. Implicitly clears all device state (active layers, animations, buffers). The device is in a fresh state ready to execute. |
 | **ACK** | device → base | Confirms program was received and loaded successfully. |
-| **START** | base → device | Begin executing the loaded program at absolute NTP timestamp T0. |
+| **START** | base → device | Begin executing the loaded program at absolute timestamp T0 (int64_t µs, controller monotonic reference). |
 
 ### Playback Flow
 
@@ -104,7 +98,7 @@ LOAD clears everything — the song's animations stop immediately, ambient progr
 
 ### Transport
 
-MQTT over the shared WiFi network. Programs are sent as binary payloads. MQTT topic structure TBD but will follow the v1 pattern: `elements/<device_id>/...`
+UDP over the shared WiFi network. Programs are sent as binary payloads. Transport protocol details (raw UDP vs MQTT) TBD — see open issues in `docs/playback_device.md`.
 
 ---
 
@@ -123,7 +117,7 @@ MQTT over the shared WiFi network. Programs are sent as binary payloads. MQTT to
 2. **Compilation:** Results are compiled into a bytecode program (cached for reuse)
 3. **Upload:** LOAD bytecode to device, wait for ACK
 4. **Trigger:** START with absolute timestamp T0
-5. **Playback:** Device executes bytecode against its NTP-synced clock
+5. **Playback:** Device executes bytecode against its controller-synced clock
 
 ---
 
@@ -198,7 +192,7 @@ The DSL and compiler design are in separate documents:
 | All config via MQTT at runtime, lost on reboot | Stored presets on flash + LOAD/START protocol |
 | `handlers_t` god struct passed everywhere | Cleaner dependency injection (TBD) |
 | Error handling via `const char **errstr` | TBD — consider error codes |
-| Blocking NTP sync | Non-blocking NTP sync |
+| Blocking NTP sync | Custom controller-led sync protocol (see `docs/playback_device.md`) |
 | Mixed memory management (SlotsMM + new/malloc) | Pre-allocated memory pool for all runtime buffers |
 | Blending: timeline trim (new animation cuts old) | Blending: per-pixel alpha compositing in RGB space |
 
@@ -257,8 +251,8 @@ Maintaining the ability to build and test animation logic on desktop (Linux) wit
 ### Phase 2: Ambient Mode
 - Implement remaining primitives
 - Store programs on flash (LittleFS)
-- MQTT interface for LOAD/START protocol
-- WiFi + NTP setup
+- UDP interface for LOAD/START/SYNC protocol
+- WiFi + controller clock sync setup
 - Power-on default program
 
 ### Phase 3: Music Sync
