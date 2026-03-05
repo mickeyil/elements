@@ -1,5 +1,7 @@
 # Elements — Engine Design
 
+> **Status: Implemented.** Matches current code in `src/engine.h`, `src/engine.cpp`.
+
 The engine is the runtime loop. It takes a decoded `Program` and a clock,
 and every frame:
 

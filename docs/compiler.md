@@ -1,5 +1,7 @@
 # Elements — Compiler Design
 
+> **Status: Implemented.** Matches current code in `compiler/elements/`.
+
 The compiler takes a DSL program and emits one binary blob per strip. It runs on the base station (PC), not the ESP32. All heavy lifting — time resolution, layer inference, buffer packing — happens here.
 
 ## Pipeline

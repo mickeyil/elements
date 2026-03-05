@@ -1,6 +1,8 @@
 # Elements — Abstractions
 
-This document defines the core abstractions for the animation engine. It is the result of iterative design discussion and supersedes the "Rendering Abstractions" and "Animation System" sections in [design.md](design.md) where they conflict.
+> **Status: Implemented.** Matches current code in `src/decoder.h`, `src/engine.h`, `src/compositor.h`.
+
+This document defines the core abstractions for the animation engine. It supersedes the "Rendering Abstractions" and "Animation System" sections in [design.md](design.md) where they conflict.
 
 ---
 

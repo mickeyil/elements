@@ -1,5 +1,7 @@
 # Elements — Design Document
 
+> **Status: Mixed.** Core pipeline (compiler, decoder, engine, compositor) is implemented. Hardware setup, build system, and project phases are current. Transport and time sync sections reflect the planned direction — see `playback_device.md` for details.
+
 ## Overview
 
 Elements is an LED animation engine. The target hardware is ESP32. The device drives a WS2812B (NeoPixel) LED strip and operates in two modes:
