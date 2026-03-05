@@ -3,67 +3,41 @@
 The decoder reads a binary blob (produced by the Python compiler) and builds
 a `Program` struct in memory. Runs on ESP32. One program loaded at a time.
 
-## Memory Strategy: Arena Allocation
+## Memory Strategy: Per-object allocation
 
-Single `malloc` for the entire program. Compute total size from the blob
-header, allocate once, lay out all data contiguously. Zero fragmentation.
-Load a new program → free the old arena → allocate a new one.
+The decoder allocates each component individually (`new[]` for arrays, `new` for
+the Program itself). `free_program()` walks the structure and frees everything
+recursively. This is simpler than arena allocation and sufficient for the
+"allocate once at load, free once at teardown" usage pattern.
 
 ```
-┌──────────────────────────────────────────────────┐
-│ Arena (one malloc)                               │
-│                                                  │
-│  Program header                                  │
-│  BufferPool: hsva_t* pool[buffer_count]          │
-│  Buffer data: hsva_t[size0], hsva_t[size1], ...  │
-│  Layer[0]: index_map, events                     │
-│  Layer[1]: index_map, events                     │
-│  ...                                             │
-│  AnimationEvent[0]: type, timing, remap, params  │
-│  AnimationEvent[1]: ...                          │
-│  ...                                             │
-│  Remap arrays (variable length, packed)          │
-│  Temp render buffer: hsva_t[max_remap_length]    │
-│                                                  │
-└──────────────────────────────────────────────────┘
+Program (new)
+├── layers (new LayerDef[])
+│   ├── [0].index_map (new uint8_t[])
+│   ├── [0].events (new AnimationEvent[])
+│   │   ├── [0].remap (new uint8_t[])
+│   │   ├── [1].remap (new uint8_t[])
+│   │   └── ...
+│   ├── [0].buffer ← allocated by Engine, not decoder
+│   ├── [1].index_map ...
+│   └── ...
+├── pool.sizes (new uint8_t[])
+├── pool.buffers (new hsva_t*[])
+│   ├── [0] (new hsva_t[])
+│   └── ...
+└── temp_buffer (new hsva_t[])
 ```
 
-### Size calculation
-
-From blob header alone we know:
-- `layer_count`, `buffer_count`, `max_remap_length`, `duration`
-
-From parsing the blob we accumulate:
-- Total events across all layers
-- Total index map bytes
-- Total remap bytes
-- Buffer pool sizes
-
-Total arena size:
-```
-sizeof(Program)
-+ layer_count * sizeof(Layer)
-+ total_events * sizeof(AnimationEvent)
-+ total_index_map_bytes
-+ total_remap_bytes
-+ sum(buffer_sizes) * sizeof(hsva_t)     // work buffers
-+ max_remap_length * sizeof(hsva_t)      // temp render buffer
-```
-
-### Two-pass decode
-
-**Pass 1:** scan the blob to compute sizes (don't allocate yet).
-**Pass 2:** allocate arena, walk blob again, populate structs with pointers
-into the arena.
-
-This avoids over-allocation and keeps the decoder simple.
+`free_program()` walks this tree in reverse, deleting each allocation.
+The Engine destructor calls `free_program()`.
 
 ---
 
 ## Target Structs
 
+Defined in `decoder.h`:
+
 ```cpp
-// Matches blob animation type IDs
 enum AnimType : uint8_t {
     ANIM_WAVE  = 0,
     ANIM_SHIFT = 1,
@@ -71,169 +45,200 @@ enum AnimType : uint8_t {
     ANIM_PAINT = 3,
 };
 
-// Animation params — tagged union, no vtables
+struct WaveParams {
+    uint8_t channel;  // 0=H, 1=S, 2=V
+    float h, s, v;
+    float min_val, max_val;
+    float period, phase0, pixel_step;
+};
+
+struct ShiftParams {
+    uint8_t direction;  // 0=left, 1=right
+    float velocity;
+    uint8_t circular;
+    float fill_h, fill_s, fill_v, fill_a;
+    uint8_t buffer_id;
+};
+
+struct SparkParams {
+    float color_h, color_s, color_v;
+    float fade;
+};
+
+struct PaintParams {
+    uint8_t mode;         // 0=solid, 1=per_pixel
+    float color_h, color_s, color_v, color_a;  // solid mode
+    uint8_t pixel_count;  // per_pixel mode
+    hsva_t* pixels;       // heap-allocated (per_pixel mode), nullptr for solid
+};
+
 struct AnimParams {
     AnimType type;
     union {
-        struct {
-            uint8_t channel;  // 0=H, 1=S, 2=V
-            float h, s;
-            float min_val, max_val;
-            float period, phase0, pixel_step;
-        } wave;
-
-        struct {
-            uint8_t direction;  // 0=left, 1=right
-            float velocity;
-            uint8_t circular;
-            float fill_h, fill_s, fill_v, fill_a;
-            uint8_t buffer_id;
-        } shift;
-
-        struct {
-            float color_h, color_s, color_v;
-            float fade;
-        } spark;
-
-        struct {
-            uint8_t mode;         // 0=solid, 1=per_pixel
-            float color_h, color_s, color_v, color_a;  // solid mode
-            uint8_t pixel_count;  // per_pixel mode
-            hsva_t* pixels;       // heap-allocated (per_pixel), nullptr for solid
-        } paint;
+        WaveParams  wave;
+        ShiftParams shift;
+        SparkParams spark;
+        PaintParams paint;
     };
 };
 
 struct AnimationEvent {
     AnimParams params;
-    float t_start;         // seconds
-    float duration;        // seconds
-    uint8_t source_layer;  // 0xFF = SOURCE_NONE
+    float t_start;          // seconds
+    float duration;         // seconds
+    uint8_t source_layer;   // 0xFF = SOURCE_NONE
     uint8_t remap_length;
     bool remap_is_identity;
-    uint8_t* remap;        // → points into arena
+    uint8_t* remap;         // heap-allocated array
 };
 
 struct LayerDef {
     uint8_t index_map_length;
-    uint8_t* index_map;     // → points into arena
+    uint8_t* index_map;      // heap-allocated array
     uint16_t event_count;
-    AnimationEvent* events; // → points into arena
+    AnimationEvent* events;  // heap-allocated array
+    hsva_t* buffer;          // engine-allocated, size = index_map_length
+};
+
+struct BufferPool {
+    uint8_t count;
+    uint8_t* sizes;          // heap-allocated array of sizes
+    hsva_t** buffers;        // heap-allocated array of pointers
 };
 
 struct Program {
-    float duration;          // seconds
+    float duration;
     uint8_t layer_count;
-    uint8_t buffer_count;
     uint8_t max_remap_length;
 
-    LayerDef* layers;        // → points into arena
-    hsva_t** buffers;        // → array of pointers into arena
-    hsva_t* temp_buffer;     // → points into arena
-
-    void* _arena;            // raw allocation, for freeing
+    LayerDef* layers;        // heap-allocated array
+    BufferPool pool;
+    hsva_t* temp_buffer;     // heap-allocated, size = max_remap_length
 };
+
+static constexpr uint8_t BLOB_VERSION = 2;
+static constexpr uint8_t SOURCE_NONE = 0xFF;
 ```
 
 ---
 
 ## Animation Instantiation
 
-The blob stores animation *definitions* (type enum + params). Two approaches:
-
-### Option A: Tagged union (chosen)
-
-No virtual dispatch. `AnimParams` is a tagged union — the engine switches on
-`params.type` at render time:
+The blob stores animation parameters as a tagged union (`AnimParams`). At
+runtime, the engine creates polymorphic `Animation*` subclasses via a factory
+function:
 
 ```cpp
-void render_event(const AnimationEvent& event, hsva_t* buffer,
-                  uint8_t length, float t_rel)
-{
-    switch (event.params.type) {
-        case ANIM_WAVE:
-            render_wave(event.params.wave, buffer, length, t_rel);
-            break;
-        case ANIM_SPARK:
-            render_spark(event.params.spark, buffer, length, t_rel);
-            break;
-        case ANIM_SHIFT:
-            render_shift(event.params.shift, buffer, length, t_rel);
-            break;
-        // ...
-    }
-}
+Animation* create_animation(const AnimationEvent& e, Program* prog,
+                            const LayerDef& dep_layer);
 ```
 
-**Why not polymorphic classes (AnimWave, AnimShift, etc.)?**
-- Arena allocation with vtables requires placement new + manual destructor
-  calls — fragile
-- Virtual dispatch overhead on every frame for every active animation
-- Tagged union is simpler, smaller, cache-friendlier
-- Adding a new animation type = add a struct to the union + a case to the
-  switch — same effort as adding a subclass
+The factory dispatches on `AnimParams.type` and constructs the appropriate
+subclass (`AnimWave`, `AnimSpark`, `AnimPaint`, `AnimShift`). Each subclass
+has a virtual `render()` method. See `docs/engine.md` for details.
 
-**Impact on existing code:** the current `Animation` base class with virtual
-`render()` would be replaced by free functions (`render_wave`, `render_spark`,
-etc.) that take the params struct directly. The math stays identical — just
-reorganized.
-
-### Option B: Polymorphic (not chosen)
-
-Keep `Animation*` base class, use placement new into the arena:
-```cpp
-AnimWave* w = new (arena_ptr) AnimWave(params...);
-```
-More familiar OOP pattern but adds complexity for arena lifecycle management.
+The decoder only deals with data — it decodes params into the tagged union.
+The engine handles instantiation.
 
 ---
 
 ## Decode Flow
 
+Single-pass decode with a `BlobReader` cursor:
+
 ```cpp
-Program* decode_program(const uint8_t* blob, size_t len)
-{
-    // Pass 1: scan blob, compute arena size
-    size_t arena_size = compute_arena_size(blob, len);
+Program* decode_program(const uint8_t* blob, size_t len) {
+    BlobReader r(blob, len);
 
-    // Allocate arena
-    void* arena = malloc(arena_size);
-    if (!arena) return nullptr;
+    // Header: magic "ELEM", version, layer_count, buffer_count,
+    //         max_remap_length, duration
+    // ... validate header ...
 
-    // Pass 2: populate structs
-    // Walk blob sequentially, copy data into arena,
-    // set up pointers between structs
-    Program* prog = (Program*)arena;
-    uint8_t* cursor = (uint8_t*)arena + sizeof(Program);
+    Program* prog = new Program();
 
-    // ... layers, events, index maps, remaps, buffers
-    // each carved out of cursor, cursor advances
+    // Buffer pool: read sizes, allocate hsva_t[] for each
+    for (uint8_t i = 0; i < buffer_count; i++) {
+        uint8_t sz = r.read_u8();
+        prog->pool.sizes[i] = sz;
+        prog->pool.buffers[i] = new hsva_t[sz]();
+    }
 
-    prog->_arena = arena;
+    // Temp buffer
+    prog->temp_buffer = new hsva_t[max_remap_length];
+
+    // Layers
+    prog->layers = new LayerDef[layer_count]();
+    for (uint8_t li = 0; li < layer_count; li++) {
+        // Read index_map_length + index_map bytes
+        // Read event_count
+        // For each event:
+        //   Read anim_type, t_start, duration, source_layer, remap_is_identity
+        //   Read remap_length + remap bytes
+        //   Read params_size, then dispatch to type-specific parser
+    }
+
     return prog;
-}
 
-void free_program(Program* prog)
-{
-    if (prog) free(prog->_arena);
+fail:
+    free_program(prog);
+    return nullptr;
 }
 ```
+
+Error handling: any parse failure jumps to `fail`, which calls `free_program()`
+to clean up partial allocations. All pointers are initialized to `nullptr` so
+`free_program()` can safely skip unallocated fields.
+
+---
+
+## free_program
+
+Walks the entire structure tree and frees each allocation:
+
+```cpp
+void free_program(Program* prog) {
+    if (!prog) return;
+
+    if (prog->layers) {
+        for (uint8_t li = 0; li < prog->layer_count; li++) {
+            LayerDef& layer = prog->layers[li];
+            if (layer.events) {
+                for (uint16_t ei = 0; ei < layer.event_count; ei++) {
+                    delete[] layer.events[ei].remap;
+                    if (layer.events[ei].params.type == ANIM_PAINT)
+                        delete[] layer.events[ei].params.paint.pixels;
+                }
+                delete[] layer.events;
+            }
+            delete[] layer.index_map;
+            delete[] layer.buffer;   // engine-allocated, but freed here
+        }
+        delete[] prog->layers;
+    }
+
+    if (prog->pool.buffers) {
+        for (uint8_t i = 0; i < prog->pool.count; i++)
+            delete[] prog->pool.buffers[i];
+        delete[] prog->pool.buffers;
+    }
+    delete[] prog->pool.sizes;
+    delete[] prog->temp_buffer;
+
+    delete prog;
+}
+```
+
+Note: `layer.buffer` is allocated by the Engine (not the decoder), but freed
+here since `free_program()` is the single teardown path (called by Engine's
+destructor).
 
 ---
 
 ## Remap Storage
 
-Variable-length remap arrays are packed contiguously in the arena.
-Each `AnimationEvent.remap` points into this region.
-
-```
-arena:
-  ... events ...
-  [remap0: 0,1,2,...,9] [remap1: 0,1,2,...,9] [remap2: 0,1] [remap3: 2,3] ...
-```
-
-The `remap_is_identity` flag tells the engine to skip scatter copy.
-When identity, the remap pointer is still valid but the engine won't read it.
+Each event has its own heap-allocated remap array. The `remap_is_identity` flag
+tells the engine to skip scatter copy. When identity, the remap array is still
+allocated and valid but the engine won't read it.
 
 ---
 
@@ -244,22 +249,17 @@ ESP32 is little-endian. Blob is little-endian. No byte swapping needed.
 
 Desktop (x86/x64) is also little-endian — tests work without conversion.
 
-Optional: add a compile-time static assert:
-```cpp
-static_assert(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__,
-              "blob format assumes little-endian");
-```
-
 ---
 
 ## Validation (at decode time)
 
-Minimal — the Python compiler already validates. But add safety checks:
+Minimal — the Python compiler already validates. Safety checks at decode time:
 - Magic == "ELEM"
 - Version == 2
-- Blob length sufficient for declared contents
-- layer_count <= 32
-- No index_map entry >= 255 (uint8 strip limit)
+- Blob length sufficient for declared contents (checked before every read)
+- `layer_count <= 32`
+- `source_layer < layer_count` (when not `SOURCE_NONE`)
+- `buffer_id < buffer_count` (for shift events)
 
 Return `nullptr` on any failure.
 
@@ -268,39 +268,8 @@ Return `nullptr` on any failure.
 ## Testing (Catch2, desktop)
 
 Test the decoder on desktop by:
-1. Using the Python compiler to produce a known blob (test animation)
+1. Using the Python compiler to produce a known blob (`test/fixtures/generate.py`)
 2. Loading it in C++ test, calling `decode_program()`
 3. Verifying struct contents match expected values
 
-Tests:
-- Header fields (duration, layer_count, buffer_count)
-- Layer 0 index map == [0..9], 2 events (wave + shift)
-- Layer 1 index map == [0,4,5,9], 8 events (all sparks)
-- Wave params (channel, h, s, period, etc.)
-- Shift params (direction, velocity, source_layer event header, buffer_id)
-- Spark remaps ([0,1] for white, [2,3] for yellow)
-- remap_is_identity flags
-- Buffer pool == [10]
-- Invalid blob → nullptr
-
-### Test blob generation
-
-Save the test blob from Python:
-```python
-from elements.dsl import *
-
-def program(beat, duration):
-    # ... test animation ...
-    return build(beat=beat, duration=duration)
-
-blob = program(beat=0.5, duration=2.0)
-open("test_animation.bin", "wb").write(blob)
-```
-
-Include `test_animation.bin` as a test fixture (embed as C array or load from file).
-
----
-
-## Open Questions
-
-_(none — ready to implement)_
+Test fixture is auto-generated by CMake if missing. See `test/test_decoder.cpp`.
