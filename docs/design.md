@@ -100,7 +100,7 @@ LOAD clears everything — the song's animations stop immediately, ambient progr
 
 ### Transport
 
-UDP over the shared WiFi network. Programs are sent as binary payloads. See `docs/playback_device.md` for the full command and sync protocol.
+TCP for commands (LOAD, START, debug) and clock sync results. UDP for clock sync probes (latency-sensitive RTT measurement) and streaming (RGB frames, telemetry). See `docs/playback_device.md` for the full protocol, packet formats, and device-side implementation.
 
 ---
 

@@ -1,6 +1,6 @@
 # PlaybackDevice — Shared Device Abstraction
 
-> **Status: Design document.** Not yet implemented. Describes planned architecture for the PlaybackDevice hierarchy, custom clock sync protocol, and simulator debug extensions. Prerequisites include `Engine::reset()` and Compositor gamma control, which are also not yet in the codebase (see plan file for implementation details).
+> **Status: Design document.** Not yet implemented. Describes planned architecture for the PlaybackDevice hierarchy, transport split, custom clock sync protocol, and simulator debug extensions. Prerequisites `Engine::reset()` and Compositor gamma control are implemented in `src/engine.cpp` and `src/compositor.cpp`.
 
 ## Motivation
 
@@ -21,18 +21,203 @@ Rather than duplicate this logic, a base class `PlaybackDevice` captures the sha
                         Controller
                        (has blobs, controls time, hosts web UI)
                       /            \
-              LOAD/START          LOAD/START
-              (same protocol)     (same protocol)
+              TCP + UDP            TCP + UDP
+              (same protocol)      (same protocol)
                 /                    \
         ESPDevice #1            ESPSimulated #1
         (real hardware)         (desktop process)
         - controller-synced clock - desktop monotonic clock
         - FastLED output        - sends rgb over network
-        - UDP commands          - same protocol + debug extensions
-        - sends telemetry       - sends telemetry + rgb frames
+        - TCP: commands         - TCP: commands + debug extensions
+        - UDP in: sync probes   - UDP in: sync probes
+        - UDP out: telemetry    - UDP out: telemetry + rgb frames
 ```
 
-The controller orchestrates all devices. It doesn't know or care whether a device is real or simulated — it sends the same LOAD and START commands. The only difference is that it knows simulated devices send rgb frame telemetry and accept debug extensions (pause/seek/step).
+The controller orchestrates all devices. It doesn't know or care whether a device is real or simulated — it sends the same LOAD and START commands over TCP. The only difference is that it knows simulated devices send rgb frame telemetry (UDP) and accept debug extensions (pause/seek/step) over the TCP connection.
+
+---
+
+## Transport architecture
+
+Three channels per device, split by requirements:
+
+| Channel | Direction | Purpose | Why this transport |
+|---------|-----------|---------|-------------------|
+| **TCP** | controller → device | LOAD, START, SYNC_RESULT, debug commands | Reliable delivery, arbitrary payload size (blobs can exceed UDP MTU) |
+| **UDP inbound** | controller → device | SYNC_REQ | Low-latency RTT measurement — TCP head-of-line blocking and Nagle would corrupt offset calculations |
+| **UDP outbound** | device → controller | SYNC_RESP, telemetry, RGB frames | Fire-and-forget streaming; dropped frame = browser skips one update |
+
+Each device listens on one TCP port and one UDP port. The controller maintains a persistent TCP connection to each device and sends UDP sync probes to the device's UDP port.
+
+### TCP command protocol
+
+The controller opens a persistent TCP connection to each device. Commands are length-prefixed messages:
+
+```
+[length: u32 little-endian] [type: u8] [payload...]
+```
+
+`length` includes the type byte but not itself. So a START command (type + 8 bytes of t0) has `length = 9`.
+
+Command types:
+
+```
+CMD_LOAD:         type = 0x10, payload = blob bytes (variable length)
+CMD_START:        type = 0x11, payload = [t0: i64]                     → 9 bytes total
+CMD_SYNC_RESULT:  type = 0x03, payload = [seq: u16] [boot_seq: u32] [offset: i64] → 15 bytes total
+CMD_DEBUG_PAUSE:  type = 0x20, no payload                              → 1 byte total
+CMD_DEBUG_RESUME: type = 0x21, no payload                              → 1 byte total
+CMD_DEBUG_SEEK:   type = 0x22, payload = [t_rel: f32]                  → 5 bytes total
+CMD_DEBUG_STEP:   type = 0x23, payload = [direction: i8]               → 2 bytes total
+```
+
+Response (device → controller, same TCP connection):
+
+```
+CMD_ACK:          type = 0x80, payload = [status: u8]                  → 2 bytes total
+                  status: 0 = ok, 1 = decode error
+```
+
+The device sends an ACK after LOAD (with decode status). Other commands are fire-and-forget from the controller's perspective — the TCP connection itself provides delivery guarantee.
+
+### TCP command reading (device side)
+
+The device reads from the TCP socket in its main loop. Commands are length-prefixed, so reading is straightforward and non-blocking:
+
+```cpp
+// Persistent read buffer — accumulates partial TCP reads across loop iterations.
+// Sized for the largest expected command (LOAD with max blob size).
+static uint8_t tcp_buf[32768];
+static uint32_t tcp_buf_len = 0;
+
+// Called each loop iteration. Non-blocking: reads whatever is available,
+// processes complete commands, leaves partial data for next call.
+void poll_tcp_commands(int tcp_fd, PlaybackDevice& device) {
+    // Non-blocking read — append to buffer
+    int n = recv(tcp_fd, tcp_buf + tcp_buf_len,
+                 sizeof(tcp_buf) - tcp_buf_len, MSG_DONTWAIT);
+    if (n > 0) tcp_buf_len += n;
+
+    // Process complete messages
+    while (tcp_buf_len >= 4) {
+        uint32_t msg_len;
+        memcpy(&msg_len, tcp_buf, 4);
+
+        if (tcp_buf_len < 4 + msg_len) break;  // incomplete message
+
+        uint8_t* msg = tcp_buf + 4;
+        uint8_t type = msg[0];
+        uint8_t* payload = msg + 1;
+        uint32_t payload_len = msg_len - 1;
+
+        switch (type) {
+            case 0x10: {  // CMD_LOAD
+                bool ok = device.handle_load(payload, payload_len);
+                uint8_t ack[] = {0x80, ok ? (uint8_t)0 : (uint8_t)1};
+                // send_tcp_ack(tcp_fd, ack, sizeof(ack));  // length-prefixed
+                break;
+            }
+            case 0x11: {  // CMD_START
+                if (payload_len >= 8) {
+                    int64_t t0;
+                    memcpy(&t0, payload, 8);
+                    device.handle_start(t0);
+                }
+                break;
+            }
+            case 0x03: {  // CMD_SYNC_RESULT
+                if (payload_len >= 14) {
+                    // seq (2) + boot_seq (4) + offset (8)
+                    handle_sync_result(payload, payload_len);
+                }
+                break;
+            }
+            // Debug commands (ESPSimulated only):
+            // case 0x20: device.debug_pause(); break;
+            // case 0x22: device.debug_seek(read_f32(payload)); break;
+            // etc.
+        }
+
+        // Shift remaining data to front
+        uint32_t consumed = 4 + msg_len;
+        tcp_buf_len -= consumed;
+        if (tcp_buf_len > 0)
+            memmove(tcp_buf, tcp_buf + consumed, tcp_buf_len);
+    }
+}
+```
+
+### UDP sync probes (device side)
+
+Sync probes use a separate UDP socket. The device listens for SYNC_REQ and replies with SYNC_RESP on the same socket:
+
+```cpp
+void poll_udp_sync(int udp_fd) {
+    uint8_t buf[64];
+    struct sockaddr_in sender;
+    socklen_t sender_len = sizeof(sender);
+
+    int n = recvfrom(udp_fd, buf, sizeof(buf), MSG_DONTWAIT,
+                     (struct sockaddr*)&sender, &sender_len);
+    if (n < 1) return;
+
+    if (buf[0] == 0x01 && n >= 15) {  // SYNC_REQ
+        int64_t t2 = now_mono();
+
+        uint8_t resp[31];
+        resp[0] = 0x02;  // SYNC_RESP
+        memcpy(resp + 1, buf + 1, 14);  // echo seq + boot_seq + t1
+        memcpy(resp + 15, &t2, 8);
+        int64_t t3 = now_mono();
+        memcpy(resp + 23, &t3, 8);
+
+        sendto(udp_fd, resp, 31, 0,
+               (struct sockaddr*)&sender, sender_len);
+    }
+}
+```
+
+### Device main loop (combined)
+
+```cpp
+void loop() {              // Arduino (ESPDevice)
+    poll_tcp_commands(tcp_fd, device);
+    poll_udp_sync(udp_fd);
+    device.tick_once();
+}
+```
+
+```cpp
+while (running) {          // Desktop (ESPSimulated)
+    poll_tcp_commands(tcp_fd, device);
+    poll_udp_sync(udp_fd);
+    device.tick_once();
+    pace_loop();           // sleep_until next_tick, overrun detection
+}
+```
+
+### Controller side (sending LOAD)
+
+```python
+# Python controller — sending a blob over TCP
+def send_load(conn: socket.socket, blob: bytes):
+    msg = struct.pack('<I', 1 + len(blob))  # length prefix
+    msg += b'\x10'                           # CMD_LOAD
+    msg += blob
+    conn.sendall(msg)
+
+    # Read ACK
+    ack_hdr = conn.recv(4)                   # length prefix
+    ack_len = struct.unpack('<I', ack_hdr)[0]
+    ack = conn.recv(ack_len)
+    assert ack[0] == 0x80                    # CMD_ACK
+    return ack[1] == 0                       # status: 0 = ok
+
+def send_start(conn: socket.socket, t0: int):
+    msg = struct.pack('<IB', 9, 0x11)        # length=9, CMD_START
+    msg += struct.pack('<q', t0)             # t0 as int64
+    conn.sendall(msg)
+```
 
 ---
 
@@ -83,7 +268,7 @@ public:
     // The device computes t_rel = (now_mono() + _sync_offset - t0) / 1e6 each frame.
     void handle_start(int64_t t0);
 
-    // Update sync offset (from controller SYNC_RESULT).
+    // Update sync offset (from controller SYNC_RESULT, received over TCP).
     void handle_sync_result(int64_t offset);
 
     // --- Per-iteration logic (called from platform loop) ---
@@ -207,14 +392,14 @@ bool PlaybackDevice::tick_once() {
 
 ## ESPDevice (real hardware subclass)
 
-Runs on ESP32 under Arduino framework. Uses `esp_timer_get_time()` (monotonic µs) + controller-provided sync offset for time, FastLED for output, UDP for commands.
+Runs on ESP32 under Arduino framework. Uses `esp_timer_get_time()` (monotonic µs) + controller-provided sync offset for time, FastLED for output. Receives commands over TCP, sync probes over UDP, sends telemetry over UDP.
 
 ```cpp
 class ESPDevice : public PlaybackDevice {
 public:
     ESPDevice(uint16_t strip_length)
         : PlaybackDevice(strip_length, /*gamma_enabled=*/true) {
-        // Hardware init: FastLED, WiFi, UDP
+        // Hardware init: FastLED, WiFi, TCP server, UDP socket
     }
 
 protected:
@@ -238,14 +423,18 @@ Arduino integration:
 
 ```cpp
 ESPDevice device(NUM_LEDS);
+int tcp_fd, udp_fd;
 
 void setup() {
-    // WiFi, UDP init (no NTP needed — controller handles sync)
+    // WiFi init (no NTP needed — controller handles sync)
     // FastLED.addLeds<WS2811, PIN, GRB>((CRGB*)device.rgb_buf(), NUM_LEDS);
+    // tcp_fd = start_tcp_server(TCP_PORT);
+    // udp_fd = bind_udp(UDP_PORT);
 }
 
 void loop() {
-    poll_commands();       // check UDP for LOAD/START/SYNC, call device handlers
+    poll_tcp_commands(tcp_fd, device);   // LOAD, START, SYNC_RESULT
+    poll_udp_sync(udp_fd);              // SYNC_REQ → SYNC_RESP
     device.tick_once();
     // Arduino yields between loop() calls — no explicit sleep
 }
@@ -359,15 +548,19 @@ Desktop main loop:
 
 ```cpp
 ESPSimulated device(NUM_LEDS);
+int tcp_fd, udp_fd;
 
 int main() {
-    // Parse args, set up UDP listener for commands
+    // Parse args, connect TCP to controller, bind UDP
+    // tcp_fd = connect_tcp(controller_addr, TCP_PORT);
+    // udp_fd = bind_udp(UDP_PORT);
 
     auto next_tick = steady_clock::now();
     auto dt = chrono::milliseconds(20);  // 50Hz
 
     while (running) {
-        poll_commands();        // check for LOAD/START/debug commands
+        poll_tcp_commands(tcp_fd, device);   // LOAD, START, SYNC_RESULT, debug
+        poll_udp_sync(udp_fd);              // SYNC_REQ → SYNC_RESP
         device.tick_once();
 
         // Pace + overrun detection
@@ -414,12 +607,11 @@ All protocol timestamps are **int64_t microseconds** — avoids float byte-order
 
 ### Custom sync protocol (replaces NTP on ESP)
 
-Instead of each ESP running an NTP client, the controller performs a lightweight sync exchange over the existing UDP command channel.
+Instead of each ESP running an NTP client, the controller performs a lightweight sync exchange over a dedicated UDP channel. Sync probes use UDP (not the TCP command channel) because RTT measurement requires minimal, predictable latency — TCP's head-of-line blocking and Nagle's algorithm would add jitter that corrupts offset calculations. The computed offset (SYNC_RESULT) is delivered over the TCP command connection since it's a one-shot value, not latency-sensitive.
 
 **Why not NTP:**
 - NTPClient on ESP is fragile: `forceUpdate()` blocks up to 1s, `getEpochTime()` loses sub-second precision via integer division, managing the library is unnecessary complexity.
-- The controller already talks to every device. Adding sync to the existing protocol is natural.
-- The controller can centrally track sync quality per device and make informed decisions.
+- The controller already talks to every device. A custom protocol is simpler on the ESP side (~15 lines), non-blocking, and gives the controller full visibility into sync quality per device.
 
 #### Sync exchange
 
@@ -445,42 +637,48 @@ Controller                           ESP
 Packet format (all fields little-endian):
 
 ```
-SYNC_REQ:   [type: u8 = 0x01] [seq: u16] [boot_seq: u32] [t1: i64]     → 15 bytes
-SYNC_RESP:  [type: u8 = 0x02] [seq: u16] [boot_seq: u32] [t1: i64] [t2: i64] [t3: i64]  → 31 bytes
-SYNC_RESULT:[type: u8 = 0x03] [seq: u16] [boot_seq: u32] [offset: i64]  → 15 bytes
+SYNC_REQ:    [type: u8 = 0x01] [seq: u16] [boot_seq: u32] [t1: i64]                      → 15 bytes (UDP)
+SYNC_RESP:   [type: u8 = 0x02] [seq: u16] [boot_seq: u32] [t1: i64] [t2: i64] [t3: i64]  → 31 bytes (UDP)
+SYNC_RESULT: [type: u8 = 0x03] [seq: u16] [boot_seq: u32] [offset: i64]                   → 15 bytes (TCP, length-prefixed)
 ```
 
 #### ESP implementation (minimal, non-blocking)
 
+The sync probe exchange (SYNC_REQ/SYNC_RESP) runs on UDP for latency accuracy. The computed result (SYNC_RESULT) arrives over TCP with the other commands.
+
 ```cpp
-int64_t _sync_offset = 0;    // set by controller via SYNC_RESULT
+int64_t _sync_offset = 0;    // set by controller via SYNC_RESULT (TCP)
 uint32_t _boot_seq = 0;     // incremented on each boot
 uint16_t _last_sync_seq = 0; // last applied SYNC_RESULT seq
 
-void handle_sync_req(const uint8_t* pkt) {
+// Called from poll_udp_sync() — UDP path
+void handle_sync_req(const uint8_t* pkt, const struct sockaddr_in& sender) {
     int64_t t2 = esp_timer_get_time();
 
-    SyncResp resp;
-    memcpy(&resp.seq, pkt + 1, 2);
-    memcpy(&resp.boot_seq, pkt + 3, 4);
-    memcpy(&resp.t1, pkt + 7, 8);
-    resp.t2 = t2;
-    resp.t3 = esp_timer_get_time();
-    send_udp(&resp, sizeof(resp));
+    uint8_t resp[31];
+    resp[0] = 0x02;  // SYNC_RESP
+    memcpy(resp + 1, pkt + 1, 14);  // echo seq + boot_seq + t1
+    memcpy(resp + 15, &t2, 8);
+    int64_t t3 = esp_timer_get_time();
+    memcpy(resp + 23, &t3, 8);
+    sendto(udp_fd, resp, 31, 0, (struct sockaddr*)&sender, sizeof(sender));
 }
 
-void handle_sync_result(const uint8_t* pkt) {
+// Called from poll_tcp_commands() — TCP path
+void handle_sync_result(const uint8_t* payload, uint32_t len) {
+    if (len < 14) return;
+
     uint16_t seq;
     uint32_t boot_seq;
-    memcpy(&seq, pkt + 1, 2);
-    memcpy(&boot_seq, pkt + 3, 4);
+    memcpy(&seq, payload, 2);
+    memcpy(&boot_seq, payload + 2, 4);
 
     // Drop stale: wrong boot epoch or old/reordered sequence
     if (boot_seq != _boot_seq || seq < _last_sync_seq)
         return;
 
     _last_sync_seq = seq;
-    memcpy(&_sync_offset, pkt + 7, 8);
+    memcpy(&_sync_offset, payload + 6, 8);
 }
 
 int64_t now_epoch_approx() {
@@ -488,7 +686,7 @@ int64_t now_epoch_approx() {
 }
 ```
 
-No NTP library. No blocking. No state machine. The ESP is a passive responder — it timestamps and echoes. The controller owns all filtering and correction logic.
+No NTP library. No blocking. No state machine. The ESP is a passive responder for sync probes — it timestamps and echoes. The controller owns all filtering and correction logic.
 
 #### Controller sync policy
 
@@ -581,7 +779,7 @@ Key properties of this filter:
 
 #### Correction behavior during playback
 
-When the ESP receives a SYNC_RESULT with an updated offset:
+When the ESP receives a SYNC_RESULT (over TCP) with an updated offset:
 
 - **ESP clock is early** (offset correction makes `t_rel` smaller → animation was ahead): next `tick_once()` produces a smaller `t_rel` than expected. The engine effectively stalls for one frame (renders the same visual position twice). Invisible at 20ms frame intervals.
 - **ESP clock is late** (offset correction makes `t_rel` larger → animation was behind): next `tick_once()` produces a larger `t_rel` jump. The engine's cursor naturally skips past finished events — this is a single `tick()` call, no replay needed.
@@ -657,18 +855,18 @@ After reset, the engine is in the same state as immediately after construction. 
 
 The controller is a separate component that orchestrates all devices. It:
 
-1. **Syncs clocks** — runs the custom sync protocol (SYNC_REQ/RESP) with each ESP, maintains filtered offsets, sends SYNC_RESULT.
+1. **Syncs clocks** — sends SYNC_REQ probes (UDP) to each device, receives SYNC_RESP (UDP), computes filtered offsets, sends SYNC_RESULT (TCP).
 2. **Holds the blobs** — produced by the compiler, one per strip.
 3. **Maps blobs to devices** — knows which device runs which strip.
-4. **Sends LOAD** — delivers blob bytes to each device.
-5. **Sends START with shared T0** — all devices begin playback from the same absolute time, so animations synchronize across strips.
-6. **Receives telemetry** — health, errors, timing from all devices.
-7. **Receives rgb frames from simulators** — forwards to the web UI for display.
+4. **Sends LOAD** — delivers blob bytes over TCP (length-prefixed, arbitrary size). Waits for ACK.
+5. **Sends START with shared T0** — over TCP to all devices. All devices begin playback from the same absolute time, so animations synchronize across strips.
+6. **Receives telemetry** — health, errors, timing from all devices (UDP).
+7. **Receives rgb frames from simulators** — forwarded to the web UI for display (UDP).
 8. **Hosts the web UI** (open issue — see below).
 
-The controller uses the same protocol for real and simulated devices. It knows which devices are simulated and can:
-- Send debug extensions (pause/seek/step) to simulators
-- Expect rgb frame telemetry from simulators
+The controller uses the same TCP+UDP protocol for real and simulated devices. It knows which devices are simulated and can:
+- Send debug extensions (pause/seek/step) over the TCP connection to simulators
+- Expect rgb frame telemetry (UDP) from simulators
 - Route rgb frames to the browser UI
 
 ---
@@ -682,7 +880,7 @@ A wave animation on 10 pixels, controller + one ESPSimulated, browser display.
 ```
 Controller                     ESPSimulated (separate process)
    │                              │
-   │  LOAD(blob_bytes)            │
+   │  TCP: LOAD(blob_bytes)       │
    │─────────────────────────────>│
    │                              │  handle_load():
    │                              │    decode_program() → Program*
@@ -690,8 +888,10 @@ Controller                     ESPSimulated (separate process)
    │                              │    create Strip(rgb_buf, 10)
    │                              │    create Engine(prog, strip, gamma=false)
    │                              │    state = LOADED
+   │  TCP: ACK(status=0)          │
+   │<─────────────────────────────│
    │                              │
-   │  START(t0)                   │
+   │  TCP: START(t0)              │
    │─────────────────────────────>│
    │                              │  handle_start(t0):
    │                              │    _t0 = t0
@@ -712,7 +912,7 @@ ESPSimulated loop iteration:
    │    → rgb_buf = [0,1,5, 0,4,97, 0,1,5, ...]
    │
    │  output_frame()
-   │    → send rgb_buf (30 bytes) + t_rel (0.3) to controller via UDP
+   │    → UDP: send rgb_buf (30 bytes) + t_rel (0.3) to controller
    │
    │  sleep until next frame (20ms cadence)
 ```
@@ -722,9 +922,9 @@ ESPSimulated loop iteration:
 ```
 ESPSimulated              Controller                    Browser
    │                         │                            │
-   │  [rgb + t_rel]          │                            │
+   │  UDP: [rgb + t_rel]     │                            │
    │────────────────────────>│                            │
-   │         (UDP)           │  [strip_id + t + rgb]      │
+   │                         │  [strip_id + t + rgb]      │
    │                         │───────────────────────────>│
    │                         │       (WebSocket)          │
    │                         │                            │  render canvas
@@ -738,7 +938,7 @@ Browser                   Controller                ESPSimulated
    │                         │                         │
    │ {"cmd":"seek","t":2.5}  │                         │
    │────────────────────────>│                         │
-   │                         │  DEBUG_SEEK(2.5)        │
+   │                         │  TCP: DEBUG_SEEK(2.5)   │
    │                         │────────────────────────>│
    │                         │                         │  debug_seek(2.5):
    │                         │                         │    engine.reset()
@@ -746,7 +946,7 @@ Browser                   Controller                ESPSimulated
    │                         │                         │    adjust _t0
    │                         │                         │    output_frame()
    │                         │                         │
-   │                         │  [rgb + t_rel=2.5]      │
+   │                         │  UDP: [rgb + t_rel=2.5]  │
    │                         │<────────────────────────│
    │  [strip_id + 2.5 + rgb] │                         │
    │<────────────────────────│                         │
@@ -758,11 +958,7 @@ Browser                   Controller                ESPSimulated
 
 ## Open issues / undecided
 
-### 1. Transport protocol
-
-**Provisional decision: raw UDP for everything.** The sync protocol already uses UDP, all code snippets and architecture diagrams assume UDP, and adding an MQTT broker is unnecessary complexity for a single-controller LAN setup. MQTT could be reconsidered later if pub/sub semantics prove useful for multi-controller or cloud scenarios, but UDP is the starting point.
-
-### 2. Controller ↔ Web UI relationship
+### 1. Controller ↔ Web UI relationship
 
 The controller receives rgb frame telemetry from simulators and needs to forward it to the browser. Questions:
 - Does the controller host the web UI directly (Flask + WebSocket)?
@@ -771,7 +967,7 @@ The controller receives rgb frame telemetry from simulators and needs to forward
 
 The controller is the natural host since it already knows about all devices. But the exact architecture (Flask in the controller process, or a separate frontend server) is **not yet decided.**
 
-### 3. Multi-device seek/pause coordination
+### 2. Multi-device seek/pause coordination
 
 When the user seeks or pauses via the browser, the controller sends debug commands to all simulated devices. Questions:
 - Should all simulators seek atomically (all get the command before any resume)?
@@ -780,7 +976,7 @@ When the user seeks or pauses via the browser, the controller sends debug comman
 
 **Not yet decided.**
 
-### 4. Program looping
+### 3. Program looping
 
 When a program ends (`tick()` returns false), what happens?
 - The device transitions to ENDED state and goes dark.
@@ -789,7 +985,7 @@ When a program ends (`tick()` returns false), what happens?
 
 Should looping be a device-level setting (passed with LOAD or START) or a controller-level concern? **Not yet decided.**
 
-### 5. ESPSimulated as separate process — startup and discovery
+### 4. ESPSimulated as separate process — startup and discovery
 
 ESPSimulated runs as its own process. How does the controller discover it?
 - Controller starts the process and knows the port?
