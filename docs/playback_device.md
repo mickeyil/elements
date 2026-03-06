@@ -489,6 +489,8 @@ void PlaybackDevice::handle_jump(int64_t t0, float t_rel, uint16_t gen) {
 
 Because jump targets are reset-safe (no event is active at that instant), `reset()` + starting from `t_rel` produces correct output. The engine's cursor will advance to the first event at or after `t_rel` on each layer.
 
+**Implementation note:** `handle_start()` and `handle_jump()` share the core "set timebase + reset engine" logic. The implementation should extract a common helper (e.g. `apply_timebase(t0, gen)`) to avoid duplicating the timing math, while keeping the two public handlers separate for their distinct state transitions and preconditions.
+
 #### `tick_once()`
 
 The shared per-iteration logic. Called by each platform's loop.
@@ -1083,7 +1085,9 @@ Controller                              Web App / Browser
 
 Devices don't know about session_id or epoch — those are controller-level concepts. But the controller can't simply stamp its current epoch onto incoming UDP frames, because stale frames emitted before a LOAD or JUMP may arrive after the controller has already advanced its epoch. Those stale frames would be incorrectly stamped with the new epoch.
 
-To solve this, LOAD and JUMP commands carry a **generation counter** (`gen`, u16) that the device stores and echoes on every outbound UDP frame:
+To solve this, LOAD and JUMP commands carry a **generation counter** (`gen`, u16) that the device stores and echoes on every outbound UDP frame.
+
+**When the device starts using the new gen:** immediately, in the command handler itself (`_gen = gen;` in both `handle_load()` and `handle_jump()`). This happens synchronously before the next `tick_once()` / `output_frame()` cycle. So the first frame emitted after processing the command carries the new gen, and any frames already in the UDP pipeline carry the old gen. This is the invariant that makes controller-side filtering work.
 
 ```
 Device outbound UDP frame:
