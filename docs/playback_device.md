@@ -72,14 +72,16 @@ A static config file on the base station is the single source of truth for the p
 
 ### What the config provides
 
-| Field | Used by | Purpose |
-|-------|---------|---------|
-| `strip_id` (key) | Controller, compiler | Logical name — matches DSL `strip("main_left", ...)` |
-| `device_id` | Controller | Human-readable device name for logs/UI |
-| `ip` | Controller | Where to open TCP/UDP connections |
-| `length` | Controller | Validated against DSL-declared strip length at compile time |
-| `mode` | Controller | `"sim"` or `"esp"` — determines seek behavior and debug capabilities |
-| `simulation.layout` | Web app, browser | Pixel positions for canvas rendering |
+| Field | Used by | Scope | Purpose |
+|-------|---------|-------|---------|
+| `strip_id` (key) | Controller, compiler | Compile | Logical name — matches DSL `strip("main_left", ...)` |
+| `length` | Controller, compiler | Compile | Validated against DSL-declared strip length at compile time |
+| `device_id` | Controller | Runtime | Human-readable device name for logs/UI |
+| `ip` | Controller | Runtime | Where to open TCP/UDP connections |
+| `mode` | Controller | Runtime | `"sim"` or `"esp"` — determines seek behavior and debug capabilities |
+| `simulation.layout` | Web app, browser | Runtime | Pixel positions for canvas rendering |
+
+The **Compile** fields (`strip_id`, `length`) affect compiled output and are included in `config_hash` for artifact caching. **Runtime** fields are deployment and display concerns — changing them does not invalidate the artifact cache.
 
 ### Relationship to the DSL
 
@@ -1021,7 +1023,7 @@ All components matter:
 - **DSL source** — different program text produces different blobs and safe intervals
 - **beat** — beat duration in seconds; all beat-relative timings resolve differently at different tempos (same DSL at BPM=120 vs BPM=140 produces different blobs)
 - **duration** — total program length; affects event clipping and safe interval boundaries
-- **Config hash** — strip lengths and mapping affect compilation (e.g., pixel bounds validation)
+- **Config hash** — hashes only the **compile-relevant topology**: `{strip_id: length}` pairs. Deployment details (`ip`, `device_id`, `mode`) and simulation layout are excluded — changing an IP address or switching a device between sim/esp mode must not invalidate the cache, since compilation output is identical
 - **Compiler version** — changes to layer inference, blob format, or safe-interval rules change the output
 
 The key principle: `artifact_id` must cover every input to `compile_program(strips, events, beat, duration)`. If any input changes, the output changes, and the cache must miss. `beat` and `duration` are runtime arguments to the compiler (passed via `build(beat=..., duration=...)`), not embedded in the DSL source text, so they must be included explicitly.
