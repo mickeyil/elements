@@ -1,6 +1,6 @@
 # Elements — Compiler Design
 
-> **Status: Implemented.** Matches current code in `compiler/elements/`.
+> **Status: Mostly implemented.** Steps 1–7 match current code in `compiler/elements/`. Step 8 (jump point analysis) is designed but not yet implemented.
 
 The compiler takes a DSL program and emits one binary blob per strip. It runs on the base station (PC), not the ESP32. All heavy lifting — time resolution, layer inference, buffer packing — happens here.
 
