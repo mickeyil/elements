@@ -1089,7 +1089,9 @@ Devices don't know about session_id or epoch — those are controller-level conc
 
 To solve this, LOAD and JUMP commands carry a **generation counter** (`gen`, u16) that the device stores and echoes on every outbound UDP frame.
 
-**When the device starts using the new gen:** immediately, in the command handler itself (`_gen = gen;` in both `handle_load()` and `handle_jump()`). This happens synchronously before the next `tick_once()` / `output_frame()` cycle. So the first frame emitted after processing the command carries the new gen, and any frames already in the UDP pipeline carry the old gen. This is the invariant that makes controller-side filtering work.
+**When the device starts using the new gen:** synchronously in the command handler, before the next `tick_once()` / `output_frame()` cycle. For `handle_jump()`, this is immediate. For `handle_load()`, `_gen` is set only after successful decode — on decode failure the device goes IDLE and never emits RGB frames, so there is nothing to filter. The first frame emitted after a successful command carries the new gen; any frames already in the UDP pipeline carry the old gen. This is the invariant that makes controller-side filtering work.
+
+**Telemetry is not gen-filtered.** Gen filtering applies to RGB frames forwarded to the browser. Telemetry (health, errors, decode failures) is always accepted by the controller regardless of gen — otherwise the controller would never learn about a failed LOAD.
 
 ```
 Device outbound UDP frame:
