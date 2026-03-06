@@ -403,6 +403,7 @@ protected:
     int64_t _t0 = 0;              // absolute start time from handle_start (us)
     int64_t _sync_offset = 0;     // controller-provided offset (us), 0 until first SYNC_RESULT
     uint16_t _gen = 0;            // generation counter, echoed on outbound UDP frames
+    uint32_t _frame_index = 0;    // monotonic frame counter, reset on LOAD/JUMP
     bool _gamma_enabled;
 };
 ```
@@ -433,7 +434,8 @@ bool PlaybackDevice::handle_load(const uint8_t* blob, size_t blob_len, uint16_t 
 
     // Create engine (strip already exists, wrapping _rgb_buf)
     _engine = new Engine(prog, *_strip, _gamma_enabled);
-    _gen = gen;  // controller-supplied, echoed on outbound UDP
+    _gen = gen;           // controller-supplied, echoed on outbound UDP
+    _frame_index = 0;     // reset frame counter for new program
     _state = LOADED;
     send_telemetry(LOADED, 0.0f);
     return true;
@@ -472,8 +474,9 @@ void PlaybackDevice::handle_jump(int64_t t0, float t_rel, uint16_t gen) {
     if (t_rel > dur) t_rel = dur;
 
     _engine->reset();
-    _t0 = t0;    // shared absolute time — same on all devices (like START)
-    _gen = gen;  // new generation — stale in-flight frames carry the old gen
+    _t0 = t0;           // shared absolute time — same on all devices (like START)
+    _gen = gen;          // new generation — stale in-flight frames carry the old gen
+    _frame_index = 0;    // reset frame counter for new playback segment
 
     if (_state == PLAYING) {
         // Continue playing from jump target
@@ -587,8 +590,9 @@ protected:
     }
 
     void output_frame() override {
-        // Send rgb buffer as telemetry to controller, tagged with gen
-        send_rgb_frame(_gen, _rgb_buf, _strip_length * 3);
+        // Send rgb buffer to controller, tagged with gen and frame_index
+        send_rgb_frame(_gen, _frame_index, _rgb_buf, _strip_length * 3);
+        _frame_index++;
     }
 
     void send_telemetry(State state, float t_rel, const char* error) override {
@@ -1002,10 +1006,10 @@ dict[str, bytes]   # strip_name -> blob
     "artifact_id": "sha256(...)",      # compiled artifact identity (see below)
     "duration": 612.0,                 # seconds
     "safe_intervals": [(0.0, 0.0), (12.4, 13.0), (28.0, 29.5), (44.5, 46.0), (58.0, 60.0)],  # reset-safe intervals (global)
-    "strips": {
-        "main_left":  { "blob": b"..." },
-        "main_right": { "blob": b"..." }
-    }
+    "strips": [                              # ordered list — defines canonical strip order
+        { "name": "main_left",  "length": 150, "blob": b"..." },
+        { "name": "main_right", "length": 150, "blob": b"..." }
+    ]
 }
 ```
 
@@ -1059,16 +1063,20 @@ Controller                              Web App / Browser
     |    "artifact_id": "song_abc",           |
     |    "duration": 612.0,                  |
     |    "safe_intervals": [...],             |
-    |    "strips": [...] }                   |
+    |    "strips": [                         |
+    |      {"name":"main_left","length":150},|
+    |      {"name":"main_right","length":150}|
+    |    ] }                                 |
     |--------------------------------------->|
     |                                        |  browser renders seek bar
-    |  play()                                |     with jump markers
+    |                                        |  strips[] defines order and
+    |                                        |  lengths for program frames
+    |  play()                                |     with safe interval markers
     |  epoch = 1                             |
     |                                        |
-    |  streamed frame:                       |
-    |  { "session_id": 42, "epoch": 1,       |
-    |    "strip_id": "main_left",            |
-    |    "t_rel": 0.34, "rgb": [...] }       |
+    |  program frame (binary):               |
+    |  [frame_index=10] [t_rel=0.34]         |
+    |  [rgb_strip_0] [rgb_strip_1]           |
     |--------------------------------------->|  browser renders
     |                                        |
     |  ... frames flow ...                   |
@@ -1095,39 +1103,59 @@ To solve this, LOAD and JUMP commands carry a **generation counter** (`gen`, u16
 
 ```
 Device outbound UDP frame:
-[gen: u16] [t_rel: f32] [rgb: bytes...]
+[gen: u16] [frame_index: u32] [t_rel: f32] [rgb: bytes...]
 ```
 
-The controller increments `gen` on each LOAD and JUMP, and tracks the expected `gen` per device. When a UDP frame arrives:
+The controller increments `gen` on each LOAD and JUMP, and tracks the expected `gen` per device. When a UDP frame arrives, the controller filters by gen and assembles per-strip frames into a program-level frame before forwarding:
 
 ```python
 def on_device_frame(self, device_id, frame):
     if frame.gen != self.expected_gen[device_id]:
         return  # stale frame from before LOAD/JUMP — drop
 
-    # Safe to stamp with current session/epoch and forward
-    self.forward_to_web_app({
-        "session_id": self.session_id,
-        "epoch": self.epoch,
-        "strip_id": self.strip_for_device(device_id),
-        "t_rel": frame.t_rel,
-        "rgb": frame.rgb,
+    strip_index = self.strip_index_for_device(device_id)
+    self.assemble_program_frame(frame.frame_index, strip_index, frame.t_rel, frame.rgb)
+
+def assemble_program_frame(self, frame_index, strip_index, t_rel, rgb):
+    """Collect per-strip frames and emit a complete program frame."""
+    bucket = self.pending_frames.setdefault(frame_index, {
+        "t_rel": t_rel,
+        "strips": {},
+        "deadline": time.monotonic() + self.frame_deadline,
     })
+    bucket["strips"][strip_index] = rgb
+
+    if len(bucket["strips"]) == self.strip_count:
+        # All strips present — emit immediately
+        self.emit_program_frame(frame_index, bucket)
+        del self.pending_frames[frame_index]
+
+def emit_program_frame(self, frame_index, bucket):
+    """Send assembled program frame to web app over UDS."""
+    # Binary payload: [frame_index:u32] [t_rel:f32] [rgb_0][rgb_1]...[rgb_N-1]
+    # Strip order and lengths defined in session snapshot
+    payload = struct.pack('<If', frame_index, bucket["t_rel"])
+    for i in range(self.strip_count):
+        payload += bucket["strips"][i]
+    self.send_to_web_app(kind=0x02, payload=payload)
+
+# Periodic cleanup: drop incomplete frames past their deadline
+def sweep_stale_frames(self):
+    now = time.monotonic()
+    for fid in list(self.pending_frames):
+        if self.pending_frames[fid]["deadline"] < now:
+            del self.pending_frames[fid]  # incomplete — drop entire frame
 ```
 
-This closes the race window: a frame emitted before the device processes JUMP carries the old `gen`, so the controller drops it instead of stamping it with the new epoch.
+**Frame assembly policy: complete-only.** The controller emits a program frame only when all strips for a given `frame_index` are present. If any strip is missing when the deadline expires, the entire frame is dropped. This keeps semantics clean — the browser only sees coherent frames. One slow device causes dropped frames, not stale-filled partial renders.
 
 **Scope:** `gen` filtering applies to LOAD and JUMP only. CMD_DEBUG_SEEK (simulator-only) does not bump `gen`. A stale frame from just before a debug seek could be stamped with the new epoch, but this is at most a single-frame glitch during interactive dev scrubbing — not worth coupling the debug path to the gen protocol.
 
 ### What carries session_id and epoch
 
-Everything streamed from controller to web app / browser:
+Session_id and epoch are controller-level metadata, communicated to the web app / browser via JSON events — not embedded in binary program frames. The session_start event establishes context; epoch changes are sent as separate events. The browser tracks the current session_id and epoch and drops any late-arriving data from a previous epoch.
 
-- **RGB frames** — `{ session_id, epoch, strip_id, t_rel, rgb }`
-- **Playback state events** — `{ session_id, epoch, state, t_rel }`
-- **Telemetry** — `{ session_id, strip_id, ... }` (epoch optional)
-
-Session_id and epoch are stamped by the controller after `gen` filtering. The browser uses epoch to drop late-arriving frames after a seek (in case the web app relays faster than it processes).
+Program frames (binary, kind=0x02) carry only `frame_index` and `t_rel` — they are implicitly within the current session/epoch because they flow on the same ordered UDS connection as the events.
 
 ---
 
@@ -1310,9 +1338,9 @@ The controller is the long-running authority on the base station. It is a separa
 
 8. **Receives telemetry** — health, errors, timing from all devices (UDP).
 
-9. **Receives RGB frames from simulators** — filters by `gen` (drops stale in-flight frames), stamps with session_id, epoch, strip_id, forwards to web app (which relays to browser via WebSocket).
+9. **Assembles program frames** — receives per-strip RGB frames from simulators, filters by `gen` (drops stale), groups by `frame_index`, emits complete multi-strip program frames to the web app over UDS. The web app relays to browser via WebSocket.
 
-10. **Exposes a control/event API** — the web app connects to this API to send commands (load, play, pause, seek) and receive events (session start, state changes, frames, telemetry).
+10. **Exposes a control/event API over UDS** — the web app connects to a Unix Domain Socket to send commands (load, play, pause, seek) and receive events (session start, state changes), program frames, and telemetry. See "Controller ↔ Web app protocol" section.
 
 ### What the controller does NOT do
 
@@ -1342,25 +1370,31 @@ def load_program(self, dsl_source: str):
         per_strip_si[name] = blob_safe_intervals[name]  # from compiler
     global_si = intersect_safe_intervals(per_strip_si)
 
-    # 4. Build manifest
+    # 4. Build manifest (strips as ordered list — defines canonical strip order)
     self.session_id += 1
     self.epoch = 0
+    strip_order = list(strips_config.keys())  # stable order from config
     self.manifest = {
         "artifact_id": sha256(dsl_source + beat + duration + config_hash + compiler_version),
         "session_id": self.session_id,
         "duration": duration,
         "safe_intervals": global_si,
-        "strips": {name: {"blob": blob} for name, blob in blobs.items()},
+        "strips": [
+            {"name": name, "length": strips_config[name]["length"], "blob": blobs[name]}
+            for name in strip_order
+        ],
     }
+    self.strip_count = len(self.manifest["strips"])
 
     # 5. Route blobs to devices
     self.gen += 1
-    for strip_name, strip_data in self.manifest["strips"].items():
-        device = self.device_for_strip(strip_name)  # config lookup
+    for i, strip_data in enumerate(self.manifest["strips"]):
+        device = self.device_for_strip(strip_data["name"])  # config lookup
         self.expected_gen[device.id] = self.gen
+        self.strip_index_for[device.id] = i  # maps device → strip index
         ok = self.send_load(device.conn, strip_data["blob"], self.gen)
         if not ok:
-            raise Error(f"device {device.id} rejected blob for {strip_name}")
+            raise Error(f"device {device.id} rejected blob for {strip_data['name']}")
 
     # 6. Notify web app
     self.publish_session_start(self.manifest)
@@ -1375,9 +1409,9 @@ The web app is a separate process. It serves browser assets and relays between t
 ### What the web app does
 
 1. **Serves browser assets** — HTML, JS, CSS for the visualization UI
-2. **Opens a long-lived connection to the controller** — receives session events, frames, telemetry
-3. **Translates browser commands to controller commands** — browser sends `{"cmd": "seek", "t": 30.0}`, web app forwards to controller API
-4. **Forwards RGB frames and events to browser** — via WebSocket
+2. **Connects to the controller over UDS** — receives session events, program frames, telemetry on a single ordered connection
+3. **Translates browser commands to controller commands** — browser sends `{"cmd": "seek", "t": 30.0}`, web app forwards as JSON over UDS
+4. **Relays program frames and events to browser** — via WebSocket (JSON text frames for events, binary frames for program frames)
 5. **Exposes metadata to browser** — strip layout, pixel positions (from config, via controller)
 
 ### What the web app does NOT do
@@ -1386,12 +1420,75 @@ The web app is a separate process. It serves browser assets and relays between t
 - Does not know device IPs
 - Does not manage clock sync
 - Does not track playback state (the controller is authoritative)
+- Does not assemble per-device frames (the controller does that)
+
+---
+
+## Controller ↔ Web app protocol
+
+A single **Unix Domain Socket (UDS)** connection carries all traffic between the controller and the web app. One connection, one ordering domain, one backpressure story.
+
+### Why one connection
+
+- **Ordering is guaranteed.** `session_start` → `epoch_changed` → first program frame always arrive in that order. Two sockets would create cross-stream ordering races.
+- **Reconnect is simple.** Reconnect → receive snapshot → resume frame flow. No need to synchronize multiple connections.
+- **No external dependencies.** No ZMQ, no HTTP server in the controller. Just a Unix socket with length-prefixed records.
+
+### Wire format
+
+```
+[length: u32 LE] [kind: u8] [payload...]
+```
+
+`length` includes the kind byte but not itself (same convention as the device TCP protocol).
+
+Two record kinds:
+
+#### kind=0x01 — JSON
+
+`payload` is UTF-8 JSON. Used for commands, events, and session snapshots.
+
+**Web app → Controller (commands):**
+```json
+{"cmd": "load", "source": "..."}
+{"cmd": "play"}
+{"cmd": "pause"}
+{"cmd": "seek", "t": 30.0}
+```
+
+**Controller → Web app (events):**
+```json
+{"event": "session_start", "session_id": 42, "artifact_id": "...",
+ "duration": 612.0, "safe_intervals": [[0.0, 0.0], [12.4, 13.0], ...],
+ "strips": [{"name": "main_left", "length": 150}, {"name": "main_right", "length": 150}]}
+{"event": "state", "state": "playing", "epoch": 2}
+{"event": "error", "message": "device esp-01 rejected blob"}
+```
+
+The `strips` array in `session_start` defines the **canonical strip order and lengths** for the session. Program frames pack RGB blobs in this exact order with no per-entry headers — the web app and browser use the strip list to slice the payload.
+
+#### kind=0x02 — Program frame
+
+Binary payload, emitted by the controller after assembling all per-strip frames for a given `frame_index`:
+
+```
+[frame_index: u32 LE] [t_rel: f32 LE] [rgb_strip_0] [rgb_strip_1] ... [rgb_strip_N-1]
+```
+
+- `frame_index` — device-emitted monotonic counter, reset to 0 on LOAD/JUMP
+- `t_rel` — playback time in seconds
+- `rgb_strip_i` — raw RGB bytes, length = `strips[i].length * 3` (from session snapshot)
+- No strip_id, no rgb_len per entry — strip order and sizes are implicit from the session snapshot
+
+### Session snapshot on reconnect
+
+When the web app reconnects (or connects for the first time), the controller sends the current session state as a JSON record before any frames flow. This lets the web app catch up without special handshake logic — it's just regular JSON messages on the same connection.
 
 ---
 
 ## Data flow: end-to-end example
 
-A wave animation on 10 pixels, controller + one ESPSimulated, browser display.
+A wave animation on two strips, controller + two ESPSimulated devices, browser display.
 
 ### 1. Startup
 
@@ -1415,8 +1512,10 @@ Web App                   Controller                     ESPSimulated
    |  { session_start,       |                              |
    |    session_id: 42,      |                              |
    |    duration: 2.0,       |                              |
-   |    safe_intervals: [(0.0,0.0)], |                       |
-   |    strips: [...] }      |                              |
+   |    safe_intervals: ..., |                              |
+   |    strips: [            |                              |
+   |     {name, length},...  |                              |
+   |    ] }                  |                              |
    |<------------------------|                              |
    |                         |                              |
    |  play()                 |                              |
@@ -1442,28 +1541,32 @@ ESPSimulated loop iteration:
    |    -> rgb_buf = [0,1,5, 0,4,97, 0,1,5, ...]
    |
    |  output_frame()
-   |    -> UDP: [gen + t_rel + rgb_buf] to controller
+   |    -> UDP: [gen + frame_index + t_rel + rgb_buf] to controller
+   |    -> _frame_index++
    |
    |  sleep until next frame (20ms cadence)
 ```
 
-### 3. Controller receives and forwards to browser
+### 3. Controller assembles program frame and forwards to browser
 
 ```
-ESPSimulated              Controller                    Browser
-   |                         |                            |
-   |  UDP: [gen + t_rel + rgb]|                            |
-   |------------------------>|                            |
-   |                         |  check gen, stamp:         |
-   |                         |  { session_id: 42,         |
-   |                         |    epoch: 1,               |
-   |                         |    strip_id: "main_left",  |
-   |                         |    t_rel: 0.3,             |
-   |                         |    rgb: [...] }            |
-   |                         |--------------------------->|
-   |                         |       (WebSocket)          |
-   |                         |                            |  render canvas
-   |                         |                            |  update clock
+ESPSimulated (strip 0)    ESPSimulated (strip 1)    Controller              Browser
+   |                         |                         |                      |
+   |  UDP: [gen, fi=10,      |                         |                      |
+   |   t_rel=0.3, rgb]       |                         |                      |
+   |------------------------>|                         |                      |
+   |                         |  UDP: [gen, fi=10,      |                      |
+   |                         |   t_rel=0.3, rgb]       |                      |
+   |                         |------------------------>|                      |
+   |                         |                         |  gen ok, fi=10:      |
+   |                         |                         |  both strips present |
+   |                         |                         |                      |
+   |                         |                         |  UDS program frame:  |
+   |                         |                         |  [fi=10][t_rel=0.3]  |
+   |                         |                         |  [rgb_0][rgb_1]      |
+   |                         |                         |--------------------->|
+   |                         |                         |     (via web app)    |
+   |                         |                         |                      | render canvas
 ```
 
 ### 4. Jump (user clicks within a safe region on seek bar)
@@ -1482,19 +1585,18 @@ Browser                   Controller                Devices (all)
    |                         |                         |  handle_jump(t0, 2.5):
    |                         |                         |    engine.reset()
    |                         |                         |    _t0 = t0 (shared)
+   |                         |                         |    _frame_index = 0
    |                         |                         |    continue playing
    |                         |                         |
-   |                         |  UDP: [rgb + t_rel=2.5] |
-   |                         |<------------------------|
+   |                         |  UDP: [gen, fi=0,       |
+   |                         |   t_rel=2.5, rgb]       |
+   |                         |<--- (from all devices)--|
    |                         |                         |
-   |  { session_id: 42,      |                         |
-   |    epoch: 2,            |                         |
-   |    strip_id: "main_left"|                         |
-   |    t_rel: 2.0,          |                         |
-   |    rgb: [...] }         |                         |
+   |                         |  assemble fi=0:         |
+   |  program frame           |  all strips present    |
+   |  [fi=0][t_rel=2.5]      |                         |
+   |  [rgb_0][rgb_1]          |                         |
    |<------------------------|                         |
-   |                         |                         |
-   |  drop any late epoch=1  |                         |
    |  frames, render epoch=2 |                         |
 ```
 
@@ -1534,14 +1636,9 @@ When the controller sends a debug command (e.g., seek), it sends it to all simul
 
 ## Open issues / undecided
 
-### 1. Controller <-> Web app protocol
+### ~~1. Controller <-> Web app protocol~~ (decided)
 
-The controller exposes a control/event API to the web app. The exact protocol is not yet decided:
-- JSON over TCP?
-- HTTP + WebSocket?
-- ZMQ?
-
-The web app needs to: send commands (load, play, pause, seek), receive events (session start, state changes), receive streamed RGB frames. A WebSocket-like bidirectional channel is the natural fit, but whether the controller speaks WebSocket directly or uses a simpler TCP protocol with the web app adapting to WebSocket is open.
+See "Controller ↔ Web app protocol" section below.
 
 ### 2. Program looping
 
