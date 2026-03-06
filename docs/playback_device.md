@@ -956,6 +956,17 @@ Browser                   Controller                ESPSimulated
 
 ---
 
+## Device mode and debug coordination
+
+Mixed configurations (real ESPs + simulators in the same show) are not supported. Two clean modes:
+
+- **Production mode**: all real ESPs. No debug commands. Controller sends LOAD, START, and sync only.
+- **Dev mode**: all simulators. Full debug controls (pause/seek/step). Browser reflects the true state of every strip.
+
+When the controller sends a debug command (e.g., seek), it sends it to all simulators via their TCP connections without waiting for acknowledgment (fire-and-forget). Each simulator independently resets, replays, and sends its RGB frame. The browser may receive frames from different simulators a few milliseconds apart — at worst a single-frame glitch during a debug operation, invisible in practice.
+
+---
+
 ## Open issues / undecided
 
 ### 1. Controller ↔ Web UI relationship
@@ -967,16 +978,7 @@ The controller receives rgb frame telemetry from simulators and needs to forward
 
 The controller is the natural host since it already knows about all devices. But the exact architecture (Flask in the controller process, or a separate frontend server) is **not yet decided.**
 
-### 2. Multi-device seek/pause coordination
-
-When the user seeks or pauses via the browser, the controller sends debug commands to all simulated devices. Questions:
-- Should all simulators seek atomically (all get the command before any resume)?
-- What happens if some devices are real and some simulated — pause only affects simulators while real ESPs keep playing?
-- Is there a "simulation mode" where the controller knows all devices are simulated and enables full debug control?
-
-**Not yet decided.**
-
-### 3. Program looping
+### 2. Program looping
 
 When a program ends (`tick()` returns false), what happens?
 - The device transitions to ENDED state and goes dark.
@@ -985,7 +987,7 @@ When a program ends (`tick()` returns false), what happens?
 
 Should looping be a device-level setting (passed with LOAD or START) or a controller-level concern? **Not yet decided.**
 
-### 4. ESPSimulated as separate process — startup and discovery
+### 3. ESPSimulated as separate process — startup and discovery
 
 ESPSimulated runs as its own process. How does the controller discover it?
 - Controller starts the process and knows the port?
