@@ -118,7 +118,7 @@ Command types:
 ```
 CMD_LOAD:         type = 0x10, payload = blob bytes (variable length)
 CMD_START:        type = 0x11, payload = [t0: i64]                     -> 9 bytes total
-CMD_JUMP:         type = 0x12, payload = [t_rel: f32]                  -> 5 bytes total
+CMD_JUMP:         type = 0x12, payload = [t0: i64] [t_rel: f32]        -> 13 bytes total
 CMD_SYNC_RESULT:  type = 0x03, payload = [seq: u16] [boot_seq: u32] [offset: i64] -> 15 bytes total
 CMD_DEBUG_PAUSE:  type = 0x20, no payload                              -> 1 byte total
 CMD_DEBUG_RESUME: type = 0x21, no payload                              -> 1 byte total
@@ -135,7 +135,7 @@ CMD_ACK:          type = 0x80, payload = [status: u8]                  -> 2 byte
 
 The device sends an ACK after LOAD (with decode status). Other commands are fire-and-forget from the controller's perspective — the TCP connection itself provides delivery guarantee.
 
-**CMD_JUMP vs CMD_DEBUG_SEEK:** CMD_JUMP is a lightweight seek available on all devices. It resets the engine and starts ticking from the given time — valid only at reset-safe jump points (see "Reset-safe jump points" below). CMD_DEBUG_SEEK is simulator-only: it replays from t=0 to the target, producing correct output at any arbitrary time.
+**CMD_JUMP vs CMD_DEBUG_SEEK:** CMD_JUMP is a lightweight seek available on all devices. It carries a shared absolute `t0` (like CMD_START) so all devices stay synchronized, plus `t_rel` for precise frame rendering when paused. Valid only at reset-safe jump points (see "Reset-safe jump points" below). CMD_DEBUG_SEEK is simulator-only: it replays from t=0 to the target, producing correct output at any arbitrary time.
 
 ### TCP command reading (device side)
 
@@ -183,10 +183,12 @@ void poll_tcp_commands(int tcp_fd, PlaybackDevice& device) {
                 break;
             }
             case 0x12: {  // CMD_JUMP
-                if (payload_len >= 4) {
+                if (payload_len >= 12) {
+                    int64_t t0;
                     float t_rel;
-                    memcpy(&t_rel, payload, 4);
-                    device.handle_jump(t_rel);
+                    memcpy(&t0, payload, 8);
+                    memcpy(&t_rel, payload + 8, 4);
+                    device.handle_jump(t0, t_rel);
                 }
                 break;
             }
@@ -283,8 +285,8 @@ def send_start(conn: socket.socket, t0: int):
     msg += struct.pack('<q', t0)             # t0 as int64
     conn.sendall(msg)
 
-def send_jump(conn: socket.socket, t_rel: float):
-    msg = struct.pack('<IBf', 5, 0x12, t_rel)  # length=5, CMD_JUMP, t_rel
+def send_jump(conn: socket.socket, t0: int, t_rel: float):
+    msg = struct.pack('<IBqf', 13, 0x12, t0, t_rel)  # length=13, CMD_JUMP, t0, t_rel
     conn.sendall(msg)
 ```
 
@@ -339,10 +341,11 @@ public:
     // The device computes t_rel = (now_mono() + _sync_offset - t0) / 1e6 each frame.
     void handle_start(int64_t t0);
 
-    // Jump to a reset-safe point. Resets the engine and adjusts time origin.
+    // Jump to a reset-safe point. Resets the engine and sets shared time origin.
+    // t0 is the shared absolute time (same value sent to all devices, like START).
+    // t_rel is the target jump time (used for precise frame rendering when paused).
     // Valid only at compiler-identified safe points (controller enforces this).
-    // Works on both real ESP and simulator.
-    void handle_jump(float t_rel);
+    void handle_jump(int64_t t0, float t_rel);
 
     // Update sync offset (from controller SYNC_RESULT, received over TCP).
     void handle_sync_result(int64_t offset);
@@ -443,10 +446,10 @@ void PlaybackDevice::handle_start(int64_t t0) {
 
 #### `handle_jump()`
 
-Lightweight seek to a reset-safe point. Resets the engine and adjusts the time origin so the next tick produces `t_rel` at the target. No replay needed — the target is a time where no event carries prior state.
+Lightweight seek to a reset-safe point. The controller sends a shared absolute `t0` (computed the same way as for START) so all devices stay synchronized. `t_rel` is included for precise frame rendering when paused. No replay needed — the target is a time where no event carries prior state.
 
 ```cpp
-void PlaybackDevice::handle_jump(float t_rel) {
+void PlaybackDevice::handle_jump(int64_t t0, float t_rel) {
     if (!_engine) return;
 
     // Clamp to valid range
@@ -455,21 +458,21 @@ void PlaybackDevice::handle_jump(float t_rel) {
     if (t_rel > dur) t_rel = dur;
 
     _engine->reset();
-
-    // Adjust t0 so next tick_once() produces the target t_rel
-    _t0 = now_mono() + _sync_offset - (int64_t)(t_rel * 1e6f);
+    _t0 = t0;  // shared absolute time — same on all devices (like START)
 
     if (_state == PLAYING) {
         // Continue playing from jump point
-        // First tick after jump will render the target frame
+        // Next tick_once() computes t_rel from the shared _t0
     } else if (_state == PAUSED || _state == LOADED || _state == ENDED) {
-        // Tick once to render the frame at the jump point, then pause
+        // Render one frame at the exact target, then pause
         _engine->tick(t_rel);
         output_frame();
         _state = PAUSED;
     }
 }
 ```
+
+**Why `t0` must be shared:** If each device derived `_t0` from its own local receipt time (`now_mono() + offset - t_rel * 1e6`), TCP delivery jitter would cause permanent clock skew between devices. The shared `t0` avoids this — same mechanism as CMD_START.
 
 Because jump targets are reset-safe (no event is active at that instant), `reset()` + starting from `t_rel` produces correct output. The engine's cursor will advance to the first event at or after `t_rel` on each layer.
 
@@ -1158,11 +1161,14 @@ def handle_seek(self, requested_t: float):
         # Simulators: arbitrary seek via replay (CMD_DEBUG_SEEK)
         for device in self.devices:
             self.send_debug_seek(device, requested_t)
+        target = requested_t
     else:
         # ESPs: snap to nearest safe point (CMD_JUMP)
         target = self.snap_to_jump_point(requested_t)
+        # Compute shared t0 so all devices are synchronized
+        t0 = self.mono_now() - int(target * 1e6)
         for device in self.devices:
-            self.send_jump(device, target)
+            self.send_jump(device, t0, target)
 
     self.epoch += 1
     self.notify_web_app(epoch=self.epoch, t_rel=target)
@@ -1378,11 +1384,11 @@ Browser                   Controller                Devices (all)
    |                         |  (nearest safe point)   |
    |                         |  epoch = 2              |
    |                         |                         |
-   |                         |  TCP: CMD_JUMP(2.0)     |
+   |                         |  TCP: CMD_JUMP(t0, 2.0)  |
    |                         |------------------------>|
-   |                         |                         |  handle_jump(2.0):
+   |                         |                         |  handle_jump(t0, 2.0):
    |                         |                         |    engine.reset()
-   |                         |                         |    adjust _t0
+   |                         |                         |    _t0 = t0 (shared)
    |                         |                         |    continue playing
    |                         |                         |
    |                         |  UDP: [rgb + t_rel=2.0] |
