@@ -16,10 +16,11 @@ DSL (.py)
   → 5. Buffer packing    — stateful animations → shared buffer slots
   → 6. Validation        — bounds, references, timing checks
   → 7. Blob emission     — serialize to binary
-  → dict[strip_name, bytes]
+  → 8. Jump point analysis — find reset-safe times (no active events)
+  → dict[strip_name, bytes] + per-strip jump points
 ```
 
-Steps 1–3 run once across all events. Steps 4–7 run independently per strip. `build()` returns `dict[str, bytes]` — one entry per strip.
+Steps 1–3 run once across all events. Steps 4–8 run independently per strip. `build()` returns `dict[str, bytes]` — one entry per strip. Jump points are returned as separate metadata (not embedded in the blob).
 
 ### Multi-strip
 
@@ -535,3 +536,72 @@ Total:                            383 bytes
 ```
 
 Fits in a single UDP packet.
+
+---
+
+## 8. Jump Point Analysis
+
+After blob emission, the compiler analyzes the per-strip event timeline to find **reset-safe jump points** — times where no event is active on any layer. At these times, `Engine::reset()` followed by `tick(t)` produces correct output without replaying from t=0. This enables cheap seek on real ESP hardware.
+
+### Algorithm
+
+A simple interval sweep over all events across all layers:
+
+```python
+def _find_jump_points(layers: list[dict], duration: float) -> list[float]:
+    """Find times where no event is active on any layer."""
+    intervals = []
+    for layer in layers:
+        for e in layer["events"]:
+            intervals.append((e["at_sec"], e["at_sec"] + e["duration_sec"]))
+
+    if not intervals:
+        return [0.0]
+
+    intervals.sort()
+    points = [0.0]  # t=0 is always safe
+    end = 0.0
+    for start, stop in intervals:
+        if start > end:
+            points.append(end)  # gap: no events active in [end, start)
+        end = max(end, stop)
+    if end < duration:
+        points.append(end)  # gap between last event and program end
+
+    return points
+```
+
+### Why this is correct
+
+A time is safe for jump if no animation carries prior state at that instant. In this engine, the only sources of history-dependence are:
+
+- **Stateful animations** (shift) — snapshot source pixels at construction. If the shift isn't active, there's nothing to snapshot.
+- **Source layer dependencies** — an event reads another layer's buffer. If neither event is active, there's no dependency.
+- **Active stateless events** (wave, spark, paint) — while these compute output purely from `(t - event_start)`, the engine creates animation instances on the first tick where an event is active. Jumping into the middle of an active event would skip that creation.
+
+The conservative rule — "no event active anywhere" — avoids all of these. It's simple and correct.
+
+### Output
+
+Jump points are returned as metadata alongside the blobs, not embedded in the blob format. The blob and decoder are unchanged.
+
+```python
+# Per-strip result (internal to compiler)
+{
+    "blob": b"...",
+    "jump_points": [0.0, 4.0, 8.5, 12.0]
+}
+```
+
+The controller computes the **global intersection** of per-strip jump points for synchronized multi-device seek. See `docs/playback_device.md`, section "Reset-safe jump points".
+
+### Test animation walkthrough
+
+```
+Layer 0:  wave [0.0, 1.0)  shift [1.0, 2.0)
+Layer 1:  sparks scattered throughout [0.0, 2.0)
+```
+
+If sparks leave gaps (e.g., spark at [0.0, 0.1), next at [0.25, 0.35)), those gaps on layer 1 must also be gaps on layer 0 to be safe. In this example, layer 0 has continuous coverage from 0.0 to 2.0, so the only safe points are `[0.0]` (before everything starts) — no interior jump points. This is expected for a short, dense test animation.
+
+A realistic music program with phrase boundaries and blackout moments will have many more safe points.

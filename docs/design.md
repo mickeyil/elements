@@ -16,57 +16,45 @@ The core design principle: **tight timing sync over complex rendering**. Simple 
 ## System Architecture
 
 ```
-┌─────────────────────────────────────┐
-│          Base Station               │
-│  (NUC / Raspberry Pi / Linux box)   │
-│                                     │
-│  ┌──────────────┐  ┌──────────────┐  │
-│  │ Controller   │  │ Audio Engine │  │
-│  │ (sync, LOAD, │  │ (ALSA/Pipe)  │  │
-│  │  START, telem│  │              │  │
-│  └──────┬───────┘  └──────┬───────┘  │
-│         │                 │          │
-│  ┌──────┴─────────────────┴───────┐  │
-│  │ Beat Analyzer + Compiler      │  │
-│  │ (offline analysis → bytecode) │  │
-│  └───────────────┬───────────────┘  │
-│                  │                  │
-│              UDP │ (commands, sync, │
-│                  │  blobs, telemetry│
-└──────────────────┼──────────────────┘
-                   │ WiFi (same LAN)
-┌──────────────────┼──────────────────┐
-│  ESP32 Device    │                  │
-│                  │                  │
-│  ┌───────────────┴───────────────┐  │
-│  │ UDP command handler           │  │
-│  │ (LOAD, START, SYNC_REQ)      │  │
-│  └───────────────┬───────────────┘  │
-│                  │                  │
-│  ┌───────────────┴───────────────┐  │
-│  │ Animation VM                  │  │
-│  │ (bytecode interpreter)        │  │
-│  │ renders to layer buffers      │  │
-│  └───────────────┬───────────────┘  │
-│                  │                  │
-│  ┌───────────────┴───────────────┐  │
-│  │ Compositor → FastLED → strip  │  │
-│  └───────────────────────────────┘  │
-└─────────────────────────────────────┘
+┌──────────────────────────────────────────────────┐
+│                   Base Station                    │
+│            (NUC / Raspberry Pi / Linux box)       │
+│                                                   │
+│  ┌──────────────────┐     ┌───────────────────┐  │
+│  │    Controller     │     │     Web App       │  │
+│  │  (compiles, routes│<--->│  (serves browser, │  │
+│  │   blobs, syncs,   │     │   relays commands │  │
+│  │   manages sessions│     │   and frames)     │  │
+│  │   + playback)     │     └────────┬──────────┘  │
+│  └────────┬──────────┘              │ WebSocket   │
+│           │                         │             │
+│     TCP + UDP                    Browser          │
+│     (device protocol)            (canvas, UI)     │
+│           │                                       │
+└───────────┼───────────────────────────────────────┘
+            │ WiFi (same LAN)
+     ┌──────┴──────┐
+     │   Devices   │
+     │  (ESP32 or  │
+     │  Simulated) │
+     └─────────────┘
 ```
+
+The controller is the long-running authority. It compiles DSL programs, routes per-strip blobs to devices via a static config, manages clock sync and playback sessions, and exposes a control/event API. The web app is a separate process that relays between the controller and the browser. See `playback_device.md` for the full architecture, config format, and session identity model.
 
 ### Network Assumptions
 
 - Base station and ESP32 share the same WiFi network
 - No firewall or routing restrictions between them
-- Base station runs controller (UDP commands + custom clock sync)
-- Future: potentially multiple ESP32 devices synced to the same base station
+- Base station runs controller + web app as separate processes
+- Static config maps strip names to device IPs
+- Multiple ESP32 devices synced to the same controller
 
 ---
 
 ## Base Station Protocol
 
-Communication between the base station and the ESP32 device is minimal by design. The base station does all the heavy lifting (analysis, compilation); the device is a dumb playback engine.
+Communication between the base station and devices is minimal by design. The controller does all the heavy lifting (analysis, compilation, routing); the device is a dumb playback engine.
 
 ### Messages
 
@@ -163,9 +151,9 @@ Detailed design documents:
 
 **→ [decoder.md](decoder.md)** — C++ decoder: blob parsing, struct layout, free_program
 
-**→ [compiler.md](compiler.md)** — Python compiler pipeline: parser, time resolution, layer inference, buffer packing, blob emission
+**→ [compiler.md](compiler.md)** — Python compiler pipeline: parser, time resolution, layer inference, buffer packing, blob emission, jump point analysis
 
-**→ [playback_device.md](playback_device.md)** — PlaybackDevice hierarchy, custom clock sync protocol, simulator debug extensions *(planned)*
+**→ [playback_device.md](playback_device.md)** — PlaybackDevice hierarchy, transport protocol, custom clock sync, controller/web-app architecture, session identity, reset-safe jump points *(planned)*
 
 **→ [draft_simulator_proposal.md](draft_simulator_proposal.md)** — Simulator: pybind11 + Flask + browser visualization *(early draft)*
 
