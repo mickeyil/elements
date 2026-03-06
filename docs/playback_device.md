@@ -1,6 +1,6 @@
 # PlaybackDevice — Shared Device Abstraction
 
-> **Status: Design document.** Not yet implemented. Describes planned architecture for the PlaybackDevice hierarchy, transport split, custom clock sync protocol, controller/web-app separation, session identity model, reset-safe jump points, and simulator debug extensions. Prerequisites `Engine::reset()` and Compositor gamma control are implemented in `src/engine.cpp` and `src/compositor.cpp`.
+> **Status: Design document.** Not yet implemented. Describes planned architecture for the PlaybackDevice hierarchy, transport split, custom clock sync protocol, controller/web-app separation, session identity model, reset-safe intervals, and simulator debug extensions. Prerequisites `Engine::reset()` and Compositor gamma control are implemented in `src/engine.cpp` and `src/compositor.cpp`.
 
 ## Motivation
 
@@ -135,7 +135,7 @@ CMD_ACK:          type = 0x80, payload = [status: u8]                  -> 2 byte
 
 The device sends an ACK after LOAD (with decode status). Other commands are fire-and-forget from the controller's perspective — the TCP connection itself provides delivery guarantee.
 
-**CMD_JUMP vs CMD_DEBUG_SEEK:** CMD_JUMP is a lightweight seek available on all devices. It carries a shared absolute `t0` (like CMD_START) so all devices stay synchronized, `t_rel` for precise frame rendering when paused, and a `gen` value the device echoes on outbound UDP so the controller can drop stale in-flight frames. Valid only at reset-safe jump points (see "Reset-safe jump points" below). CMD_DEBUG_SEEK is simulator-only: it replays from t=0 to the target, producing correct output at any arbitrary time.
+**CMD_JUMP vs CMD_DEBUG_SEEK:** CMD_JUMP is a lightweight seek available on all devices. It carries a shared absolute `t0` (like CMD_START) so all devices stay synchronized, `t_rel` for precise frame rendering when paused, and a `gen` value the device echoes on outbound UDP so the controller can drop stale in-flight frames. Valid only within reset-safe intervals (see "Reset-safe jump points" below). CMD_DEBUG_SEEK is simulator-only: it replays from t=0 to the target, producing correct output at any arbitrary time.
 
 **Generation counter (`gen`):** LOAD and JUMP carry a `gen` value (u16) that the device stores and includes on every outbound UDP frame. The controller increments `gen` on each LOAD and JUMP, and drops any incoming UDP frame whose `gen` doesn't match the current expected value. This prevents stale in-flight frames — emitted before the device processed the command — from being forwarded to the browser with the wrong epoch. See "Session identity and frame filtering" below.
 
@@ -350,11 +350,11 @@ public:
     // The device computes t_rel = (now_mono() + _sync_offset - t0) / 1e6 each frame.
     void handle_start(int64_t t0);
 
-    // Jump to a reset-safe point. Resets the engine and sets shared time origin.
+    // Jump to a reset-safe time. Resets the engine and sets shared time origin.
     // t0 is the shared absolute time (same value sent to all devices, like START).
     // t_rel is the target jump time (used for precise frame rendering when paused).
     // gen is the new generation counter, echoed on outbound UDP.
-    // Valid only at compiler-identified safe points (controller enforces this).
+    // Valid only within compiler-identified safe intervals (controller enforces this).
     void handle_jump(int64_t t0, float t_rel, uint16_t gen);
 
     // Update sync offset (from controller SYNC_RESULT, received over TCP).
@@ -458,7 +458,7 @@ void PlaybackDevice::handle_start(int64_t t0) {
 
 #### `handle_jump()`
 
-Lightweight seek to a reset-safe point. The controller sends a shared absolute `t0` (computed the same way as for START) so all devices stay synchronized. `t_rel` is included for precise frame rendering when paused. No replay needed — the target is a time where no event carries prior state.
+Lightweight seek to a reset-safe time (within a compiler-identified safe interval). The controller sends a shared absolute `t0` (computed the same way as for START) so all devices stay synchronized. `t_rel` is included for precise frame rendering when paused. No replay needed — the target is a time where no event carries prior state.
 
 ```cpp
 void PlaybackDevice::handle_jump(int64_t t0, float t_rel, uint16_t gen) {
@@ -474,7 +474,7 @@ void PlaybackDevice::handle_jump(int64_t t0, float t_rel, uint16_t gen) {
     _gen = gen;  // new generation — stale in-flight frames carry the old gen
 
     if (_state == PLAYING) {
-        // Continue playing from jump point
+        // Continue playing from jump target
         // Next tick_once() computes t_rel from the shared _t0
     } else if (_state == PAUSED || _state == LOADED || _state == ENDED) {
         // Render one frame at the exact target, then pause
@@ -922,7 +922,7 @@ For mixed real+simulated setups: the controller can derive a trivial offset for 
 
 Two seek mechanisms exist with different tradeoffs:
 
-**CMD_JUMP (all devices):** Resets the engine and starts ticking from a reset-safe point. O(1) — no replay. Valid only at compiler-identified safe points where no event carries prior state. See "Reset-safe jump points" section below.
+**CMD_JUMP (all devices):** Resets the engine and starts ticking from a reset-safe time. O(1) — no replay. Valid only within compiler-identified safe intervals where no event carries prior state. See "Reset-safe jump points" section below.
 
 **CMD_DEBUG_SEEK (simulator only):** Resets the engine and replays frame-by-frame from t=0 to the target. Correct at any arbitrary time, but cost is proportional to the target time. Used for precise scrubbing during development.
 
@@ -979,7 +979,7 @@ void Engine::reset() {
 
 After reset, the engine is in the same state as immediately after construction. Source-dependent animations (shift snapshotting a source layer) reproduce correctly because the source layer is re-rendered during replay.
 
-For jump-point seek (CMD_JUMP), replay is not needed — the target time is a reset-safe point where no event carries prior state, so `reset()` alone leaves the engine in the correct state to begin ticking from that point.
+For jump seek (CMD_JUMP), replay is not needed — the target time falls within a safe interval where no event carries prior state, so `reset()` alone leaves the engine in the correct state to begin ticking from that time.
 
 ---
 
@@ -997,7 +997,7 @@ dict[str, bytes]   # strip_name -> blob
 {
     "artifact_id": "sha256(...)",      # compiled artifact identity (see below)
     "duration": 612.0,                 # seconds
-    "jump_points": [0.0, 12.4, 28.0, 44.5, 58.0],  # reset-safe times (global)
+    "safe_intervals": [(0.0, 0.0), (12.4, 13.0), (28.0, 29.5), (44.5, 46.0), (58.0, 60.0)],  # reset-safe intervals (global)
     "strips": {
         "main_left":  { "blob": b"..." },
         "main_right": { "blob": b"..." }
@@ -1009,20 +1009,20 @@ The blob format and decoder are unchanged. The manifest is controller-level meta
 
 ### Artifact caching
 
-The compiled manifest (blobs + jump points + duration) should be cached as a single unit keyed by all inputs that affect the output:
+The compiled manifest (blobs + safe intervals + duration) should be cached as a single unit keyed by all inputs that affect the output:
 
 ```
 artifact_id = sha256(dsl_source + config_hash + compiler_version)
 ```
 
 All three components matter:
-- **DSL source** — different program text produces different blobs and jump points
+- **DSL source** — different program text produces different blobs and safe intervals
 - **Config hash** — strip lengths and mapping affect compilation (e.g., pixel bounds validation)
-- **Compiler version** — changes to layer inference, blob format, or jump-point rules change the output
+- **Compiler version** — changes to layer inference, blob format, or safe-interval rules change the output
 
 On load, the controller checks the cache first. Cache hit skips compilation entirely and serves the stored manifest. Cache miss triggers compilation and stores the result.
 
-The cache stores the full artifact — blobs, jump points, duration, strip metadata. No separate caching of individual components. This keeps blobs and metadata consistent by construction.
+The cache stores the full artifact — blobs, safe intervals, duration, strip metadata. No separate caching of individual components. This keeps blobs and metadata consistent by construction.
 
 ### Identity model
 
@@ -1050,7 +1050,7 @@ Controller                              Web App / Browser
     |    "session_id": 42,                   |
     |    "artifact_id": "song_abc",           |
     |    "duration": 612.0,                  |
-    |    "jump_points": [0.0, 12.4, ...],    |
+    |    "safe_intervals": [...],             |
     |    "strips": [...] }                   |
     |--------------------------------------->|
     |                                        |  browser renders seek bar
@@ -1121,13 +1121,15 @@ Session_id and epoch are stamped by the controller after `gen` filtering. The br
 
 ### Definition
 
-A time `t` is **reset-safe** if the visual output at `t` depends only on events starting at or after `t` — not on any state accumulated before `t`. At a reset-safe point, `engine.reset()` followed by `engine.tick(t)` produces correct output without replaying earlier frames.
+A time `t` is **reset-safe** if the visual output at `t` depends only on events starting at or after `t` — not on any state accumulated before `t`. At a reset-safe time, `engine.reset()` followed by `engine.tick(t)` produces correct output without replaying earlier frames.
 
 In this engine, a time is reset-safe when **no event is active on any layer** at that instant. Concretely: for every layer, either the cursor is between events (previous event ended, next event hasn't started) or before the first event.
 
+Safe times form **intervals**, not discrete points. A gap between events spans a continuous range `[gap_start, gap_end)` where every time within the gap is reset-safe. Modeling these as intervals is essential for correct multi-strip intersection (see "Per-strip vs global safe intervals" below).
+
 ### Why this matters
 
-The engine's cursor is forward-only. To seek to an arbitrary time, the simulator replays from t=0 — expensive and impractical on real ESP hardware. But if the target time is a reset-safe point, the engine can simply reset and start ticking from there. Cost is O(1) instead of O(target_time).
+The engine's cursor is forward-only. To seek to an arbitrary time, the simulator replays from t=0 — expensive and impractical on real ESP hardware. But if the target time falls within a safe interval, the engine can simply reset and start ticking from there. Cost is O(1) instead of O(target_time).
 
 ### What creates history-dependence
 
@@ -1141,60 +1143,84 @@ The conservative rule avoids all of these: if no event is active anywhere, there
 
 ### Compiler analysis
 
-The compiler already has the complete event timeline after time resolution and layer inference. Finding reset-safe points is a straightforward interval sweep:
+The compiler already has the complete event timeline after time resolution and layer inference. Finding safe intervals is a straightforward interval sweep:
 
 ```python
-def _find_jump_points(layers: list[dict], duration: float) -> list[float]:
-    """Find times where no event is active on any layer."""
-    # Collect all active intervals across all layers
-    intervals = []
+def _find_safe_intervals(layers: list[dict], duration: float) -> list[tuple[float, float]]:
+    """Find time intervals where no event is active on any layer."""
+    event_intervals = []
     for layer in layers:
         for e in layer["events"]:
-            intervals.append((e["at_sec"], e["at_sec"] + e["duration_sec"]))
+            event_intervals.append((e["at_sec"], e["at_sec"] + e["duration_sec"]))
 
-    if not intervals:
-        return [0.0]
+    if not event_intervals:
+        return [(0.0, duration)]  # entire program is safe
 
-    # Sort by start time, sweep for gaps
-    intervals.sort()
-    points = [0.0]  # t=0 is always safe (fresh engine state)
+    event_intervals.sort()
+
+    safe = []
     end = 0.0
-    for start, stop in intervals:
+    for start, stop in event_intervals:
         if start > end:
-            # Gap found: [end, start) has no active events
-            # The safe point is at the start of the gap
-            points.append(end)
+            safe.append((end, start))  # gap: no events active in [end, start)
         end = max(end, stop)
     if end < duration:
-        points.append(end)  # gap between last event and program end
+        safe.append((end, duration))  # gap between last event and program end
 
-    return points
+    # t=0 is always safe — ensure it's represented
+    if not safe or safe[0][0] > 0.0:
+        safe.insert(0, (0.0, 0.0))  # degenerate: only t=0 is safe
+
+    return safe
 ```
 
 This runs once per strip during compilation, after layer inference (step 4) and before blob emission (step 7). It adds negligible cost — one sort and one linear sweep over all events.
 
-### Per-strip vs global jump points
+### Per-strip vs global safe intervals
 
-Each strip may have different event timelines, producing different safe points. For synchronized multi-device jumps, the controller computes the **intersection** of all per-strip safe points:
+Each strip may have different event timelines, producing different safe intervals. For synchronized multi-device jumps, the controller computes the **intersection** of all per-strip safe intervals — only times that are safe on *every* strip are globally safe:
 
 ```python
-def global_jump_points(per_strip_points: dict[str, list[float]]) -> list[float]:
-    """Intersection of per-strip safe points."""
-    if not per_strip_points:
+def intersect_safe_intervals(
+    per_strip: dict[str, list[tuple[float, float]]]
+) -> list[tuple[float, float]]:
+    """Intersection of per-strip safe intervals."""
+    if not per_strip:
         return []
-    sets = [set(pts) for pts in per_strip_points.values()]
-    common = sets[0]
-    for s in sets[1:]:
-        common &= s
-    return sorted(common)
+
+    strips = list(per_strip.values())
+    result = strips[0]
+    for other in strips[1:]:
+        result = _pairwise_intersect(result, other)
+    return result
+
+def _pairwise_intersect(
+    a: list[tuple[float, float]], b: list[tuple[float, float]]
+) -> list[tuple[float, float]]:
+    """Intersect two sorted interval lists."""
+    result = []
+    i, j = 0, 0
+    while i < len(a) and j < len(b):
+        lo = max(a[i][0], b[j][0])
+        hi = min(a[i][1], b[j][1])
+        if lo <= hi:
+            result.append((lo, hi))
+        # Advance the interval that ends first
+        if a[i][1] < b[j][1]:
+            i += 1
+        else:
+            j += 1
+    return result
 ```
 
 Example:
-- Strip A safe at `[0.0, 4.0, 8.0, 12.0]`
-- Strip B safe at `[0.0, 8.0, 12.0, 16.0]`
-- Global safe points: `[0.0, 8.0, 12.0]`
+- Strip A safe intervals: `[(0.0, 0.0), (4.0, 5.0), (8.0, 10.0)]`
+- Strip B safe intervals: `[(0.0, 0.0), (4.5, 6.0), (8.0, 9.5)]`
+- Global safe intervals: `[(0.0, 0.0), (4.5, 5.0), (8.0, 9.5)]`
 
-If the user seeks to 10.0, the controller snaps to the nearest global safe point (either 8.0 or 12.0, depending on snap policy).
+Note: `(4.0, 5.0) ∩ (4.5, 6.0) = (4.5, 5.0)`. A point-based model would have recorded `4.0` for A and `4.5` for B — set intersection yields nothing, missing this valid window. This is why intervals are necessary.
+
+If the user seeks to 4.7, it falls within `(4.5, 5.0)` — a valid jump target. If they seek to 6.5, the controller snaps to the nearest safe interval.
 
 ### Controller seek logic
 
@@ -1206,8 +1232,10 @@ def handle_seek(self, requested_t: float):
             self.send_debug_seek(device, requested_t)
         target = requested_t
     else:
-        # ESPs: snap to nearest safe point (CMD_JUMP)
-        target = self.snap_to_jump_point(requested_t)
+        # ESPs: snap to a safe time (CMD_JUMP)
+        target = self.snap_to_safe_time(requested_t)
+        if target is None:
+            return  # no safe interval available
         # Compute shared t0 so all devices are synchronized
         t0 = self.mono_now() - int(target * 1e6)
         self.gen += 1
@@ -1218,27 +1246,31 @@ def handle_seek(self, requested_t: float):
     self.epoch += 1
     self.notify_web_app(epoch=self.epoch, t_rel=target)
 
-def snap_to_jump_point(self, t: float) -> float:
-    """Find the nearest global jump point <= t."""
-    best = 0.0
-    for jp in self.jump_points:
-        if jp <= t:
-            best = jp
-        else:
-            break
+def snap_to_safe_time(self, t: float) -> float | None:
+    """Find a safe jump time for the requested seek position.
+
+    If t falls within a safe interval, use it directly.
+    Otherwise, find the nearest safe interval boundary <= t.
+    """
+    best = None
+    for lo, hi in self.safe_intervals:
+        if lo <= t <= hi:
+            return t  # requested time is inside a safe interval
+        if hi <= t:
+            best = hi  # latest safe interval that ends before t
     return best
 ```
 
 ### Browser seek bar
 
-The controller sends session metadata (including jump points) to the web app when a program is loaded. The browser renders jump markers on the seek bar:
+The controller sends session metadata (including safe intervals) to the web app when a program is loaded. The browser renders safe regions on the seek bar:
 
-- **Simulator mode:** allow arbitrary scrubbing, markers shown as visual indicators of safe points
-- **Production mode:** restrict seek to jump markers only (click-to-jump)
+- **Simulator mode:** allow arbitrary scrubbing, safe intervals shown as visual highlights
+- **Production mode:** restrict seek to safe intervals only (click within a highlighted region to jump there, or click outside to snap to the nearest safe boundary)
 
-### Edge case: programs with few or no interior jump points
+### Edge case: programs with few or no interior safe intervals
 
-A program with a single long event spanning the full duration (e.g., one wave from 0 to 300s) has only `[0.0]` as a jump point. This is immediately visible from the metadata — the UI can disable the seek bar or show "no jump points available." In practice, music-synced programs have frequent phrase boundaries with brief blackouts, producing many safe points.
+A program with a single long event spanning the full duration (e.g., one wave from 0 to 300s) has only `[(0.0, 0.0)]` as a safe interval — the degenerate t=0-only case. This is immediately visible from the metadata — the UI can disable the seek bar or show "no safe jump regions available." In practice, music-synced programs have frequent phrase boundaries with brief blackouts, producing many safe intervals.
 
 ---
 
@@ -1250,7 +1282,7 @@ The controller is the long-running authority on the base station. It is a separa
 
 1. **Loads static config** — reads the base-station config file at startup. Knows every strip, device, IP, mode.
 
-2. **Compiles programs** — receives DSL source (from the web app or CLI), compiles it using the existing Python compiler (`compile_program()`), validates strip lengths against config. Produces a manifest: per-strip blobs + duration + jump points.
+2. **Compiles programs** — receives DSL source (from the web app or CLI), compiles it using the existing Python compiler (`compile_program()`), validates strip lengths against config. Produces a manifest: per-strip blobs + duration + safe intervals.
 
 3. **Routes blobs to devices** — uses config to map `strip_id -> device_id -> ip`. Sends each blob to the correct device via TCP LOAD. Waits for ACK.
 
@@ -1258,7 +1290,7 @@ The controller is the long-running authority on the base station. It is a separa
 
 5. **Sends START with shared T0** — over TCP to all devices. All devices begin playback from the same absolute time, so animations synchronize across strips.
 
-6. **Sends JUMP** — snaps requested seek time to nearest global safe point, sends CMD_JUMP to all devices, increments epoch.
+6. **Sends JUMP** — snaps requested seek time to nearest global safe interval, sends CMD_JUMP to all devices, increments epoch.
 
 7. **Syncs clocks** — sends SYNC_REQ probes (UDP) to each device, receives SYNC_RESP (UDP), computes filtered offsets, sends SYNC_RESULT (TCP).
 
@@ -1290,11 +1322,11 @@ def load_program(self, dsl_source: str):
         if name not in strips_config:
             raise Error(f"strip '{name}' not in config")
 
-    # 3. Compute jump points per strip, then global intersection
-    per_strip_jp = {}
+    # 3. Compute safe intervals per strip, then global intersection
+    per_strip_si = {}
     for name, blob in blobs.items():
-        per_strip_jp[name] = blob_jump_points[name]  # from compiler
-    global_jp = intersect_jump_points(per_strip_jp)
+        per_strip_si[name] = blob_safe_intervals[name]  # from compiler
+    global_si = intersect_safe_intervals(per_strip_si)
 
     # 4. Build manifest
     self.session_id += 1
@@ -1303,7 +1335,7 @@ def load_program(self, dsl_source: str):
         "artifact_id": sha256(dsl_source + config_hash + compiler_version),
         "session_id": self.session_id,
         "duration": duration,
-        "jump_points": global_jp,
+        "safe_intervals": global_si,
         "strips": {name: {"blob": blob} for name, blob in blobs.items()},
     }
 
@@ -1369,7 +1401,7 @@ Web App                   Controller                     ESPSimulated
    |  { session_start,       |                              |
    |    session_id: 42,      |                              |
    |    duration: 2.0,       |                              |
-   |    jump_points: [0.0],  |                              |
+   |    safe_intervals: [(0.0,0.0)], |                       |
    |    strips: [...] }      |                              |
    |<------------------------|                              |
    |                         |                              |
@@ -1420,25 +1452,25 @@ ESPSimulated              Controller                    Browser
    |                         |                            |  update clock
 ```
 
-### 4. Jump (user clicks a jump marker on seek bar)
+### 4. Jump (user clicks within a safe region on seek bar)
 
 ```
 Browser                   Controller                Devices (all)
    |                         |                         |
    | {"cmd":"seek","t":2.5}  |                         |
    |------------------------>|                         |
-   |                         |  snap 2.5 -> 2.0        |
-   |                         |  (nearest safe point)   |
+   |                         |  2.5 is within safe      |
+   |                         |  interval [2.0, 3.0)    |
    |                         |  epoch = 2              |
    |                         |                         |
-   |                         |  TCP: CMD_JUMP(t0, 2.0)  |
+   |                         |  TCP: CMD_JUMP(t0, 2.5)  |
    |                         |------------------------>|
-   |                         |                         |  handle_jump(t0, 2.0):
+   |                         |                         |  handle_jump(t0, 2.5):
    |                         |                         |    engine.reset()
    |                         |                         |    _t0 = t0 (shared)
    |                         |                         |    continue playing
    |                         |                         |
-   |                         |  UDP: [rgb + t_rel=2.0] |
+   |                         |  UDP: [rgb + t_rel=2.5] |
    |                         |<------------------------|
    |                         |                         |
    |  { session_id: 42,      |                         |
@@ -1477,10 +1509,10 @@ Browser                   Controller                ESPSimulated
 
 Mixed configurations (real ESPs + simulators in the same show) are not supported. Two clean modes, determined by the base-station config:
 
-- **Production mode** (`mode: "esp"` for all strips): all real ESPs. Controller sends LOAD, START, JUMP, and sync. No replay-based debug commands. Seek is restricted to jump points only.
+- **Production mode** (`mode: "esp"` for all strips): all real ESPs. Controller sends LOAD, START, JUMP, and sync. No replay-based debug commands. Seek is restricted to safe intervals only.
 - **Dev mode** (`mode: "sim"` for all strips): all simulators. Full debug controls (pause/seek/step/jump). Browser supports both arbitrary scrubbing (via CMD_DEBUG_SEEK) and jump-point navigation.
 
-Both modes support CMD_JUMP — it works on any device because it only targets reset-safe points where `reset()` + forward tick is correct.
+Both modes support CMD_JUMP — it works on any device because it only targets times within reset-safe intervals where `reset()` + forward tick is correct.
 
 When the controller sends a debug command (e.g., seek), it sends it to all simulators via their TCP connections without waiting for acknowledgment (fire-and-forget). Each simulator independently resets, replays, and sends its RGB frame. The browser may receive frames from different simulators a few milliseconds apart — at worst a single-frame glitch during a debug operation, invisible in practice.
 
@@ -1501,7 +1533,7 @@ The web app needs to: send commands (load, play, pause, seek), receive events (s
 
 When a program ends (`tick()` returns false), what happens?
 - The device transitions to ENDED state and goes dark.
-- The controller can send a new LOAD to restart, or CMD_JUMP to t=0.0 (which is always a safe point).
+- The controller can send a new LOAD to restart, or CMD_JUMP to t=0.0 (which is always within a safe interval).
 - For the simulator, auto-loop is useful for preview. For production, the controller decides.
 
 Should looping be a device-level setting (passed with LOAD or START) or a controller-level concern? Mechanically, CMD_JUMP to 0.0 implements loop, but the controller must detect program end (via telemetry) and react. **Not yet decided.**

@@ -151,9 +151,9 @@ Detailed design documents:
 
 **→ [decoder.md](decoder.md)** — C++ decoder: blob parsing, struct layout, free_program
 
-**→ [compiler.md](compiler.md)** — Python compiler pipeline: parser, time resolution, layer inference, buffer packing, blob emission, jump point analysis
+**→ [compiler.md](compiler.md)** — Python compiler pipeline: parser, time resolution, layer inference, buffer packing, blob emission, safe interval analysis
 
-**→ [playback_device.md](playback_device.md)** — PlaybackDevice hierarchy, transport protocol, custom clock sync, controller/web-app architecture, session identity, reset-safe jump points *(planned)*
+**→ [playback_device.md](playback_device.md)** — PlaybackDevice hierarchy, transport protocol, custom clock sync, controller/web-app architecture, session identity, reset-safe intervals *(planned)*
 
 **→ [draft_simulator_proposal.md](draft_simulator_proposal.md)** — Simulator: pybind11 + Flask + browser visualization *(early draft)*
 

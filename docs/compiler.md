@@ -1,6 +1,6 @@
 # Elements — Compiler Design
 
-> **Status: Mostly implemented.** Steps 1–7 match current code in `compiler/elements/`. Step 8 (jump point analysis) is designed but not yet implemented.
+> **Status: Mostly implemented.** Steps 1–7 match current code in `compiler/elements/`. Step 8 (safe interval analysis) is designed but not yet implemented.
 
 The compiler takes a DSL program and emits one binary blob per strip. It runs on the base station (PC), not the ESP32. All heavy lifting — time resolution, layer inference, buffer packing — happens here.
 
@@ -16,8 +16,8 @@ DSL (.py)
   → 5. Buffer packing    — stateful animations → shared buffer slots
   → 6. Validation        — bounds, references, timing checks
   → 7. Blob emission     — serialize to binary
-  → 8. Jump point analysis — find reset-safe times (no active events)
-  → dict[strip_name, bytes] + per-strip jump points
+  → 8. Safe interval analysis — find reset-safe intervals (no active events)
+  → dict[strip_name, bytes] + per-strip safe intervals
 ```
 
 Steps 1–3 run once across all events. Steps 4–8 run independently per strip. `build()` returns `dict[str, bytes]` — one entry per strip. Jump points are returned as separate metadata (not embedded in the blob).
@@ -541,34 +541,45 @@ Fits in a single UDP packet.
 
 ## 8. Jump Point Analysis
 
-After blob emission, the compiler analyzes the per-strip event timeline to find **reset-safe jump points** — times where no event is active on any layer. At these times, `Engine::reset()` followed by `tick(t)` produces correct output without replaying from t=0. This enables cheap seek on real ESP hardware.
+After blob emission, the compiler analyzes the per-strip event timeline to find **safe intervals** — time ranges where no event is active on any layer. Within a safe interval, `Engine::reset()` followed by `tick(t)` produces correct output without replaying from t=0. This enables cheap seek on real ESP hardware.
+
+### Why intervals, not points
+
+A gap between events is a continuous range `[gap_start, gap_end)`, not a single timestamp. Modeling safe regions as intervals is essential for correct multi-strip intersection. If strip A is safe on `[4.0, 5.0)` and strip B is safe on `[4.5, 6.0)`, the global safe region is `[4.5, 5.0)`. A point-based model would record `4.0` for A and `4.5` for B — set intersection yields nothing, missing the valid synchronized jump window.
 
 ### Algorithm
 
-A simple interval sweep over all events across all layers:
+A simple interval sweep over all events across all layers, returning the gaps as intervals:
 
 ```python
-def _find_jump_points(layers: list[dict], duration: float) -> list[float]:
-    """Find times where no event is active on any layer."""
-    intervals = []
+def _find_safe_intervals(layers: list[dict], duration: float) -> list[tuple[float, float]]:
+    """Find time intervals where no event is active on any layer."""
+    event_intervals = []
     for layer in layers:
         for e in layer["events"]:
-            intervals.append((e["at_sec"], e["at_sec"] + e["duration_sec"]))
+            event_intervals.append((e["at_sec"], e["at_sec"] + e["duration_sec"]))
 
-    if not intervals:
-        return [0.0]
+    if not event_intervals:
+        return [(0.0, duration)]  # entire program is safe
 
-    intervals.sort()
-    points = [0.0]  # t=0 is always safe
+    event_intervals.sort()
+
+    safe = []
     end = 0.0
-    for start, stop in intervals:
+    for start, stop in event_intervals:
         if start > end:
-            points.append(end)  # gap: no events active in [end, start)
+            safe.append((end, start))  # gap: no events active in [end, start)
         end = max(end, stop)
     if end < duration:
-        points.append(end)  # gap between last event and program end
+        safe.append((end, duration))  # gap between last event and program end
 
-    return points
+    # t=0 is always safe — if the first event starts at 0.0, the sweep
+    # won't produce a leading interval, but Engine::reset() at t=0 is
+    # correct by construction (fresh state). Ensure it's included.
+    if not safe or safe[0][0] > 0.0:
+        safe.insert(0, (0.0, 0.0))  # degenerate interval: only t=0 is safe
+
+    return safe
 ```
 
 ### Why this is correct
@@ -579,21 +590,21 @@ A time is safe for jump if no animation carries prior state at that instant. In 
 - **Source layer dependencies** — an event reads another layer's buffer. If neither event is active, there's no dependency.
 - **Active stateless events** (wave, spark, paint) — while these compute output purely from `(t - event_start)`, the engine creates animation instances on the first tick where an event is active. Jumping into the middle of an active event would skip that creation.
 
-The conservative rule — "no event active anywhere" — avoids all of these. It's simple and correct.
+The conservative rule — "no event active anywhere" — avoids all of these. It's simple and correct. Any time within a safe interval satisfies this rule.
 
 ### Output
 
-Jump points are returned as metadata alongside the blobs, not embedded in the blob format. The blob and decoder are unchanged.
+Safe intervals are returned as metadata alongside the blobs, not embedded in the blob format. The blob and decoder are unchanged.
 
 ```python
 # Per-strip result (internal to compiler)
 {
     "blob": b"...",
-    "jump_points": [0.0, 4.0, 8.5, 12.0]
+    "safe_intervals": [(0.0, 0.0), (4.0, 5.5), (8.5, 9.0), (12.0, 15.0)]
 }
 ```
 
-The controller computes the **global intersection** of per-strip jump points for synchronized multi-device seek. See `docs/playback_device.md`, section "Reset-safe jump points".
+The controller computes the **global intersection** of per-strip safe intervals for synchronized multi-device seek. See `docs/playback_device.md`, section "Reset-safe jump points".
 
 ### Test animation walkthrough
 
@@ -602,6 +613,6 @@ Layer 0:  wave [0.0, 1.0)  shift [1.0, 2.0)
 Layer 1:  sparks scattered throughout [0.0, 2.0)
 ```
 
-If sparks leave gaps (e.g., spark at [0.0, 0.1), next at [0.25, 0.35)), those gaps on layer 1 must also be gaps on layer 0 to be safe. In this example, layer 0 has continuous coverage from 0.0 to 2.0, so the only safe points are `[0.0]` (before everything starts) — no interior jump points. This is expected for a short, dense test animation.
+If sparks leave gaps (e.g., spark at [0.0, 0.1), next at [0.25, 0.35)), those gaps on layer 1 must also be gaps on layer 0 to be safe. In this example, layer 0 has continuous coverage from 0.0 to 2.0, so the only safe interval is `[(0.0, 0.0)]` (the degenerate t=0-only interval) — no interior safe regions. This is expected for a short, dense test animation.
 
-A realistic music program with phrase boundaries and blackout moments will have many more safe points.
+A realistic music program with phrase boundaries and blackout moments will have many safe intervals.
