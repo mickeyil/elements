@@ -1009,16 +1009,20 @@ The blob format and decoder are unchanged. The manifest is controller-level meta
 
 ### Artifact caching
 
-The compiled manifest (blobs + safe intervals + duration) should be cached as a single unit keyed by all inputs that affect the output:
+The compiled manifest (blobs + safe intervals + duration) should be cached as a single unit keyed by **all compile inputs** — not just source text:
 
 ```
-artifact_id = sha256(dsl_source + config_hash + compiler_version)
+artifact_id = sha256(dsl_source + beat + duration + config_hash + compiler_version)
 ```
 
-All three components matter:
+All components matter:
 - **DSL source** — different program text produces different blobs and safe intervals
+- **beat** — beat duration in seconds; all beat-relative timings resolve differently at different tempos (same DSL at BPM=120 vs BPM=140 produces different blobs)
+- **duration** — total program length; affects event clipping and safe interval boundaries
 - **Config hash** — strip lengths and mapping affect compilation (e.g., pixel bounds validation)
 - **Compiler version** — changes to layer inference, blob format, or safe-interval rules change the output
+
+The key principle: `artifact_id` must cover every input to `compile_program(strips, events, beat, duration)`. If any input changes, the output changes, and the cache must miss. `beat` and `duration` are runtime arguments to the compiler (passed via `build(beat=..., duration=...)`), not embedded in the DSL source text, so they must be included explicitly.
 
 On load, the controller checks the cache first. Cache hit skips compilation entirely and serves the stored manifest. Cache miss triggers compilation and stores the result.
 
@@ -1332,7 +1336,7 @@ def load_program(self, dsl_source: str):
     self.session_id += 1
     self.epoch = 0
     self.manifest = {
-        "artifact_id": sha256(dsl_source + config_hash + compiler_version),
+        "artifact_id": sha256(dsl_source + beat + duration + config_hash + compiler_version),
         "session_id": self.session_id,
         "duration": duration,
         "safe_intervals": global_si,
