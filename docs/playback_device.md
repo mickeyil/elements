@@ -1428,6 +1428,8 @@ The web app is a separate process. It serves browser assets and relays between t
 
 A single **Unix Domain Socket (UDS)** connection carries all traffic between the controller and the web app. One connection, one ordering domain, one backpressure story.
 
+**Exactly one web app client.** The controller accepts one UDS connection from one web app process. Multiple browser clients connect to the web app (via WebSocket), not to the controller — browser fan-out is the web app's concern. This avoids command arbitration and multi-client state fanout on the controller side.
+
 ### Why one connection
 
 - **Ordering is guaranteed.** `session_start` → `epoch_changed` → first program frame always arrive in that order. Two sockets would create cross-stream ordering races.
@@ -1480,9 +1482,65 @@ Binary payload, emitted by the controller after assembling all per-strip frames 
 - `rgb_strip_i` — raw RGB bytes, length = `strips[i].length * 3` (from session snapshot)
 - No strip_id, no rgb_len per entry — strip order and sizes are implicit from the session snapshot
 
-### Session snapshot on reconnect
+### Snapshot
 
-When the web app reconnects (or connects for the first time), the controller sends the current session state as a JSON record before any frames flow. This lets the web app catch up without special handshake logic — it's just regular JSON messages on the same connection.
+On every connect (first or reconnect), the controller immediately sends a **snapshot** — a single JSON message containing everything the web app needs to start working. No request needed, no handshake. The web app has one bootstrap path: connect → receive snapshot → ready.
+
+```json
+{
+  "event": "snapshot",
+  "protocol_version": 1,
+  "controller_state": "running",
+  "session": {
+    "session_id": 42,
+    "artifact_id": "sha256(...)",
+    "epoch": 2,
+    "playback_state": "playing",
+    "duration": 612.0,
+    "safe_intervals": [[0.0, 0.0], [12.4, 13.0], [28.0, 29.5]],
+    "strips": [
+      {"name": "main_left", "length": 150},
+      {"name": "main_right", "length": 150}
+    ]
+  },
+  "layout": {
+    "main_left":  {"x": 0, "y": 0, "dx": 1, "dy": 0},
+    "main_right": {"x": 0, "y": 2, "dx": 1, "dy": 0}
+  },
+  "devices": [
+    {"device_id": "esp-01", "strip": "main_left", "mode": "sim", "status": "connected"},
+    {"device_id": "esp-02", "strip": "main_right", "mode": "sim", "status": "connected"}
+  ]
+}
+```
+
+If no active session (controller just started, no program loaded yet):
+
+```json
+{
+  "event": "snapshot",
+  "protocol_version": 1,
+  "controller_state": "running",
+  "session": null,
+  "layout": { ... },
+  "devices": [ ... ]
+}
+```
+
+**What the snapshot contains:**
+
+| Field | Purpose |
+|-------|---------|
+| `protocol_version` | Allows the web app to detect incompatible controller versions |
+| `controller_state` | Top-level controller health |
+| `session` | Active session if any — includes all metadata the browser needs to render the seek bar and receive frames. `null` if no program is loaded |
+| `session.strips` | Canonical strip order and lengths — defines how program frame payloads are sliced |
+| `layout` | Pixel positions for browser canvas rendering (from static config). Included so the web app doesn't need its own config file |
+| `devices` | Per-device status summary — connected/disconnected, mode, which strip each serves |
+
+**Why the controller owns layout:** The static config is the single source of truth for strip topology, device mapping, and simulation layout. Rather than having the web app read a separate config or duplicate data, the controller includes layout in the snapshot. One source, one delivery path.
+
+After the snapshot, the controller sends incremental events (`state`, `session_start`, etc.) and program frames as they occur. The snapshot is never re-sent mid-connection — it's a connect-time-only message.
 
 ---
 
