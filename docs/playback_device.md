@@ -1261,15 +1261,15 @@ def handle_seek(self, requested_t: float):
 def snap_to_safe_time(self, t: float) -> float | None:
     """Find a safe jump time for the requested seek position.
 
-    If t falls within a safe interval, use it directly.
-    Otherwise, find the nearest safe interval boundary <= t.
+    If t falls within a safe interval [lo, hi), use it directly.
+    Otherwise, snap to the start of the latest safe interval before t.
     """
     best = None
     for lo, hi in self.safe_intervals:
-        if lo <= t <= hi:
+        if lo <= t < hi:
             return t  # requested time is inside a safe interval
         if hi <= t:
-            best = hi  # latest safe interval that ends before t
+            best = lo  # start of the latest safe interval before t
     return best
 ```
 
