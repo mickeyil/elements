@@ -116,9 +116,9 @@ The controller opens a persistent TCP connection to each device. Commands are le
 Command types:
 
 ```
-CMD_LOAD:         type = 0x10, payload = blob bytes (variable length)
+CMD_LOAD:         type = 0x10, payload = [gen: u16] [blob: variable]    -> 3+ bytes total
 CMD_START:        type = 0x11, payload = [t0: i64]                     -> 9 bytes total
-CMD_JUMP:         type = 0x12, payload = [t0: i64] [t_rel: f32]        -> 13 bytes total
+CMD_JUMP:         type = 0x12, payload = [t0: i64] [t_rel: f32] [gen: u16] -> 15 bytes total
 CMD_SYNC_RESULT:  type = 0x03, payload = [seq: u16] [boot_seq: u32] [offset: i64] -> 15 bytes total
 CMD_DEBUG_PAUSE:  type = 0x20, no payload                              -> 1 byte total
 CMD_DEBUG_RESUME: type = 0x21, no payload                              -> 1 byte total
@@ -135,7 +135,9 @@ CMD_ACK:          type = 0x80, payload = [status: u8]                  -> 2 byte
 
 The device sends an ACK after LOAD (with decode status). Other commands are fire-and-forget from the controller's perspective — the TCP connection itself provides delivery guarantee.
 
-**CMD_JUMP vs CMD_DEBUG_SEEK:** CMD_JUMP is a lightweight seek available on all devices. It carries a shared absolute `t0` (like CMD_START) so all devices stay synchronized, plus `t_rel` for precise frame rendering when paused. Valid only at reset-safe jump points (see "Reset-safe jump points" below). CMD_DEBUG_SEEK is simulator-only: it replays from t=0 to the target, producing correct output at any arbitrary time.
+**CMD_JUMP vs CMD_DEBUG_SEEK:** CMD_JUMP is a lightweight seek available on all devices. It carries a shared absolute `t0` (like CMD_START) so all devices stay synchronized, `t_rel` for precise frame rendering when paused, and a `gen` value the device echoes on outbound UDP so the controller can drop stale in-flight frames. Valid only at reset-safe jump points (see "Reset-safe jump points" below). CMD_DEBUG_SEEK is simulator-only: it replays from t=0 to the target, producing correct output at any arbitrary time.
+
+**Generation counter (`gen`):** LOAD and JUMP carry a `gen` value (u16) that the device stores and includes on every outbound UDP frame. The controller increments `gen` on each LOAD and JUMP, and drops any incoming UDP frame whose `gen` doesn't match the current expected value. This prevents stale in-flight frames — emitted before the device processed the command — from being forwarded to the browser with the wrong epoch. See "Session identity and frame filtering" below.
 
 ### TCP command reading (device side)
 
@@ -169,7 +171,10 @@ void poll_tcp_commands(int tcp_fd, PlaybackDevice& device) {
 
         switch (type) {
             case 0x10: {  // CMD_LOAD
-                bool ok = device.handle_load(payload, payload_len);
+                if (payload_len < 2) break;
+                uint16_t gen;
+                memcpy(&gen, payload, 2);
+                bool ok = device.handle_load(payload + 2, payload_len - 2, gen);
                 uint8_t ack[] = {0x80, ok ? (uint8_t)0 : (uint8_t)1};
                 // send_tcp_ack(tcp_fd, ack, sizeof(ack));  // length-prefixed
                 break;
@@ -183,12 +188,14 @@ void poll_tcp_commands(int tcp_fd, PlaybackDevice& device) {
                 break;
             }
             case 0x12: {  // CMD_JUMP
-                if (payload_len >= 12) {
+                if (payload_len >= 14) {
                     int64_t t0;
                     float t_rel;
+                    uint16_t gen;
                     memcpy(&t0, payload, 8);
                     memcpy(&t_rel, payload + 8, 4);
-                    device.handle_jump(t0, t_rel);
+                    memcpy(&gen, payload + 12, 2);
+                    device.handle_jump(t0, t_rel, gen);
                 }
                 break;
             }
@@ -267,9 +274,10 @@ while (running) {          // Desktop (ESPSimulated)
 
 ```python
 # Python controller — sending a blob over TCP
-def send_load(conn: socket.socket, blob: bytes):
-    msg = struct.pack('<I', 1 + len(blob))  # length prefix
-    msg += b'\x10'                           # CMD_LOAD
+def send_load(conn: socket.socket, blob: bytes, gen: int):
+    msg = struct.pack('<I', 1 + 2 + len(blob))  # length prefix
+    msg += b'\x10'                               # CMD_LOAD
+    msg += struct.pack('<H', gen)                # generation counter
     msg += blob
     conn.sendall(msg)
 
@@ -285,8 +293,8 @@ def send_start(conn: socket.socket, t0: int):
     msg += struct.pack('<q', t0)             # t0 as int64
     conn.sendall(msg)
 
-def send_jump(conn: socket.socket, t0: int, t_rel: float):
-    msg = struct.pack('<IBqf', 13, 0x12, t0, t_rel)  # length=13, CMD_JUMP, t0, t_rel
+def send_jump(conn: socket.socket, t0: int, t_rel: float, gen: int):
+    msg = struct.pack('<IBqfH', 15, 0x12, t0, t_rel, gen)  # length=15, CMD_JUMP, t0, t_rel, gen
     conn.sendall(msg)
 ```
 
@@ -334,8 +342,9 @@ public:
     // --- Command handlers (called by subclass when a command arrives) ---
 
     // Load a new program. Tears down any existing program first.
+    // gen is the controller-supplied generation counter, echoed on outbound UDP.
     // Returns true on success, false on decode error.
-    bool handle_load(const uint8_t* blob, size_t blob_len);
+    bool handle_load(const uint8_t* blob, size_t blob_len, uint16_t gen);
 
     // Begin playback. t0 is the absolute start time (int64_t, microseconds).
     // The device computes t_rel = (now_mono() + _sync_offset - t0) / 1e6 each frame.
@@ -344,8 +353,9 @@ public:
     // Jump to a reset-safe point. Resets the engine and sets shared time origin.
     // t0 is the shared absolute time (same value sent to all devices, like START).
     // t_rel is the target jump time (used for precise frame rendering when paused).
+    // gen is the new generation counter, echoed on outbound UDP.
     // Valid only at compiler-identified safe points (controller enforces this).
-    void handle_jump(int64_t t0, float t_rel);
+    void handle_jump(int64_t t0, float t_rel, uint16_t gen);
 
     // Update sync offset (from controller SYNC_RESULT, received over TCP).
     void handle_sync_result(int64_t offset);
@@ -390,6 +400,7 @@ protected:
     State _state = IDLE;
     int64_t _t0 = 0;              // absolute start time from handle_start (us)
     int64_t _sync_offset = 0;     // controller-provided offset (us), 0 until first SYNC_RESULT
+    uint16_t _gen = 0;            // generation counter, echoed on outbound UDP frames
     bool _gamma_enabled;
 };
 ```
@@ -403,7 +414,7 @@ protected:
 Tears down any existing program, decodes the new blob, creates Engine+Strip.
 
 ```cpp
-bool PlaybackDevice::handle_load(const uint8_t* blob, size_t blob_len) {
+bool PlaybackDevice::handle_load(const uint8_t* blob, size_t blob_len, uint16_t gen) {
     // Tear down existing
     if (_engine) {
         delete _engine;    // Engine destructor calls free_program()
@@ -420,6 +431,7 @@ bool PlaybackDevice::handle_load(const uint8_t* blob, size_t blob_len) {
 
     // Create engine (strip already exists, wrapping _rgb_buf)
     _engine = new Engine(prog, *_strip, _gamma_enabled);
+    _gen = gen;  // controller-supplied, echoed on outbound UDP
     _state = LOADED;
     send_telemetry(LOADED, 0.0f);
     return true;
@@ -449,7 +461,7 @@ void PlaybackDevice::handle_start(int64_t t0) {
 Lightweight seek to a reset-safe point. The controller sends a shared absolute `t0` (computed the same way as for START) so all devices stay synchronized. `t_rel` is included for precise frame rendering when paused. No replay needed — the target is a time where no event carries prior state.
 
 ```cpp
-void PlaybackDevice::handle_jump(int64_t t0, float t_rel) {
+void PlaybackDevice::handle_jump(int64_t t0, float t_rel, uint16_t gen) {
     if (!_engine) return;
 
     // Clamp to valid range
@@ -458,7 +470,8 @@ void PlaybackDevice::handle_jump(int64_t t0, float t_rel) {
     if (t_rel > dur) t_rel = dur;
 
     _engine->reset();
-    _t0 = t0;  // shared absolute time — same on all devices (like START)
+    _t0 = t0;    // shared absolute time — same on all devices (like START)
+    _gen = gen;  // new generation — stale in-flight frames carry the old gen
 
     if (_state == PLAYING) {
         // Continue playing from jump point
@@ -570,8 +583,8 @@ protected:
     }
 
     void output_frame() override {
-        // Send rgb buffer as telemetry to controller
-        send_rgb_frame(_rgb_buf, _strip_length * 3);
+        // Send rgb buffer as telemetry to controller, tagged with gen
+        send_rgb_frame(_gen, _rgb_buf, _strip_length * 3);
     }
 
     void send_telemetry(State state, float t_rel, const char* error) override {
@@ -1062,6 +1075,36 @@ Controller                              Web App / Browser
     |--------------------------------------->|  browser renders
 ```
 
+### Generation counter and frame filtering
+
+Devices don't know about session_id or epoch — those are controller-level concepts. But the controller can't simply stamp its current epoch onto incoming UDP frames, because stale frames emitted before a LOAD or JUMP may arrive after the controller has already advanced its epoch. Those stale frames would be incorrectly stamped with the new epoch.
+
+To solve this, LOAD and JUMP commands carry a **generation counter** (`gen`, u16) that the device stores and echoes on every outbound UDP frame:
+
+```
+Device outbound UDP frame:
+[gen: u16] [t_rel: f32] [rgb: bytes...]
+```
+
+The controller increments `gen` on each LOAD and JUMP, and tracks the expected `gen` per device. When a UDP frame arrives:
+
+```python
+def on_device_frame(self, device_id, frame):
+    if frame.gen != self.expected_gen[device_id]:
+        return  # stale frame from before LOAD/JUMP — drop
+
+    # Safe to stamp with current session/epoch and forward
+    self.forward_to_web_app({
+        "session_id": self.session_id,
+        "epoch": self.epoch,
+        "strip_id": self.strip_for_device(device_id),
+        "t_rel": frame.t_rel,
+        "rgb": frame.rgb,
+    })
+```
+
+This closes the race window: a frame emitted before the device processes JUMP carries the old `gen`, so the controller drops it instead of stamping it with the new epoch.
+
 ### What carries session_id and epoch
 
 Everything streamed from controller to web app / browser:
@@ -1070,7 +1113,7 @@ Everything streamed from controller to web app / browser:
 - **Playback state events** — `{ session_id, epoch, state, t_rel }`
 - **Telemetry** — `{ session_id, strip_id, ... }` (epoch optional)
 
-Devices don't know about session_id or epoch. These are controller-level concepts stamped onto outgoing data before forwarding to the web app.
+Session_id and epoch are stamped by the controller after `gen` filtering. The browser uses epoch to drop late-arriving frames after a seek (in case the web app relays faster than it processes).
 
 ---
 
@@ -1167,8 +1210,10 @@ def handle_seek(self, requested_t: float):
         target = self.snap_to_jump_point(requested_t)
         # Compute shared t0 so all devices are synchronized
         t0 = self.mono_now() - int(target * 1e6)
+        self.gen += 1
         for device in self.devices:
-            self.send_jump(device, t0, target)
+            self.expected_gen[device.id] = self.gen
+            self.send_jump(device, t0, target, self.gen)
 
     self.epoch += 1
     self.notify_web_app(epoch=self.epoch, t_rel=target)
@@ -1219,7 +1264,7 @@ The controller is the long-running authority on the base station. It is a separa
 
 8. **Receives telemetry** — health, errors, timing from all devices (UDP).
 
-9. **Receives RGB frames from simulators** — stamps with session_id, epoch, strip_id, forwards to web app (which relays to browser via WebSocket).
+9. **Receives RGB frames from simulators** — filters by `gen` (drops stale in-flight frames), stamps with session_id, epoch, strip_id, forwards to web app (which relays to browser via WebSocket).
 
 10. **Exposes a control/event API** — the web app connects to this API to send commands (load, play, pause, seek) and receive events (session start, state changes, frames, telemetry).
 
@@ -1263,9 +1308,11 @@ def load_program(self, dsl_source: str):
     }
 
     # 5. Route blobs to devices
+    self.gen += 1
     for strip_name, strip_data in self.manifest["strips"].items():
         device = self.device_for_strip(strip_name)  # config lookup
-        ok = self.send_load(device.conn, strip_data["blob"])
+        self.expected_gen[device.id] = self.gen
+        ok = self.send_load(device.conn, strip_data["blob"], self.gen)
         if not ok:
             raise Error(f"device {device.id} rejected blob for {strip_name}")
 
@@ -1349,7 +1396,7 @@ ESPSimulated loop iteration:
    |    -> rgb_buf = [0,1,5, 0,4,97, 0,1,5, ...]
    |
    |  output_frame()
-   |    -> UDP: send rgb_buf (30 bytes) + t_rel to controller
+   |    -> UDP: [gen + t_rel + rgb_buf] to controller
    |
    |  sleep until next frame (20ms cadence)
 ```
@@ -1359,9 +1406,9 @@ ESPSimulated loop iteration:
 ```
 ESPSimulated              Controller                    Browser
    |                         |                            |
-   |  UDP: [rgb + t_rel]     |                            |
+   |  UDP: [gen + t_rel + rgb]|                            |
    |------------------------>|                            |
-   |                         |  stamp with identity:      |
+   |                         |  check gen, stamp:         |
    |                         |  { session_id: 42,         |
    |                         |    epoch: 1,               |
    |                         |    strip_id: "main_left",  |
