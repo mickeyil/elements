@@ -1448,26 +1448,50 @@ Two record kinds:
 
 #### kind=0x01 — JSON
 
-`payload` is UTF-8 JSON. Used for commands, events, and session snapshots.
+`payload` is UTF-8 JSON. Every JSON message has a `type` field to distinguish commands, replies, and events.
 
 **Web app → Controller (commands):**
+
+Commands carry an `id` (web-app-assigned, incrementing counter) that the controller echoes in the reply.
+
 ```json
-{"cmd": "load", "source": "..."}
-{"cmd": "play"}
-{"cmd": "pause"}
-{"cmd": "seek", "t": 30.0}
+{"type": "cmd", "id": 1, "cmd": "load", "source": "..."}
+{"type": "cmd", "id": 2, "cmd": "play"}
+{"type": "cmd", "id": 3, "cmd": "pause"}
+{"type": "cmd", "id": 4, "cmd": "seek", "t": 30.0}
+```
+
+**Controller → Web app (replies):**
+
+Replies are **controller-complete** — the reply is sent after the controller has finished all work for the command (compilation, device ACKs, state updates). The web app does not need to track intermediate states or correlate follow-up events.
+
+```json
+{"type": "reply", "id": 1, "ok": true, "result": {"session_id": 42}}
+{"type": "reply", "id": 4, "ok": true, "result": {"t": 28.0}}
+{"type": "reply", "id": 1, "ok": false, "error": "device esp-01 rejected blob"}
 ```
 
 **Controller → Web app (events):**
+
+Asynchronous state changes and broadcasts — not tied to a specific command.
+
 ```json
-{"event": "session_start", "session_id": 42, "artifact_id": "...",
+{"type": "event", "event": "session_start", "session_id": 42, "artifact_id": "...",
  "duration": 612.0, "safe_intervals": [[0.0, 0.0], [12.4, 13.0], ...],
  "strips": [{"name": "main_left", "length": 150}, {"name": "main_right", "length": 150}]}
-{"event": "state", "state": "playing", "epoch": 2}
-{"event": "error", "message": "device esp-01 rejected blob"}
+{"type": "event", "event": "state", "state": "playing", "epoch": 2}
 ```
 
 The `strips` array in `session_start` defines the **canonical strip order and lengths** for the session. Program frames pack RGB blobs in this exact order with no per-entry headers — the web app and browser use the strip list to slice the payload.
+
+**Command semantics summary:**
+
+| Command | Controller-complete means | Reply result |
+|---------|--------------------------|-------------|
+| `load` | Compiled (or cache hit), all devices ACKed LOAD, session created | `{"session_id": N}` |
+| `play` | State updated, START sent to all devices | `{}` |
+| `pause` | State updated, devices notified | `{}` |
+| `seek` | Time resolved/snapped, JUMP or DEBUG_SEEK sent, epoch updated | `{"t": snapped_time}` |
 
 #### kind=0x02 — Program frame
 
@@ -1488,6 +1512,7 @@ On every connect (first or reconnect), the controller immediately sends a **snap
 
 ```json
 {
+  "type": "event",
   "event": "snapshot",
   "protocol_version": 1,
   "controller_state": "running",
@@ -1518,6 +1543,7 @@ If no active session (controller just started, no program loaded yet):
 
 ```json
 {
+  "type": "event",
   "event": "snapshot",
   "protocol_version": 1,
   "controller_state": "running",
