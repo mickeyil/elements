@@ -979,7 +979,7 @@ dict[str, bytes]   # strip_name -> blob
 
 # What the controller wraps it into:
 {
-    "program_id": "song_abc",          # content identity (e.g. hash of DSL source)
+    "artifact_id": "sha256(...)",      # compiled artifact identity (see below)
     "duration": 612.0,                 # seconds
     "jump_points": [0.0, 12.4, 28.0, 44.5, 58.0],  # reset-safe times (global)
     "strips": {
@@ -991,14 +991,31 @@ dict[str, bytes]   # strip_name -> blob
 
 The blob format and decoder are unchanged. The manifest is controller-level metadata — devices never see it. They receive bare blobs via LOAD as before.
 
+### Artifact caching
+
+The compiled manifest (blobs + jump points + duration) should be cached as a single unit keyed by all inputs that affect the output:
+
+```
+artifact_id = sha256(dsl_source + config_hash + compiler_version)
+```
+
+All three components matter:
+- **DSL source** — different program text produces different blobs and jump points
+- **Config hash** — strip lengths and mapping affect compilation (e.g., pixel bounds validation)
+- **Compiler version** — changes to layer inference, blob format, or jump-point rules change the output
+
+On load, the controller checks the cache first. Cache hit skips compilation entirely and serves the stored manifest. Cache miss triggers compilation and stores the result.
+
+The cache stores the full artifact — blobs, jump points, duration, strip metadata. No separate caching of individual components. This keeps blobs and metadata consistent by construction.
+
 ### Identity model
 
 Three levels of identity track what's loaded and what's happening:
 
 | Identity | What it means | When it changes |
 |----------|---------------|-----------------|
-| **program_id** | Content identity — "what program is this?" | New DSL source or different compile inputs |
-| **session_id** | Active load — "which live run of this program?" | New on each LOAD (even reloading the same program) |
+| **artifact_id** | Compiled artifact identity — "what exact compiled result is this?" | New source, config change, or compiler version change |
+| **session_id** | Active load — "which live run of this artifact?" | New on each LOAD (even reloading the same artifact) |
 | **epoch** | Continuity marker — "has playback been interrupted?" | Increments on seek, restart, jump |
 
 **Why session_id matters:** When the controller loads a new program, old frames from the previous program may still be in UDP flight. Without session_id, the browser can't distinguish stale frames from current ones.
@@ -1015,7 +1032,7 @@ Controller                              Web App / Browser
     |                                        |
     |  { "event": "session_start",           |
     |    "session_id": 42,                   |
-    |    "program_id": "song_abc",           |
+    |    "artifact_id": "song_abc",           |
     |    "duration": 612.0,                  |
     |    "jump_points": [0.0, 12.4, ...],    |
     |    "strips": [...] }                   |
@@ -1232,7 +1249,7 @@ def load_program(self, dsl_source: str):
     self.session_id += 1
     self.epoch = 0
     self.manifest = {
-        "program_id": hash(dsl_source),
+        "artifact_id": sha256(dsl_source + config_hash + compiler_version),
         "session_id": self.session_id,
         "duration": duration,
         "jump_points": global_jp,
