@@ -60,35 +60,44 @@ Communication between the base station and devices is minimal by design. The con
 
 | Message | Direction | Description |
 |---------|-----------|-------------|
-| **LOAD** | base → device | Upload a bytecode program. Implicitly clears all device state (active layers, animations, buffers). The device is in a fresh state ready to execute. |
-| **ACK** | device → base | Confirms program was received and loaded successfully. |
-| **START** | base → device | Begin executing the loaded program at absolute timestamp T0 (int64_t µs, controller monotonic reference). |
+| **LOAD(blob, gen)** | base → device | Upload a compiled blob + generation counter. Clears all device state. Device decodes and enters LOADED. |
+| **ACK** | device → base | Confirms program was received and decoded successfully. |
+| **START(t0)** | base → device | Begin playback at shared absolute timestamp `t0` (int64_t µs). |
+| **JUMP(t0, t_rel, gen)** | base → device | Seek to a reset-safe time. Resets engine, sets shared `t0` and new `gen`. |
+
+See `docs/playback_device.md` for the full protocol spec: wire formats, state machine, gen filtering, safe intervals, and debug commands.
 
 ### Playback Flow
 
 **Song playback:**
 ```
-Base station → ESP32: LOAD (song bytecode, ~3KB)
-ESP32 → Base station: ACK
-Base station → ESP32: START at T0
-Base station: begins audio playback timed to T0 (accounting for audio pipeline latency)
-ESP32: executes bytecode from T0
+Controller → Device: LOAD(blob, gen=1)
+Device → Controller: ACK
+Controller → Device: START(t0)
+Controller: begins audio playback timed to T0
+Device: executes from T0
   ... song plays ...
-Song ends. Program finishes. Device goes dark.
-Base station → ESP32: LOAD (ambient bytecode or next song)
+Song ends. Device goes dark.
+Controller → Device: LOAD(next blob, gen=2)
+```
+
+**Seeking (production):**
+```
+Controller → Device: JUMP(t0, t_rel=28.0, gen=3)
+Device: reset(), resume from t_rel with shared t0
 ```
 
 **Stopping mid-song:**
 ```
-Base station → ESP32: LOAD (ambient bytecode)
+Controller → Device: LOAD(ambient blob, gen=N)
 ```
 LOAD clears everything — the song's animations stop immediately, ambient program takes over. No explicit stop command needed.
 
-**Default behavior:** When a program finishes and no new program is loaded, the device goes dark. This is the expected state between songs — the base station sends the next program when ready.
+**Default behavior:** When a program finishes and no new program is loaded, the device goes dark. This is the expected state between songs — the controller sends the next program when ready.
 
 ### Transport
 
-TCP for commands (LOAD, START, debug) and clock sync results. UDP for clock sync probes (latency-sensitive RTT measurement) and streaming (RGB frames, telemetry). See `docs/playback_device.md` for the full protocol, packet formats, and device-side implementation.
+TCP for commands (LOAD, START, JUMP, debug) and clock sync results. UDP for clock sync probes (latency-sensitive RTT measurement) and streaming (RGB frames, telemetry). See `docs/playback_device.md` for the full transport architecture.
 
 ---
 
