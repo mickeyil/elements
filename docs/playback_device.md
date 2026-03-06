@@ -1115,6 +1115,8 @@ def on_device_frame(self, device_id, frame):
 
 This closes the race window: a frame emitted before the device processes JUMP carries the old `gen`, so the controller drops it instead of stamping it with the new epoch.
 
+**Scope:** `gen` filtering applies to LOAD and JUMP only. CMD_DEBUG_SEEK (simulator-only) does not bump `gen`. A stale frame from just before a debug seek could be stamped with the new epoch, but this is at most a single-frame glitch during interactive dev scrubbing — not worth coupling the debug path to the gen protocol.
+
 ### What carries session_id and epoch
 
 Everything streamed from controller to web app / browser:
