@@ -99,7 +99,7 @@ Three channels per device, split by requirements:
 
 | Channel | Direction | Purpose | Why this transport |
 |---------|-----------|---------|-------------------|
-| **TCP** | controller → device | LOAD, START, JUMP, PAUSE, RESUME, SYNC_RESULT, debug commands | Reliable delivery, arbitrary payload size (blobs can exceed UDP MTU) |
+| **TCP** | controller → device | LOAD, START, JUMP, PAUSE, RESUME, STOP, SYNC_RESULT, debug commands | Reliable delivery, arbitrary payload size (blobs can exceed UDP MTU) |
 | **UDP inbound** | controller → device | SYNC_REQ | Low-latency RTT measurement — TCP head-of-line blocking and Nagle would corrupt offset calculations |
 | **UDP outbound** | device → controller | SYNC_RESP, telemetry, RGB frames | Fire-and-forget streaming; dropped frame = browser skips one update |
 
@@ -123,6 +123,7 @@ CMD_START:        type = 0x11, payload = [t0: i64]                     -> 9 byte
 CMD_JUMP:         type = 0x12, payload = [t0: i64] [t_rel: f32] [gen: u16] -> 15 bytes total
 CMD_PAUSE:        type = 0x13, no payload                              -> 1 byte total
 CMD_RESUME:       type = 0x14, payload = [t0: i64]                     -> 9 bytes total
+CMD_STOP:         type = 0x15, no payload                              -> 1 byte total
 CMD_SYNC_RESULT:  type = 0x03, payload = [seq: u16] [boot_seq: u32] [offset: i64] -> 15 bytes total
 CMD_DEBUG_PAUSE:  type = 0x20, no payload                              -> 1 byte total
 CMD_DEBUG_RESUME: type = 0x21, no payload                              -> 1 byte total
@@ -215,6 +216,10 @@ void poll_tcp_commands(int tcp_fd, PlaybackDevice& device) {
                     memcpy(&t0, payload, 8);
                     device.handle_resume(t0);
                 }
+                break;
+            }
+            case 0x15: {  // CMD_STOP
+                device.handle_stop();
                 break;
             }
             case 0x03: {  // CMD_SYNC_RESULT
@@ -314,6 +319,10 @@ def send_start(conn: socket.socket, t0: int):
 def send_jump(conn: socket.socket, t0: int, t_rel: float, gen: int):
     msg = struct.pack('<IBqfH', 15, 0x12, t0, t_rel, gen)  # length=15, CMD_JUMP, t0, t_rel, gen
     conn.sendall(msg)
+
+def send_stop(conn: socket.socket):
+    msg = struct.pack('<IB', 1, 0x15)  # length=1, CMD_STOP
+    conn.sendall(msg)
 ```
 
 ---
@@ -323,7 +332,7 @@ def send_jump(conn: socket.socket, t0: int, t_rel: float, gen: int):
 ### Responsibilities
 
 - Owns the Engine, Strip, Program, and rgb buffer lifecycle
-- Provides `handle_load()` / `handle_start()` / `handle_jump()` / `handle_pause()` / `handle_resume()` for command processing
+- Provides `handle_load()` / `handle_start()` / `handle_jump()` / `handle_pause()` / `handle_resume()` / `handle_stop()` for command processing
 - Provides `tick_once()` — the shared per-iteration logic
 - Manages device state (IDLE -> LOADED -> PLAYING -> PAUSED -> ENDED)
 - Defines virtual methods for platform-specific behavior
@@ -333,19 +342,21 @@ def send_jump(conn: socket.socket, t0: int, t_rel: float, gen: int):
 ```
        LOAD              START             tick returns false
   IDLE -----> LOADED --------> PLAYING ----------> ENDED
-    ^          ^                |   ^               |
-    |          | LOAD           |   | RESUME        | LOAD
-    |          |----------------|   |               |
-    |          |                |   |-------+       |
-    |          |           PAUSE|           |       |
-    |          |                v           |       |
-    |          |             PAUSED --------+       |
-    |          |                |                   |
-    |          | LOAD           | LOAD              |
-    +----------+----------------+-------------------+
+    ^          ^ ^              |   ^               |
+    |          | | STOP         |   | RESUME        | LOAD
+    |          | |--------------|   |               |
+    |          | |              |   |-------+       |
+    |          | |         PAUSE|           |       |
+    |          | |              v           |       |
+    |          | |           PAUSED --------+       |
+    |          | |              |  |                |
+    |          | +----- STOP ---+  |                |
+    |          |                   |                |
+    |          | LOAD              | LOAD           |
+    +----------+-------------------+----------------+
 ```
 
-A new LOAD at any point tears down the current program and replaces it. This is how the base station transitions between songs or back to ambient mode. PAUSE and RESUME are production commands available on all devices — they preserve engine state and coordinate with audio (see `handle_pause()` / `handle_resume()`). Debug extensions (DEBUG_PAUSE, DEBUG_SEEK, etc.) are separate and simulator-only.
+A new LOAD at any point tears down the current program and replaces it. This is how the base station transitions between songs or back to ambient mode. PAUSE and RESUME are production commands available on all devices — they preserve engine state and coordinate with audio (see `handle_pause()` / `handle_resume()`). STOP clears output to black, resets to t=0, and transitions to LOADED — the program remains loaded and ready to play again. Debug extensions (DEBUG_PAUSE, DEBUG_SEEK, etc.) are separate and simulator-only.
 
 JUMP is valid in PLAYING, PAUSED, and LOADED states. It resets the engine and adjusts the time origin so playback continues (or pauses) at the target time.
 
@@ -383,6 +394,10 @@ public:
     // the engine — preserves all cursor positions and animation state.
     // t0 is computed by the controller so that the first tick produces the correct t_rel.
     void handle_resume(int64_t t0);
+
+    // Stop playback. Clears output to black, resets engine to t=0,
+    // transitions to LOADED. Program remains loaded, ready for play.
+    void handle_stop();
 
     // Update sync offset (from controller SYNC_RESULT, received over TCP).
     void handle_sync_result(int64_t offset);
@@ -553,6 +568,23 @@ void PlaybackDevice::handle_resume(int64_t t0) {
 
 **Why RESUME doesn't reset:** The engine may be mid-event with accumulated state (e.g., a shift animation that has been scrolling pixels). Resetting would destroy that state, and the paused time is almost certainly not in a safe interval. RESUME simply continues ticking from where the engine left off. The small time gap between pause and resume (typically <100ms of clock difference) is handled in a single `tick()` call — the engine advances cursors and renders at the new time without replaying intermediate frames.
 
+#### `handle_stop()`
+
+Stops playback, clears the LEDs to black, resets the engine to t=0, and transitions to LOADED. The program remains loaded and ready for a fresh `play` (which sends START).
+
+```cpp
+void PlaybackDevice::handle_stop() {
+    if (_state == IDLE) return;
+
+    _engine->reset();
+    memset(_rgb_buf, 0, _strip_length * 3);  // black
+    output_frame();
+    _frame_index = 0;
+    _state = LOADED;
+    send_telemetry(LOADED, 0.0f);
+}
+```
+
 #### `tick_once()`
 
 The shared per-iteration logic. Called by each platform's loop.
@@ -621,7 +653,7 @@ void setup() {
 }
 
 void loop() {
-    poll_tcp_commands(tcp_fd, device);   // LOAD, START, JUMP, SYNC_RESULT
+    poll_tcp_commands(tcp_fd, device);   // LOAD, START, JUMP, PAUSE, RESUME, STOP, SYNC_RESULT
     poll_udp_sync(udp_fd);              // SYNC_REQ -> SYNC_RESP
     device.tick_once();
     // Arduino yields between loop() calls — no explicit sleep
@@ -748,7 +780,7 @@ int main() {
     auto dt = chrono::milliseconds(20);  // 50Hz
 
     while (running) {
-        poll_tcp_commands(tcp_fd, device);   // LOAD, START, JUMP, SYNC_RESULT, debug
+        poll_tcp_commands(tcp_fd, device);   // LOAD, START, JUMP, PAUSE, RESUME, STOP, SYNC_RESULT, debug
         poll_udp_sync(udp_fd);              // SYNC_REQ -> SYNC_RESP
         device.tick_once();
 
@@ -1517,6 +1549,7 @@ Commands carry an `id` (web-app-assigned, incrementing counter) that the control
 {"type": "cmd", "id": 2, "cmd": "play"}
 {"type": "cmd", "id": 3, "cmd": "pause"}
 {"type": "cmd", "id": 4, "cmd": "seek", "t": 30.0}
+{"type": "cmd", "id": 5, "cmd": "stop"}
 ```
 
 `play` means both fresh start and resume — the controller decides which device command to send based on current state (CMD_START from LOADED/ENDED, CMD_RESUME from PAUSED). The web app does not need to distinguish between them.
@@ -1567,6 +1600,7 @@ The `strips` array in `session_start` defines the **canonical strip order and le
 | `play` | State updated; sends START (from LOADED/ENDED) or RESUME (from PAUSED) to all devices + audio | `{}` |
 | `pause` | CMD_PAUSE sent to all devices, paused t_rel collected, audio paused, state updated | `{"t_rel": paused_time}` |
 | `seek` | Time resolved/snapped, JUMP or DEBUG_SEEK sent, epoch updated | `{"t": snapped_time}` |
+| `stop` | CMD_STOP sent to all devices, output cleared to black, state updated | `{}` |
 
 #### kind=0x02 — Program frame
 
@@ -1667,6 +1701,7 @@ The browser uses the same `type`/`id` message convention as the UDS protocol. Br
 {"type": "cmd", "id": 2, "cmd": "play"}
 {"type": "cmd", "id": 3, "cmd": "pause"}
 {"type": "cmd", "id": 4, "cmd": "seek", "t": 30.0}
+{"type": "cmd", "id": 5, "cmd": "stop"}
 ```
 
 Same command vocabulary as the UDS protocol. The web app forwards each browser command to the controller as a UDS command (with its own `id`), then maps the controller's reply back to the browser's `id`.

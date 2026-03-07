@@ -66,6 +66,7 @@ Communication between the base station and devices is minimal by design. The con
 | **JUMP(t0, t_rel, gen)** | base → device | Seek to a reset-safe time. Resets engine, sets shared `t0` and new `gen`. |
 | **PAUSE** | base → device | Stop advancing. Keep displaying last frame. Report paused `t_rel`. |
 | **RESUME(t0)** | base → device | Resume from paused state with shared `t0`. No engine reset — state preserved. |
+| **STOP** | base → device | Clear output to black, reset engine to t=0, transition to LOADED. Program stays loaded. |
 
 See `docs/playback_device.md` for the full protocol spec: wire formats, state machine, gen filtering, safe intervals, and debug commands.
 
@@ -101,7 +102,7 @@ LOAD clears everything — the song's animations stop immediately, ambient progr
 
 ### Transport
 
-TCP for commands (LOAD, START, JUMP, PAUSE, RESUME, debug) and clock sync results. UDP for clock sync probes (latency-sensitive RTT measurement) and streaming (RGB frames, telemetry). See `docs/playback_device.md` for the full transport architecture.
+TCP for commands (LOAD, START, JUMP, PAUSE, RESUME, STOP, debug) and clock sync results. UDP for clock sync probes (latency-sensitive RTT measurement) and streaming (RGB frames, telemetry). See `docs/playback_device.md` for the full transport architecture.
 
 ---
 
