@@ -84,7 +84,9 @@ Controller → Device: LOAD(next blob, gen=2)
 **Seeking (production):**
 ```
 Controller → Device: JUMP(t0, t_rel=28.0, gen=3)
+Controller → Audio: seek_and_start_at(28.0, t0)
 Device: reset(), resume from t_rel with shared t0
+Audio: repositions to 28.0, starts at t0
 ```
 
 **Stopping mid-song:**

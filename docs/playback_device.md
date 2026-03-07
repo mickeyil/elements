@@ -1274,16 +1274,17 @@ def handle_seek(self, requested_t: float):
             self.send_debug_seek(device, requested_t)
         target = requested_t
     else:
-        # ESPs: snap to a safe time (CMD_JUMP)
+        # Production: snap to a safe time (CMD_JUMP) + audio coordination
         target = self.snap_to_safe_time(requested_t)
         if target is None:
             return  # no safe interval available
-        # Compute shared t0 so all devices are synchronized
+        # Compute shared t0 so all devices and audio are synchronized
         t0 = self.mono_now() - int(target * 1e6)
         self.gen += 1
         for device in self.devices:
             self.expected_gen[device.id] = self.gen
             self.send_jump(device, t0, target, self.gen)
+        self.audio.seek_and_start_at(target, t0)
 
     self.epoch += 1
     self.notify_web_app(epoch=self.epoch, t_rel=target)
@@ -1702,6 +1703,35 @@ Browser                   Controller                ESPSimulated
    |                         |                         |    replay 0 -> 7.3
    |                         |                         |    output_frame()
 ```
+
+---
+
+## Audio player coordination
+
+The audio player is a separate component on the base station, coordinated by the controller using the same synchronization primitive as device sync: shared absolute `t0` + scheduled start.
+
+### Contract
+
+The audio player must support two operations:
+
+- **`start_at(t0_abs)`** — begin playback from the start, timed to absolute `t0`
+- **`seek_and_start_at(t_audio, t0_abs)`** — seek to position `t_audio` in the track, then start/resume playback at absolute `t0`
+
+Both use the controller's monotonic clock reference. The audio player compensates for its own pipeline latency (see `docs/design.md`, "Audio pipeline latency" section).
+
+### How it fits into the controller flows
+
+**START:** The controller computes a shared `t0`, sends `START(t0)` to all devices, and calls `audio.start_at(t0)`. Audio and LEDs begin together.
+
+**JUMP (production seek):** The controller snaps to a safe interval, computes a shared `t0`, sends `JUMP(t0, t_rel, gen)` to all devices, and calls `audio.seek_and_start_at(t_rel, t0)`. Audio and LEDs reposition together.
+
+**JUMP (looping):** Same as seek — `t_rel=0.0`, audio restarts from the beginning at the new `t0`.
+
+### Scope
+
+The audio player component itself is not yet designed. This section documents the required contract so that the controller's seek and start flows are specified end-to-end. The LED side (CMD_JUMP, safe intervals, gen filtering) is fully defined. The audio side depends on this interface being implemented.
+
+Production seek is supported — restricted to safe intervals on the visual side, with audio coordination via the contract above. Audio-only seek (repositioning audio without LED seek) is not a use case.
 
 ---
 
