@@ -1540,7 +1540,22 @@ Asynchronous state changes and broadcasts — not tied to a specific command.
  "duration": 612.0, "safe_intervals": [[0.0, 0.0], [12.4, 13.0], ...],
  "strips": [{"name": "main_left", "length": 150}, {"name": "main_right", "length": 150}]}
 {"type": "event", "event": "state", "state": "playing", "epoch": 2}
+{"type": "event", "event": "loop", "epoch": 3}
+{"type": "event", "event": "device_status",
+ "device_id": "esp-01", "strip": "main_left", "status": "connected"}
+{"type": "event", "event": "device_status",
+ "device_id": "esp-01", "strip": "main_left", "status": "disconnected"}
+{"type": "event", "event": "error",
+ "scope": "device", "device_id": "esp-01", "message": "lost TCP connection"}
+{"type": "event", "event": "error",
+ "scope": "session", "message": "device esp-01 dropped during playback"}
 ```
+
+- **`session_start`** — new session loaded, includes all metadata for seek bar and frame slicing
+- **`state`** — playback state change (playing, paused, ended), includes current epoch
+- **`loop`** — program looped back to t=0, includes new epoch
+- **`device_status`** — device lifecycle change (connected/disconnected). State-oriented — UI updates indicators
+- **`error`** — async failure. Human-oriented — UI shows notification/log. `scope` is `"device"` (one device) or `"session"` (program-level)
 
 The `strips` array in `session_start` defines the **canonical strip order and lengths** for the session. Program frames pack RGB blobs in this exact order with no per-entry headers — the web app and browser use the strip list to slice the payload.
 
@@ -1627,6 +1642,13 @@ If no active session (controller just started, no program loaded yet):
 **Why the controller owns layout:** The static config is the single source of truth for strip topology, device mapping, and simulation layout. Rather than having the web app read a separate config or duplicate data, the controller includes layout in the snapshot. One source, one delivery path.
 
 After the snapshot, the controller sends incremental events (`state`, `session_start`, etc.) and program frames as they occur. The snapshot is never re-sent mid-connection — it's a connect-time-only message.
+
+### Backpressure
+
+The UDS socket is **non-blocking**. The controller never blocks on frame delivery.
+
+- **Program frames (kind=0x02) are lossy.** If a write returns EAGAIN/EWOULDBLOCK, the frame is dropped silently. The web app and browser handle gaps in `frame_index` — they render whatever arrives next. No backpressure propagates into the device coordination path.
+- **JSON messages (kind=0x01) are reliable.** Commands, replies, events, and snapshots are infrequent and small. If a JSON write cannot proceed, the web app connection is unhealthy — the controller closes it and waits for reconnect. On reconnect, the web app receives a fresh snapshot and resumes.
 
 ---
 
