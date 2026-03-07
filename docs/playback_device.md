@@ -99,7 +99,7 @@ Three channels per device, split by requirements:
 
 | Channel | Direction | Purpose | Why this transport |
 |---------|-----------|---------|-------------------|
-| **TCP** | controller → device | LOAD, START, SYNC_RESULT, JUMP, debug commands | Reliable delivery, arbitrary payload size (blobs can exceed UDP MTU) |
+| **TCP** | controller → device | LOAD, START, JUMP, PAUSE, RESUME, SYNC_RESULT, debug commands | Reliable delivery, arbitrary payload size (blobs can exceed UDP MTU) |
 | **UDP inbound** | controller → device | SYNC_REQ | Low-latency RTT measurement — TCP head-of-line blocking and Nagle would corrupt offset calculations |
 | **UDP outbound** | device → controller | SYNC_RESP, telemetry, RGB frames | Fire-and-forget streaming; dropped frame = browser skips one update |
 
@@ -345,7 +345,7 @@ def send_jump(conn: socket.socket, t0: int, t_rel: float, gen: int):
     +----------+----------------+-------------------+
 ```
 
-A new LOAD at any point tears down the current program and replaces it. This is how the base station transitions between songs or back to ambient mode. PAUSE and RESUME are debug extensions available only on ESPSimulated.
+A new LOAD at any point tears down the current program and replaces it. This is how the base station transitions between songs or back to ambient mode. PAUSE and RESUME are production commands available on all devices — they preserve engine state and coordinate with audio (see `handle_pause()` / `handle_resume()`). Debug extensions (DEBUG_PAUSE, DEBUG_SEEK, etc.) are separate and simulator-only.
 
 JUMP is valid in PLAYING, PAUSED, and LOADED states. It resets the engine and adjusts the time origin so playback continues (or pauses) at the target time.
 
@@ -1519,6 +1519,8 @@ Commands carry an `id` (web-app-assigned, incrementing counter) that the control
 {"type": "cmd", "id": 4, "cmd": "seek", "t": 30.0}
 ```
 
+`play` means both fresh start and resume — the controller decides which device command to send based on current state (CMD_START from LOADED/ENDED, CMD_RESUME from PAUSED). The web app does not need to distinguish between them.
+
 **Controller → Web app (replies):**
 
 Replies are **controller-complete** — the reply is sent after the controller has finished all work for the command (compilation, device ACKs, state updates). The web app does not need to track intermediate states or correlate follow-up events.
@@ -1547,7 +1549,7 @@ The `strips` array in `session_start` defines the **canonical strip order and le
 | Command | Controller-complete means | Reply result |
 |---------|--------------------------|-------------|
 | `load` | Compiled (or cache hit), all devices ACKed LOAD, session created | `{"session_id": N}` |
-| `play` | State updated, START or RESUME sent to all devices, audio started/resumed | `{}` |
+| `play` | State updated; sends START (from LOADED/ENDED) or RESUME (from PAUSED) to all devices + audio | `{}` |
 | `pause` | CMD_PAUSE sent to all devices, paused t_rel collected, audio paused, state updated | `{"t_rel": paused_time}` |
 | `seek` | Time resolved/snapped, JUMP or DEBUG_SEEK sent, epoch updated | `{"t": snapped_time}` |
 
