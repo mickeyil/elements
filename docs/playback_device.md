@@ -1513,7 +1513,7 @@ Two record kinds:
 Commands carry an `id` (web-app-assigned, incrementing counter) that the controller echoes in the reply.
 
 ```json
-{"type": "cmd", "id": 1, "cmd": "load", "source": "...", "loop": true}
+{"type": "cmd", "id": 1, "cmd": "load", "source": "...", "beat": 0.5, "duration": 300.0, "loop": true}
 {"type": "cmd", "id": 2, "cmd": "play"}
 {"type": "cmd", "id": 3, "cmd": "pause"}
 {"type": "cmd", "id": 4, "cmd": "seek", "t": 30.0}
@@ -1827,7 +1827,7 @@ See "Controller ↔ Web app protocol" section below.
 
 **How it's enabled:** The `load` command accepts a `loop` flag:
 ```json
-{"type": "cmd", "id": 1, "cmd": "load", "source": "...", "loop": true}
+{"type": "cmd", "id": 1, "cmd": "load", "source": "...", "beat": 0.5, "duration": 300.0, "loop": true}
 ```
 
 **How end-detection works:** When a device's program finishes, it transitions to ENDED and sends telemetry. The controller treats this as a program-level signal — it does not react per-device. Once the controller determines the program has ended (first ENDED telemetry, since all devices share the same t0 and duration), it issues one coordinated JUMP to all devices with a shared t0 and new gen.
