@@ -1455,7 +1455,7 @@ Two record kinds:
 Commands carry an `id` (web-app-assigned, incrementing counter) that the controller echoes in the reply.
 
 ```json
-{"type": "cmd", "id": 1, "cmd": "load", "source": "..."}
+{"type": "cmd", "id": 1, "cmd": "load", "source": "...", "loop": true}
 {"type": "cmd", "id": 2, "cmd": "play"}
 {"type": "cmd", "id": 3, "cmd": "pause"}
 {"type": "cmd", "id": 4, "cmd": "seek", "t": 30.0}
@@ -1724,11 +1724,22 @@ When the controller sends a debug command (e.g., seek), it sends it to all simul
 
 See "Controller ↔ Web app protocol" section below.
 
-### 2. Program looping
+### ~~2. Program looping~~ (decided)
 
-When a program ends (`tick()` returns false), what happens?
-- The device transitions to ENDED state and goes dark.
-- The controller can send a new LOAD to restart, or CMD_JUMP to t=0.0 (which is always within a safe interval).
-- For the simulator, auto-loop is useful for preview. For production, the controller decides.
+**Looping is controller-owned.** The device never auto-loops — it transitions to ENDED and goes dark. The controller decides whether and when to restart.
 
-Should looping be a device-level setting (passed with LOAD or START) or a controller-level concern? Mechanically, CMD_JUMP to 0.0 implements loop, but the controller must detect program end (via telemetry) and react. **Not yet decided.**
+**Mechanism:** `CMD_JUMP(t0, 0.0, new_gen)`. The program is already loaded, t=0 is always safe, and the gen bump filters stale tail frames from the previous iteration. No full LOAD+START cycle needed.
+
+**How it's enabled:** The `load` command accepts a `loop` flag:
+```json
+{"type": "cmd", "id": 1, "cmd": "load", "source": "...", "loop": true}
+```
+
+**How end-detection works:** When a device's program finishes, it transitions to ENDED and sends telemetry. The controller treats this as a program-level signal — it does not react per-device. Once the controller determines the program has ended (first ENDED telemetry, since all devices share the same t0 and duration), it issues one coordinated JUMP to all devices with a shared t0 and new gen.
+
+**Loop event:** The controller emits a loop event to the web app so the browser can reset its playback position:
+```json
+{"type": "event", "event": "loop", "epoch": 3}
+```
+
+**What this means for the device:** Nothing changes. The device doesn't know about looping. It receives JUMP like any other seek, resets its engine, and continues. The looping policy lives entirely in the controller.
