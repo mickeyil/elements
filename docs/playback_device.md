@@ -1579,7 +1579,7 @@ Asynchronous state changes and broadcasts — not tied to a specific command.
 {"type": "event", "event": "device_status",
  "device_id": "esp-01", "strip": "main_left", "status": "disconnected"}
 {"type": "event", "event": "error",
- "scope": "device", "device_id": "esp-01", "message": "lost TCP connection"}
+ "scope": "device", "device_id": "esp-01", "strip": "main_left", "message": "lost TCP connection"}
 {"type": "event", "event": "error",
  "scope": "session", "message": "device esp-01 dropped during playback"}
 ```
@@ -1588,7 +1588,7 @@ Asynchronous state changes and broadcasts — not tied to a specific command.
 - **`state`** — playback state change (playing, paused, ended), includes current epoch
 - **`loop`** — program looped back to t=0, includes new epoch
 - **`device_status`** — device lifecycle change (connected/disconnected). State-oriented — UI updates indicators
-- **`error`** — async failure. Human-oriented — UI shows notification/log. `scope` is `"device"` (one device) or `"session"` (program-level)
+- **`error`** — async failure. Human-oriented — UI shows notification/log. `scope` is `"device"` (one device, includes `device_id` + `strip`) or `"session"` (program-level). No error codes — message is a human-readable string
 
 The `strips` array in `session_start` defines the **canonical strip order and lengths** for the session. Program frames pack RGB blobs in this exact order with no per-entry headers — the web app and browser use the strip list to slice the payload.
 
@@ -1722,7 +1722,7 @@ Same command vocabulary as the UDS protocol. The web app forwards each browser c
 {"type": "event", "event": "state", "state": "playing", "epoch": 2}
 {"type": "event", "event": "loop", "epoch": 3}
 {"type": "event", "event": "device_status", "device_id": "esp-01", "strip": "main_left", "status": "connected"}
-{"type": "event", "event": "error", "scope": "device", "device_id": "esp-01", "message": "lost TCP connection"}
+{"type": "event", "event": "error", "scope": "device", "device_id": "esp-01", "strip": "main_left", "message": "lost TCP connection"}
 ```
 
 Events are forwarded from the controller with one transformation: **device IPs are stripped**. The browser does not need (and should not see) device network addresses.
