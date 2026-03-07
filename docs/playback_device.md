@@ -323,7 +323,7 @@ def send_jump(conn: socket.socket, t0: int, t_rel: float, gen: int):
 ### Responsibilities
 
 - Owns the Engine, Strip, Program, and rgb buffer lifecycle
-- Provides `handle_load()` / `handle_start()` / `handle_jump()` for command processing
+- Provides `handle_load()` / `handle_start()` / `handle_jump()` / `handle_pause()` / `handle_resume()` for command processing
 - Provides `tick_once()` — the shared per-iteration logic
 - Manages device state (IDLE -> LOADED -> PLAYING -> PAUSED -> ENDED)
 - Defines virtual methods for platform-specific behavior
@@ -1671,12 +1671,12 @@ The browser uses the same `type`/`id` message convention as the UDS protocol. Br
 
 Same command vocabulary as the UDS protocol. The web app forwards each browser command to the controller as a UDS command (with its own `id`), then maps the controller's reply back to the browser's `id`.
 
-**Web app → Browser (results):**
+**Web app → Browser (replies):**
 
 ```json
-{"type": "result", "id": 1, "ok": true, "result": {"session_id": 42}}
-{"type": "result", "id": 4, "ok": true, "result": {"t": 28.0}}
-{"type": "result", "id": 1, "ok": false, "error": "device esp-01 rejected blob"}
+{"type": "reply", "id": 1, "ok": true, "result": {"session_id": 42}}
+{"type": "reply", "id": 4, "ok": true, "result": {"t": 28.0}}
+{"type": "reply", "id": 1, "ok": false, "error": "device esp-01 rejected blob"}
 ```
 
 **Web app → Browser (events):**
@@ -1711,7 +1711,7 @@ If the web app is not yet connected to the controller (or has no snapshot), it s
 ### Backpressure
 
 - **Binary frames (program data) are dropped for slow clients.** If a WebSocket send would block or the client's write buffer exceeds a threshold, the web app drops the frame. The browser handles gaps in `frame_index` — it renders whatever arrives. This mirrors the UDS backpressure policy.
-- **JSON frames (commands, results, events) are never dropped.** These are small and infrequent. If a client cannot keep up with JSON messages, the web app closes the WebSocket — the browser reconnects and receives a fresh snapshot.
+- **JSON frames (commands, replies, events) are never dropped.** These are small and infrequent. If a client cannot keep up with JSON messages, the web app closes the WebSocket — the browser reconnects and receives a fresh snapshot.
 
 ---
 
@@ -1724,7 +1724,11 @@ A wave animation on two strips, controller + two ESPSimulated devices, browser d
 ```
 Web App                   Controller                     ESPSimulated
    |                         |                              |
-   | load("song_abc.py")     |                              |
+   | {"type":"cmd","id":1,   |                              |
+   |  "cmd":"load",          |                              |
+   |  "source":"song_abc.py",|                              |
+   |  "beat":0.5,            |                              |
+   |  "duration":2.0}        |                              |
    |------------------------>|                              |
    |                         |  compile -> manifest          |
    |                         |  session_id = 42              |
@@ -1747,7 +1751,8 @@ Web App                   Controller                     ESPSimulated
    |    ] }                  |                              |
    |<------------------------|                              |
    |                         |                              |
-   |  play()                 |                              |
+   | {"type":"cmd","id":2,   |                              |
+   |  "cmd":"play"}          |                              |
    |------------------------>|                              |
    |                         |  epoch = 1                   |
    |                         |  TCP: START(t0)              |
@@ -1803,7 +1808,8 @@ ESPSimulated (strip 0)    ESPSimulated (strip 1)    Controller              Brow
 ```
 Browser                   Controller                Devices (all)
    |                         |                         |
-   | {"cmd":"seek","t":2.5}  |                         |
+   | {"type":"cmd","id":3,   |                         |
+   |  "cmd":"seek","t":2.5}  |                         |
    |------------------------>|                         |
    |                         |  2.5 is within safe      |
    |                         |  interval [2.0, 3.0)    |
@@ -1836,7 +1842,8 @@ When in dev mode with simulators, the controller sends CMD_DEBUG_SEEK for arbitr
 ```
 Browser                   Controller                ESPSimulated
    |                         |                         |
-   | {"cmd":"seek","t":7.3}  |                         |
+   | {"type":"cmd","id":4,   |                         |
+   |  "cmd":"seek","t":7.3}  |                         |
    |------------------------>|                         |
    |                         |  (dev mode, sims)       |
    |                         |  epoch = 3              |
