@@ -1468,8 +1468,8 @@ The web app is a separate process. It serves browser assets and relays between t
 
 1. **Serves browser assets** — HTML, JS, CSS for the visualization UI
 2. **Connects to the controller over UDS** — receives session events, program frames, telemetry on a single ordered connection
-3. **Translates browser commands to controller commands** — browser sends `{"cmd": "seek", "t": 30.0}`, web app forwards as JSON over UDS
-4. **Relays program frames and events to browser** — via WebSocket (JSON text frames for events, binary frames for program frames)
+3. **Translates browser commands to controller commands** — browser sends `{"type": "cmd", "id": 1, "cmd": "seek", "t": 30.0}`, web app forwards as JSON over UDS (see "Web app ↔ Browser protocol" section)
+4. **Relays program frames and events to browser** — via WebSocket (JSON text frames for events, binary frames for program frames). Drops binary frames for slow clients
 5. **Exposes metadata to browser** — strip layout, pixel positions (from config, via controller)
 
 ### What the web app does NOT do
@@ -1649,6 +1649,69 @@ The UDS socket is **non-blocking**. The controller never blocks on frame deliver
 
 - **Program frames (kind=0x02) are lossy.** If a write returns EAGAIN/EWOULDBLOCK, the frame is dropped silently. The web app and browser handle gaps in `frame_index` — they render whatever arrives next. No backpressure propagates into the device coordination path.
 - **JSON messages (kind=0x01) are reliable.** Commands, replies, events, and snapshots are infrequent and small. If a JSON write cannot proceed, the web app connection is unhealthy — the controller closes it and waits for reconnect. On reconnect, the web app receives a fresh snapshot and resumes.
+
+---
+
+## Web app ↔ Browser protocol
+
+A single **WebSocket** connection carries all traffic between the web app and the browser. Text frames for JSON, binary frames for program data.
+
+### Message shapes
+
+The browser uses the same `type`/`id` message convention as the UDS protocol. Browser-assigned `id` values are independent of the UDS `id` namespace — the web app maps between them.
+
+**Browser → Web app (commands):**
+
+```json
+{"type": "cmd", "id": 1, "cmd": "load", "source": "...", "beat": 0.5, "duration": 300.0, "loop": true}
+{"type": "cmd", "id": 2, "cmd": "play"}
+{"type": "cmd", "id": 3, "cmd": "pause"}
+{"type": "cmd", "id": 4, "cmd": "seek", "t": 30.0}
+```
+
+Same command vocabulary as the UDS protocol. The web app forwards each browser command to the controller as a UDS command (with its own `id`), then maps the controller's reply back to the browser's `id`.
+
+**Web app → Browser (results):**
+
+```json
+{"type": "result", "id": 1, "ok": true, "result": {"session_id": 42}}
+{"type": "result", "id": 4, "ok": true, "result": {"t": 28.0}}
+{"type": "result", "id": 1, "ok": false, "error": "device esp-01 rejected blob"}
+```
+
+**Web app → Browser (events):**
+
+```json
+{"type": "event", "event": "snapshot", "protocol_version": 1, ...}
+{"type": "event", "event": "session_start", "session_id": 42, ...}
+{"type": "event", "event": "state", "state": "playing", "epoch": 2}
+{"type": "event", "event": "loop", "epoch": 3}
+{"type": "event", "event": "device_status", "device_id": "esp-01", "strip": "main_left", "status": "connected"}
+{"type": "event", "event": "error", "scope": "device", "device_id": "esp-01", "message": "lost TCP connection"}
+```
+
+Events are forwarded from the controller with one transformation: **device IPs are stripped**. The browser does not need (and should not see) device network addresses.
+
+**Web app → Browser (program frames):**
+
+Binary WebSocket frames with the same payload as UDS kind=0x02 program frames:
+
+```
+[frame_index: u32 LE] [t_rel: f32 LE] [rgb_strip_0] [rgb_strip_1] ...
+```
+
+The browser uses the `strips` array from the snapshot to slice the RGB payload, identical to how the web app uses the UDS session snapshot.
+
+### Snapshot on connect
+
+On WebSocket connect, the web app immediately sends a snapshot event — the same snapshot it received from the controller, with IPs stripped. The browser has one bootstrap path: connect → receive snapshot → ready.
+
+If the web app is not yet connected to the controller (or has no snapshot), it sends a snapshot with `controller_state: "connecting"` and `session: null`. Once the UDS connection is established and a controller snapshot arrives, the web app forwards it as a new snapshot event.
+
+### Backpressure
+
+- **Binary frames (program data) are dropped for slow clients.** If a WebSocket send would block or the client's write buffer exceeds a threshold, the web app drops the frame. The browser handles gaps in `frame_index` — it renders whatever arrives. This mirrors the UDS backpressure policy.
+- **JSON frames (commands, results, events) are never dropped.** These are small and infrequent. If a client cannot keep up with JSON messages, the web app closes the WebSocket — the browser reconnects and receives a fresh snapshot.
 
 ---
 
