@@ -121,6 +121,8 @@ Command types:
 CMD_LOAD:         type = 0x10, payload = [gen: u16] [blob: variable]    -> 3+ bytes total
 CMD_START:        type = 0x11, payload = [t0: i64]                     -> 9 bytes total
 CMD_JUMP:         type = 0x12, payload = [t0: i64] [t_rel: f32] [gen: u16] -> 15 bytes total
+CMD_PAUSE:        type = 0x13, no payload                              -> 1 byte total
+CMD_RESUME:       type = 0x14, payload = [t0: i64]                     -> 9 bytes total
 CMD_SYNC_RESULT:  type = 0x03, payload = [seq: u16] [boot_seq: u32] [offset: i64] -> 15 bytes total
 CMD_DEBUG_PAUSE:  type = 0x20, no payload                              -> 1 byte total
 CMD_DEBUG_RESUME: type = 0x21, no payload                              -> 1 byte total
@@ -138,6 +140,8 @@ CMD_ACK:          type = 0x80, payload = [status: u8]                  -> 2 byte
 The device sends an ACK after LOAD (with decode status). Other commands are fire-and-forget from the controller's perspective — the TCP connection itself provides delivery guarantee.
 
 **CMD_JUMP vs CMD_DEBUG_SEEK:** CMD_JUMP is a lightweight seek available on all devices. It carries a shared absolute `t0` (like CMD_START) so all devices stay synchronized, `t_rel` for precise frame rendering when paused, and a `gen` value the device echoes on outbound UDP so the controller can drop stale in-flight frames. Valid only within reset-safe intervals (see "Reset-safe jump points" below). CMD_DEBUG_SEEK is simulator-only: it replays from t=0 to the target, producing correct output at any arbitrary time.
+
+**CMD_PAUSE vs CMD_RESUME:** CMD_PAUSE stops the device from advancing. The device keeps displaying the last rendered frame and reports its last `t_rel` via telemetry. CMD_RESUME(t0) sets a new shared time origin and transitions to PLAYING **without resetting the engine** — all cursor positions, active animation instances, and stateful buffers are preserved. This is fundamentally different from CMD_JUMP, which resets the engine and is only valid within safe intervals. Resume works at any time because the engine state is already correct.
 
 **Generation counter (`gen`):** LOAD and JUMP carry a `gen` value (u16) that the device stores and includes on every outbound UDP frame. The controller increments `gen` on each LOAD and JUMP, and drops any incoming UDP frame whose `gen` doesn't match the current expected value. This prevents stale in-flight frames — emitted before the device processed the command — from being forwarded to the browser with the wrong epoch. See "Session identity and frame filtering" below.
 
@@ -198,6 +202,18 @@ void poll_tcp_commands(int tcp_fd, PlaybackDevice& device) {
                     memcpy(&t_rel, payload + 8, 4);
                     memcpy(&gen, payload + 12, 2);
                     device.handle_jump(t0, t_rel, gen);
+                }
+                break;
+            }
+            case 0x13: {  // CMD_PAUSE
+                device.handle_pause();
+                break;
+            }
+            case 0x14: {  // CMD_RESUME
+                if (payload_len >= 8) {
+                    int64_t t0;
+                    memcpy(&t0, payload, 8);
+                    device.handle_resume(t0);
                 }
                 break;
             }
@@ -359,6 +375,15 @@ public:
     // Valid only within compiler-identified safe intervals (controller enforces this).
     void handle_jump(int64_t t0, float t_rel, uint16_t gen);
 
+    // Pause playback. Stops ticking, keeps displaying last frame.
+    // Reports last t_rel via telemetry so controller can coordinate resume.
+    void handle_pause();
+
+    // Resume playback from paused state. Sets shared time origin WITHOUT resetting
+    // the engine — preserves all cursor positions and animation state.
+    // t0 is computed by the controller so that the first tick produces the correct t_rel.
+    void handle_resume(int64_t t0);
+
     // Update sync offset (from controller SYNC_RESULT, received over TCP).
     void handle_sync_result(int64_t offset);
 
@@ -404,6 +429,7 @@ protected:
     int64_t _sync_offset = 0;     // controller-provided offset (us), 0 until first SYNC_RESULT
     uint16_t _gen = 0;            // generation counter, echoed on outbound UDP frames
     uint32_t _frame_index = 0;    // monotonic frame counter, reset on LOAD/JUMP
+    float _paused_t_rel = 0.0f;   // t_rel at pause time, reported to controller
     bool _gamma_enabled;
 };
 ```
@@ -444,14 +470,14 @@ bool PlaybackDevice::handle_load(const uint8_t* blob, size_t blob_len, uint16_t 
 
 #### `handle_start()`
 
-Records the absolute start time. Playback begins on the next `tick_once()`.
+Records the absolute start time. Playback begins on the next `tick_once()`. Only valid from LOADED or ENDED — use `handle_resume()` to continue from PAUSED.
 
 ```cpp
 void PlaybackDevice::handle_start(int64_t t0) {
-    if (_state != LOADED && _state != PAUSED && _state != ENDED)
-        return;  // ignore if no program loaded
+    if (_state != LOADED && _state != ENDED)
+        return;  // ignore if no program loaded or already playing
 
-    if (_state == PAUSED || _state == ENDED)
+    if (_state == ENDED)
         _engine->reset();
 
     _t0 = t0;
@@ -495,6 +521,37 @@ void PlaybackDevice::handle_jump(int64_t t0, float t_rel, uint16_t gen) {
 Because jump targets are reset-safe (no event is active at that instant), `reset()` + starting from `t_rel` produces correct output. The engine's cursor will advance to the first event at or after `t_rel` on each layer.
 
 **Implementation note:** `handle_start()` and `handle_jump()` share the core "set timebase + reset engine" logic. The implementation should extract a common helper (e.g. `apply_timebase(t0, gen)`) to avoid duplicating the timing math, while keeping the two public handlers separate for their distinct state transitions and preconditions.
+
+#### `handle_pause()`
+
+Stops the device from advancing. The last rendered frame stays on the LEDs. Reports the paused `t_rel` via telemetry so the controller can coordinate a synchronized resume across all devices.
+
+```cpp
+void PlaybackDevice::handle_pause() {
+    if (_state != PLAYING) return;
+
+    _paused_t_rel = current_t_rel();
+    _state = PAUSED;
+    send_telemetry(PAUSED, _paused_t_rel);
+}
+```
+
+#### `handle_resume()`
+
+Resumes playback from the paused state. Sets a new shared time origin **without resetting the engine** — all cursor positions, active animation instances, and stateful buffers are preserved. The controller computes `t0` so that the first tick after resume produces the correct `t_rel`.
+
+```cpp
+void PlaybackDevice::handle_resume(int64_t t0) {
+    if (_state != PAUSED) return;
+
+    _t0 = t0;    // shared absolute time — first tick lands at the right t_rel
+    _state = PLAYING;
+    // No reset — engine state is preserved from before the pause
+    send_telemetry(PLAYING, _paused_t_rel);
+}
+```
+
+**Why RESUME doesn't reset:** The engine may be mid-event with accumulated state (e.g., a shift animation that has been scrolling pixels). Resetting would destroy that state, and the paused time is almost certainly not in a safe interval. RESUME simply continues ticking from where the engine left off. The small time gap between pause and resume (typically <100ms of clock difference) is handled in a single `tick()` call — the engine advances cursors and renders at the new time without replaying intermediate frames.
 
 #### `tick_once()`
 
@@ -1490,8 +1547,8 @@ The `strips` array in `session_start` defines the **canonical strip order and le
 | Command | Controller-complete means | Reply result |
 |---------|--------------------------|-------------|
 | `load` | Compiled (or cache hit), all devices ACKed LOAD, session created | `{"session_id": N}` |
-| `play` | State updated, START sent to all devices | `{}` |
-| `pause` | State updated, devices notified | `{}` |
+| `play` | State updated, START or RESUME sent to all devices, audio started/resumed | `{}` |
+| `pause` | CMD_PAUSE sent to all devices, paused t_rel collected, audio paused, state updated | `{"t_rel": paused_time}` |
 | `seek` | Time resolved/snapped, JUMP or DEBUG_SEEK sent, epoch updated | `{"t": snapped_time}` |
 
 #### kind=0x02 — Program frame
@@ -1712,16 +1769,22 @@ The audio player is a separate component on the base station, coordinated by the
 
 ### Contract
 
-The audio player must support two operations:
+The audio player must support four operations:
 
 - **`start_at(t0_abs)`** — begin playback from the start, timed to absolute `t0`
 - **`seek_and_start_at(t_audio, t0_abs)`** — seek to position `t_audio` in the track, then start/resume playback at absolute `t0`
+- **`pause()`** — stop audio playback, retain current position
+- **`resume_at(t_audio, t0_abs)`** — resume from `t_audio`, starting at absolute `t0`
 
-Both use the controller's monotonic clock reference. The audio player compensates for its own pipeline latency (see `docs/design.md`, "Audio pipeline latency" section).
+All operations using `t0_abs` reference the controller's monotonic clock. The audio player compensates for its own pipeline latency (see `docs/design.md`, "Audio pipeline latency" section).
 
 ### How it fits into the controller flows
 
 **START:** The controller computes a shared `t0`, sends `START(t0)` to all devices, and calls `audio.start_at(t0)`. Audio and LEDs begin together.
+
+**PAUSE:** The controller sends `CMD_PAUSE` to all devices, collects their reported `t_rel`, and calls `audio.pause()`. Audio and LEDs stop together.
+
+**RESUME:** The controller picks `t_resume = max(reported t_rel values)`, computes a shared `t0`, sends `CMD_RESUME(t0)` to all devices, and calls `audio.resume_at(t_resume, t0)`. Audio and LEDs resume together.
 
 **JUMP (production seek):** The controller snaps to a safe interval, computes a shared `t0`, sends `JUMP(t0, t_rel, gen)` to all devices, and calls `audio.seek_and_start_at(t_rel, t0)`. Audio and LEDs reposition together.
 
@@ -1731,7 +1794,7 @@ Both use the controller's monotonic clock reference. The audio player compensate
 
 The audio player component itself is not yet designed. This section documents the required contract so that the controller's seek and start flows are specified end-to-end. The LED side (CMD_JUMP, safe intervals, gen filtering) is fully defined. The audio side depends on this interface being implemented.
 
-Production seek is supported — restricted to safe intervals on the visual side, with audio coordination via the contract above. Audio-only seek (repositioning audio without LED seek) is not a use case.
+Production seek and pause/resume are supported — seek is restricted to safe intervals on the visual side, pause/resume preserves engine state. Both coordinate with audio via the contract above.
 
 ---
 
@@ -1739,7 +1802,7 @@ Production seek is supported — restricted to safe intervals on the visual side
 
 Mixed configurations (real ESPs + simulators in the same show) are not supported. Two clean modes, determined by the base-station config:
 
-- **Production mode** (`mode: "esp"` for all strips): all real ESPs. Controller sends LOAD, START, JUMP, and sync. No replay-based debug commands. Seek is restricted to safe intervals only.
+- **Production mode** (`mode: "esp"` for all strips): all real ESPs. Controller sends LOAD, START, JUMP, PAUSE, RESUME, and sync. No replay-based debug commands. Seek is restricted to safe intervals only.
 - **Dev mode** (`mode: "sim"` for all strips): all simulators. Full debug controls (pause/seek/step/jump). Browser supports both arbitrary scrubbing (via CMD_DEBUG_SEEK) and jump-point navigation.
 
 Both modes support CMD_JUMP — it works on any device because it only targets times within reset-safe intervals where `reset()` + forward tick is correct.
