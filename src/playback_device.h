@@ -33,9 +33,10 @@ public:
     uint8_t* rgb_buf();
     uint16_t strip_length() const;
 
-protected:
     // Platform-specific — subclasses override
     virtual int64_t now_mono() const = 0;
+
+protected:
     virtual void output_frame(float t_rel) = 0;
     virtual void send_telemetry(DeviceState s, float t, const char* err = nullptr) {}
 

@@ -31,8 +31,9 @@ public:
     void debug_seek(float target_t_rel);
     void debug_step(int direction);
 
-protected:
     int64_t now_mono() const override;
+
+protected:
     void output_frame(float t_rel) override;
     void send_telemetry(DeviceState s, float t, const char* err = nullptr) override;
 

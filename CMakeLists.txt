@@ -15,6 +15,7 @@ add_library(elements_core STATIC
     src/colors.cpp
     src/playback_device.cpp
     src/esp_simulated.cpp
+    src/sim_controller.cpp
 )
 target_include_directories(elements_core PUBLIC src)
 
@@ -56,6 +57,9 @@ if(BUILD_TESTS)
     add_executable(test_esp_simulated test/test_esp_simulated.cpp)
     target_link_libraries(test_esp_simulated elements_core Catch2::Catch2WithMain)
 
+    add_executable(test_sim_controller test/test_sim_controller.cpp)
+    target_link_libraries(test_sim_controller elements_core Catch2::Catch2WithMain)
+
     # Auto-generate test fixtures if missing
     find_program(PYTHON3 python3)
     if(PYTHON3)
@@ -88,6 +92,7 @@ if(BUILD_TESTS)
         add_dependencies(test_engine test_fixtures)
         add_dependencies(test_playback_device test_fixtures)
         add_dependencies(test_esp_simulated test_fixtures)
+        add_dependencies(test_sim_controller test_fixtures)
     endif()
 
     add_test(NAME test_decoder COMMAND test_decoder
@@ -103,6 +108,8 @@ if(BUILD_TESTS)
     add_test(NAME test_playback_device COMMAND test_playback_device
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_esp_simulated COMMAND test_esp_simulated
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    add_test(NAME test_sim_controller COMMAND test_sim_controller
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
     # Valgrind memcheck (optional)
@@ -169,6 +176,15 @@ if(BUILD_TESTS)
                     --error-exitcode=1 $<TARGET_FILE:test_esp_simulated>
         )
         set_tests_properties(test_esp_simulated_memcheck PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        )
+        add_test(
+            NAME test_sim_controller_memcheck
+            COMMAND ${VALGRIND} --leak-check=full
+                    --errors-for-leak-kinds=definite,indirect,possible
+                    --error-exitcode=1 $<TARGET_FILE:test_sim_controller>
+        )
+        set_tests_properties(test_sim_controller_memcheck PROPERTIES
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         )
     endif()
