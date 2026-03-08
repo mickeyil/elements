@@ -2,6 +2,7 @@
 #include <catch2/catch_approx.hpp>
 #include "../src/sim_controller.h"
 #include "../src/sim_device.h"
+#include "../src/playback_device.h"
 
 #include <cstdio>
 #include <vector>
@@ -18,6 +19,40 @@ public:
     int64_t now_mono() const override { return _now; }
 
 private:
+    int64_t _now = 0;
+};
+
+// ---------------------------------------------------------------------------
+// FakeDevice — minimal ControllerDevice with no debug_seek support
+// ---------------------------------------------------------------------------
+
+class FakeDevice : public ControllerDevice {
+public:
+    bool handle_load(const uint8_t*, size_t, uint16_t) override {
+        _state = DeviceState::LOADED;
+        return true;
+    }
+    void handle_start(int64_t) override { _state = DeviceState::PLAYING; }
+    void handle_jump(int64_t, float, uint16_t) override {}
+    void handle_pause() override { _state = DeviceState::PAUSED; }
+    void handle_resume(int64_t) override { _state = DeviceState::PLAYING; }
+    void handle_stop() override { _state = DeviceState::LOADED; }
+
+    void tick_once() override {}
+
+    DeviceState state() const override { return _state; }
+    float current_t_rel() const override { return 0.0f; }
+    int64_t now_mono() const override { return _now; }
+
+    std::vector<DeviceFrame> drain_frames() override { return {}; }
+
+    bool supports_debug_seek() const override { return false; }
+    void debug_seek(float) override {}
+
+    void set_time(int64_t us) { _now = us; }
+
+private:
+    DeviceState _state = DeviceState::IDLE;
     int64_t _now = 0;
 };
 
@@ -686,4 +721,35 @@ TEST_CASE("Play from ENDED restarts", "[simctrl]") {
     ctrl.tick_once();
     auto pf = ctrl.drain_program_frames();
     REQUIRE(pf.size() >= 1);
+}
+
+// =========================================================================
+// ControllerDevice boundary: non-sim device
+// =========================================================================
+
+TEST_CASE("Seek on device without debug_seek emits ERROR and preserves state", "[simctrl][interface]") {
+    FakeDevice dev;
+    SimController ctrl({{"strip", 5, &dev}});
+
+    // Minimal blob — FakeDevice always succeeds
+    CompiledProgram prog;
+    prog.artifact_id = "fake";
+    prog.duration = 5.0f;
+    prog.strips = {{"strip", 5, {0x01}}};
+    REQUIRE(ctrl.load(prog));
+    ctrl.drain_events();
+
+    dev.set_time(0);
+    ctrl.play();
+    uint32_t epoch_before = ctrl.epoch();
+    ctrl.drain_events();
+
+    // Seek should fail — FakeDevice doesn't support debug_seek
+    ctrl.seek(2.0f);
+    CHECK(ctrl.state() == ControllerState::PLAYING);
+    CHECK(ctrl.epoch() == epoch_before);  // epoch not advanced
+
+    auto evts = ctrl.drain_events();
+    REQUIRE(evts.size() == 1);
+    CHECK(evts[0].kind == ControllerEvent::ERROR);
 }
