@@ -1,6 +1,6 @@
 # Elements — Design Document
 
-> **Status: Mixed.** Core pipeline (compiler, decoder, engine, compositor) is implemented. Hardware setup, build system, and project phases are current. Transport and time sync sections reflect the planned direction — see `transport.md` and `controller.md` for details.
+> **Status: Mixed.** Core pipeline (compiler, decoder, engine, compositor, PlaybackDevice base class) is implemented. Hardware setup, build system, and project phases are current. Transport, controller, and web app are designed but not yet implemented — see `transport.md` and `controller.md`.
 
 ## Overview
 
@@ -92,11 +92,18 @@ Device: reset(), resume from t_rel with shared t0
 Audio: repositions to 28.0, starts at t0
 ```
 
-**Stopping mid-song:**
+**Stopping playback (program stays loaded):**
+```
+Controller → Device: STOP
+Device: clears to black, resets to t=0, stays LOADED
+Controller → Device: START(t0)   // can replay later without re-uploading
+```
+
+**Replacing program mid-song:**
 ```
 Controller → Device: LOAD(ambient blob, gen=N)
 ```
-LOAD clears everything — the song's animations stop immediately, ambient program takes over. No explicit stop command needed.
+LOAD tears down the current program and replaces it — no STOP needed when switching programs.
 
 **Default behavior:** When a program finishes and no new program is loaded, the device goes dark. This is the expected state between songs — the controller sends the next program when ready.
 
@@ -167,11 +174,11 @@ Detailed design documents:
 
 **→ [compiler.md](compiler.md)** — Python compiler pipeline: parser, time resolution, layer inference, buffer packing, blob emission, safe interval analysis
 
-**→ [playback_device.md](playback_device.md)** — PlaybackDevice base class: state machine, method contracts, ESPDevice/ESPSimulated subclass sketches *(base class implemented)*
+**→ [playback_device.md](playback_device.md)** — PlaybackDevice base class: state machine, method contracts, ESPDevice/ESPSimulated subclass sketches *(base class implemented, subclasses planned)*
 
-**→ [transport.md](transport.md)** — Device communication protocol: TCP commands, UDP sync probes, wire formats, custom clock sync *(planned)*
+**→ [transport.md](transport.md)** — Device communication protocol: TCP commands, UDP sync probes, wire formats, custom clock sync *(design)*
 
-**→ [controller.md](controller.md)** — Controller/web-app architecture: config, identity model, frame assembly, reset-safe intervals, protocols, end-to-end flows *(planned)*
+**→ [controller.md](controller.md)** — Controller/web-app architecture: config, identity model, frame assembly, reset-safe intervals, protocols, end-to-end flows *(design)*
 
 **→ [draft_simulator_proposal.md](draft_simulator_proposal.md)** — Simulator: pybind11 + Flask + browser visualization *(early draft, partially superseded by playback_device.md and controller.md)*
 

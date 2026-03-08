@@ -786,7 +786,7 @@ ESPSimulated loop iteration:
    |
    |  output_frame()
    |    -> UDP: [gen + frame_index + t_rel + rgb_buf] to controller
-   |    -> _frame_index++
+   |  _frame_index++   // base class increments after output_frame()
    |
    |  sleep until next frame (20ms cadence)
 ```
