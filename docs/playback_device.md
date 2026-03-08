@@ -422,7 +422,7 @@ protected:
     // Return current monotonic time in microseconds (int64_t).
     // Real ESP: esp_timer_get_time().
     // Simulator: steady_clock.
-    virtual int64_t now_mono() = 0;
+    virtual int64_t now_mono() const = 0;
 
     // Output the current frame.
     // Real ESP: FastLED.show()
@@ -629,7 +629,7 @@ public:
     }
 
 protected:
-    int64_t now_mono() override {
+    int64_t now_mono() const override {
         return esp_timer_get_time();  // microseconds, monotonic
     }
 
@@ -679,7 +679,7 @@ public:
         : PlaybackDevice(strip_length, /*gamma_enabled=*/false) {}
 
 protected:
-    int64_t now_mono() override {
+    int64_t now_mono() const override {
         auto now = steady_clock::now();
         return duration_cast<microseconds>(now.time_since_epoch()).count();
     }

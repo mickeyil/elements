@@ -22,7 +22,7 @@ public:
         : PlaybackDevice(len, /*gamma_enabled=*/false) {}
 
     void set_time(int64_t us) { _now = us; }
-    int64_t now_mono() override { return _now; }
+    int64_t now_mono() const override { return _now; }
 
     int output_frame_count = 0;
     void output_frame() override { output_frame_count++; }

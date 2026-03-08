@@ -170,8 +170,7 @@ float PlaybackDevice::current_t_rel() const
         case DeviceState::PAUSED:
             return _paused_t_rel;
         case DeviceState::PLAYING: {
-            float t = (float)(const_cast<PlaybackDevice*>(this)->now_mono()
-                              + _sync_offset - _t0) / 1e6f;
+            float t = (float)(now_mono() + _sync_offset - _t0) / 1e6f;
             if (t < 0.0f) return 0.0f;
             if (t > _duration) return _duration;
             return t;
