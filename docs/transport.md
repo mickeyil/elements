@@ -1,0 +1,477 @@
+# Transport & Clock Sync
+
+> **Status: Design document.** Not yet implemented. Describes the device communication protocol, wire formats, and custom clock synchronization.
+
+## Transport architecture
+
+Three channels per device, split by requirements:
+
+| Channel | Direction | Purpose | Why this transport |
+|---------|-----------|---------|-------------------|
+| **TCP** | controller → device | LOAD, START, JUMP, PAUSE, RESUME, STOP, SYNC_RESULT, debug commands | Reliable delivery, arbitrary payload size (blobs can exceed UDP MTU) |
+| **UDP inbound** | controller → device | SYNC_REQ | Low-latency RTT measurement — TCP head-of-line blocking and Nagle would corrupt offset calculations |
+| **UDP outbound** | device → controller | SYNC_RESP, telemetry, RGB frames | Fire-and-forget streaming; dropped frame = browser skips one update |
+
+Each device listens on one TCP port and one UDP port. The controller maintains a persistent TCP connection to each device and sends UDP sync probes to the device's UDP port.
+
+---
+
+## TCP command protocol
+
+The controller opens a persistent TCP connection to each device. Commands are length-prefixed messages:
+
+```
+[length: u32 little-endian] [type: u8] [payload...]
+```
+
+`length` includes the type byte but not itself. So a START command (type + 8 bytes of t0) has `length = 9`.
+
+Command types:
+
+```
+CMD_LOAD:         type = 0x10, payload = [gen: u16] [blob: variable]    -> 3+ bytes total
+CMD_START:        type = 0x11, payload = [t0: i64]                     -> 9 bytes total
+CMD_JUMP:         type = 0x12, payload = [t0: i64] [t_rel: f32] [gen: u16] -> 15 bytes total
+CMD_PAUSE:        type = 0x13, no payload                              -> 1 byte total
+CMD_RESUME:       type = 0x14, payload = [t0: i64]                     -> 9 bytes total
+CMD_STOP:         type = 0x15, no payload                              -> 1 byte total
+CMD_SYNC_RESULT:  type = 0x03, payload = [seq: u16] [boot_seq: u32] [offset: i64] -> 15 bytes total
+CMD_DEBUG_PAUSE:  type = 0x20, no payload                              -> 1 byte total
+CMD_DEBUG_RESUME: type = 0x21, no payload                              -> 1 byte total
+CMD_DEBUG_SEEK:   type = 0x22, payload = [t_rel: f32]                  -> 5 bytes total
+CMD_DEBUG_STEP:   type = 0x23, payload = [direction: i8]               -> 2 bytes total
+```
+
+Response (device → controller, same TCP connection):
+
+```
+CMD_ACK:          type = 0x80, payload = [status: u8]                  -> 2 bytes total
+                  status: 0 = ok, 1 = decode error
+```
+
+The device sends an ACK after LOAD (with decode status). Other commands are fire-and-forget from the controller's perspective — the TCP connection itself provides delivery guarantee.
+
+**CMD_JUMP vs CMD_DEBUG_SEEK:** CMD_JUMP is a lightweight seek available on all devices. It carries a shared absolute `t0` (like CMD_START) so all devices stay synchronized, `t_rel` for precise frame rendering when paused, and a `gen` value the device echoes on outbound UDP so the controller can drop stale in-flight frames. Valid only within reset-safe intervals (see `controller.md`). CMD_DEBUG_SEEK is simulator-only: it replays from t=0 to the target, producing correct output at any arbitrary time.
+
+**CMD_PAUSE vs CMD_RESUME:** CMD_PAUSE stops the device from advancing. The device keeps displaying the last rendered frame and reports its last `t_rel` via telemetry. CMD_RESUME(t0) sets a new shared time origin and transitions to PLAYING **without resetting the engine** — all cursor positions, active animation instances, and stateful buffers are preserved. This is fundamentally different from CMD_JUMP, which resets the engine and is only valid within safe intervals. Resume works at any time because the engine state is already correct.
+
+**Generation counter (`gen`):** LOAD and JUMP carry a `gen` value (u16) that the device stores and includes on every outbound UDP frame. The controller increments `gen` on each LOAD and JUMP, and drops any incoming UDP frame whose `gen` doesn't match the current expected value. This prevents stale in-flight frames from being forwarded to the browser with the wrong epoch.
+
+---
+
+## TCP command reading (device side)
+
+The device reads from the TCP socket in its main loop. Commands are length-prefixed, so reading is straightforward and non-blocking:
+
+```cpp
+// Persistent read buffer — accumulates partial TCP reads across loop iterations.
+// Sized for the largest expected command (LOAD with max blob size).
+static uint8_t tcp_buf[32768];
+static uint32_t tcp_buf_len = 0;
+
+// Called each loop iteration. Non-blocking: reads whatever is available,
+// processes complete commands, leaves partial data for next call.
+void poll_tcp_commands(int tcp_fd, PlaybackDevice& device) {
+    // Non-blocking read — append to buffer
+    int n = recv(tcp_fd, tcp_buf + tcp_buf_len,
+                 sizeof(tcp_buf) - tcp_buf_len, MSG_DONTWAIT);
+    if (n > 0) tcp_buf_len += n;
+
+    // Process complete messages
+    while (tcp_buf_len >= 4) {
+        uint32_t msg_len;
+        memcpy(&msg_len, tcp_buf, 4);
+
+        if (tcp_buf_len < 4 + msg_len) break;  // incomplete message
+
+        uint8_t* msg = tcp_buf + 4;
+        uint8_t type = msg[0];
+        uint8_t* payload = msg + 1;
+        uint32_t payload_len = msg_len - 1;
+
+        switch (type) {
+            case 0x10: {  // CMD_LOAD
+                if (payload_len < 2) break;
+                uint16_t gen;
+                memcpy(&gen, payload, 2);
+                bool ok = device.handle_load(payload + 2, payload_len - 2, gen);
+                uint8_t ack[] = {0x80, ok ? (uint8_t)0 : (uint8_t)1};
+                // send_tcp_ack(tcp_fd, ack, sizeof(ack));  // length-prefixed
+                break;
+            }
+            case 0x11: {  // CMD_START
+                if (payload_len >= 8) {
+                    int64_t t0;
+                    memcpy(&t0, payload, 8);
+                    device.handle_start(t0);
+                }
+                break;
+            }
+            case 0x12: {  // CMD_JUMP
+                if (payload_len >= 14) {
+                    int64_t t0;
+                    float t_rel;
+                    uint16_t gen;
+                    memcpy(&t0, payload, 8);
+                    memcpy(&t_rel, payload + 8, 4);
+                    memcpy(&gen, payload + 12, 2);
+                    device.handle_jump(t0, t_rel, gen);
+                }
+                break;
+            }
+            case 0x13: {  // CMD_PAUSE
+                device.handle_pause();
+                break;
+            }
+            case 0x14: {  // CMD_RESUME
+                if (payload_len >= 8) {
+                    int64_t t0;
+                    memcpy(&t0, payload, 8);
+                    device.handle_resume(t0);
+                }
+                break;
+            }
+            case 0x15: {  // CMD_STOP
+                device.handle_stop();
+                break;
+            }
+            case 0x03: {  // CMD_SYNC_RESULT
+                if (payload_len >= 14) {
+                    // seq (2) + boot_seq (4) + offset (8)
+                    handle_sync_result(payload, payload_len);
+                }
+                break;
+            }
+            // Debug commands (ESPSimulated only):
+            // case 0x20: device.debug_pause(); break;
+            // case 0x22: device.debug_seek(read_f32(payload)); break;
+            // etc.
+        }
+
+        // Shift remaining data to front
+        uint32_t consumed = 4 + msg_len;
+        tcp_buf_len -= consumed;
+        if (tcp_buf_len > 0)
+            memmove(tcp_buf, tcp_buf + consumed, tcp_buf_len);
+    }
+}
+```
+
+---
+
+## UDP sync probes (device side)
+
+Sync probes use a separate UDP socket. The device listens for SYNC_REQ and replies with SYNC_RESP on the same socket:
+
+```cpp
+void poll_udp_sync(int udp_fd) {
+    uint8_t buf[64];
+    struct sockaddr_in sender;
+    socklen_t sender_len = sizeof(sender);
+
+    int n = recvfrom(udp_fd, buf, sizeof(buf), MSG_DONTWAIT,
+                     (struct sockaddr*)&sender, &sender_len);
+    if (n < 1) return;
+
+    if (buf[0] == 0x01 && n >= 15) {  // SYNC_REQ
+        int64_t t2 = now_mono();
+
+        uint8_t resp[31];
+        resp[0] = 0x02;  // SYNC_RESP
+        memcpy(resp + 1, buf + 1, 14);  // echo seq + boot_seq + t1
+        memcpy(resp + 15, &t2, 8);
+        int64_t t3 = now_mono();
+        memcpy(resp + 23, &t3, 8);
+
+        sendto(udp_fd, resp, 31, 0,
+               (struct sockaddr*)&sender, sender_len);
+    }
+}
+```
+
+---
+
+## Device main loop (combined)
+
+```cpp
+void loop() {              // Arduino (ESPDevice)
+    poll_tcp_commands(tcp_fd, device);
+    poll_udp_sync(udp_fd);
+    device.tick_once();
+}
+```
+
+```cpp
+while (running) {          // Desktop (ESPSimulated)
+    poll_tcp_commands(tcp_fd, device);
+    poll_udp_sync(udp_fd);
+    device.tick_once();
+    pace_loop();           // sleep_until next_tick, overrun detection
+}
+```
+
+---
+
+## Controller side (sending commands)
+
+```python
+# Python controller — sending a blob over TCP
+def send_load(conn: socket.socket, blob: bytes, gen: int):
+    msg = struct.pack('<I', 1 + 2 + len(blob))  # length prefix
+    msg += b'\x10'                               # CMD_LOAD
+    msg += struct.pack('<H', gen)                # generation counter
+    msg += blob
+    conn.sendall(msg)
+
+    # Read ACK
+    ack_hdr = conn.recv(4)                   # length prefix
+    ack_len = struct.unpack('<I', ack_hdr)[0]
+    ack = conn.recv(ack_len)
+    assert ack[0] == 0x80                    # CMD_ACK
+    return ack[1] == 0                       # status: 0 = ok
+
+def send_start(conn: socket.socket, t0: int):
+    msg = struct.pack('<IB', 9, 0x11)        # length=9, CMD_START
+    msg += struct.pack('<q', t0)             # t0 as int64
+    conn.sendall(msg)
+
+def send_jump(conn: socket.socket, t0: int, t_rel: float, gen: int):
+    msg = struct.pack('<IBqfH', 15, 0x12, t0, t_rel, gen)  # length=15, CMD_JUMP, t0, t_rel, gen
+    conn.sendall(msg)
+
+def send_stop(conn: socket.socket):
+    msg = struct.pack('<IB', 1, 0x15)  # length=1, CMD_STOP
+    conn.sendall(msg)
+```
+
+---
+
+## Clock and time model
+
+This is a clock subsystem and command-protocol feature. The engine is not involved — it still receives only `float t_rel` and knows nothing about synchronization. Only the time origination path changes.
+
+### Absolute vs relative time
+
+Two time representations serve different purposes:
+
+- **Absolute time (int64_t, microseconds):** Used in the protocol between controller and devices. The START command carries a `t0` value. Devices compute `t_rel = (now_mono + sync_offset - t0) / 1e6`. This is what enables multi-device synchronization — all devices derive the same `t_rel` from the same reference.
+
+- **Relative time (float, seconds since program start):** Used inside the engine. `engine.tick(t_rel)` takes a float. This is fine for durations up to hours — float32 precision at 600 seconds (10 min) is ~40 microseconds, far below the 20ms frame interval.
+
+### Clock architecture
+
+Each device maintains a monotonic local clock and a sync offset provided by the controller:
+
+```
+now_epoch_approx = now_mono + sync_offset
+t_rel = (now_epoch_approx - t0) / 1e6        (microseconds -> float seconds)
+```
+
+- **ESP:** `now_mono` = `esp_timer_get_time()` (microsecond monotonic). No epoch knowledge needed — the controller provides `sync_offset`.
+- **Simulator:** `now_mono` = `steady_clock` (monotonic, immune to wall-clock/NTP jumps on host). For local-only use, `sync_offset = 0` — the controller and simulator share the same clock domain.
+- **Controller:** uses its own monotonic clock as the reference. Epoch alignment is irrelevant — what matters is stability and consistency across devices.
+
+All protocol timestamps are **int64_t microseconds** — avoids float byte-order issues and keeps deterministic precision.
+
+### Custom sync protocol (replaces NTP on ESP)
+
+Instead of each ESP running an NTP client, the controller performs a lightweight sync exchange over a dedicated UDP channel. Sync probes use UDP (not the TCP command channel) because RTT measurement requires minimal, predictable latency — TCP's head-of-line blocking and Nagle's algorithm would add jitter that corrupts offset calculations. The computed offset (SYNC_RESULT) is delivered over the TCP command connection since it's a one-shot value, not latency-sensitive.
+
+**Why not NTP:**
+- NTPClient on ESP is fragile: `forceUpdate()` blocks up to 1s, `getEpochTime()` loses sub-second precision via integer division, managing the library is unnecessary complexity.
+- The controller already talks to every device. A custom protocol is simpler on the ESP side (~15 lines), non-blocking, and gives the controller full visibility into sync quality per device.
+
+#### Sync exchange
+
+```
+Controller                           ESP
+    |                                 |
+    |  SYNC_REQ { seq, t1 }         |
+    |-------------------------------->|
+    |                                 |  t2 = esp_timer_get_time()
+    |  SYNC_RESP { seq, t1, t2, t3 }|  t3 = esp_timer_get_time()
+    |<--------------------------------|
+    |  t4 = mono_now()               |
+    |                                 |
+    |  rtt = (t4 - t1) - (t3 - t2)
+    |  offset = ((t2 - t1) + (t3 - t4)) / 2
+```
+
+- **T1, T4:** controller monotonic timestamps (int64_t us).
+- **T2, T3:** ESP monotonic timestamps (int64_t us) — both from `esp_timer_get_time()`, same clock source.
+- **seq:** uint16_t sequence number — controller ignores stale/mismatched replies.
+- **boot_seq:** uint32_t boot counter — ensures offsets from a pre-reboot timer are not reused.
+
+Packet format (all fields little-endian):
+
+```
+SYNC_REQ:    [type: u8 = 0x01] [seq: u16] [boot_seq: u32] [t1: i64]                      -> 15 bytes (UDP)
+SYNC_RESP:   [type: u8 = 0x02] [seq: u16] [boot_seq: u32] [t1: i64] [t2: i64] [t3: i64]  -> 31 bytes (UDP)
+SYNC_RESULT: [type: u8 = 0x03] [seq: u16] [boot_seq: u32] [offset: i64]                   -> 15 bytes (TCP, length-prefixed)
+```
+
+#### ESP implementation (minimal, non-blocking)
+
+The sync probe exchange (SYNC_REQ/SYNC_RESP) runs on UDP for latency accuracy. The computed result (SYNC_RESULT) arrives over TCP with the other commands.
+
+```cpp
+int64_t _sync_offset = 0;    // set by controller via SYNC_RESULT (TCP)
+uint32_t _boot_seq = 0;     // incremented on each boot
+uint16_t _last_sync_seq = 0; // last applied SYNC_RESULT seq
+
+// Called from poll_udp_sync() — UDP path
+void handle_sync_req(const uint8_t* pkt, const struct sockaddr_in& sender) {
+    int64_t t2 = esp_timer_get_time();
+
+    uint8_t resp[31];
+    resp[0] = 0x02;  // SYNC_RESP
+    memcpy(resp + 1, pkt + 1, 14);  // echo seq + boot_seq + t1
+    memcpy(resp + 15, &t2, 8);
+    int64_t t3 = esp_timer_get_time();
+    memcpy(resp + 23, &t3, 8);
+    sendto(udp_fd, resp, 31, 0, (struct sockaddr*)&sender, sizeof(sender));
+}
+
+// Called from poll_tcp_commands() — TCP path
+void handle_sync_result(const uint8_t* payload, uint32_t len) {
+    if (len < 14) return;
+
+    uint16_t seq;
+    uint32_t boot_seq;
+    memcpy(&seq, payload, 2);
+    memcpy(&boot_seq, payload + 2, 4);
+
+    // Drop stale: wrong boot epoch or old/reordered sequence
+    if (boot_seq != _boot_seq || seq < _last_sync_seq)
+        return;
+
+    _last_sync_seq = seq;
+    memcpy(&_sync_offset, payload + 6, 8);
+}
+
+int64_t now_epoch_approx() {
+    return esp_timer_get_time() + _sync_offset;
+}
+```
+
+No NTP library. No blocking. No state machine. The ESP is a passive responder for sync probes — it timestamps and echoes. The controller owns all filtering and correction logic.
+
+#### Controller sync policy
+
+**Startup (before first LOAD):**
+
+1. Send 8 SYNC_REQ rounds at 1-second intervals.
+2. For each round, compute RTT and offset.
+3. Filter: discard samples where `rtt > rtt_max` or `rtt < 0`.
+4. Sort remaining by RTT, keep lowest K (e.g., K=3-4) — low RTT means less asymmetric jitter.
+5. Compute median offset of those K candidates.
+6. Send SYNC_RESULT to ESP.
+
+**Steady-state (during and between playback):**
+
+Periodic probes at an adaptive interval:
+
+| Condition | Probe interval |
+|-----------|---------------|
+| Startup calibration | 1s (8 rounds) |
+| Steady, good confidence | 15s |
+| Poor confidence or high variance | 5-10s |
+| Idle (no playback, low priority) | 20-30s |
+
+At ~10 ESP devices, even 10s intervals are negligible network load (~31 bytes per probe).
+
+#### Controller filter model
+
+```python
+class DeviceSync:
+    WINDOW_SIZE = 5
+
+    def __init__(self):
+        self.window = []            # median window of filtered offsets
+        self.applied_offset = 0     # currently sent to ESP
+        self.prev_delta_sign = 0    # for sustained-move guard
+
+    def on_sync_sample(self, samples_from_round):
+        """Called with (rtt, offset) pairs from one or more recent probes."""
+        # 1. Discard invalid
+        valid = [(rtt, off) for rtt, off in samples_from_round
+                 if 0 < rtt < RTT_MAX]
+        if not valid:
+            return
+
+        # 2. Sort by RTT, keep lowest K
+        by_rtt = sorted(valid, key=lambda s: s[0])
+        best = by_rtt[:min(4, len(by_rtt))]
+
+        # 3. Median offset of best candidates
+        offsets = sorted(s[1] for s in best)
+        candidate = offsets[len(offsets) // 2]
+
+        # 4. Feed into sliding median window
+        self.window.append(candidate)
+        if len(self.window) > self.WINDOW_SIZE:
+            self.window.pop(0)
+        if len(self.window) < 3:
+            return  # not enough data
+
+        smoothed = median(self.window)
+        delta = smoothed - self.applied_offset
+
+        # 5. Ignore noise floor
+        if abs(delta) < 2000:   # < 2ms in us
+            self.prev_delta_sign = 0
+            return
+
+        # 6. Sustained-move guard: require 2 consecutive deltas
+        #    in the same direction before applying
+        sign = 1 if delta > 0 else -1
+        if sign != self.prev_delta_sign:
+            self.prev_delta_sign = sign
+            return  # first move in this direction — wait for confirmation
+
+        # 7. Apply
+        self.applied_offset = smoothed
+        send_sync_result(device, smoothed)
+        self.prev_delta_sign = 0
+
+    def is_stale(self, max_age_s=60):
+        """True if no successful sync in max_age_s — trigger full re-sync."""
+        ...
+```
+
+Key properties of this filter:
+- **Low-RTT selection** removes WiFi retransmit noise.
+- **Median window** (N=5) makes a single outlier unable to move the output.
+- **Sustained-move guard** requires two consecutive deltas in the same direction before applying — prevents toggling from a jitter spike that happens to survive the median.
+- **Staleness timeout** triggers a full re-sync if samples are consistently bad.
+
+#### Correction behavior during playback
+
+When the ESP receives a SYNC_RESULT (over TCP) with an updated offset:
+
+- **ESP clock is early** (offset correction makes `t_rel` smaller -> animation was ahead): next `tick_once()` produces a smaller `t_rel` than expected. The engine effectively stalls for one frame (renders the same visual position twice). Invisible at 20ms frame intervals.
+- **ESP clock is late** (offset correction makes `t_rel` larger -> animation was behind): next `tick_once()` produces a larger `t_rel` jump. The engine's cursor naturally skips past finished events — this is a single `tick()` call, no replay needed.
+
+Both directions are handled gracefully by the existing engine design. Corrections filtered through the median window + sustained-move guard are small (a few ms), so the frame-to-frame timing perturbation is imperceptible.
+
+### Simulator clock
+
+ESPSimulated uses `steady_clock` (monotonic) for its tick loop. This is immune to wall-clock jumps from NTP adjustments on the host machine.
+
+For local-only use (no real ESPs): `sync_offset = 0`. The controller and simulator share the same clock domain, so no sync exchange is needed.
+
+For mixed real+simulated setups: the controller can derive a trivial offset for the simulator from the identity relationship (same machine = same monotonic base). Real ESPs go through the full sync protocol.
+
+### Seek and virtual time
+
+Two seek mechanisms exist with different tradeoffs:
+
+**CMD_JUMP (all devices):** Resets the engine and starts ticking from a reset-safe time. O(1) — no replay. Valid only within compiler-identified safe intervals where no event carries prior state. See `controller.md`, "Reset-safe jump points".
+
+**CMD_DEBUG_SEEK (simulator only):** Resets the engine and replays frame-by-frame from t=0 to the target. Correct at any arbitrary time, but cost is proportional to the target time. Used for precise scrubbing during development.
+
+### Device outbound UDP frame format
+
+```
+[gen: u16] [frame_index: u32] [t_rel: f32] [rgb: bytes...]
+```

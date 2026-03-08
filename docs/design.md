@@ -1,6 +1,6 @@
 # Elements — Design Document
 
-> **Status: Mixed.** Core pipeline (compiler, decoder, engine, compositor) is implemented. Hardware setup, build system, and project phases are current. Transport and time sync sections reflect the planned direction — see `playback_device.md` for details.
+> **Status: Mixed.** Core pipeline (compiler, decoder, engine, compositor) is implemented. Hardware setup, build system, and project phases are current. Transport and time sync sections reflect the planned direction — see `transport.md` and `controller.md` for details.
 
 ## Overview
 
@@ -40,7 +40,7 @@ The core design principle: **tight timing sync over complex rendering**. Simple 
      └─────────────┘
 ```
 
-The controller is the long-running authority. It compiles DSL programs, routes per-strip blobs to devices via a static config, manages clock sync and playback sessions, and exposes a control/event API. The web app is a separate process that relays between the controller and the browser. See `playback_device.md` for the full architecture, config format, and session identity model.
+The controller is the long-running authority. It compiles DSL programs, routes per-strip blobs to devices via a static config, manages clock sync and playback sessions, and exposes a control/event API. The web app is a separate process that relays between the controller and the browser. See `controller.md` for the full architecture, config format, and session identity model.
 
 ### Network Assumptions
 
@@ -68,7 +68,7 @@ Communication between the base station and devices is minimal by design. The con
 | **RESUME(t0)** | base → device | Resume from paused state with shared `t0`. No engine reset — state preserved. |
 | **STOP** | base → device | Clear output to black, reset engine to t=0, transition to LOADED. Program stays loaded. |
 
-See `docs/playback_device.md` for the full protocol spec: wire formats, state machine, gen filtering, safe intervals, and debug commands.
+See `docs/transport.md` for wire formats and sync protocol, `docs/controller.md` for gen filtering, safe intervals, and debug commands, and `docs/playback_device.md` for the device state machine.
 
 ### Playback Flow
 
@@ -102,7 +102,7 @@ LOAD clears everything — the song's animations stop immediately, ambient progr
 
 ### Transport
 
-TCP for commands (LOAD, START, JUMP, PAUSE, RESUME, STOP, debug) and clock sync results. UDP for clock sync probes (latency-sensitive RTT measurement) and streaming (RGB frames, telemetry). See `docs/playback_device.md` for the full transport architecture.
+TCP for commands (LOAD, START, JUMP, PAUSE, RESUME, STOP, debug) and clock sync results. UDP for clock sync probes (latency-sensitive RTT measurement) and streaming (RGB frames, telemetry). See `docs/transport.md` for the full transport architecture.
 
 ---
 
@@ -139,7 +139,7 @@ The controller performs a lightweight SYNC_REQ/SYNC_RESP exchange with each ESP 
 
 **Why not NTP:** A generic NTP client on ESP is fragile — `forceUpdate()` blocks for up to 1s, `getEpochTime()` loses sub-second precision via integer division, and each ESP must manage its own NTP state. The custom protocol is simpler on the ESP side (~15 lines), non-blocking by design, and gives the controller full visibility into sync quality per device.
 
-**Full design and implementation details:** See `docs/playback_device.md`, section "Custom sync protocol".
+**Full design and implementation details:** See `docs/transport.md`, section "Custom sync protocol".
 
 ### Audio Playback Latency Compensation
 
@@ -167,9 +167,13 @@ Detailed design documents:
 
 **→ [compiler.md](compiler.md)** — Python compiler pipeline: parser, time resolution, layer inference, buffer packing, blob emission, safe interval analysis
 
-**→ [playback_device.md](playback_device.md)** — PlaybackDevice hierarchy, transport protocol, custom clock sync, controller/web-app architecture, session identity, reset-safe intervals *(planned)*
+**→ [playback_device.md](playback_device.md)** — PlaybackDevice base class: state machine, method contracts, ESPDevice/ESPSimulated subclass sketches *(base class implemented)*
 
-**→ [draft_simulator_proposal.md](draft_simulator_proposal.md)** — Simulator: pybind11 + Flask + browser visualization *(early draft)*
+**→ [transport.md](transport.md)** — Device communication protocol: TCP commands, UDP sync probes, wire formats, custom clock sync *(planned)*
+
+**→ [controller.md](controller.md)** — Controller/web-app architecture: config, identity model, frame assembly, reset-safe intervals, protocols, end-to-end flows *(planned)*
+
+**→ [draft_simulator_proposal.md](draft_simulator_proposal.md)** — Simulator: pybind11 + Flask + browser visualization *(early draft, partially superseded by playback_device.md and controller.md)*
 
 **→ [dsl_example.py](dsl_example.py)** — DSL example: wave+shift+sparks test animation
 
