@@ -67,7 +67,8 @@ bool SimController::load(const CompiledProgram& program)
         const auto& sb = program.strips[pi];
         if (!_strips[ci].device->handle_load(sb.blob.data(), sb.blob.size(), new_gen)) {
             // handle_load is destructive (deletes old engine), so already-loaded
-            // devices have lost their original program. Clean them up and go IDLE.
+            // devices retain the new program. Stop them (→ LOADED, inert).
+            // The failed device is IDLE. Next load() overwrites everything.
             for (size_t li : loaded)
                 _strips[li].device->handle_stop();
             _state = ControllerState::IDLE;

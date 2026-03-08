@@ -231,6 +231,11 @@ TEST_CASE("Device load failure fails controller load", "[simctrl]") {
     CHECK(ctrl.session_id() == 0);  // identity not mutated
     auto evts = ctrl.drain_events();
     CHECK(has_event(evts, ControllerEvent::ERROR));
+
+    // Device asymmetry: strip 0 loaded OK then got handle_stop → LOADED;
+    // strip 1 failed decode → IDLE. Next load() overwrites both.
+    CHECK(f.left.state() == DeviceState::LOADED);
+    CHECK(f.right.state() == DeviceState::IDLE);
 }
 
 TEST_CASE("Failed device load does not advance identity", "[simctrl]") {
