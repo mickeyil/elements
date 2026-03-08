@@ -78,6 +78,11 @@ bool SimController::load(const CompiledProgram& program)
             for (size_t li : loaded)
                 _strips[li].device->handle_stop();
             _state = ControllerState::IDLE;
+            _duration = 0.0f;
+            _paused_t_rel = 0.0f;
+            _loop = false;
+            _buckets.clear();
+            _program_frames.clear();
             queue_event(ControllerEvent::ERROR,
                 "device load failed for " + _strips[ci].strip_id);
             return false;

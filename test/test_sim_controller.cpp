@@ -306,6 +306,10 @@ TEST_CASE("Failed device load does not advance identity", "[simctrl]") {
     CHECK(ctrl.epoch() == 1);
     // State goes IDLE — handle_load is destructive, old program is gone
     CHECK(ctrl.state() == ControllerState::IDLE);
+    // Session data fully cleared
+    CHECK(ctrl.duration() == 0.0f);
+    CHECK(ctrl.current_t_rel() == 0.0f);
+    CHECK(ctrl.drain_program_frames().empty());
 
     // Can recover with a fresh load
     REQUIRE(ctrl.load(f.program()));
