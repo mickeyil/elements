@@ -34,6 +34,8 @@ public:
 
     const TelemetryEntry& last_telemetry() const { return telemetry.back(); }
 
+    uint32_t frame_index() const { return _frame_index; }
+
 private:
     int64_t _now = 0;
 };
@@ -687,6 +689,108 @@ TEST_CASE("Telemetry on load failure includes error", "[playback][telemetry]") {
     REQUIRE(dev.telemetry.size() == 1);
     CHECK(dev.last_telemetry().state == DeviceState::IDLE);
     CHECK(dev.last_telemetry().err == "decode failed");
+}
+
+// ---------------------------------------------------------------------------
+// frame_index tracking
+// ---------------------------------------------------------------------------
+
+TEST_CASE("frame_index resets and increments correctly", "[playback][frame_index]") {
+    TestDevice dev(5);
+    auto blob = load_blob(SHIFT_FIXTURE);
+
+    // After construction: 0
+    CHECK(dev.frame_index() == 0);
+
+    // After load: 0
+    REQUIRE(dev.handle_load(blob.data(), blob.size(), 1));
+    CHECK(dev.frame_index() == 0);
+
+    // tick_once while LOADED: no increment
+    dev.tick_once();
+    CHECK(dev.frame_index() == 0);
+
+    // After start: reset to 0
+    dev.set_time(0);
+    dev.handle_start(0);
+    CHECK(dev.frame_index() == 0);
+
+    // tick_once while PLAYING: increments
+    dev.set_time(500'000);
+    dev.tick_once();
+    CHECK(dev.frame_index() == 1);
+
+    dev.set_time(1'000'000);
+    dev.tick_once();
+    CHECK(dev.frame_index() == 2);
+
+    // tick_once while PAUSED: no increment
+    dev.set_time(1'500'000);
+    dev.handle_pause();
+    uint32_t before_pause = dev.frame_index();
+    dev.tick_once();
+    CHECK(dev.frame_index() == before_pause);
+
+    // Resume and tick: increments again
+    dev.handle_resume(1'500'000);
+    dev.set_time(2'000'000);
+    dev.tick_once();
+    CHECK(dev.frame_index() == before_pause + 1);
+
+    // Stop: reset to 0
+    dev.handle_stop();
+    CHECK(dev.frame_index() == 0);
+
+    // Start again, tick twice
+    dev.set_time(3'000'000);
+    dev.handle_start(3'000'000);
+    CHECK(dev.frame_index() == 0);
+    dev.set_time(3'500'000);
+    dev.tick_once();
+    dev.set_time(4'000'000);
+    dev.tick_once();
+    CHECK(dev.frame_index() == 2);
+
+    // Jump while PLAYING: reset to 0
+    dev.handle_jump(4'000'000, 0.0f, 2);
+    CHECK(dev.frame_index() == 0);
+
+    // tick_once after jump: increments from 0
+    dev.set_time(4'500'000);
+    dev.tick_once();
+    CHECK(dev.frame_index() == 1);
+
+    // Re-load: reset to 0
+    REQUIRE(dev.handle_load(blob.data(), blob.size(), 3));
+    CHECK(dev.frame_index() == 0);
+
+    // Jump from LOADED (non-PLAYING): renders one frame → 1
+    dev.handle_jump(0, 0.0f, 4);
+    CHECK(dev.frame_index() == 1);
+
+    // tick_once while PAUSED (from jump): no increment
+    dev.tick_once();
+    CHECK(dev.frame_index() == 1);
+}
+
+TEST_CASE("frame_index not incremented for future-start ticks", "[playback][frame_index]") {
+    TestDevice dev(5);
+    auto blob = load_blob(SHIFT_FIXTURE);
+    REQUIRE(dev.handle_load(blob.data(), blob.size(), 1));
+
+    // Start 1 second in the future
+    dev.set_time(0);
+    dev.handle_start(1'000'000);
+    CHECK(dev.frame_index() == 0);
+
+    // t_rel < 0 → returns true but no render, no increment
+    dev.tick_once();
+    CHECK(dev.frame_index() == 0);
+
+    // Advance past start → now renders
+    dev.set_time(1'500'000);
+    dev.tick_once();
+    CHECK(dev.frame_index() == 1);
 }
 
 TEST_CASE("No telemetry from ignored commands", "[playback][telemetry]") {
