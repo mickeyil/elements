@@ -605,6 +605,24 @@ class TestSafeIntervals:
         # Merged unsafe: [0, 4). Safe: (0,0) + [4, 5)
         assert m.strips[0].safe_intervals == [(0.0, 0.0), (4.0, 5.0)]
 
+    def test_transitive_source_chain(self):
+        """A→B→C: C's required_start propagates back through B to A."""
+        s = strip("si_trans", length=5)
+        px = s.pixels("0-4")
+        # A: paint [0, 1)
+        a = paint(colors=[(0, 0, 0.2)] * 5)
+        a.schedule(px, at=0, duration=1)
+        # B: shift(source=A) [2, 3)  — required_start = A.required_start = 0.0
+        b = shift(direction="right", velocity=1, circular=False, fill="transparent")
+        b.schedule(px, at=sec(2.0), duration=sec(1.0), source=a)
+        # C: shift(source=B) [4, 5)  — required_start = B.required_start = 0.0
+        c = shift(direction="right", velocity=1, circular=False, fill="transparent")
+        c.schedule(px, at=sec(4.0), duration=sec(1.0), source=b)
+        m = build_manifest(beat=1.0, duration=6.0)
+        # All three chain back to t=0. Merged unsafe: [0, 5).
+        # Naive algorithm would say [1,2) and [3,4) are safe — wrong.
+        assert m.strips[0].safe_intervals == [(0.0, 0.0), (5.0, 6.0)]
+
     def test_overlapping_unsafe_spans_merge(self):
         """Overlapping unsafe spans merge — no fragmented false gaps."""
         s = strip("si_merge", length=5)
