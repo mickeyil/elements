@@ -227,11 +227,7 @@ Program frames (binary, kind=0x02) carry only `frame_index` and `t_rel` — they
 
 ### Definition
 
-A time `t` is **reset-safe** if the visual output at `t` depends only on events starting at or after `t` — not on any state accumulated before `t`. At a reset-safe time, `engine.reset()` followed by `engine.tick(t)` produces correct output without replaying earlier frames.
-
-In this engine, a time is reset-safe when **no event is active on any layer** at that instant. Concretely: for every layer, either the cursor is between events (previous event ended, next event hasn't started) or before the first event.
-
-Safe times form **intervals**, not discrete points. A gap between events spans a continuous range `[gap_start, gap_end)` where every time within the gap is reset-safe. Modeling these as intervals is essential for correct multi-strip intersection (see "Per-strip vs global safe intervals" below).
+A time `t` is **reset-safe** if `engine.reset()` followed by `engine.tick(t)` produces correct output without replaying earlier frames. Safe times form **intervals**, not discrete points — a continuous range `[gap_start, gap_end)` where every time is reset-safe. Modeling these as intervals is essential for correct multi-strip intersection.
 
 ### Why this matters
 
@@ -239,92 +235,17 @@ The engine's cursor is forward-only. To seek to an arbitrary time, the simulator
 
 ### What creates history-dependence
 
-**Stateless animations** (wave, spark, paint) — output is a pure function of `(t - event_start)` and params. No history. But the engine can't "skip into" an active event mid-way through without first creating the animation instance, which happens on the first tick where the event is active.
+**Active events** — the engine creates animation instances on the first tick where an event is active. Jumping into the middle of an active event skips that creation.
 
-**Stateful animations** (shift) — snapshots source pixels into a work buffer at construction (`engine.cpp:38-57`). The snapshot depends on whatever the source layer rendered before the shift was created. Jumping into the middle of a shift with a blank source buffer produces wrong output.
+**Source dependencies** — a shift with `source=paint` snapshots the source layer's buffer at construction. If the source event (paint) ran earlier and has ended, its output must still be in the layer buffer when the shift activates. Jumping past the source event means the shift snapshots a zeroed buffer.
 
-**Source layer dependencies** — a shift on layer 2 with `source_layer=0` captures layer 0's buffer state at the moment the shift event activates. If layer 0 had a wave running before that, the wave's visual state at that instant is baked into the shift. Skipping past the wave means the shift gets an empty source buffer.
-
-The conservative rule avoids all of these: if no event is active anywhere, there's no state to miss.
+Simply checking for "no active event" is insufficient. A gap between a source event and its dependent event appears idle but is actually unsafe — the source's buffer state must survive across the gap. The compiler handles this by extending each event's unsafe span backward through its source dependency chain (`required_start_sec`). See `docs/compiler.md` § 8 for the algorithm.
 
 ### Compiler analysis
 
-The compiler already has the complete event timeline after time resolution and layer inference. Finding safe intervals is a straightforward interval sweep:
+The compiler computes safe intervals as part of the compilation pipeline. Per-strip intervals are computed internally and intersected across all strips. Only the global result is exposed on `CompiledManifest.safe_intervals`.
 
-```python
-def _find_safe_intervals(layers: list[dict], duration: float) -> list[tuple[float, float]]:
-    """Find time intervals where no event is active on any layer."""
-    event_intervals = []
-    for layer in layers:
-        for e in layer["events"]:
-            event_intervals.append((e["at_sec"], e["at_sec"] + e["duration_sec"]))
-
-    if not event_intervals:
-        return [(0.0, duration)]  # entire program is safe
-
-    event_intervals.sort()
-
-    safe = []
-    end = 0.0
-    for start, stop in event_intervals:
-        if start > end:
-            safe.append((end, start))  # gap: no events active in [end, start)
-        end = max(end, stop)
-    if end < duration:
-        safe.append((end, duration))  # gap between last event and program end
-
-    # t=0 is always safe — ensure it's represented
-    if not safe or safe[0][0] > 0.0:
-        safe.insert(0, (0.0, 0.0))  # degenerate: only t=0 is safe
-
-    return safe
-```
-
-This runs once per strip during compilation, after layer inference (step 4) and before blob emission (step 7). It adds negligible cost — one sort and one linear sweep over all events.
-
-### Per-strip vs global safe intervals
-
-Each strip may have different event timelines, producing different safe intervals. For synchronized multi-device jumps, the controller computes the **intersection** of all per-strip safe intervals — only times that are safe on *every* strip are globally safe:
-
-```python
-def intersect_safe_intervals(
-    per_strip: dict[str, list[tuple[float, float]]]
-) -> list[tuple[float, float]]:
-    """Intersection of per-strip safe intervals."""
-    if not per_strip:
-        return []
-
-    strips = list(per_strip.values())
-    result = strips[0]
-    for other in strips[1:]:
-        result = _pairwise_intersect(result, other)
-    return result
-
-def _pairwise_intersect(
-    a: list[tuple[float, float]], b: list[tuple[float, float]]
-) -> list[tuple[float, float]]:
-    """Intersect two sorted interval lists."""
-    result = []
-    i, j = 0, 0
-    while i < len(a) and j < len(b):
-        lo = max(a[i][0], b[j][0])
-        hi = min(a[i][1], b[j][1])
-        if lo <= hi:
-            result.append((lo, hi))
-        # Advance the interval that ends first
-        if a[i][1] < b[j][1]:
-            i += 1
-        else:
-            j += 1
-    return result
-```
-
-Example:
-- Strip A safe intervals: `[(0.0, 0.0), (4.0, 5.0), (8.0, 10.0)]`
-- Strip B safe intervals: `[(0.0, 0.0), (4.5, 6.0), (8.0, 9.5)]`
-- Global safe intervals: `[(0.0, 0.0), (4.5, 5.0), (8.0, 9.5)]`
-
-Note: `(4.0, 5.0) ∩ (4.5, 6.0) = (4.5, 5.0)`. A point-based model would have recorded `4.0` for A and `4.5` for B — set intersection yields nothing, missing this valid window. This is why intervals are necessary.
+The controller receives the pre-computed global safe intervals from the manifest — it does not compute them itself.
 
 If the user seeks to 4.7, it falls within `(4.5, 5.0)` — a valid jump target. If they seek to 6.5, the controller snaps to the nearest safe interval.
 
@@ -389,7 +310,7 @@ The controller is the long-running authority on the base station. It is a separa
 
 1. **Loads static config** — reads the base-station config file at startup. Knows every strip, device, IP, mode.
 
-2. **Compiles programs** — receives DSL source (from the web app or CLI), compiles it using the existing Python compiler (`compile_program()`), validates strip lengths against config. Produces a manifest: per-strip blobs + duration + safe intervals.
+2. **Compiles programs** — receives DSL source (from the web app or CLI), compiles it using the Python compiler (`compile_manifest()`), validates strip lengths against config. The compiler returns a `CompiledManifest` with per-strip blobs, duration, and global safe intervals.
 
 3. **Routes blobs to devices** — uses config to map `strip_id -> device_id -> ip`. Sends each blob to the correct device via TCP LOAD. Waits for ACK.
 
@@ -418,35 +339,28 @@ The controller is the long-running authority on the base station. It is a separa
 ```python
 # Controller receives DSL source from web app
 def load_program(self, dsl_source: str):
-    # 1. Compile against config
+    # 1. Compile — returns CompiledManifest with blobs + global safe intervals
     strips_config = self.config["strips"]
-    # Set up DSL environment, exec source, call build()
-    blobs = compile_dsl(dsl_source, beat=..., duration=...)
-    # blobs: dict[strip_name, bytes]
+    manifest = compile_manifest_from_dsl(dsl_source, beat=..., duration=...)
+    # manifest.strips: list[CompiledStripArtifact] (strip_id, length, blob)
+    # manifest.safe_intervals: list[tuple[float, float]] (global, pre-intersected)
 
-    # 2. Validate strip names match config
-    for name in blobs:
-        if name not in strips_config:
-            raise Error(f"strip '{name}' not in config")
+    # 2. Validate strip names/lengths match config
+    for sa in manifest.strips:
+        if sa.strip_id not in strips_config:
+            raise Error(f"strip '{sa.strip_id}' not in config")
 
-    # 3. Compute safe intervals per strip, then global intersection
-    per_strip_si = {}
-    for name, blob in blobs.items():
-        per_strip_si[name] = blob_safe_intervals[name]  # from compiler
-    global_si = intersect_safe_intervals(per_strip_si)
-
-    # 4. Build manifest (strips as ordered list — defines canonical strip order)
+    # 3. Build session (strips as ordered list — defines canonical strip order)
     self.session_id += 1
     self.epoch = 0
-    strip_order = list(strips_config.keys())  # stable order from config
     self.manifest = {
         "artifact_id": sha256(dsl_source + beat + duration + config_hash + compiler_version),
         "session_id": self.session_id,
-        "duration": duration,
-        "safe_intervals": global_si,
+        "duration": manifest.duration,
+        "safe_intervals": manifest.safe_intervals,
         "strips": [
-            {"name": name, "length": strips_config[name]["length"], "blob": blobs[name]}
-            for name in strip_order
+            {"name": sa.strip_id, "length": sa.length, "blob": sa.blob}
+            for sa in manifest.strips
         ],
     }
     self.strip_count = len(self.manifest["strips"])
