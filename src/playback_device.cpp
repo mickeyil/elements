@@ -29,6 +29,7 @@ bool PlaybackDevice::handle_load(const uint8_t* blob, size_t blob_len, uint16_t 
     if (!prog) {
         _duration = 0.0f;
         memset(_rgb_buf, 0, _strip_length * 3);
+        output_frame();
         _state = DeviceState::IDLE;
         send_telemetry(DeviceState::IDLE, 0.0f, "decode failed");
         return false;

@@ -18,6 +18,9 @@ public:
     void set_time(int64_t us) { _now = us; }
     int64_t now_mono() override { return _now; }
 
+    int output_frame_count = 0;
+    void output_frame() override { output_frame_count++; }
+
 private:
     int64_t _now = 0;
 };
@@ -314,6 +317,37 @@ TEST_CASE("Load failure: garbage blob", "[playback][load]") {
     const uint8_t* rgb = dev.rgb_data();
     for (int i = 0; i < 5 * 3; i++) {
         CHECK(rgb[i] == 0);
+    }
+}
+
+TEST_CASE("Load failure after playing pushes black to output", "[playback][load]") {
+    TestDevice dev(5);
+    auto blob = load_blob(SHIFT_FIXTURE);
+    REQUIRE(dev.handle_load(blob.data(), blob.size(), 1));
+
+    dev.set_time(0);
+    dev.handle_start(0);
+    dev.set_time(500'000);
+    dev.tick_once();
+
+    // Verify something was rendered (non-black)
+    bool any_nonzero = false;
+    for (int i = 0; i < 5 * 3; i++) {
+        if (dev.rgb_data()[i] != 0) { any_nonzero = true; break; }
+    }
+    REQUIRE(any_nonzero);
+
+    int before = dev.output_frame_count;
+
+    // Load garbage — should clear buffer and push black frame
+    uint8_t garbage[] = {0xDE, 0xAD, 0xBE, 0xEF};
+    CHECK_FALSE(dev.handle_load(garbage, sizeof(garbage), 2));
+    CHECK(dev.state() == DeviceState::IDLE);
+    CHECK(dev.output_frame_count == before + 1);
+
+    // Buffer is black
+    for (int i = 0; i < 5 * 3; i++) {
+        CHECK(dev.rgb_data()[i] == 0);
     }
 }
 
