@@ -581,7 +581,7 @@ class TestSafeIntervals:
         w = self._wave()
         w.schedule(s.pixels("0-4"), at=0, duration=4)
         m = build_manifest(beat=1.0, duration=4.0)
-        assert m.strips[0].safe_intervals == [(0.0, 0.0)]
+        assert m.safe_intervals == [(0.0, 0.0)]
 
     def test_gap_between_events(self):
         """Two unrelated events with a real gap."""
@@ -591,7 +591,7 @@ class TestSafeIntervals:
         w1.schedule(s.pixels("0-4"), at=0, duration=1)   # [0, 1)
         w2.schedule(s.pixels("0-4"), at=3, duration=1)   # [3, 4)
         m = build_manifest(beat=1.0, duration=5.0)
-        assert m.strips[0].safe_intervals == [(0.0, 0.0), (1.0, 3.0), (4.0, 5.0)]
+        assert m.safe_intervals == [(0.0, 0.0), (1.0, 3.0), (4.0, 5.0)]
 
     def test_source_dependent_removes_gap(self):
         """Source-dependent event makes the apparent gap unsafe."""
@@ -603,7 +603,7 @@ class TestSafeIntervals:
         m = build_manifest(beat=1.0, duration=5.0)
         # Shift required_start_sec = paint required_start_sec = 0.0
         # Merged unsafe: [0, 4). Safe: (0,0) + [4, 5)
-        assert m.strips[0].safe_intervals == [(0.0, 0.0), (4.0, 5.0)]
+        assert m.safe_intervals == [(0.0, 0.0), (4.0, 5.0)]
 
     def test_transitive_source_chain(self):
         """A→B→C: C's required_start propagates back through B to A."""
@@ -621,7 +621,7 @@ class TestSafeIntervals:
         m = build_manifest(beat=1.0, duration=6.0)
         # All three chain back to t=0. Merged unsafe: [0, 5).
         # Naive algorithm would say [1,2) and [3,4) are safe — wrong.
-        assert m.strips[0].safe_intervals == [(0.0, 0.0), (5.0, 6.0)]
+        assert m.safe_intervals == [(0.0, 0.0), (5.0, 6.0)]
 
     def test_overlapping_unsafe_spans_merge(self):
         """Overlapping unsafe spans merge — no fragmented false gaps."""
@@ -637,26 +637,21 @@ class TestSafeIntervals:
         sp.schedule(s.pixels("0-4"), at=0, duration=sec(0.5))
         m = build_manifest(beat=1.0, duration=5.0)
         # All events cover [0, 4). Safe: (0,0) + [4, 5)
-        assert m.strips[0].safe_intervals == [(0.0, 0.0), (4.0, 5.0)]
+        assert m.safe_intervals == [(0.0, 0.0), (4.0, 5.0)]
 
     def test_multi_strip_global_intersection(self):
-        """Global safe intervals are the intersection of per-strip intervals."""
+        """Safe intervals are the intersection across strips."""
         sa = strip("si_ms_a", length=5)
         sb = strip("si_ms_b", length=5)
         wa = self._wave()
         wb = self._wave(h=60)
-        wa.schedule(sa.pixels("0-4"), at=0, duration=1)  # strip A: [0,1)
-        wb.schedule(sb.pixels("0-4"), at=2, duration=1)  # strip B: [2,3)
+        wa.schedule(sa.pixels("0-4"), at=0, duration=1)  # strip A: unsafe [0,1)
+        wb.schedule(sb.pixels("0-4"), at=2, duration=1)  # strip B: unsafe [2,3)
         m = build_manifest(beat=1.0, duration=4.0)
-        # Strip A safe: (0,0), [1, 4)
-        assert m.strips[0].safe_intervals == [(0.0, 0.0), (1.0, 4.0)]
-        # Strip B safe: [0, 2), [3, 4)
-        assert m.strips[1].safe_intervals == [(0.0, 2.0), (3.0, 4.0)]
-        # Global: intersection of [(0,0),(1,4)] and [(0,2),(3,4)]
-        #   (0,0) ∩ (0,2) → (0,0)
-        #   (1,4) ∩ (0,2) → (1,2)
-        #   (1,4) ∩ (3,4) → (3,4)
-        assert m.global_safe_intervals == [(0.0, 0.0), (1.0, 2.0), (3.0, 4.0)]
+        # Strip A per-strip safe: (0,0), [1, 4)
+        # Strip B per-strip safe: [0, 2), [3, 4)
+        # Intersection: (0,0), [1,2), [3,4)
+        assert m.safe_intervals == [(0.0, 0.0), (1.0, 2.0), (3.0, 4.0)]
 
     def test_event_clamped_at_duration(self):
         """Event extending past duration uses clamped end for safe intervals."""
@@ -668,7 +663,7 @@ class TestSafeIntervals:
             warnings.simplefilter("ignore")
             m = build_manifest(beat=1.0, duration=3.0)
         # Clamped to [0, 3) → full coverage
-        assert m.strips[0].safe_intervals == [(0.0, 0.0)]
+        assert m.safe_intervals == [(0.0, 0.0)]
 
     def test_adjacent_events_no_gap(self):
         """Adjacent events [0,2) and [2,4) → no gap, only degenerate."""
@@ -678,7 +673,7 @@ class TestSafeIntervals:
         w1.schedule(s.pixels("0-4"), at=0, duration=2)
         w2.schedule(s.pixels("0-4"), at=2, duration=2)
         m = build_manifest(beat=1.0, duration=4.0)
-        assert m.strips[0].safe_intervals == [(0.0, 0.0)]
+        assert m.safe_intervals == [(0.0, 0.0)]
 
     def test_manifest_strip_order_follows_declaration(self):
         """Manifest strips follow the input strips list order, not event order."""

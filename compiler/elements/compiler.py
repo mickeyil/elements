@@ -662,27 +662,28 @@ def compile_manifest(strips: list[StripDef], events: list[dict],
     # 3–9. Per-strip pipeline; iterate input strips for canonical order
     by_strip = _partition_by_strip(events)
     strip_artifacts = []
+    per_strip_intervals = []
     for s in strips:
         if s.name not in by_strip:
             continue
         blob, intervals = _compile_strip(by_strip[s.name], duration)
         strip_artifacts.append(CompiledStripArtifact(
-            strip_id=s.name, length=s.length,
-            blob=blob, safe_intervals=intervals,
+            strip_id=s.name, length=s.length, blob=blob,
         ))
+        per_strip_intervals.append(intervals)
 
     # Global safe interval intersection
-    if strip_artifacts:
-        global_safe = strip_artifacts[0].safe_intervals
-        for sa in strip_artifacts[1:]:
-            global_safe = _intersect_intervals(global_safe, sa.safe_intervals)
+    if per_strip_intervals:
+        safe = per_strip_intervals[0]
+        for si in per_strip_intervals[1:]:
+            safe = _intersect_intervals(safe, si)
     else:
-        global_safe = [(0.0, duration)]
+        safe = [(0.0, duration)]
 
     return CompiledManifest(
         duration=duration,
         strips=strip_artifacts,
-        global_safe_intervals=global_safe,
+        safe_intervals=safe,
     )
 
 

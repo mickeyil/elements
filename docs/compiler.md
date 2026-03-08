@@ -587,7 +587,7 @@ def _find_safe_intervals(layers, duration):
 
 ### Global safe intervals
 
-The compiler computes per-strip safe intervals independently, then intersects them across all strips to produce `global_safe_intervals`. This is the set of times where all devices can safely jump simultaneously. Strips with no events are omitted from the manifest (their safe interval `[(0.0, duration)]` is the identity for intersection).
+The compiler computes per-strip safe intervals internally, then intersects them across all strips. Only the global result is exposed on `CompiledManifest.safe_intervals` — this is the set of times where all devices can safely jump simultaneously. Per-strip intervals are compile-time intermediates, not part of the public surface. Strips with no events are omitted from the manifest (their safe interval `[(0.0, duration)]` is the identity for intersection).
 
 ### Output
 
@@ -595,8 +595,7 @@ Safe intervals are returned as metadata in `CompiledManifest`, not embedded in t
 
 ```python
 manifest = build_manifest(beat=1.0, duration=15.0)
-manifest.strips[0].safe_intervals  # [(0.0, 0.0), (4.0, 5.5), (8.5, 15.0)]
-manifest.global_safe_intervals     # [(0.0, 0.0), (4.5, 5.0), (9.0, 15.0)]
+manifest.safe_intervals  # [(0.0, 0.0), (4.5, 5.0), (9.0, 15.0)]
 ```
 
 `build()` and `compile_program()` continue to return `dict[str, bytes]` for backwards compatibility.
