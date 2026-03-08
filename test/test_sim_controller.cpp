@@ -155,6 +155,56 @@ TEST_CASE("Strip length mismatch fails load", "[simctrl]") {
     CHECK(has_event(evts, ControllerEvent::ERROR));
 }
 
+TEST_CASE("Order-independent strip matching succeeds", "[simctrl]") {
+    DualFixture f;
+    SimController ctrl(f.strips());
+
+    // Program with strips in reverse order
+    CompiledProgram prog;
+    prog.artifact_id = "test";
+    prog.duration = 5.0f;
+    prog.strips = {
+        {"right", 5, f.rblob},
+        {"left", 5, f.lblob},
+    };
+    REQUIRE(ctrl.load(prog));
+    CHECK(ctrl.state() == ControllerState::LOADED);
+
+    // Verify correct device got correct blob by playing
+    f.set_time(0);
+    ctrl.play();
+    f.set_time(500'000);
+    ctrl.tick_once();
+    ctrl.drain_program_frames();
+    f.set_time(1'000'000);
+    ctrl.tick_once();
+    auto pf = ctrl.drain_program_frames();
+    REQUIRE(pf.size() == 1);
+    // Canonical order is [left, right] regardless of program order
+    // Left at t=1.0: [51, 102, 153, 204, 255]
+    check_pixel_vec(pf[0].strips[0], 0, 51);
+    check_pixel_vec(pf[0].strips[0], 4, 255);
+    // Right at t=1.0: [255, 204, 153, 102, 51]
+    check_pixel_vec(pf[0].strips[1], 0, 255);
+    check_pixel_vec(pf[0].strips[1], 4, 51);
+}
+
+TEST_CASE("Duplicate strip_id in program fails load", "[simctrl]") {
+    DualFixture f;
+    SimController ctrl(f.strips());
+
+    CompiledProgram prog;
+    prog.artifact_id = "test";
+    prog.duration = 5.0f;
+    prog.strips = {
+        {"left", 5, f.lblob},
+        {"left", 5, f.lblob},  // duplicate
+    };
+    CHECK_FALSE(ctrl.load(prog));
+    auto evts = ctrl.drain_events();
+    CHECK(has_event(evts, ControllerEvent::ERROR));
+}
+
 TEST_CASE("Strip count mismatch fails load", "[simctrl]") {
     DualFixture f;
     SimController ctrl(f.strips());

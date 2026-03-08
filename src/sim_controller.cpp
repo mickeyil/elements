@@ -31,34 +31,48 @@ bool SimController::load(const CompiledProgram& program)
         return false;
     }
 
-    // Validate strip IDs and lengths match canonical order
-    for (size_t i = 0; i < _strips.size(); i++) {
-        if (program.strips[i].strip_id != _strips[i].strip_id) {
+    // Order-independent matching: map program strips → canonical indices
+    std::vector<size_t> prog_to_canon(program.strips.size());
+    std::vector<bool> seen(_strips.size(), false);
+
+    for (size_t pi = 0; pi < program.strips.size(); pi++) {
+        auto it = _strip_id_to_index.find(program.strips[pi].strip_id);
+        if (it == _strip_id_to_index.end()) {
             queue_event(ControllerEvent::ERROR,
-                "strip id mismatch at index " + std::to_string(i));
+                "unknown strip_id: " + program.strips[pi].strip_id);
             return false;
         }
-        if (program.strips[i].length != _strips[i].length) {
+        size_t ci = it->second;
+        if (seen[ci]) {
             queue_event(ControllerEvent::ERROR,
-                "strip length mismatch for " + _strips[i].strip_id);
+                "duplicate strip_id: " + program.strips[pi].strip_id);
             return false;
         }
+        seen[ci] = true;
+        if (program.strips[pi].length != _strips[ci].length) {
+            queue_event(ControllerEvent::ERROR,
+                "strip length mismatch for " + _strips[ci].strip_id);
+            return false;
+        }
+        prog_to_canon[pi] = ci;
     }
 
     // Attempt device loads with a provisional gen.
     // Identity (_session_id, _epoch, _gen) is NOT mutated until all succeed.
     uint16_t new_gen = _gen + 1;
+    std::vector<size_t> loaded;  // canonical indices successfully loaded
 
-    for (size_t i = 0; i < _strips.size(); i++) {
-        const auto& sb = program.strips[i];
-        if (!_strips[i].device->handle_load(sb.blob.data(), sb.blob.size(), new_gen)) {
-            // Roll back already-loaded devices to avoid partial state
-            for (size_t j = 0; j < i; j++)
-                _strips[j].device->handle_stop();
+    for (size_t pi = 0; pi < program.strips.size(); pi++) {
+        size_t ci = prog_to_canon[pi];
+        const auto& sb = program.strips[pi];
+        if (!_strips[ci].device->handle_load(sb.blob.data(), sb.blob.size(), new_gen)) {
+            for (size_t li : loaded)
+                _strips[li].device->handle_stop();
             queue_event(ControllerEvent::ERROR,
-                "device load failed for " + _strips[i].strip_id);
+                "device load failed for " + _strips[ci].strip_id);
             return false;
         }
+        loaded.push_back(ci);
     }
 
     // All devices loaded — commit identity
