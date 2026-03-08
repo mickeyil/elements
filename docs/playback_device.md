@@ -405,8 +405,8 @@ public:
     // --- Per-iteration logic (called from platform loop) ---
 
     // Run one tick: advance time, call engine, output frame.
-    // Returns true if the device is still active (playing or loaded).
-    // Returns false if the program has ended.
+    // Returns true if the device is still active (LOADED, PLAYING, or PAUSED).
+    // Returns false if IDLE or ENDED.
     bool tick_once();
 
     // --- State queries ---
@@ -431,7 +431,7 @@ protected:
 
     // Send telemetry/status to the controller.
     virtual void send_telemetry(State state, float t_rel,
-                                const char* error = nullptr) = 0;
+                                const char* error = nullptr) {}  // default no-op
 
     // --- Internals ---
 
