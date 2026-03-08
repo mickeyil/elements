@@ -587,7 +587,7 @@ def _find_safe_intervals(layers, duration):
 
 ### Global safe intervals
 
-The compiler computes per-strip safe intervals internally, then intersects them across all strips. Only the global result is exposed on `CompiledManifest.safe_intervals` — this is the set of times where all devices can safely jump simultaneously. Per-strip intervals are compile-time intermediates, not part of the public surface. Strips with no events are omitted from the manifest (their safe interval `[(0.0, duration)]` is the identity for intersection).
+The compiler computes per-strip safe intervals internally, then intersects them across all strips. Only the global result is exposed on `CompiledManifest.safe_intervals` — this is the set of times where all devices can safely jump simultaneously. Per-strip intervals are compile-time intermediates, not part of the public surface. Eventless strips receive a valid zero-layer blob and a safe interval of `[(0.0, duration)]`, which is the identity for intersection.
 
 ### Output
 
