@@ -825,9 +825,10 @@ Browser                   Controller                Devices (all)
    |                         |  interval [2.0, 3.0)    |
    |                         |  epoch = 2              |
    |                         |                         |
-   |                         |  TCP: CMD_JUMP(t0, 2.5)  |
+   |                         |  gen += 1                |
+   |                         |  TCP: CMD_JUMP(t0, 2.5, gen)
    |                         |------------------------>|
-   |                         |                         |  handle_jump(t0, 2.5):
+   |                         |                         |  handle_jump(t0, 2.5, gen):
    |                         |                         |    engine.reset()
    |                         |                         |    _t0 = t0 (shared)
    |                         |                         |    _frame_index = 0
@@ -863,6 +864,7 @@ Browser                   Controller                ESPSimulated
    |                         |                         |    engine.reset()
    |                         |                         |    replay 0 -> 7.3
    |                         |                         |    output_frame()
+   |                         |                         |    _frame_index++
 ```
 
 ---
