@@ -4,7 +4,6 @@
 #include "strip.h"
 
 #include <cstring>
-#include <algorithm>
 
 PlaybackDevice::PlaybackDevice(uint16_t strip_length, bool gamma_enabled)
     : _strip_length(strip_length), _gamma_enabled(gamma_enabled)
