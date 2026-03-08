@@ -29,33 +29,33 @@ void SimController::queue_event(ControllerEvent::Kind kind, const std::string& m
     _events.push_back(std::move(ev));
 }
 
-bool SimController::load(const CompiledProgram& program)
+bool SimController::load(const CompiledManifest& manifest, bool loop)
 {
     // Validate strip count
-    if (program.strips.size() != _strips.size()) {
+    if (manifest.strips.size() != _strips.size()) {
         queue_event(ControllerEvent::ERROR, "strip count mismatch");
         return false;
     }
 
-    // Order-independent matching: map program strips → canonical indices
-    std::vector<size_t> prog_to_canon(program.strips.size());
+    // Order-independent matching: map manifest strips → canonical indices
+    std::vector<size_t> prog_to_canon(manifest.strips.size());
     std::vector<bool> seen(_strips.size(), false);
 
-    for (size_t pi = 0; pi < program.strips.size(); pi++) {
-        auto it = _strip_id_to_index.find(program.strips[pi].strip_id);
+    for (size_t pi = 0; pi < manifest.strips.size(); pi++) {
+        auto it = _strip_id_to_index.find(manifest.strips[pi].strip_id);
         if (it == _strip_id_to_index.end()) {
             queue_event(ControllerEvent::ERROR,
-                "unknown strip_id: " + program.strips[pi].strip_id);
+                "unknown strip_id: " + manifest.strips[pi].strip_id);
             return false;
         }
         size_t ci = it->second;
         if (seen[ci]) {
             queue_event(ControllerEvent::ERROR,
-                "duplicate strip_id: " + program.strips[pi].strip_id);
+                "duplicate strip_id: " + manifest.strips[pi].strip_id);
             return false;
         }
         seen[ci] = true;
-        if (program.strips[pi].length != _strips[ci].length) {
+        if (manifest.strips[pi].length != _strips[ci].length) {
             queue_event(ControllerEvent::ERROR,
                 "strip length mismatch for " + _strips[ci].strip_id);
             return false;
@@ -68,9 +68,9 @@ bool SimController::load(const CompiledProgram& program)
     uint16_t new_gen = _gen + 1;
     std::vector<size_t> loaded;  // canonical indices successfully loaded
 
-    for (size_t pi = 0; pi < program.strips.size(); pi++) {
+    for (size_t pi = 0; pi < manifest.strips.size(); pi++) {
         size_t ci = prog_to_canon[pi];
-        const auto& sb = program.strips[pi];
+        const auto& sb = manifest.strips[pi];
         if (!_strips[ci].device->handle_load(sb.blob.data(), sb.blob.size(), new_gen)) {
             // handle_load is destructive (deletes old engine), so already-loaded
             // devices retain the new program. Stop them (→ LOADED, inert).
@@ -81,6 +81,7 @@ bool SimController::load(const CompiledProgram& program)
             _duration = 0.0f;
             _paused_t_rel = 0.0f;
             _loop = false;
+            _safe_intervals.clear();
             _buckets.clear();
             _program_frames.clear();
             queue_event(ControllerEvent::ERROR,
@@ -94,8 +95,9 @@ bool SimController::load(const CompiledProgram& program)
     _session_id++;
     _epoch = 0;
     _gen = new_gen;
-    _duration = program.duration;
-    _loop = program.loop;
+    _duration = manifest.duration;
+    _loop = loop;
+    _safe_intervals = manifest.safe_intervals;
     _paused_t_rel = 0.0f;
     _buckets.clear();
     for (size_t i = 0; i < _strips.size(); i++)
@@ -157,9 +159,43 @@ void SimController::seek(float t_rel)
     if (_state == ControllerState::IDLE || _state == ControllerState::STOPPED)
         return;
 
+    if (_safe_intervals.empty()) {
+        queue_event(ControllerEvent::ERROR, "seek requires safe intervals");
+        return;
+    }
+
+    float snapped = _snap_to_safe(t_rel);
+    bool was_playing = (_state == ControllerState::PLAYING);
+
+    _epoch++;
+    _gen++;
+    int64_t now = _strips[0].device->now_mono();
+    int64_t t0 = now - (int64_t)(snapped * 1e6f);
+    for (size_t i = 0; i < _strips.size(); i++) {
+        _strips[i].device->handle_jump(t0, snapped, _gen);
+        _expected_gen[i] = _gen;
+    }
+    _buckets.clear();
+
+    if (!was_playing) {
+        _paused_t_rel = 0.0f;
+        for (auto& s : _strips) {
+            float t = s.device->current_t_rel();
+            if (t > _paused_t_rel) _paused_t_rel = t;
+        }
+        _state = ControllerState::PAUSED;
+    }
+    queue_event(ControllerEvent::STATE_CHANGED);
+}
+
+void SimController::debug_seek(float t_rel)
+{
+    if (_state == ControllerState::IDLE || _state == ControllerState::STOPPED)
+        return;
+
     for (auto& s : _strips) {
         if (!s.device->supports_debug_seek()) {
-            queue_event(ControllerEvent::ERROR, "seek requires debug_seek support");
+            queue_event(ControllerEvent::ERROR, "debug_seek requires debug_seek support");
             return;
         }
     }
@@ -173,7 +209,6 @@ void SimController::seek(float t_rel)
         // Stay PLAYING — debug_seek adjusts t0 for PLAYING devices
     } else {
         // LOADED, PAUSED, ENDED → PAUSED
-        // Read back actual clamped position from devices
         _paused_t_rel = 0.0f;
         for (auto& s : _strips) {
             float t = s.device->current_t_rel();
@@ -182,6 +217,19 @@ void SimController::seek(float t_rel)
         _state = ControllerState::PAUSED;
     }
     queue_event(ControllerEvent::STATE_CHANGED);
+}
+
+float SimController::_snap_to_safe(float t_rel) const
+{
+    for (int i = (int)_safe_intervals.size() - 1; i >= 0; i--) {
+        float lo = _safe_intervals[i].first;
+        float hi = _safe_intervals[i].second;
+        if (lo <= t_rel && t_rel < hi)
+            return t_rel;
+        if (hi <= t_rel)
+            return lo;
+    }
+    return _safe_intervals[0].first;
 }
 
 void SimController::stop()

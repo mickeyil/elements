@@ -106,16 +106,15 @@ struct DualFixture {
         };
     }
 
-    CompiledProgram program(bool loop = false) {
-        CompiledProgram prog;
-        prog.artifact_id = "test";
-        prog.duration = 5.0f;
-        prog.loop = loop;
-        prog.strips = {
+    CompiledManifest program() {
+        CompiledManifest m;
+        m.duration = 5.0f;
+        m.strips = {
             {"left", 5, lblob},
             {"right", 5, rblob},
         };
-        return prog;
+        m.safe_intervals = {};
+        return m;
     }
 
     void set_time(int64_t us) {
@@ -199,8 +198,7 @@ TEST_CASE("Order-independent strip matching succeeds", "[simctrl]") {
     SimController ctrl(f.strips());
 
     // Program with strips in reverse order
-    CompiledProgram prog;
-    prog.artifact_id = "test";
+    CompiledManifest prog;
     prog.duration = 5.0f;
     prog.strips = {
         {"right", 5, f.rblob},
@@ -232,8 +230,7 @@ TEST_CASE("Duplicate strip_id in program fails load", "[simctrl]") {
     DualFixture f;
     SimController ctrl(f.strips());
 
-    CompiledProgram prog;
-    prog.artifact_id = "test";
+    CompiledManifest prog;
     prog.duration = 5.0f;
     prog.strips = {
         {"left", 5, f.lblob},
@@ -248,8 +245,7 @@ TEST_CASE("Strip count mismatch fails load", "[simctrl]") {
     DualFixture f;
     SimController ctrl(f.strips());
 
-    CompiledProgram prog;
-    prog.artifact_id = "test";
+    CompiledManifest prog;
     prog.duration = 5.0f;
     prog.strips = {{"left", 5, f.lblob}};  // only one strip
     CHECK_FALSE(ctrl.load(prog));
@@ -476,10 +472,10 @@ TEST_CASE("Pause and resume", "[simctrl]") {
 }
 
 // =========================================================================
-// 4. Seek
+// 4. Debug seek
 // =========================================================================
 
-TEST_CASE("Seek from PLAYING stays PLAYING", "[simctrl]") {
+TEST_CASE("Debug seek from PLAYING stays PLAYING", "[simctrl]") {
     DualFixture f;
     SimController ctrl(f.strips());
     REQUIRE(ctrl.load(f.program()));
@@ -493,7 +489,7 @@ TEST_CASE("Seek from PLAYING stays PLAYING", "[simctrl]") {
     ctrl.tick_once();
     ctrl.drain_program_frames();
 
-    ctrl.seek(2.0f);
+    ctrl.debug_seek(2.0f);
     CHECK(ctrl.state() == ControllerState::PLAYING);
     CHECK(ctrl.epoch() == epoch_before + 1);
 
@@ -505,13 +501,13 @@ TEST_CASE("Seek from PLAYING stays PLAYING", "[simctrl]") {
     CHECK(pf[0].t_rel == Catch::Approx(2.0f));
 }
 
-TEST_CASE("Seek from LOADED goes to PAUSED", "[simctrl]") {
+TEST_CASE("Debug seek from LOADED goes to PAUSED", "[simctrl]") {
     DualFixture f;
     SimController ctrl(f.strips());
     REQUIRE(ctrl.load(f.program()));
     ctrl.drain_events();
 
-    ctrl.seek(2.0f);
+    ctrl.debug_seek(2.0f);
     CHECK(ctrl.state() == ControllerState::PAUSED);
 
     // tick_once assembles the seek frame
@@ -521,16 +517,16 @@ TEST_CASE("Seek from LOADED goes to PAUSED", "[simctrl]") {
     CHECK(pf[0].t_rel == Catch::Approx(2.0f));
 }
 
-TEST_CASE("Seek from PAUSED stays PAUSED", "[simctrl]") {
+TEST_CASE("Debug seek from PAUSED stays PAUSED", "[simctrl]") {
     DualFixture f;
     SimController ctrl(f.strips());
     REQUIRE(ctrl.load(f.program()));
 
-    ctrl.seek(1.0f);
+    ctrl.debug_seek(1.0f);
     CHECK(ctrl.state() == ControllerState::PAUSED);
     uint32_t epoch1 = ctrl.epoch();
 
-    ctrl.seek(3.0f);
+    ctrl.debug_seek(3.0f);
     CHECK(ctrl.state() == ControllerState::PAUSED);
     CHECK(ctrl.epoch() == epoch1 + 1);
 
@@ -544,19 +540,19 @@ TEST_CASE("Seek from PAUSED stays PAUSED", "[simctrl]") {
     CHECK(found_3);
 }
 
-TEST_CASE("Seek clamps to duration, current_t_rel reflects clamped value", "[simctrl]") {
+TEST_CASE("Debug seek clamps to duration, current_t_rel reflects clamped value", "[simctrl]") {
     DualFixture f;
     SimController ctrl(f.strips());
     REQUIRE(ctrl.load(f.program()));  // duration = 5.0
 
     // Seek beyond duration
-    ctrl.seek(999.0f);
+    ctrl.debug_seek(999.0f);
     CHECK(ctrl.state() == ControllerState::PAUSED);
     CHECK(ctrl.current_t_rel() <= 5.0f);
     CHECK(ctrl.current_t_rel() == Catch::Approx(5.0f));
 
     // Seek negative
-    ctrl.seek(-10.0f);
+    ctrl.debug_seek(-10.0f);
     CHECK(ctrl.current_t_rel() == Catch::Approx(0.0f));
 }
 
@@ -609,7 +605,7 @@ TEST_CASE("Stop and restart", "[simctrl]") {
 TEST_CASE("Non-looping program ends", "[simctrl]") {
     DualFixture f;
     SimController ctrl(f.strips());
-    REQUIRE(ctrl.load(f.program(false)));
+    REQUIRE(ctrl.load(f.program()));
 
     f.set_time(0);
     ctrl.play();
@@ -627,7 +623,7 @@ TEST_CASE("Non-looping program ends", "[simctrl]") {
 TEST_CASE("Looping program restarts", "[simctrl]") {
     DualFixture f;
     SimController ctrl(f.strips());
-    REQUIRE(ctrl.load(f.program(true)));
+    REQUIRE(ctrl.load(f.program(), true));
 
     f.set_time(0);
     ctrl.play();
@@ -731,8 +727,7 @@ TEST_CASE("Event stream on full lifecycle", "[simctrl]") {
     CHECK(evts[0].state == ControllerState::STOPPED);
 
     // Error on bad load
-    CompiledProgram bad;
-    bad.artifact_id = "bad";
+    CompiledManifest bad;
     bad.duration = 1.0f;
     bad.strips = {{"left", 5, {0xDE}}};  // wrong count
     CHECK_FALSE(ctrl.load(bad));
@@ -741,10 +736,10 @@ TEST_CASE("Event stream on full lifecycle", "[simctrl]") {
     CHECK(evts[0].kind == ControllerEvent::ERROR);
 }
 
-TEST_CASE("Seek from ENDED", "[simctrl]") {
+TEST_CASE("Debug seek from ENDED", "[simctrl]") {
     DualFixture f;
     SimController ctrl(f.strips());
-    REQUIRE(ctrl.load(f.program(false)));
+    REQUIRE(ctrl.load(f.program()));
 
     f.set_time(0);
     ctrl.play();
@@ -758,7 +753,7 @@ TEST_CASE("Seek from ENDED", "[simctrl]") {
     ctrl.drain_program_frames();
 
     // Seek back
-    ctrl.seek(2.0f);
+    ctrl.debug_seek(2.0f);
     CHECK(ctrl.state() == ControllerState::PAUSED);
 
     ctrl.tick_once();
@@ -770,7 +765,7 @@ TEST_CASE("Seek from ENDED", "[simctrl]") {
 TEST_CASE("Play from ENDED restarts", "[simctrl]") {
     DualFixture f;
     SimController ctrl(f.strips());
-    REQUIRE(ctrl.load(f.program(false)));
+    REQUIRE(ctrl.load(f.program()));
 
     f.set_time(0);
     ctrl.play();
@@ -811,13 +806,12 @@ TEST_CASE("Constructor rejects duplicate strip_ids", "[simctrl][interface]") {
         std::invalid_argument);
 }
 
-TEST_CASE("Seek on device without debug_seek emits ERROR and preserves state", "[simctrl][interface]") {
+TEST_CASE("Debug seek on device without debug_seek emits ERROR and preserves state", "[simctrl][interface]") {
     FakeDevice dev;
     SimController ctrl({{"strip", 5, &dev}});
 
     // Minimal blob — FakeDevice always succeeds
-    CompiledProgram prog;
-    prog.artifact_id = "fake";
+    CompiledManifest prog;
     prog.duration = 5.0f;
     prog.strips = {{"strip", 5, {0x01}}};
     REQUIRE(ctrl.load(prog));
@@ -828,12 +822,185 @@ TEST_CASE("Seek on device without debug_seek emits ERROR and preserves state", "
     uint32_t epoch_before = ctrl.epoch();
     ctrl.drain_events();
 
-    // Seek should fail — FakeDevice doesn't support debug_seek
-    ctrl.seek(2.0f);
+    // Debug seek should fail — FakeDevice doesn't support debug_seek
+    ctrl.debug_seek(2.0f);
     CHECK(ctrl.state() == ControllerState::PLAYING);
     CHECK(ctrl.epoch() == epoch_before);  // epoch not advanced
 
     auto evts = ctrl.drain_events();
     REQUIRE(evts.size() == 1);
     CHECK(evts[0].kind == ControllerEvent::ERROR);
+}
+
+// =========================================================================
+// Production seek
+// =========================================================================
+
+TEST_CASE("Production seek inside safe interval hits target", "[simctrl]") {
+    DualFixture f;
+    SimController ctrl(f.strips());
+
+    auto m = f.program();
+    m.safe_intervals = {{0.0f, 0.0f}, {1.0f, 3.0f}};
+    REQUIRE(ctrl.load(m));
+
+    ctrl.debug_seek(0.5f);  // move to PAUSED
+    ctrl.drain_events();
+
+    ctrl.seek(2.0f);  // inside [1.0, 3.0)
+    CHECK(ctrl.state() == ControllerState::PAUSED);
+
+    ctrl.tick_once();
+    auto pf = ctrl.drain_program_frames();
+    REQUIRE(pf.size() >= 1);
+    CHECK(pf[0].t_rel == Catch::Approx(2.0f));
+}
+
+TEST_CASE("Production seek between intervals snaps to latest before target", "[simctrl]") {
+    DualFixture f;
+    SimController ctrl(f.strips());
+
+    auto m = f.program();
+    // [0,0) degenerate, [1.0, 2.0), gap, [3.0, 4.0)
+    m.safe_intervals = {{0.0f, 0.0f}, {1.0f, 2.0f}, {3.0f, 4.0f}};
+    REQUIRE(ctrl.load(m));
+
+    ctrl.debug_seek(0.5f);
+    ctrl.drain_events();
+
+    // Target 2.5 is between [1,2) and [3,4) — should snap to 1.0
+    ctrl.seek(2.5f);
+    CHECK(ctrl.state() == ControllerState::PAUSED);
+
+    ctrl.tick_once();
+    auto pf = ctrl.drain_program_frames();
+    REQUIRE(pf.size() >= 1);
+    CHECK(pf[0].t_rel == Catch::Approx(1.0f));
+}
+
+TEST_CASE("Production seek before first non-degenerate interval snaps to 0.0", "[simctrl]") {
+    DualFixture f;
+    SimController ctrl(f.strips());
+
+    auto m = f.program();
+    m.safe_intervals = {{0.0f, 0.0f}, {2.0f, 4.0f}};
+    REQUIRE(ctrl.load(m));
+
+    ctrl.debug_seek(3.0f);
+    ctrl.drain_events();
+
+    // Target 0.5 is before [2.0, 4.0) — degenerate (0,0) has hi=0 <= 0.5, so snap to 0.0
+    ctrl.seek(0.5f);
+    CHECK(ctrl.state() == ControllerState::PAUSED);
+
+    ctrl.tick_once();
+    auto pf = ctrl.drain_program_frames();
+    REQUIRE(pf.size() >= 1);
+    CHECK(pf[0].t_rel == Catch::Approx(0.0f));
+}
+
+TEST_CASE("Production seek with empty safe_intervals emits ERROR", "[simctrl]") {
+    DualFixture f;
+    SimController ctrl(f.strips());
+
+    auto m = f.program();
+    m.safe_intervals = {};  // empty
+    REQUIRE(ctrl.load(m));
+
+    ctrl.debug_seek(1.0f);
+    uint32_t epoch_before = ctrl.epoch();
+    ControllerState state_before = ctrl.state();
+    ctrl.drain_events();
+
+    ctrl.seek(2.0f);
+    CHECK(ctrl.state() == state_before);  // unchanged
+    CHECK(ctrl.epoch() == epoch_before);  // not advanced
+
+    auto evts = ctrl.drain_events();
+    REQUIRE(evts.size() == 1);
+    CHECK(evts[0].kind == ControllerEvent::ERROR);
+}
+
+TEST_CASE("Production seek from PLAYING stays PLAYING", "[simctrl]") {
+    DualFixture f;
+    SimController ctrl(f.strips());
+
+    auto m = f.program();
+    m.safe_intervals = {{0.0f, 0.0f}, {1.0f, 4.0f}};
+    REQUIRE(ctrl.load(m));
+
+    f.set_time(0);
+    ctrl.play();
+    uint32_t epoch_before = ctrl.epoch();
+    ctrl.drain_events();
+
+    f.set_time(500'000);
+    ctrl.tick_once();
+    ctrl.drain_program_frames();
+
+    ctrl.seek(2.0f);
+    CHECK(ctrl.state() == ControllerState::PLAYING);
+    CHECK(ctrl.epoch() == epoch_before + 1);
+
+    ctrl.tick_once();
+    auto pf = ctrl.drain_program_frames();
+    REQUIRE(pf.size() >= 1);
+    CHECK(pf[0].t_rel == Catch::Approx(2.0f));
+}
+
+TEST_CASE("Production seek from LOADED goes to PAUSED", "[simctrl]") {
+    DualFixture f;
+    SimController ctrl(f.strips());
+
+    auto m = f.program();
+    m.safe_intervals = {{0.0f, 0.0f}, {1.0f, 4.0f}};
+    REQUIRE(ctrl.load(m));
+    ctrl.drain_events();
+
+    ctrl.seek(2.0f);
+    CHECK(ctrl.state() == ControllerState::PAUSED);
+
+    auto evts = ctrl.drain_events();
+    CHECK(has_state_event(evts, ControllerState::PAUSED));
+}
+
+TEST_CASE("Production seek from PAUSED stays PAUSED with epoch/gen incremented", "[simctrl]") {
+    DualFixture f;
+    SimController ctrl(f.strips());
+
+    auto m = f.program();
+    m.safe_intervals = {{0.0f, 0.0f}, {1.0f, 4.0f}};
+    REQUIRE(ctrl.load(m));
+
+    ctrl.seek(1.5f);
+    uint32_t epoch1 = ctrl.epoch();
+    ctrl.drain_events();
+
+    ctrl.seek(3.0f);
+    CHECK(ctrl.state() == ControllerState::PAUSED);
+    CHECK(ctrl.epoch() == epoch1 + 1);
+
+    ctrl.tick_once();
+    auto pf = ctrl.drain_program_frames();
+    REQUIRE(pf.size() >= 1);
+    CHECK(pf[0].t_rel == Catch::Approx(3.0f));
+}
+
+TEST_CASE("Production seek works on non-sim device (FakeDevice)", "[simctrl][interface]") {
+    FakeDevice dev;
+    SimController ctrl({{"strip", 5, &dev}});
+
+    CompiledManifest prog;
+    prog.duration = 5.0f;
+    prog.strips = {{"strip", 5, {0x01}}};
+    prog.safe_intervals = {{0.0f, 0.0f}, {1.0f, 4.0f}};
+    REQUIRE(ctrl.load(prog));
+    ctrl.drain_events();
+
+    // Production seek should work — doesn't require debug_seek support
+    ctrl.seek(2.0f);
+    CHECK(ctrl.state() == ControllerState::PAUSED);
+
+    auto evts = ctrl.drain_events();
+    CHECK(has_state_event(evts, ControllerState::PAUSED));
 }

@@ -6,6 +6,7 @@
 #include <map>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 enum class ControllerState { IDLE, LOADED, PLAYING, PAUSED, STOPPED, ENDED };
@@ -22,11 +23,10 @@ struct CompiledStripBlob {
     std::vector<uint8_t> blob;
 };
 
-struct CompiledProgram {
-    std::string artifact_id;
+struct CompiledManifest {
     float duration;
     std::vector<CompiledStripBlob> strips;   // any order; matched by strip_id
-    bool loop = false;
+    std::vector<std::pair<float, float>> safe_intervals;  // global, from compiler
 };
 
 struct ProgramFrame {
@@ -47,10 +47,11 @@ class SimController {
 public:
     explicit SimController(std::vector<ControllerStrip> strips);
 
-    bool load(const CompiledProgram& program);
+    bool load(const CompiledManifest& manifest, bool loop = false);
     void play();
     void pause();
     void seek(float t_rel);
+    void debug_seek(float t_rel);
     void stop();
 
     void tick_once();
@@ -66,6 +67,7 @@ public:
 
 private:
     void queue_event(ControllerEvent::Kind kind, const std::string& msg = "");
+    float _snap_to_safe(float t_rel) const;
 
     struct Bucket {
         uint32_t frame_index = 0;
@@ -84,6 +86,7 @@ private:
     float _duration = 0.0f;
     float _paused_t_rel = 0.0f;
     bool _loop = false;
+    std::vector<std::pair<float, float>> _safe_intervals;
 
     std::vector<uint16_t> _expected_gen;
     std::map<uint32_t, Bucket> _buckets;
