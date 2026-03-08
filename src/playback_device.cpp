@@ -141,6 +141,8 @@ bool PlaybackDevice::tick_once()
         return true;
 
     if (!_engine->tick(t_rel)) {
+        memset(_rgb_buf, 0, _strip_length * 3);
+        output_frame();
         _state = DeviceState::ENDED;
         send_telemetry(DeviceState::ENDED, _duration);
         return false;

@@ -118,7 +118,7 @@ Resets the engine, clears rgb buffer to black, outputs the black frame, resets `
 
 ### tick_once()
 
-IDLE/ENDED → returns false. LOADED/PAUSED → returns true (alive but not advancing). PLAYING → computes `t_rel` from `now_mono() + _sync_offset - _t0`, calls `engine.tick()`, outputs frame, increments `_frame_index`. If `t_rel < 0` (future start), returns true without ticking. If engine returns false (program ended), transitions to ENDED.
+IDLE/ENDED → returns false. LOADED/PAUSED → returns true (alive but not advancing). PLAYING → computes `t_rel` from `now_mono() + _sync_offset - _t0`, calls `engine.tick()`, outputs frame, increments `_frame_index`. If `t_rel < 0` (future start), returns true without ticking. If engine returns false (program ended), clears to black, outputs the black frame, and transitions to ENDED.
 
 ---
 
@@ -205,6 +205,7 @@ public:
             _engine->tick(t);
         _engine->tick(target_t_rel);
         output_frame();
+        _frame_index++;
 
         if (_state == DeviceState::PLAYING) {
             _t0 = now_mono() + _sync_offset - (int64_t)(target_t_rel * 1e6f);
@@ -229,6 +230,7 @@ public:
         _paused_t_rel = target;
         _state = DeviceState::PAUSED;
         output_frame();
+        _frame_index++;
     }
 };
 ```

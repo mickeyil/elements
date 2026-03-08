@@ -91,6 +91,10 @@ TEST_CASE("State machine: IDLE → LOADED → PLAYING → ENDED", "[playback]") 
     bool active = dev.tick_once();
     CHECK_FALSE(active);
     CHECK(dev.state() == DeviceState::ENDED);
+
+    // Device should go dark (black frame output)
+    for (int i = 0; i < 5 * 3; i++)
+        CHECK(dev.rgb_data()[i] == 0);
 }
 
 // ---------------------------------------------------------------------------
