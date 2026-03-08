@@ -25,7 +25,7 @@ struct CompiledStripBlob {
 struct CompiledProgram {
     std::string artifact_id;
     float duration;
-    std::vector<CompiledStripBlob> strips;   // canonical strip order
+    std::vector<CompiledStripBlob> strips;   // any order; matched by strip_id
     bool loop = false;
 };
 
