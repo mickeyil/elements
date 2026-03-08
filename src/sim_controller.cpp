@@ -5,8 +5,11 @@ SimController::SimController(std::vector<ControllerStrip> strips)
       _expected_gen(_strips.size(), 0)
 {
     assert(!_strips.empty() && "SimController requires at least one strip");
-    for (size_t i = 0; i < _strips.size(); i++)
-        _strip_id_to_index[_strips[i].strip_id] = i;
+    for (size_t i = 0; i < _strips.size(); i++) {
+        assert(_strips[i].device && "null device pointer");
+        auto [_, inserted] = _strip_id_to_index.emplace(_strips[i].strip_id, i);
+        assert(inserted && "duplicate strip_id");
+    }
 }
 
 void SimController::queue_event(ControllerEvent::Kind kind, const std::string& msg)
