@@ -31,7 +31,7 @@ void SimController::queue_event(ControllerEvent::Kind kind, const std::string& m
 
 bool SimController::load(const CompiledManifest& manifest, bool loop)
 {
-    // Validate strip count
+    // Validate strip count — manifest must cover all configured strips
     if (manifest.strips.size() != _strips.size()) {
         queue_event(ControllerEvent::ERROR, "strip count mismatch");
         return false;

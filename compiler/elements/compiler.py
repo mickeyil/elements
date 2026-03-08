@@ -664,9 +664,8 @@ def compile_manifest(strips: list[StripDef], events: list[dict],
     strip_artifacts = []
     per_strip_intervals = []
     for s in strips:
-        if s.name not in by_strip:
-            continue
-        blob, intervals = _compile_strip(by_strip[s.name], duration)
+        strip_events = by_strip.get(s.name, [])
+        blob, intervals = _compile_strip(strip_events, duration)
         strip_artifacts.append(CompiledStripArtifact(
             strip_id=s.name, length=s.length, blob=blob,
         ))

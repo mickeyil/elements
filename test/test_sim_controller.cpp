@@ -729,7 +729,7 @@ TEST_CASE("Event stream on full lifecycle", "[simctrl]") {
     // Error on bad load
     CompiledManifest bad;
     bad.duration = 1.0f;
-    bad.strips = {{"left", 5, {0xDE}}};  // wrong count
+    bad.strips = {{"left", 5, {0xDE}}};  // garbage blob
     CHECK_FALSE(ctrl.load(bad));
     evts = ctrl.drain_events();
     REQUIRE(evts.size() == 1);
