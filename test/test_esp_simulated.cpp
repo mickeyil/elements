@@ -286,6 +286,8 @@ TEST_CASE("debug_seek from LOADED transitions to PAUSED", "[espsim][debug]") {
     auto frames = dev.drain_frames();
     REQUIRE(frames.size() == 1);
 
+    CHECK(frames[0].t_rel == Catch::Approx(1.0f));
+
     // At t=1.0: paint fills [51, 102, 153, 204, 255]
     check_pixel_vec(frames[0].rgb, 0, 51);
     check_pixel_vec(frames[0].rgb, 4, 255);
@@ -305,6 +307,8 @@ TEST_CASE("debug_seek from PAUSED stays PAUSED", "[espsim][debug]") {
 
     auto frames = dev.drain_frames();
     REQUIRE(frames.size() == 1);
+
+    CHECK(frames[0].t_rel == Catch::Approx(2.0f));
 
     // At t=2.0: shifted right by 1 → [0, 51, 102, 153, 204]
     check_pixel_vec(frames[0].rgb, 0, 0);
@@ -387,6 +391,7 @@ TEST_CASE("debug_step from PAUSED advances by 1/50s", "[espsim][debug]") {
     CHECK(dev.state() == DeviceState::PAUSED);
     auto frames = dev.drain_frames();
     REQUIRE(frames.size() == 1);
+    CHECK(frames[0].t_rel == Catch::Approx(1.0f + 1.0f / 50.0f));
 }
 
 TEST_CASE("debug_step from LOADED transitions to PAUSED", "[espsim][debug]") {

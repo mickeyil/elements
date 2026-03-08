@@ -33,7 +33,7 @@ public:
 
 protected:
     int64_t now_mono() const override;
-    void output_frame() override;
+    void output_frame(float t_rel) override;
     void send_telemetry(DeviceState s, float t, const char* err = nullptr) override;
 
 private:

@@ -16,12 +16,12 @@ int64_t ESPSimulated::now_mono() const
         now.time_since_epoch()).count();
 }
 
-void ESPSimulated::output_frame()
+void ESPSimulated::output_frame(float t_rel)
 {
     SimRgbFrame f;
     f.gen = _gen;
     f.frame_index = _frame_index;
-    f.t_rel = current_t_rel();
+    f.t_rel = t_rel;
     f.rgb.assign(_rgb_buf, _rgb_buf + _strip_length * 3);
     _frames.push_back(std::move(f));
 }
@@ -60,7 +60,7 @@ void ESPSimulated::debug_seek(float target_t_rel)
         _engine->tick(t);
     _engine->tick(target_t_rel);
 
-    output_frame();
+    output_frame(target_t_rel);
     _frame_index++;
 
     if (_state == DeviceState::PLAYING) {
@@ -89,6 +89,6 @@ void ESPSimulated::debug_step(int direction)
 
     _paused_t_rel = target;
     _state = DeviceState::PAUSED;
-    output_frame();
+    output_frame(target);
     _frame_index++;
 }

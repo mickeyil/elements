@@ -25,7 +25,7 @@ public:
     int64_t now_mono() const override { return _now; }
 
     int output_frame_count = 0;
-    void output_frame() override { output_frame_count++; }
+    void output_frame(float) override { output_frame_count++; }
 
     std::vector<TelemetryEntry> telemetry;
     void send_telemetry(DeviceState s, float t, const char* err = nullptr) override {

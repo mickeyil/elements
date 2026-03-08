@@ -28,7 +28,7 @@ bool PlaybackDevice::handle_load(const uint8_t* blob, size_t blob_len, uint16_t 
     if (!prog) {
         _duration = 0.0f;
         memset(_rgb_buf, 0, _strip_length * 3);
-        output_frame();
+        output_frame(0.0f);
         _state = DeviceState::IDLE;
         send_telemetry(DeviceState::IDLE, 0.0f, "decode failed");
         return false;
@@ -81,7 +81,7 @@ void PlaybackDevice::handle_jump(int64_t t0, float t_rel, uint16_t gen)
     } else {
         // LOADED, PAUSED, ENDED → render one frame and pause
         _engine->tick(t_rel);
-        output_frame();
+        output_frame(t_rel);
         _frame_index++;
         _paused_t_rel = t_rel;
         _state = DeviceState::PAUSED;
@@ -115,7 +115,7 @@ void PlaybackDevice::handle_stop()
 
     _engine->reset();
     memset(_rgb_buf, 0, _strip_length * 3);
-    output_frame();
+    output_frame(0.0f);
     _frame_index = 0;
     _paused_t_rel = 0.0f;
     _state = DeviceState::LOADED;
@@ -141,13 +141,13 @@ bool PlaybackDevice::tick_once()
 
     if (!_engine->tick(t_rel)) {
         memset(_rgb_buf, 0, _strip_length * 3);
-        output_frame();
+        output_frame(_duration);
         _state = DeviceState::ENDED;
         send_telemetry(DeviceState::ENDED, _duration);
         return false;
     }
 
-    output_frame();
+    output_frame(t_rel);
     _frame_index++;
     return true;
 }
