@@ -41,21 +41,26 @@ bool SimController::load(const CompiledProgram& program)
         }
     }
 
-    // Attempt device loads
-    _session_id++;
-    _epoch = 0;
-    _gen++;
+    // Attempt device loads with a provisional gen.
+    // Identity (_session_id, _epoch, _gen) is NOT mutated until all succeed.
+    uint16_t new_gen = _gen + 1;
 
     for (size_t i = 0; i < _strips.size(); i++) {
         const auto& sb = program.strips[i];
-        if (!_strips[i].device->handle_load(sb.blob.data(), sb.blob.size(), _gen)) {
+        if (!_strips[i].device->handle_load(sb.blob.data(), sb.blob.size(), new_gen)) {
+            // Roll back already-loaded devices to avoid partial state
+            for (size_t j = 0; j < i; j++)
+                _strips[j].device->handle_stop();
             queue_event(ControllerEvent::ERROR,
                 "device load failed for " + _strips[i].strip_id);
-            _state = ControllerState::IDLE;
             return false;
         }
     }
 
+    // All devices loaded — commit identity
+    _session_id++;
+    _epoch = 0;
+    _gen = new_gen;
     _duration = program.duration;
     _loop = program.loop;
     _paused_t_rel = 0.0f;

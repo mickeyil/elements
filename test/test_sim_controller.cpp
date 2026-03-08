@@ -178,8 +178,30 @@ TEST_CASE("Device load failure fails controller load", "[simctrl]") {
     CHECK_FALSE(ctrl.load(prog));
 
     CHECK(ctrl.state() == ControllerState::IDLE);
+    CHECK(ctrl.session_id() == 0);  // identity not mutated
     auto evts = ctrl.drain_events();
     CHECK(has_event(evts, ControllerEvent::ERROR));
+}
+
+TEST_CASE("Failed device load does not advance identity or leave partial state", "[simctrl]") {
+    DualFixture f;
+    SimController ctrl(f.strips());
+
+    // Successful first load
+    REQUIRE(ctrl.load(f.program()));
+    CHECK(ctrl.session_id() == 1);
+    CHECK(ctrl.state() == ControllerState::LOADED);
+    ctrl.drain_events();
+
+    // Failed second load (strip 1 bad blob) — strip 0 loads OK then strip 1 fails
+    auto bad = f.program();
+    bad.strips[1].blob = {0xDE, 0xAD};
+    CHECK_FALSE(ctrl.load(bad));
+
+    // Identity must not have advanced
+    CHECK(ctrl.session_id() == 1);
+    // State preserved from before the failed load
+    CHECK(ctrl.state() == ControllerState::LOADED);
 }
 
 // =========================================================================
