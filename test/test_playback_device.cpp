@@ -316,19 +316,15 @@ TEST_CASE("Jump while PLAYING resets and continues from new timebase", "[playbac
     dev.set_time(3'000'000);
     dev.tick_once();
 
-    // Jump back to t_rel=1.0 while PLAYING
-    // Controller sets t0 = now - t_rel * 1e6 = 3'000'000 - 1'000'000 = 2'000'000
-    dev.handle_jump(2'000'000, 1.0f, 2);
+    // Jump to t_rel=0.0 while PLAYING.
+    // Controller sets t0 = now = 3'000'000 so next tick starts from program t=0.
+    // Clock stays monotonic: all subsequent set_time() values > 3'000'000.
+    dev.handle_jump(3'000'000, 0.0f, 2);
     CHECK(dev.state() == DeviceState::PLAYING);
 
-    // Engine was reset. Need paint to render before shift can snapshot.
-    // Tick at t_rel=0.5: now=2'500'000, t_rel=(2'500'000 - 2'000'000)/1e6 = 0.5
-    dev.set_time(2'500'000);
-    dev.tick_once();
-
-    // Tick at t_rel=1.0: now=3'000'000, t_rel=(3'000'000 - 2'000'000)/1e6 = 1.0
-    // Shift activates, snapshots paint, no shift yet → [51, 102, 153, 204, 255]
-    dev.set_time(3'000'000);
+    // First tick after jump: now=3'500'000, t_rel = (3.5M - 3M)/1e6 = 0.5
+    // Paint is active (0-1s) → renders [51, 102, 153, 204, 255]
+    dev.set_time(3'500'000);
     dev.tick_once();
     const uint8_t* rgb = dev.rgb_data();
     check_pixel(rgb, 0, 51);
@@ -337,8 +333,10 @@ TEST_CASE("Jump while PLAYING resets and continues from new timebase", "[playbac
     check_pixel(rgb, 3, 204);
     check_pixel(rgb, 4, 255);
 
-    // Tick at t_rel=2.0: shifted right by 1 → [0, 51, 102, 153, 204]
-    dev.set_time(4'000'000);
+    // Continue to t_rel=2.0: now=5'000'000, t_rel = (5M - 3M)/1e6 = 2.0
+    // Paint finished at 1.0, shift activated at 1.0 (snapshots paint buffer),
+    // shift t_rel = 1.0 → shifted right by 1 → [0, 51, 102, 153, 204]
+    dev.set_time(5'000'000);
     dev.tick_once();
     rgb = dev.rgb_data();
     check_pixel(rgb, 0, 0);
