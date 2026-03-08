@@ -5,6 +5,7 @@
 #include "../src/playback_device.h"
 
 #include <cstdio>
+#include <stdexcept>
 #include <vector>
 
 // ---------------------------------------------------------------------------
@@ -742,6 +743,21 @@ TEST_CASE("Play from ENDED restarts", "[simctrl]") {
 // =========================================================================
 // ControllerDevice boundary: non-sim device
 // =========================================================================
+
+TEST_CASE("Constructor rejects empty strip list", "[simctrl][interface]") {
+    CHECK_THROWS_AS(SimController({}), std::invalid_argument);
+}
+
+TEST_CASE("Constructor rejects null device pointer", "[simctrl][interface]") {
+    CHECK_THROWS_AS(SimController({{"strip", 5, nullptr}}), std::invalid_argument);
+}
+
+TEST_CASE("Constructor rejects duplicate strip_ids", "[simctrl][interface]") {
+    FakeDevice a, b;
+    CHECK_THROWS_AS(
+        SimController({{"same", 5, &a}, {"same", 5, &b}}),
+        std::invalid_argument);
+}
 
 TEST_CASE("Seek on device without debug_seek emits ERROR and preserves state", "[simctrl][interface]") {
     FakeDevice dev;
