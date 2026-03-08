@@ -147,11 +147,16 @@ void SimController::seek(float t_rel)
     if (_state == ControllerState::IDLE || _state == ControllerState::STOPPED)
         return;
 
-    _epoch++;
     for (auto& s : _strips) {
-        assert(s.device->supports_debug_seek() && "seek requires debug_seek support");
-        s.device->debug_seek(t_rel);
+        if (!s.device->supports_debug_seek()) {
+            queue_event(ControllerEvent::ERROR, "seek requires debug_seek support");
+            return;
+        }
     }
+
+    _epoch++;
+    for (auto& s : _strips)
+        s.device->debug_seek(t_rel);
     _buckets.clear();
 
     if (_state == ControllerState::PLAYING) {
