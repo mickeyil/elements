@@ -1,15 +1,20 @@
 #include "sim_controller.h"
 #include "playback_device.h"  // DeviceState enum values
 
+#include <stdexcept>
+
 SimController::SimController(std::vector<ControllerStrip> strips)
     : _strips(std::move(strips)),
       _expected_gen(_strips.size(), 0)
 {
-    assert(!_strips.empty() && "SimController requires at least one strip");
+    if (_strips.empty())
+        throw std::invalid_argument("SimController requires at least one strip");
     for (size_t i = 0; i < _strips.size(); i++) {
-        assert(_strips[i].device && "null device pointer");
+        if (!_strips[i].device)
+            throw std::invalid_argument("null device pointer for strip " + _strips[i].strip_id);
         auto [_, inserted] = _strip_id_to_index.emplace(_strips[i].strip_id, i);
-        assert(inserted && "duplicate strip_id");
+        if (!inserted)
+            throw std::invalid_argument("duplicate strip_id: " + _strips[i].strip_id);
     }
 }
 

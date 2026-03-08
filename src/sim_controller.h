@@ -2,7 +2,6 @@
 
 #include "controller_device.h"
 
-#include <cassert>
 #include <cstdint>
 #include <map>
 #include <string>
