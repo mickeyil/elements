@@ -317,6 +317,54 @@ TEST_CASE("Failed device load does not advance identity", "[simctrl]") {
     CHECK(ctrl.state() == ControllerState::LOADED);
 }
 
+TEST_CASE("Failed reload clears session remnants and partial buckets", "[simctrl]") {
+    DualFixture f;
+    SimController ctrl(f.strips());
+
+    // Successful load + play into mid-program
+    REQUIRE(ctrl.load(f.program()));
+    f.set_time(0);
+    ctrl.play();
+    ctrl.drain_events();
+
+    // Tick at t=0.5 (generates a program frame)
+    f.set_time(500'000);
+    ctrl.tick_once();
+    CHECK_FALSE(ctrl.drain_program_frames().empty());
+
+    // Tick at t=1.0 (generates another program frame, also populates buckets)
+    f.set_time(1'000'000);
+    ctrl.tick_once();
+    ctrl.drain_program_frames();
+
+    // Verify session data is live
+    CHECK(ctrl.duration() == Catch::Approx(5.0f));
+    CHECK(ctrl.current_t_rel() > 0.0f);
+
+    // Failed reload — bad blob for strip 1
+    auto bad = f.program();
+    bad.strips[1].blob = {0xDE, 0xAD};
+    CHECK_FALSE(ctrl.load(bad));
+
+    // All session remnants must be cleared
+    CHECK(ctrl.state() == ControllerState::IDLE);
+    CHECK(ctrl.duration() == Catch::Approx(0.0f));
+    CHECK(ctrl.current_t_rel() == Catch::Approx(0.0f));
+    CHECK(ctrl.drain_program_frames().empty());
+
+    // Recover with a fresh load — old buckets must not leak into new session
+    REQUIRE(ctrl.load(f.program()));
+    CHECK(ctrl.drain_program_frames().empty());  // no stale frames
+
+    f.set_time(0);
+    ctrl.play();
+    f.set_time(500'000);
+    ctrl.tick_once();
+    auto pf = ctrl.drain_program_frames();
+    REQUIRE(pf.size() == 1);
+    CHECK(pf[0].frame_index == 0);  // fresh frame, not a leaked bucket
+}
+
 // =========================================================================
 // 2. Shared-start playback
 // =========================================================================
