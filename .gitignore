@@ -14,3 +14,4 @@ compiler/.pytest_cache/
 __pycache__/
 build/
 test/build/
+test/fixtures/*.bin
