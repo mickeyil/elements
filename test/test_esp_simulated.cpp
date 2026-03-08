@@ -46,8 +46,9 @@ public:
             bucket.t_rel = frame.t_rel;
             bucket.strips.resize(_strip_count);
         }
+        if (bucket.strips[strip_index].empty())
+            bucket.present++;
         bucket.strips[strip_index] = frame.rgb;
-        bucket.present++;
 
         if (bucket.present == _strip_count) {
             ProgramFrame pf;
