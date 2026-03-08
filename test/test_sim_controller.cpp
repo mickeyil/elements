@@ -233,14 +233,23 @@ TEST_CASE("Device load failure fails controller load", "[simctrl]") {
     CHECK(has_event(evts, ControllerEvent::ERROR));
 }
 
-TEST_CASE("Failed device load does not advance identity or leave partial state", "[simctrl]") {
+TEST_CASE("Failed device load does not advance identity", "[simctrl]") {
     DualFixture f;
     SimController ctrl(f.strips());
 
     // Successful first load
     REQUIRE(ctrl.load(f.program()));
     CHECK(ctrl.session_id() == 1);
-    CHECK(ctrl.state() == ControllerState::LOADED);
+    CHECK(ctrl.epoch() == 0);
+    ctrl.drain_events();
+
+    // Play and tick to set epoch > 0
+    f.set_time(0);
+    ctrl.play();
+    CHECK(ctrl.epoch() == 1);
+    f.set_time(500'000);
+    ctrl.tick_once();
+    ctrl.drain_program_frames();
     ctrl.drain_events();
 
     // Failed second load (strip 1 bad blob) — strip 0 loads OK then strip 1 fails
@@ -250,7 +259,13 @@ TEST_CASE("Failed device load does not advance identity or leave partial state",
 
     // Identity must not have advanced
     CHECK(ctrl.session_id() == 1);
-    // State preserved from before the failed load
+    CHECK(ctrl.epoch() == 1);
+    // State goes IDLE — handle_load is destructive, old program is gone
+    CHECK(ctrl.state() == ControllerState::IDLE);
+
+    // Can recover with a fresh load
+    REQUIRE(ctrl.load(f.program()));
+    CHECK(ctrl.session_id() == 2);
     CHECK(ctrl.state() == ControllerState::LOADED);
 }
 
