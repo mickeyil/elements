@@ -36,7 +36,7 @@ public:
 protected:
     // Platform-specific — subclasses override
     virtual int64_t now_mono() = 0;
-    virtual void output_frame() {}
+    virtual void output_frame() = 0;
     virtual void send_telemetry(DeviceState s, float t, const char* err = nullptr) {}
 
     uint16_t _strip_length;

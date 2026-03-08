@@ -509,23 +509,24 @@ Lightweight seek to a reset-safe time (within a compiler-identified safe interva
 void PlaybackDevice::handle_jump(int64_t t0, float t_rel, uint16_t gen) {
     if (!_engine) return;
 
-    // Clamp to valid range
-    float dur = duration();
     if (t_rel < 0.0f) t_rel = 0.0f;
-    if (t_rel > dur) t_rel = dur;
+    if (t_rel >= _duration) return;  // no-op — jumping to/past end is nonsensical
 
+    DeviceState prev = _state;
     _engine->reset();
     _t0 = t0;           // shared absolute time — same on all devices (like START)
     _gen = gen;          // new generation — stale in-flight frames carry the old gen
     _frame_index = 0;    // reset frame counter for new playback segment
 
-    if (_state == PLAYING) {
+    if (prev == PLAYING) {
         // Continue playing from jump target
         // Next tick_once() computes t_rel from the shared _t0
-    } else if (_state == PAUSED || _state == LOADED || _state == ENDED) {
-        // Render one frame at the exact target, then pause
+    } else {
+        // LOADED, PAUSED, ENDED → render one frame at the exact target, then pause
         _engine->tick(t_rel);
         output_frame();
+        _frame_index++;
+        _paused_t_rel = t_rel;
         _state = PAUSED;
     }
 }
@@ -591,19 +592,24 @@ The shared per-iteration logic. Called by each platform's loop.
 
 ```cpp
 bool PlaybackDevice::tick_once() {
-    if (_state != PLAYING)
-        return _state != IDLE;  // LOADED, PAUSED, or ENDED: still "active" but not ticking
+    if (_state == IDLE || _state == ENDED)
+        return false;
+    if (_state == LOADED || _state == PAUSED)
+        return true;  // still "alive" but not advancing
 
-    int64_t now = now_mono() + _sync_offset;    // virtual mono + controller offset
-    float t_rel = (float)(now - _t0) / 1e6f;  // us -> seconds
+    // PLAYING
+    float t_rel = (float)(now_mono() + _sync_offset - _t0) / 1e6f;
+    if (t_rel < 0.0f)
+        return true;  // scheduled future start — not yet
 
     if (!_engine->tick(t_rel)) {
         _state = ENDED;
-        send_telemetry(ENDED, t_rel);
+        send_telemetry(ENDED, _duration);
         return false;
     }
 
-    output_frame();                            // virtual — FastLED or send rgb
+    output_frame();
+    _frame_index++;
     return true;
 }
 ```

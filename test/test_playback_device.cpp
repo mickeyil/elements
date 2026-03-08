@@ -10,6 +10,12 @@
 // TestDevice — concrete subclass with controllable clock
 // ---------------------------------------------------------------------------
 
+struct TelemetryEntry {
+    DeviceState state;
+    float t;
+    std::string err;
+};
+
 class TestDevice : public PlaybackDevice {
 public:
     TestDevice(uint16_t len)
@@ -20,6 +26,13 @@ public:
 
     int output_frame_count = 0;
     void output_frame() override { output_frame_count++; }
+
+    std::vector<TelemetryEntry> telemetry;
+    void send_telemetry(DeviceState s, float t, const char* err = nullptr) override {
+        telemetry.push_back({s, t, err ? err : ""});
+    }
+
+    const TelemetryEntry& last_telemetry() const { return telemetry.back(); }
 
 private:
     int64_t _now = 0;
@@ -287,6 +300,52 @@ TEST_CASE("Jump clamps negative t_rel to 0", "[playback][jump]") {
     dev.handle_jump(0, -1.0f, 2);
     CHECK(dev.state() == DeviceState::PAUSED);
     CHECK(dev.current_t_rel() == Catch::Approx(0.0f));
+}
+
+TEST_CASE("Jump while PLAYING resets and continues from new timebase", "[playback][jump]") {
+    TestDevice dev(5);
+    auto blob = load_blob(SHIFT_FIXTURE);
+    REQUIRE(dev.handle_load(blob.data(), blob.size(), 1));
+
+    dev.set_time(0);
+    dev.handle_start(0);
+
+    // Play to t=3.0 (shift has been running)
+    dev.set_time(500'000);
+    dev.tick_once();  // paint renders
+    dev.set_time(3'000'000);
+    dev.tick_once();
+
+    // Jump back to t_rel=1.0 while PLAYING
+    // Controller sets t0 = now - t_rel * 1e6 = 3'000'000 - 1'000'000 = 2'000'000
+    dev.handle_jump(2'000'000, 1.0f, 2);
+    CHECK(dev.state() == DeviceState::PLAYING);
+
+    // Engine was reset. Need paint to render before shift can snapshot.
+    // Tick at t_rel=0.5: now=2'500'000, t_rel=(2'500'000 - 2'000'000)/1e6 = 0.5
+    dev.set_time(2'500'000);
+    dev.tick_once();
+
+    // Tick at t_rel=1.0: now=3'000'000, t_rel=(3'000'000 - 2'000'000)/1e6 = 1.0
+    // Shift activates, snapshots paint, no shift yet → [51, 102, 153, 204, 255]
+    dev.set_time(3'000'000);
+    dev.tick_once();
+    const uint8_t* rgb = dev.rgb_data();
+    check_pixel(rgb, 0, 51);
+    check_pixel(rgb, 1, 102);
+    check_pixel(rgb, 2, 153);
+    check_pixel(rgb, 3, 204);
+    check_pixel(rgb, 4, 255);
+
+    // Tick at t_rel=2.0: shifted right by 1 → [0, 51, 102, 153, 204]
+    dev.set_time(4'000'000);
+    dev.tick_once();
+    rgb = dev.rgb_data();
+    check_pixel(rgb, 0, 0);
+    check_pixel(rgb, 1, 51);
+    check_pixel(rgb, 2, 102);
+    check_pixel(rgb, 3, 153);
+    check_pixel(rgb, 4, 204);
 }
 
 TEST_CASE("Jump at or past duration is no-op", "[playback][jump]") {
@@ -560,4 +619,94 @@ TEST_CASE("Commands ignored in wrong states", "[playback]") {
     // resume from PLAYING — ignored
     dev.handle_resume(0);
     CHECK(dev.state() == DeviceState::PLAYING);
+}
+
+// ---------------------------------------------------------------------------
+// Telemetry reporting
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Telemetry across full lifecycle", "[playback][telemetry]") {
+    TestDevice dev(5);
+    auto blob = load_blob(SHIFT_FIXTURE);
+
+    // Load → LOADED
+    REQUIRE(dev.handle_load(blob.data(), blob.size(), 1));
+    REQUIRE(dev.telemetry.size() == 1);
+    CHECK(dev.last_telemetry().state == DeviceState::LOADED);
+    CHECK(dev.last_telemetry().t == Catch::Approx(0.0f));
+    CHECK(dev.last_telemetry().err.empty());
+
+    // Start → PLAYING
+    dev.set_time(0);
+    dev.handle_start(0);
+    REQUIRE(dev.telemetry.size() == 2);
+    CHECK(dev.last_telemetry().state == DeviceState::PLAYING);
+    CHECK(dev.last_telemetry().t == Catch::Approx(0.0f));
+
+    // Tick (no telemetry emitted per frame)
+    dev.set_time(500'000);
+    dev.tick_once();
+    CHECK(dev.telemetry.size() == 2);
+
+    // Pause → PAUSED with current t_rel
+    dev.set_time(1'500'000);
+    dev.handle_pause();
+    REQUIRE(dev.telemetry.size() == 3);
+    CHECK(dev.last_telemetry().state == DeviceState::PAUSED);
+    CHECK(dev.last_telemetry().t == Catch::Approx(1.5f));
+
+    // Resume → PLAYING with paused t_rel
+    dev.handle_resume(1'500'000);
+    REQUIRE(dev.telemetry.size() == 4);
+    CHECK(dev.last_telemetry().state == DeviceState::PLAYING);
+    CHECK(dev.last_telemetry().t == Catch::Approx(1.5f));
+
+    // Stop → LOADED
+    dev.handle_stop();
+    REQUIRE(dev.telemetry.size() == 5);
+    CHECK(dev.last_telemetry().state == DeviceState::LOADED);
+    CHECK(dev.last_telemetry().t == Catch::Approx(0.0f));
+
+    // Start again, run to ENDED
+    dev.set_time(2'000'000);
+    dev.handle_start(2'000'000);
+    REQUIRE(dev.telemetry.size() == 6);
+    CHECK(dev.last_telemetry().state == DeviceState::PLAYING);
+
+    dev.set_time(2'500'000);
+    dev.tick_once();  // paint renders
+    dev.set_time(7'100'000);
+    dev.tick_once();  // past duration → ENDED
+    REQUIRE(dev.telemetry.size() == 7);
+    CHECK(dev.last_telemetry().state == DeviceState::ENDED);
+    CHECK(dev.last_telemetry().t == Catch::Approx(5.0f));
+}
+
+TEST_CASE("Telemetry on load failure includes error", "[playback][telemetry]") {
+    TestDevice dev(5);
+    uint8_t garbage[] = {0xDE, 0xAD, 0xBE, 0xEF};
+    dev.handle_load(garbage, sizeof(garbage), 1);
+    REQUIRE(dev.telemetry.size() == 1);
+    CHECK(dev.last_telemetry().state == DeviceState::IDLE);
+    CHECK(dev.last_telemetry().err == "decode failed");
+}
+
+TEST_CASE("No telemetry from ignored commands", "[playback][telemetry]") {
+    TestDevice dev(5);
+
+    // Commands from IDLE — all ignored, no telemetry
+    dev.handle_start(0);
+    dev.handle_pause();
+    dev.handle_resume(0);
+    dev.handle_stop();
+    CHECK(dev.telemetry.empty());
+
+    auto blob = load_blob(SHIFT_FIXTURE);
+    REQUIRE(dev.handle_load(blob.data(), blob.size(), 1));
+    size_t baseline = dev.telemetry.size();
+
+    // Pause/resume from LOADED — ignored
+    dev.handle_pause();
+    dev.handle_resume(0);
+    CHECK(dev.telemetry.size() == baseline);
 }
