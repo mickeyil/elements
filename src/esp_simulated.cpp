@@ -1,0 +1,94 @@
+#include "esp_simulated.h"
+#include "engine.h"
+
+#include <chrono>
+#include <cstring>
+
+ESPSimulated::ESPSimulated(uint16_t strip_length)
+    : PlaybackDevice(strip_length, /*gamma_enabled=*/false)
+{
+}
+
+int64_t ESPSimulated::now_mono() const
+{
+    auto now = std::chrono::steady_clock::now();
+    return std::chrono::duration_cast<std::chrono::microseconds>(
+        now.time_since_epoch()).count();
+}
+
+void ESPSimulated::output_frame()
+{
+    SimRgbFrame f;
+    f.gen = _gen;
+    f.frame_index = _frame_index;
+    f.t_rel = current_t_rel();
+    f.rgb.assign(_rgb_buf, _rgb_buf + _strip_length * 3);
+    _frames.push_back(std::move(f));
+}
+
+void ESPSimulated::send_telemetry(DeviceState s, float t, const char* err)
+{
+    _telemetry.push_back({s, t, err ? err : ""});
+}
+
+std::vector<SimRgbFrame> ESPSimulated::drain_frames()
+{
+    std::vector<SimRgbFrame> out;
+    out.swap(_frames);
+    return out;
+}
+
+std::vector<SimTelemetry> ESPSimulated::drain_telemetry()
+{
+    std::vector<SimTelemetry> out;
+    out.swap(_telemetry);
+    return out;
+}
+
+void ESPSimulated::debug_seek(float target_t_rel)
+{
+    if (!_engine)
+        return;
+
+    float dur = duration();
+    if (target_t_rel < 0.0f) target_t_rel = 0.0f;
+    if (target_t_rel > dur) target_t_rel = dur;
+
+    _engine->reset();
+    float dt = 1.0f / 50.0f;
+    for (float t = dt; t < target_t_rel; t += dt)
+        _engine->tick(t);
+    _engine->tick(target_t_rel);
+
+    output_frame();
+    _frame_index++;
+
+    if (_state == DeviceState::PLAYING) {
+        _t0 = now_mono() + _sync_offset - (int64_t)(target_t_rel * 1e6f);
+    } else {
+        _paused_t_rel = target_t_rel;
+        _state = DeviceState::PAUSED;
+    }
+}
+
+void ESPSimulated::debug_step(int direction)
+{
+    if (_state != DeviceState::PAUSED && _state != DeviceState::LOADED)
+        return;
+
+    float dur = duration();
+    float target = _paused_t_rel + direction * (1.0f / 50.0f);
+    if (target < 0.0f) target = 0.0f;
+    if (target > dur) target = dur;
+
+    _engine->reset();
+    float dt = 1.0f / 50.0f;
+    for (float t = dt; t < target; t += dt)
+        _engine->tick(t);
+    _engine->tick(target);
+
+    _paused_t_rel = target;
+    _state = DeviceState::PAUSED;
+    output_frame();
+    _frame_index++;
+}

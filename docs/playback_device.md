@@ -1,6 +1,6 @@
 # PlaybackDevice — Shared Device Abstraction
 
-> **Status: Implemented.** Base class in `src/playback_device.h` / `src/playback_device.cpp`. Tests in `test/test_playback_device.cpp`. Subclasses (`ESPDevice`, `ESPSimulated`) are not yet implemented.
+> **Status: Implemented.** Base class in `src/playback_device.h` / `src/playback_device.cpp`. Tests in `test/test_playback_device.cpp`. `ESPSimulated` implemented as in-process desktop simulator (`src/esp_simulated.h/cpp`, tests in `test/test_esp_simulated.cpp`). `ESPDevice` (real hardware) is not yet implemented.
 >
 > Related docs: `transport.md` (device protocol, clock sync), `controller.md` (controller/web-app architecture, identity model, reset-safe intervals).
 
