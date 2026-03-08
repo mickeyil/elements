@@ -562,6 +562,118 @@ class TestPaint:
         assert abs(p["pixels"][2]["h"] - 240.0) < 1e-6
 
 
+# ---------------------------------------------------------------------------
+# Safe interval analysis tests
+# ---------------------------------------------------------------------------
+
+class TestSafeIntervals:
+    """Tests for dependency-aware safe interval analysis."""
+
+    def _wave(self, **extra):
+        params = dict(channel="V", h=0, s=1.0, v=0.0,
+                      min_val=0.0, max_val=1.0, period=4, phase0=0, pixel_step=0)
+        params.update(extra)
+        return wave(**params)
+
+    def test_single_event_full_coverage(self):
+        """Single event [0, duration) → only degenerate (0,0)."""
+        s = strip("si_full", length=5)
+        w = self._wave()
+        w.schedule(s.pixels("0-4"), at=0, duration=4)
+        m = build_manifest(beat=1.0, duration=4.0)
+        assert m.strips[0].safe_intervals == [(0.0, 0.0)]
+
+    def test_gap_between_events(self):
+        """Two unrelated events with a real gap."""
+        s = strip("si_gap", length=5)
+        w1 = self._wave()
+        w2 = self._wave(h=60)
+        w1.schedule(s.pixels("0-4"), at=0, duration=1)   # [0, 1)
+        w2.schedule(s.pixels("0-4"), at=3, duration=1)   # [3, 4)
+        m = build_manifest(beat=1.0, duration=5.0)
+        assert m.strips[0].safe_intervals == [(0.0, 0.0), (1.0, 3.0), (4.0, 5.0)]
+
+    def test_source_dependent_removes_gap(self):
+        """Source-dependent event makes the apparent gap unsafe."""
+        s = strip("si_dep", length=5)
+        p = paint(colors=[(0, 0, 0.2)] * 5)
+        sh = shift(direction="right", velocity=1, circular=False, fill="transparent")
+        p.schedule(s.pixels("0-4"), at=0, duration=1)             # [0, 1)
+        sh.schedule(s.pixels("0-4"), at=sec(2.0), duration=sec(2.0), source=p)  # [2, 4)
+        m = build_manifest(beat=1.0, duration=5.0)
+        # Shift required_start_sec = paint required_start_sec = 0.0
+        # Merged unsafe: [0, 4). Safe: (0,0) + [4, 5)
+        assert m.strips[0].safe_intervals == [(0.0, 0.0), (4.0, 5.0)]
+
+    def test_overlapping_unsafe_spans_merge(self):
+        """Overlapping unsafe spans merge — no fragmented false gaps."""
+        s = strip("si_merge", length=5)
+        w1 = self._wave()
+        w2 = self._wave(h=60)
+        sp = spark(color="white", fade=sec(0.5))
+        # Layer 0: wave [0, 3)
+        w1.schedule(s.pixels("0-4"), at=0, duration=3)
+        # Layer 1 (forced by overlap): wave [1, 4)
+        w2.schedule(s.pixels("0-4"), at=1, duration=3)
+        # Layer 1 also gets spark [0, 0.5) — non-overlapping with w2
+        sp.schedule(s.pixels("0-4"), at=0, duration=sec(0.5))
+        m = build_manifest(beat=1.0, duration=5.0)
+        # All events cover [0, 4). Safe: (0,0) + [4, 5)
+        assert m.strips[0].safe_intervals == [(0.0, 0.0), (4.0, 5.0)]
+
+    def test_multi_strip_global_intersection(self):
+        """Global safe intervals are the intersection of per-strip intervals."""
+        sa = strip("si_ms_a", length=5)
+        sb = strip("si_ms_b", length=5)
+        wa = self._wave()
+        wb = self._wave(h=60)
+        wa.schedule(sa.pixels("0-4"), at=0, duration=1)  # strip A: [0,1)
+        wb.schedule(sb.pixels("0-4"), at=2, duration=1)  # strip B: [2,3)
+        m = build_manifest(beat=1.0, duration=4.0)
+        # Strip A safe: (0,0), [1, 4)
+        assert m.strips[0].safe_intervals == [(0.0, 0.0), (1.0, 4.0)]
+        # Strip B safe: [0, 2), [3, 4)
+        assert m.strips[1].safe_intervals == [(0.0, 2.0), (3.0, 4.0)]
+        # Global: intersection of [(0,0),(1,4)] and [(0,2),(3,4)]
+        #   (0,0) ∩ (0,2) → (0,0)
+        #   (1,4) ∩ (0,2) → (1,2)
+        #   (1,4) ∩ (3,4) → (3,4)
+        assert m.global_safe_intervals == [(0.0, 0.0), (1.0, 2.0), (3.0, 4.0)]
+
+    def test_event_clamped_at_duration(self):
+        """Event extending past duration uses clamped end for safe intervals."""
+        s = strip("si_clamp", length=5)
+        w = self._wave()
+        w.schedule(s.pixels("0-4"), at=0, duration=10)  # extends way past duration
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            m = build_manifest(beat=1.0, duration=3.0)
+        # Clamped to [0, 3) → full coverage
+        assert m.strips[0].safe_intervals == [(0.0, 0.0)]
+
+    def test_adjacent_events_no_gap(self):
+        """Adjacent events [0,2) and [2,4) → no gap, only degenerate."""
+        s = strip("si_adj", length=5)
+        w1 = self._wave()
+        w2 = self._wave(h=60)
+        w1.schedule(s.pixels("0-4"), at=0, duration=2)
+        w2.schedule(s.pixels("0-4"), at=2, duration=2)
+        m = build_manifest(beat=1.0, duration=4.0)
+        assert m.strips[0].safe_intervals == [(0.0, 0.0)]
+
+    def test_backwards_compatibility(self):
+        """compile_program() and build() still return dict[str, bytes]."""
+        s = strip("si_compat", length=5)
+        w = self._wave()
+        w.schedule(s.pixels("0-4"), at=0, duration=1)
+        blobs = build(beat=1.0, duration=2.0)
+        assert isinstance(blobs, dict)
+        assert isinstance(blobs["si_compat"], bytes)
+        assert blobs["si_compat"][:4] == b"ELEM"
+        assert set(blobs.keys()) == {"si_compat"}
+
+
 def test_layer_limit_contract():
     """Compiler max_layers and decoder layer_count limit must agree (32)."""
     repo_root = Path(__file__).resolve().parents[2]

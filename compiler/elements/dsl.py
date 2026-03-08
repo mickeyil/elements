@@ -12,11 +12,12 @@ Usage:
 from __future__ import annotations
 from typing import Any
 
-from .types import PI, SecMarker, PixelGroup, StripDef, AnimDef
-from .compiler import compile_program
+from .types import PI, SecMarker, PixelGroup, StripDef, AnimDef, CompiledManifest
+from .compiler import compile_program, compile_manifest
 
 # Re-export for `from elements.dsl import *`
-__all__ = ["PI", "sec", "strip", "wave", "shift", "spark", "paint", "build"]
+__all__ = ["PI", "sec", "strip", "wave", "shift", "spark", "paint",
+           "build", "build_manifest", "CompiledManifest"]
 
 
 def sec(value: float) -> SecMarker:
@@ -91,5 +92,13 @@ def build(beat: float, duration: float) -> dict[str, bytes]:
     """Compile the accumulated program. Returns one binary blob per strip."""
     try:
         return compile_program(_builder.strips, _builder.events, beat, duration)
+    finally:
+        _builder.reset()
+
+
+def build_manifest(beat: float, duration: float) -> CompiledManifest:
+    """Compile the accumulated program. Returns manifest with blobs + safe intervals."""
+    try:
+        return compile_manifest(_builder.strips, _builder.events, beat, duration)
     finally:
         _builder.reset()

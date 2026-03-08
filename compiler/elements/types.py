@@ -108,3 +108,22 @@ class AnimDef:
 
     def schedule(self, pixels: PixelGroup, at, duration, **kw):
         self._builder.add_event(self, pixels, at, duration, **kw)
+
+
+# ---------------------------------------------------------------------------
+# Compiler output types
+# ---------------------------------------------------------------------------
+
+@dataclass
+class CompiledStripArtifact:
+    strip_id: str
+    length: int
+    blob: bytes
+    safe_intervals: list[tuple[float, float]]
+
+
+@dataclass
+class CompiledManifest:
+    duration: float
+    strips: list[CompiledStripArtifact]
+    global_safe_intervals: list[tuple[float, float]]

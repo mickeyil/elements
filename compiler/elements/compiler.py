@@ -5,8 +5,11 @@ Pipeline:
     2. Time resolution    — beats/sec → absolute seconds
     3. Layer inference     — events → layers (bin-packing with index merging)
     4. Buffer packing     — stateful animations → shared buffer slots
-    5. Validation (late)  — source references, timing checks
-    6. Blob emission      — serialize to binary
+    5. Source resolution   — resolve source= references, compute required_start_sec
+    6. Validation (late)  — source references, timing checks
+    7. Safe interval analysis — dependency-aware per-strip safe intervals
+    8. Param resolution   — resolve animation params to binary-ready values
+    9. Blob emission      — serialize to binary
 """
 
 from __future__ import annotations
@@ -19,6 +22,7 @@ from .types import (
     SecMarker, AnimDef, PixelGroup, StripDef, COLORS,
     ANIM_TYPES, TIME_PARAMS, REQUIRED_PARAMS, STATEFUL_TYPES,
     CHANNELS, DIRECTIONS,
+    CompiledStripArtifact, CompiledManifest,
 )
 from .blob import emit_blob
 
@@ -497,6 +501,7 @@ def _resolve_and_validate_source_layers(events: list[dict], layers: list[dict]):
             )
 
         e["source_layer"] = source_li
+        e["source_event"] = source_evt
 
         source_end = source_evt["end_sec"]
         dep_start = e["at_sec"]
@@ -510,6 +515,87 @@ def _resolve_and_validate_source_layers(events: list[dict], layers: list[dict]):
                     stacklevel=2,
                 )
                 break
+
+
+# ---------------------------------------------------------------------------
+# Safe interval analysis
+# ---------------------------------------------------------------------------
+
+def _compute_required_starts(layers: list[dict]):
+    """Set required_start_sec on each event, accounting for source dependencies.
+
+    Must process layers in ascending index order. Within each layer, events
+    are sorted by at_sec. The source_layer <= dependent_layer invariant
+    (enforced by _resolve_and_validate_source_layers) guarantees the source
+    event's required_start_sec is already set when the dependent is processed.
+    Same-layer dependencies also work because events within a layer are
+    non-overlapping and sorted by time.
+    """
+    for layer in layers:
+        for e in layer["events"]:
+            if e["source_layer"] == SOURCE_NONE:
+                e["required_start_sec"] = e["at_sec"]
+            else:
+                e["required_start_sec"] = e["source_event"]["required_start_sec"]
+
+
+def _find_safe_intervals(layers: list[dict], duration: float) -> list[tuple[float, float]]:
+    """Find time intervals where jumping is safe, accounting for source dependencies.
+
+    An event's unsafe span is [required_start_sec, end_sec). For events with
+    source dependencies, required_start_sec extends back to include the source
+    chain's start time. This is conservative but correct.
+    """
+    # Build unsafe spans per event
+    unsafe = [
+        (e["required_start_sec"], e["at_sec"] + e["duration_sec"])
+        for layer in layers for e in layer["events"]
+    ]
+    if not unsafe:
+        return [(0.0, duration)]
+
+    # Merge overlapping unsafe spans
+    unsafe.sort()
+    merged = [list(unsafe[0])]
+    for lo, hi in unsafe[1:]:
+        if lo <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], hi)
+        else:
+            merged.append([lo, hi])
+
+    # Complement: gaps between merged unsafe spans
+    safe = []
+    prev_end = 0.0
+    for lo, hi in merged:
+        if lo > prev_end:
+            safe.append((prev_end, lo))
+        prev_end = max(prev_end, hi)
+    if prev_end < duration:
+        safe.append((prev_end, duration))
+
+    # t=0 is always safe (engine reset at t=0 is correct by construction)
+    if not safe or safe[0][0] > 0.0:
+        safe.insert(0, (0.0, 0.0))
+
+    return safe
+
+
+def _intersect_intervals(
+    a: list[tuple[float, float]], b: list[tuple[float, float]]
+) -> list[tuple[float, float]]:
+    """Intersect two sorted lists of non-overlapping intervals."""
+    result = []
+    i = j = 0
+    while i < len(a) and j < len(b):
+        lo = max(a[i][0], b[j][0])
+        hi = min(a[i][1], b[j][1])
+        if lo < hi or (lo == hi == 0.0):  # preserve degenerate (0,0)
+            result.append((lo, hi))
+        if a[i][1] <= b[j][1]:
+            i += 1
+        else:
+            j += 1
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -527,21 +613,26 @@ def _partition_by_strip(events: list[dict]) -> dict[str, list[dict]]:
     return by_strip
 
 
-def _compile_strip(strip_events: list[dict], duration: float) -> bytes:
-    """Run the per-strip pipeline (layers → buffers → validation → blob)."""
+def _compile_strip(strip_events: list[dict],
+                    duration: float) -> tuple[bytes, list[tuple[float, float]]]:
+    """Run the per-strip pipeline. Returns (blob, safe_intervals)."""
     # 3. Layer inference
     layers = _infer_layers(strip_events)
 
     # 4. Buffer packing
     buffer_pool = _pack_buffers(layers)
 
-    # Resolve source-layer dependencies (needs layer info)
+    # 5. Source resolution + required_start_sec
     _resolve_and_validate_source_layers(strip_events, layers)
 
-    # 5. Late validation (timing, dependencies)
+    # 6. Late validation (timing, dependencies)
     _validate_late(strip_events, layers, buffer_pool, duration)
 
-    # 6. Resolve animation params to binary-ready values
+    # 7. Safe interval analysis (after late validation, which may clamp end_sec)
+    _compute_required_starts(layers)
+    safe_intervals = _find_safe_intervals(layers, duration)
+
+    # 8. Resolve animation params to binary-ready values
     for layer in layers:
         for e in layer["events"]:
             e["binary_params"] = _resolve_anim_params(e)
@@ -552,13 +643,13 @@ def _compile_strip(strip_events: list[dict], duration: float) -> bytes:
         default=0,
     )
 
-    # 7. Blob emission
-    return emit_blob(layers, buffer_pool, duration, max_remap)
+    # 9. Blob emission
+    return emit_blob(layers, buffer_pool, duration, max_remap), safe_intervals
 
 
-def compile_program(strips: list[StripDef], events: list[dict],
-                    beat: float, duration: float) -> dict[str, bytes]:
-    """Full compile pipeline: returns one binary blob per strip."""
+def compile_manifest(strips: list[StripDef], events: list[dict],
+                     beat: float, duration: float) -> CompiledManifest:
+    """Full compile pipeline: returns manifest with blobs + safe intervals."""
     # Deep copy events so we don't mutate the builder's originals
     events = [dict(e) for e in events]
 
@@ -568,9 +659,35 @@ def compile_program(strips: list[StripDef], events: list[dict],
     # 2. Time resolution — global, strip-independent
     _resolve_times(events, beat, duration)
 
-    # 3–7. Per-strip: layer inference → buffer packing → validation → blob
+    # 3–9. Per-strip pipeline; iterate input strips for canonical order
     by_strip = _partition_by_strip(events)
-    return {
-        name: _compile_strip(strip_events, duration)
-        for name, strip_events in by_strip.items()
-    }
+    strip_artifacts = []
+    for s in strips:
+        if s.name not in by_strip:
+            continue
+        blob, intervals = _compile_strip(by_strip[s.name], duration)
+        strip_artifacts.append(CompiledStripArtifact(
+            strip_id=s.name, length=s.length,
+            blob=blob, safe_intervals=intervals,
+        ))
+
+    # Global safe interval intersection
+    if strip_artifacts:
+        global_safe = strip_artifacts[0].safe_intervals
+        for sa in strip_artifacts[1:]:
+            global_safe = _intersect_intervals(global_safe, sa.safe_intervals)
+    else:
+        global_safe = [(0.0, duration)]
+
+    return CompiledManifest(
+        duration=duration,
+        strips=strip_artifacts,
+        global_safe_intervals=global_safe,
+    )
+
+
+def compile_program(strips: list[StripDef], events: list[dict],
+                    beat: float, duration: float) -> dict[str, bytes]:
+    """Full compile pipeline: returns one binary blob per strip."""
+    manifest = compile_manifest(strips, events, beat, duration)
+    return {s.strip_id: s.blob for s in manifest.strips}

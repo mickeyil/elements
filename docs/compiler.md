@@ -1,6 +1,6 @@
 # Elements — Compiler Design
 
-> **Status: Mostly implemented.** Steps 1–7 match current code in `compiler/elements/`. Step 8 (safe interval analysis) is designed but not yet implemented.
+> **Status: Fully implemented.** Steps 1–9 match current code in `compiler/elements/`.
 
 The compiler takes a DSL program and emits one binary blob per strip. It runs on the base station (PC), not the ESP32. All heavy lifting — time resolution, layer inference, buffer packing — happens here.
 
@@ -8,19 +8,22 @@ The compiler takes a DSL program and emits one binary blob per strip. It runs on
 
 ```
 DSL (.py)
-  → 1. Parser            — DSL calls → structured data
-  → 2. Time resolution   — beats/sec → absolute seconds (global, all strips)
-  → 3. Strip partition   — events split by strip_name
+  → 1. Parser              — DSL calls → structured data
+  → 2. Time resolution     — beats/sec → absolute seconds (global, all strips)
+  → 3. Strip partition      — events split by strip_name
   → [per strip:]
-  → 4. Layer inference   — events → layers (interval graph coloring)
-  → 5. Buffer packing    — stateful animations → shared buffer slots
-  → 6. Validation        — bounds, references, timing checks
-  → 7. Blob emission     — serialize to binary
-  → 8. Safe interval analysis — find reset-safe intervals (no active events)
-  → dict[strip_name, bytes] + per-strip safe intervals
+  → 4. Layer inference      — events → layers (interval graph coloring)
+  → 5. Buffer packing       — stateful animations → shared buffer slots
+  → 6. Source resolution    — resolve source= refs, compute required_start_sec
+  → 7. Validation           — bounds, references, timing checks
+  → 8. Safe interval analysis — dependency-aware per-strip safe intervals
+  → 9. Param resolution + blob emission — serialize to binary
+  → [across strips:]
+  → 10. Global safe interval intersection
+  → CompiledManifest (per-strip blobs + safe intervals + global safe intervals)
 ```
 
-Steps 1–3 run once across all events. Steps 4–8 run independently per strip. `build()` returns `dict[str, bytes]` — one entry per strip. Jump points are returned as separate metadata (not embedded in the blob).
+Steps 1–3 run once across all events. Steps 4–9 run independently per strip. Step 10 intersects per-strip safe intervals. `build_manifest()` returns `CompiledManifest`; `build()` returns `dict[str, bytes]` for backwards compatibility. Safe intervals are metadata (not embedded in the blob).
 
 ### Multi-strip
 
@@ -539,80 +542,70 @@ Fits in a single UDP packet.
 
 ---
 
-## 8. Jump Point Analysis
+## 8. Safe Interval Analysis
 
-After blob emission, the compiler analyzes the per-strip event timeline to find **safe intervals** — time ranges where no event is active on any layer. Within a safe interval, `Engine::reset()` followed by `tick(t)` produces correct output without replaying from t=0. This enables cheap seek on real ESP hardware.
+After late validation, the compiler analyzes the per-strip event timeline to find **safe intervals** — time ranges where `Engine::reset()` followed by `tick(t)` produces correct output without replaying from t=0. This enables cheap seek on real ESP hardware.
 
 ### Why intervals, not points
 
 A gap between events is a continuous range `[gap_start, gap_end)`, not a single timestamp. Modeling safe regions as intervals is essential for correct multi-strip intersection. If strip A is safe on `[4.0, 5.0)` and strip B is safe on `[4.5, 6.0)`, the global safe region is `[4.5, 5.0)`. A point-based model would record `4.0` for A and `4.5` for B — set intersection yields nothing, missing the valid synchronized jump window.
 
-### Algorithm
+### Dependency-aware unsafe spans
 
-A simple interval sweep over all events across all layers, returning the gaps as intervals:
+A naive "no event active on any layer" rule is insufficient when source dependencies exist. Consider:
 
-```python
-def _find_safe_intervals(layers: list[dict], duration: float) -> list[tuple[float, float]]:
-    """Find time intervals where no event is active on any layer."""
-    event_intervals = []
-    for layer in layers:
-        for e in layer["events"]:
-            event_intervals.append((e["at_sec"], e["at_sec"] + e["duration_sec"]))
-
-    if not event_intervals:
-        return [(0.0, duration)]  # entire program is safe
-
-    event_intervals.sort()
-
-    safe = []
-    end = 0.0
-    for start, stop in event_intervals:
-        if start > end:
-            safe.append((end, start))  # gap: no events active in [end, start)
-        end = max(end, stop)
-    if end < duration:
-        safe.append((end, duration))  # gap between last event and program end
-
-    # t=0 is always safe — if the first event starts at 0.0, the sweep
-    # won't produce a leading interval, but Engine::reset() at t=0 is
-    # correct by construction (fresh state). Ensure it's included.
-    if not safe or safe[0][0] > 0.0:
-        safe.insert(0, (0.0, 0.0))  # degenerate interval: only t=0 is safe
-
-    return safe
+```
+paint:              [0.0, 1.0)
+shift(source=paint): [2.0, 4.0)
 ```
 
-### Why this is correct
+The gap `[1.0, 2.0)` appears safe — no event is active. But jumping to `t=1.5` loses paint's buffer state: after `Engine::reset()`, all layer buffers are zeroed. When shift constructs at `t=2.0`, it snapshots zeroes instead of paint's output. The gap is actually unsafe.
 
-A time is safe for jump if no animation carries prior state at that instant. In this engine, the only sources of history-dependence are:
+The correct rule: each event's **unsafe span** extends back to the start of its source dependency chain.
 
-- **Stateful animations** (shift) — snapshot source pixels at construction. If the shift isn't active, there's nothing to snapshot.
-- **Source layer dependencies** — an event reads another layer's buffer. If neither event is active, there's no dependency.
-- **Active stateless events** (wave, spark, paint) — while these compute output purely from `(t - event_start)`, the engine creates animation instances on the first tick where an event is active. Jumping into the middle of an active event would skip that creation.
+### Algorithm
 
-The conservative rule — "no event active anywhere" — avoids all of these. It's simple and correct. Any time within a safe interval satisfies this rule.
+**Step 1 — `required_start_sec`:** For each event, compute the earliest time from which playback must begin to produce correct output:
+
+- No source dependency: `required_start_sec = at_sec`
+- Source dependency: `required_start_sec = source_event.required_start_sec`
+
+This propagates transitively: if A feeds B and B feeds C, then C's `required_start_sec` is A's. Processing layers in ascending index order (guaranteed by the `source_layer <= dependent_layer` invariant) ensures the source event is already computed.
+
+**Step 2 — merge and complement:** Collect all unsafe spans `[required_start_sec, end_sec)` across all layers, merge overlaps, and take the complement over `[0, duration]`:
+
+```python
+def _find_safe_intervals(layers, duration):
+    unsafe = [
+        (e["required_start_sec"], e["at_sec"] + e["duration_sec"])
+        for layer in layers for e in layer["events"]
+    ]
+    # sort, merge overlaps, compute complement → safe intervals
+```
+
+**Step 3 — degenerate t=0:** `Engine::reset()` at t=0 is always correct by construction. If the first unsafe span starts at 0.0, the degenerate interval `(0.0, 0.0)` is inserted to represent this.
+
+### Global safe intervals
+
+The compiler computes per-strip safe intervals independently, then intersects them across all strips to produce `global_safe_intervals`. This is the set of times where all devices can safely jump simultaneously. Strips with no events are omitted from the manifest (their safe interval `[(0.0, duration)]` is the identity for intersection).
 
 ### Output
 
-Safe intervals are returned as metadata alongside the blobs, not embedded in the blob format. The blob and decoder are unchanged.
+Safe intervals are returned as metadata in `CompiledManifest`, not embedded in the blob. The blob format and C++ decoder are unchanged.
 
 ```python
-# Per-strip result (internal to compiler)
-{
-    "blob": b"...",
-    "safe_intervals": [(0.0, 0.0), (4.0, 5.5), (8.5, 9.0), (12.0, 15.0)]
-}
+manifest = build_manifest(beat=1.0, duration=15.0)
+manifest.strips[0].safe_intervals  # [(0.0, 0.0), (4.0, 5.5), (8.5, 15.0)]
+manifest.global_safe_intervals     # [(0.0, 0.0), (4.5, 5.0), (9.0, 15.0)]
 ```
 
-The controller computes the **global intersection** of per-strip safe intervals for synchronized multi-device seek. See `docs/playback_device.md`, section "Reset-safe jump points".
+`build()` and `compile_program()` continue to return `dict[str, bytes]` for backwards compatibility.
 
-### Test animation walkthrough
+### Example walkthrough
 
 ```
-Layer 0:  wave [0.0, 1.0)  shift [1.0, 2.0)
-Layer 1:  sparks scattered throughout [0.0, 2.0)
+paint:               [0.0, 1.0)   required_start = 0.0
+shift(source=paint): [2.0, 4.0)   required_start = 0.0  (follows paint)
 ```
 
-If sparks leave gaps (e.g., spark at [0.0, 0.1), next at [0.25, 0.35)), those gaps on layer 1 must also be gaps on layer 0 to be safe. In this example, layer 0 has continuous coverage from 0.0 to 2.0, so the only safe interval is `[(0.0, 0.0)]` (the degenerate t=0-only interval) — no interior safe regions. This is expected for a short, dense test animation.
-
-A realistic music program with phrase boundaries and blackout moments will have many safe intervals.
+Unsafe spans: `[0.0, 1.0)` and `[0.0, 4.0)`. Merged: `[0.0, 4.0)`. For duration=5.0, safe intervals: `[(0.0, 0.0), (4.0, 5.0)]`.
