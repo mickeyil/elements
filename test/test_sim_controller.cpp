@@ -491,6 +491,22 @@ TEST_CASE("Seek from PAUSED stays PAUSED", "[simctrl]") {
     CHECK(found_3);
 }
 
+TEST_CASE("Seek clamps to duration, current_t_rel reflects clamped value", "[simctrl]") {
+    DualFixture f;
+    SimController ctrl(f.strips());
+    REQUIRE(ctrl.load(f.program()));  // duration = 5.0
+
+    // Seek beyond duration
+    ctrl.seek(999.0f);
+    CHECK(ctrl.state() == ControllerState::PAUSED);
+    CHECK(ctrl.current_t_rel() <= 5.0f);
+    CHECK(ctrl.current_t_rel() == Catch::Approx(5.0f));
+
+    // Seek negative
+    ctrl.seek(-10.0f);
+    CHECK(ctrl.current_t_rel() == Catch::Approx(0.0f));
+}
+
 // =========================================================================
 // 5. Stop
 // =========================================================================

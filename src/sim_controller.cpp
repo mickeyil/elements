@@ -168,7 +168,12 @@ void SimController::seek(float t_rel)
         // Stay PLAYING — debug_seek adjusts t0 for PLAYING devices
     } else {
         // LOADED, PAUSED, ENDED → PAUSED
-        _paused_t_rel = t_rel;
+        // Read back actual clamped position from devices
+        _paused_t_rel = 0.0f;
+        for (auto& s : _strips) {
+            float t = s.device->current_t_rel();
+            if (t > _paused_t_rel) _paused_t_rel = t;
+        }
         _state = ControllerState::PAUSED;
     }
     queue_event(ControllerEvent::STATE_CHANGED);
