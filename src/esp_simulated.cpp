@@ -2,7 +2,6 @@
 #include "engine.h"
 
 #include <chrono>
-#include <cstring>
 
 ESPSimulated::ESPSimulated(uint16_t strip_length)
     : PlaybackDevice(strip_length, /*gamma_enabled=*/false)

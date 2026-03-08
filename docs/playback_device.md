@@ -68,7 +68,7 @@ public:
 protected:
     // --- Platform-specific (virtual, implemented by subclasses) ---
     virtual int64_t now_mono() const = 0;     // monotonic clock, microseconds
-    virtual void output_frame() = 0;           // push rgb buffer to output
+    virtual void output_frame(float t_rel) = 0; // push rgb buffer to output
     virtual void send_telemetry(DeviceState s, float t,
                                 const char* err = nullptr) {}  // default no-op
 
@@ -137,7 +137,7 @@ protected:
         return esp_timer_get_time();
     }
 
-    void output_frame() override {
+    void output_frame(float) override {
         FastLED.show();
     }
 
@@ -168,95 +168,41 @@ void loop() {
 
 ## ESPSimulated (simulator subclass)
 
-Runs as a desktop process. Uses `steady_clock` for time, sends rgb buffer over UDP, gamma disabled.
+In-process desktop simulator with queue-based frame/telemetry capture. Uses `steady_clock` for time, gamma disabled. No sockets — a future transport wrapper will add TCP/UDP.
 
 ```cpp
+struct SimRgbFrame {
+    uint16_t gen;
+    uint32_t frame_index;
+    float t_rel;
+    std::vector<uint8_t> rgb;
+};
+
+struct SimTelemetry {
+    DeviceState state;
+    float t_rel;
+    std::string error;
+};
+
 class ESPSimulated : public PlaybackDevice {
 public:
-    ESPSimulated(uint16_t strip_length)
-        : PlaybackDevice(strip_length, /*gamma_enabled=*/false) {}
+    explicit ESPSimulated(uint16_t strip_length);
+
+    // Drain queued frames/telemetry — destructive, order-preserving
+    std::vector<SimRgbFrame> drain_frames();
+    std::vector<SimTelemetry> drain_telemetry();
+
+    // Debug extensions (simulator only)
+    void debug_seek(float target_t_rel);
+    void debug_step(int direction);
 
 protected:
-    int64_t now_mono() const override {
-        auto now = steady_clock::now();
-        return duration_cast<microseconds>(now.time_since_epoch()).count();
-    }
-
-    void output_frame() override {
-        send_rgb_frame(_gen, _frame_index, _rgb_buf, _strip_length * 3);
-    }
-
-    void send_telemetry(DeviceState s, float t, const char* err) override {
-        // Send status over UDP to controller
-    }
-
-public:
-    // --- Debug extensions (simulator only) ---
-
-    void debug_seek(float target_t_rel) {
-        if (!_engine) return;
-        float dur = duration();
-        if (target_t_rel < 0.0f) target_t_rel = 0.0f;
-        if (target_t_rel > dur) target_t_rel = dur;
-
-        _engine->reset();
-        float dt = 1.0f / 50.0f;
-        for (float t = dt; t < target_t_rel; t += dt)
-            _engine->tick(t);
-        _engine->tick(target_t_rel);
-        output_frame();
-        _frame_index++;
-
-        if (_state == DeviceState::PLAYING) {
-            _t0 = now_mono() + _sync_offset - (int64_t)(target_t_rel * 1e6f);
-        } else {
-            _paused_t_rel = target_t_rel;
-            _state = DeviceState::PAUSED;
-        }
-    }
-
-    void debug_step(int direction) {
-        if (_state != DeviceState::PAUSED && _state != DeviceState::LOADED) return;
-        float target = _paused_t_rel + direction * (1.0f / 50.0f);
-        if (target < 0.0f) target = 0.0f;
-        if (target > duration()) target = duration();
-
-        _engine->reset();
-        float dt = 1.0f / 50.0f;
-        for (float t = dt; t < target; t += dt)
-            _engine->tick(t);
-        _engine->tick(target);
-
-        _paused_t_rel = target;
-        _state = DeviceState::PAUSED;
-        output_frame();
-        _frame_index++;
-    }
+    int64_t now_mono() const override;
+    void output_frame(float t_rel) override;
+    void send_telemetry(DeviceState s, float t, const char* err = nullptr) override;
 };
 ```
 
-Desktop main loop:
+`output_frame()` pushes a `SimRgbFrame` (gen, frame_index, t_rel, rgb copy) to an internal queue. `send_telemetry()` pushes a `SimTelemetry` to a separate queue. Callers drain queues with `drain_frames()` / `drain_telemetry()`.
 
-```cpp
-ESPSimulated device(NUM_LEDS);
-
-int main() {
-    auto next_tick = steady_clock::now();
-    auto dt = chrono::milliseconds(20);  // 50Hz
-
-    while (running) {
-        poll_tcp_commands(tcp_fd, device);
-        poll_udp_sync(udp_fd);
-        device.tick_once();
-
-        next_tick += dt;
-        auto now = steady_clock::now();
-        if (now > next_tick) {
-            log_overrun(now - next_tick + dt);
-            next_tick = now;
-        } else {
-            this_thread::sleep_until(next_tick);
-        }
-    }
-}
-```
+`debug_seek()` replays the engine from t=0 to the target time at 50Hz steps, emits one frame, then adjusts state (stays PLAYING with adjusted `_t0`, or transitions to PAUSED). `debug_step()` advances by ±1/50s from the current paused position, valid only from PAUSED or LOADED.
