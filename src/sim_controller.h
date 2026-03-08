@@ -2,6 +2,7 @@
 
 #include "esp_simulated.h"
 
+#include <cassert>
 #include <cstdint>
 #include <map>
 #include <string>

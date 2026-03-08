@@ -4,6 +4,7 @@ SimController::SimController(std::vector<ControllerStrip> strips)
     : _strips(std::move(strips)),
       _expected_gen(_strips.size(), 0)
 {
+    assert(!_strips.empty() && "SimController requires at least one strip");
     for (size_t i = 0; i < _strips.size(); i++)
         _strip_id_to_index[_strips[i].strip_id] = i;
 }
