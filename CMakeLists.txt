@@ -13,6 +13,7 @@ add_library(elements_core STATIC
     src/engine.cpp
     src/compositor.cpp
     src/colors.cpp
+    src/playback_device.cpp
 )
 target_include_directories(elements_core PUBLIC src)
 
@@ -48,7 +49,10 @@ if(BUILD_TESTS)
     add_executable(test_animations test/test_animations.cpp)
     target_link_libraries(test_animations elements_core Catch2::Catch2WithMain)
 
-    # Auto-generate test fixture if missing
+    add_executable(test_playback_device test/test_playback_device.cpp)
+    target_link_libraries(test_playback_device elements_core Catch2::Catch2WithMain)
+
+    # Auto-generate test fixtures if missing
     find_program(PYTHON3 python3)
     if(PYTHON3)
         add_custom_command(
@@ -57,11 +61,19 @@ if(BUILD_TESTS)
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
             COMMENT "Generating test fixture test_animation.bin"
         )
+        add_custom_command(
+            OUTPUT ${CMAKE_SOURCE_DIR}/test/fixtures/test_shift.bin
+            COMMAND ${PYTHON3} ${CMAKE_SOURCE_DIR}/test/fixtures/generate_shift.py
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            COMMENT "Generating test fixture test_shift.bin"
+        )
         add_custom_target(test_fixtures
             DEPENDS ${CMAKE_SOURCE_DIR}/test/fixtures/test_animation.bin
+                    ${CMAKE_SOURCE_DIR}/test/fixtures/test_shift.bin
         )
         add_dependencies(test_decoder test_fixtures)
         add_dependencies(test_engine test_fixtures)
+        add_dependencies(test_playback_device test_fixtures)
     endif()
 
     add_test(NAME test_decoder COMMAND test_decoder
@@ -73,6 +85,8 @@ if(BUILD_TESTS)
     add_test(NAME test_compositor COMMAND test_compositor
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_animations COMMAND test_animations
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    add_test(NAME test_playback_device COMMAND test_playback_device
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
     # Valgrind memcheck (optional)
@@ -121,6 +135,15 @@ if(BUILD_TESTS)
                     --error-exitcode=1 $<TARGET_FILE:test_animations>
         )
         set_tests_properties(test_animations_memcheck PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        )
+        add_test(
+            NAME test_playback_device_memcheck
+            COMMAND ${VALGRIND} --leak-check=full
+                    --errors-for-leak-kinds=definite,indirect,possible
+                    --error-exitcode=1 $<TARGET_FILE:test_playback_device>
+        )
+        set_tests_properties(test_playback_device_memcheck PROPERTIES
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         )
     endif()
