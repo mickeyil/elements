@@ -9,7 +9,7 @@ from elemctl.controller import (
     ProgramFrame,
     StripConfig,
 )
-from elemctl.device import DeviceFrame, DeviceState, DeviceTelemetry
+from elemctl.device import DeviceFrame, DeviceState
 
 
 # ---------------------------------------------------------------------------
@@ -110,9 +110,6 @@ class MockDevice:
         self._frames.clear()
         return out
 
-    def drain_telemetry(self) -> list[DeviceTelemetry]:
-        return []
-
     def supports_debug_seek(self) -> bool:
         return True
 
@@ -182,9 +179,6 @@ class FakeDevice:
         return self._last_t_rel
 
     def drain_frames(self) -> list[DeviceFrame]:
-        return []
-
-    def drain_telemetry(self) -> list[DeviceTelemetry]:
         return []
 
     def supports_debug_seek(self) -> bool:
@@ -989,6 +983,13 @@ class TestConstructor:
         with pytest.raises(ValueError):
             Controller(
                 [StripConfig("same", 5, a), StripConfig("same", 5, b)],
+                clock=lambda: 0,
+            )
+
+    def test_rejects_none_device(self):
+        with pytest.raises(ValueError, match="no device"):
+            Controller(
+                [StripConfig("strip", 5, None)],
                 clock=lambda: 0,
             )
 

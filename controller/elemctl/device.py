@@ -19,13 +19,6 @@ class DeviceFrame:
     rgb: bytes        # raw RGB bytes
 
 
-@dataclass
-class DeviceTelemetry:
-    state: DeviceState
-    t_rel: float
-    error: str = ""
-
-
 class ControllerDevice(Protocol):
     """Protocol for devices managed by the controller.
 
@@ -48,9 +41,8 @@ class ControllerDevice(Protocol):
     def state(self) -> DeviceState: ...
     def current_t_rel(self, now_ns: int) -> float: ...
 
-    # Frame/telemetry output
+    # Frame output
     def drain_frames(self) -> list[DeviceFrame]: ...
-    def drain_telemetry(self) -> list[DeviceTelemetry]: ...
 
     # Capability
     def supports_debug_seek(self) -> bool: ...

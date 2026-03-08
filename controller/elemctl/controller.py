@@ -68,6 +68,8 @@ class Controller:
         self._strips = list(strips)
         self._strip_id_to_index: dict[str, int] = {}
         for i, s in enumerate(self._strips):
+            if s.device is None:
+                raise ValueError(f"strip {s.strip_id!r} has no device")
             if s.strip_id in self._strip_id_to_index:
                 raise ValueError(f"duplicate strip_id: {s.strip_id}")
             self._strip_id_to_index[s.strip_id] = i
@@ -132,7 +134,7 @@ class Controller:
 
     @property
     def safe_intervals(self) -> list[tuple[float, float]]:
-        return self._safe_intervals
+        return list(self._safe_intervals)
 
     # ------------------------------------------------------------------
     # Commands
@@ -370,6 +372,9 @@ class Controller:
                     self._gen += 1
                     self._buckets.clear()
                     now = self._clock()
+                    # Devices are ENDED here. jump() transitions ENDED→PAUSED,
+                    # so resume() is needed to restart playback. This differs
+                    # from seek-while-PLAYING where jump() keeps devices PLAYING.
                     for i, s in enumerate(self._strips):
                         s.device.jump(now, 0.0, self._gen)
                         s.device.resume(now)

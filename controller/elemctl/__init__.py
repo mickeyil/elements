@@ -1,7 +1,6 @@
 from .device import (
     DeviceState,
     DeviceFrame,
-    DeviceTelemetry,
     ControllerDevice,
 )
 from .controller import (
@@ -15,7 +14,6 @@ from .controller import (
 __all__ = [
     "DeviceState",
     "DeviceFrame",
-    "DeviceTelemetry",
     "ControllerDevice",
     "Controller",
     "ControllerState",
