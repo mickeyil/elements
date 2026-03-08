@@ -1,6 +1,6 @@
 # Controller & Web App
 
-> **Status: Design document.** Not yet implemented. Describes the controller and web app architecture, protocols, identity model, frame assembly, reset-safe intervals, and end-to-end flows.
+> **Status: Partially implemented.** SimController (`src/sim_controller.h/cpp`) implements in-process sim-only controller logic: session/playback state, shared-time orchestration, frame assembly, seek, looping. The networked controller, web app, and transport layers described below are not yet implemented.
 
 ## Base-station config
 

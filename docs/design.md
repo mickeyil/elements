@@ -1,6 +1,6 @@
 # Elements — Design Document
 
-> **Status: Mixed.** Core pipeline (compiler, decoder, engine, compositor, PlaybackDevice base class, ESPSimulated) is implemented. Hardware setup, build system, and project phases are current. Transport, controller, and web app are designed but not yet implemented — see `transport.md` and `controller.md`.
+> **Status: Mixed.** Core pipeline (compiler, decoder, engine, compositor, PlaybackDevice base class, ESPSimulated) and SimController (in-process sim-only controller) are implemented. Hardware setup, build system, and project phases are current. Transport and web app are designed but not yet implemented — see `transport.md` and `controller.md`.
 
 ## Overview
 
