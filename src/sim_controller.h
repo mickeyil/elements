@@ -1,6 +1,6 @@
 #pragma once
 
-#include "esp_simulated.h"
+#include "controller_device.h"
 
 #include <cassert>
 #include <cstdint>
@@ -14,7 +14,7 @@ enum class ControllerState { IDLE, LOADED, PLAYING, PAUSED, STOPPED, ENDED };
 struct ControllerStrip {
     std::string strip_id;
     uint16_t length;
-    ESPSimulated* device;   // non-owning
+    ControllerDevice* device;   // non-owning
 };
 
 struct CompiledStripBlob {

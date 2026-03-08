@@ -1,4 +1,5 @@
 #include "sim_controller.h"
+#include "playback_device.h"  // DeviceState enum values
 
 SimController::SimController(std::vector<ControllerStrip> strips)
     : _strips(std::move(strips)),
@@ -147,8 +148,10 @@ void SimController::seek(float t_rel)
         return;
 
     _epoch++;
-    for (auto& s : _strips)
+    for (auto& s : _strips) {
+        assert(s.device->supports_debug_seek() && "seek requires debug_seek support");
         s.device->debug_seek(t_rel);
+    }
     _buckets.clear();
 
     if (_state == ControllerState::PLAYING) {

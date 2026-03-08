@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 #include "../src/sim_controller.h"
+#include "../src/sim_device.h"
 
 #include <cstdio>
 #include <vector>
@@ -52,6 +53,8 @@ static void check_pixel_vec(const std::vector<uint8_t>& rgb, int i, uint8_t expe
 struct DualFixture {
     ControlledESPSimulated left{5};
     ControlledESPSimulated right{5};
+    SimDevice left_dev{left};
+    SimDevice right_dev{right};
     std::vector<uint8_t> lblob;
     std::vector<uint8_t> rblob;
 
@@ -62,8 +65,8 @@ struct DualFixture {
 
     std::vector<ControllerStrip> strips() {
         return {
-            {"left", 5, &left},
-            {"right", 5, &right},
+            {"left", 5, &left_dev},
+            {"right", 5, &right_dev},
         };
     }
 
