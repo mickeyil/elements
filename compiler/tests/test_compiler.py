@@ -680,6 +680,32 @@ class TestSafeIntervals:
         m = build_manifest(beat=1.0, duration=4.0)
         assert m.strips[0].safe_intervals == [(0.0, 0.0)]
 
+    def test_manifest_strip_order_follows_declaration(self):
+        """Manifest strips follow the input strips list order, not event order."""
+        # Declare strips in order: c, a, b
+        sc = strip("si_ord_c", length=5)
+        sa = strip("si_ord_a", length=5)
+        sb = strip("si_ord_b", length=5)
+        # Schedule events in reverse order: b, a, c
+        wb = self._wave(h=120)
+        wa = self._wave(h=60)
+        wc = self._wave()
+        wb.schedule(sb.pixels("0-4"), at=0, duration=1)
+        wa.schedule(sa.pixels("0-4"), at=0, duration=1)
+        wc.schedule(sc.pixels("0-4"), at=0, duration=1)
+        m = build_manifest(beat=1.0, duration=2.0)
+        assert [s.strip_id for s in m.strips] == ["si_ord_c", "si_ord_a", "si_ord_b"]
+
+    def test_manifest_omits_eventless_strips(self):
+        """Strips with no events are omitted from the manifest."""
+        sa = strip("si_has", length=5)
+        strip("si_empty", length=5)  # declared but no events
+        w = self._wave()
+        w.schedule(sa.pixels("0-4"), at=0, duration=1)
+        m = build_manifest(beat=1.0, duration=2.0)
+        assert len(m.strips) == 1
+        assert m.strips[0].strip_id == "si_has"
+
     def test_backwards_compatibility(self):
         """compile_program() and build() still return dict[str, bytes]."""
         s = strip("si_compat", length=5)
