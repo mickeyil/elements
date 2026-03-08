@@ -1,6 +1,6 @@
 # Controller & Web App
 
-> **Status: Partially implemented.** SimController (`src/sim_controller.h/cpp`) implements in-process sim-only controller logic: session/playback state, shared-time orchestration, frame assembly, seek, looping. The networked controller, web app, and transport layers described below are not yet implemented.
+> **Status: Partially implemented.** SimController (`src/sim_controller.h/cpp`) implements in-process sim-only controller logic: session/playback state, shared-time orchestration, frame assembly, seek, looping. It depends on `ControllerDevice` (`src/controller_device.h`), an abstract device interface. `SimDevice` (`src/sim_device.h`) adapts `ESPSimulated` to this interface; future networked device wrappers will implement it directly. The networked controller, web app, and transport layers described below are not yet implemented.
 
 ## Base-station config
 
