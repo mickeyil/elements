@@ -20,6 +20,13 @@ add_library(elements_core STATIC
 target_include_directories(elements_core PUBLIC src)
 
 # ---------------------------------------------------------------------------
+# Tools
+# ---------------------------------------------------------------------------
+
+add_executable(network_sim src/network_sim.cpp)
+target_link_libraries(network_sim elements_core)
+
+# ---------------------------------------------------------------------------
 # Tests (Catch2, fetched at configure time)
 # ---------------------------------------------------------------------------
 
