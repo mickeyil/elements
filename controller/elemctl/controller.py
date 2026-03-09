@@ -7,7 +7,7 @@ from typing import Callable
 
 from elements.types import CompiledManifest
 
-from .device import ControllerDevice, DeviceFrame, DeviceState
+from .device import ControllerDevice, DeviceFrame
 
 
 class ControllerState(IntEnum):
@@ -361,12 +361,13 @@ class Controller:
         for fi in complete:
             del self._buckets[fi]
 
-        # 4. End-of-program detection
+        # 4. End-of-program detection (controller-inferred, not device-reported)
         if self._state == ControllerState.PLAYING:
-            all_ended = all(
-                s.device.state() == DeviceState.ENDED for s in self._strips
+            all_past_end = all(
+                s.device.current_t_rel(now) >= self._duration
+                for s in self._strips
             )
-            if all_ended:
+            if all_past_end:
                 if self._loop:
                     self._epoch += 1
                     self._gen += 1

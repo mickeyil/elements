@@ -29,7 +29,7 @@ The controller opens a persistent TCP connection to each device. Commands are le
 Command types:
 
 ```
-CMD_LOAD:         type = 0x10, payload = [gen: u16] [blob: variable]    -> 3+ bytes total
+CMD_LOAD:         type = 0x10, payload = [device_id: u16] [gen: u16] [blob: variable] -> 5+ bytes total
 CMD_START:        type = 0x11, payload = [t0: i64]                     -> 9 bytes total
 CMD_JUMP:         type = 0x12, payload = [t0: i64] [t_rel: f32] [gen: u16] -> 15 bytes total
 CMD_PAUSE:        type = 0x13, no payload                              -> 1 byte total
@@ -53,9 +53,11 @@ The device sends an ACK after LOAD (with decode status). Other commands are fire
 
 **CMD_JUMP vs CMD_DEBUG_SEEK:** CMD_JUMP is a lightweight seek available on all devices. It carries a shared absolute `t0` (like CMD_START) so all devices stay synchronized, `t_rel` for precise frame rendering when paused, and a `gen` value the device echoes on outbound UDP so the controller can drop stale in-flight frames. Valid only within reset-safe intervals (see `controller.md`). CMD_DEBUG_SEEK is simulator-only: it replays from t=0 to the target, producing correct output at any arbitrary time.
 
-**CMD_PAUSE vs CMD_RESUME:** CMD_PAUSE stops the device from advancing. The device keeps displaying the last rendered frame and reports its last `t_rel` via telemetry. CMD_RESUME(t0) sets a new shared time origin and transitions to PLAYING **without resetting the engine** — all cursor positions, active animation instances, and stateful buffers are preserved. This is fundamentally different from CMD_JUMP, which resets the engine and is only valid within safe intervals. Resume works at any time because the engine state is already correct.
+**CMD_PAUSE vs CMD_RESUME:** CMD_PAUSE stops the device from advancing. The device keeps displaying the last rendered frame and captures its current `t_rel` internally (for correct resume). CMD_RESUME(t0) sets a new shared time origin and transitions to PLAYING **without resetting the engine** — all cursor positions, active animation instances, and stateful buffers are preserved. This is fundamentally different from CMD_JUMP, which resets the engine and is only valid within safe intervals. Resume works at any time because the engine state is already correct.
 
 **Generation counter (`gen`):** LOAD and JUMP carry a `gen` value (u16) that the device stores and includes on every outbound UDP frame. The controller increments `gen` on each LOAD and JUMP, and drops any incoming UDP frame whose `gen` doesn't match the current expected value. This prevents stale in-flight frames from being forwarded to the browser with the wrong epoch.
+
+**Device identity (`device_id`):** LOAD carries a `device_id` (u16) assigned from the controller's static config. The device stores it and echoes it on every outbound UDP packet (frames and telemetry). This allows the controller to receive all device frames on a single shared UDP port and demux by `device_id`. This is necessary because multiple simulator instances on the same host share a source IP, making source-address-based demux unreliable.
 
 ---
 
@@ -91,10 +93,12 @@ void poll_tcp_commands(int tcp_fd, PlaybackDevice& device) {
 
         switch (type) {
             case 0x10: {  // CMD_LOAD
-                if (payload_len < 2) break;
-                uint16_t gen;
-                memcpy(&gen, payload, 2);
-                bool ok = device.handle_load(payload + 2, payload_len - 2, gen);
+                if (payload_len < 4) break;
+                uint16_t device_id, gen;
+                memcpy(&device_id, payload, 2);
+                memcpy(&gen, payload + 2, 2);
+                _device_id = device_id;  // store for outbound UDP
+                bool ok = device.handle_load(payload + 4, payload_len - 4, gen);
                 uint8_t ack[] = {0x80, ok ? (uint8_t)0 : (uint8_t)1};
                 // send_tcp_ack(tcp_fd, ack, sizeof(ack));  // length-prefixed
                 break;
@@ -215,11 +219,11 @@ while (running) {          // Desktop (ESPSimulated)
 ## Controller side (sending commands)
 
 ```python
-# Python controller — sending a blob over TCP
-def send_load(conn: socket.socket, blob: bytes, gen: int):
-    msg = struct.pack('<I', 1 + 2 + len(blob))  # length prefix
-    msg += b'\x10'                               # CMD_LOAD
-    msg += struct.pack('<H', gen)                # generation counter
+# Python controller — sending commands over TCP
+def send_load(conn: socket.socket, device_id: int, gen: int, blob: bytes):
+    msg = struct.pack('<I', 1 + 2 + 2 + len(blob))  # length prefix
+    msg += b'\x10'                                    # CMD_LOAD
+    msg += struct.pack('<HH', device_id, gen)         # device_id + generation counter
     msg += blob
     conn.sendall(msg)
 
@@ -236,11 +240,20 @@ def send_start(conn: socket.socket, t0: int):
     conn.sendall(msg)
 
 def send_jump(conn: socket.socket, t0: int, t_rel: float, gen: int):
-    msg = struct.pack('<IBqfH', 15, 0x12, t0, t_rel, gen)  # length=15, CMD_JUMP, t0, t_rel, gen
+    msg = struct.pack('<IBqfH', 15, 0x12, t0, t_rel, gen)
+    conn.sendall(msg)
+
+def send_pause(conn: socket.socket):
+    msg = struct.pack('<IB', 1, 0x13)        # length=1, CMD_PAUSE
+    conn.sendall(msg)
+
+def send_resume(conn: socket.socket, t0: int):
+    msg = struct.pack('<IB', 9, 0x14)        # length=9, CMD_RESUME
+    msg += struct.pack('<q', t0)
     conn.sendall(msg)
 
 def send_stop(conn: socket.socket):
-    msg = struct.pack('<IB', 1, 0x15)  # length=1, CMD_STOP
+    msg = struct.pack('<IB', 1, 0x15)        # length=1, CMD_STOP
     conn.sendall(msg)
 ```
 
@@ -473,5 +486,15 @@ Two seek mechanisms exist with different tradeoffs:
 ### Device outbound UDP frame format
 
 ```
-[gen: u16] [frame_index: u32] [t_rel: f32] [rgb: bytes...]
+[device_id: u16] [gen: u16] [frame_index: u32] [t_rel: f32] [rgb: bytes...]
 ```
+
+`device_id` is stored by the device from CMD_LOAD and echoed on every outbound UDP packet.
+
+### Frame destination
+
+The device sends UDP frames to the controller's IP on a fixed well-known port (`frame_port` from static config, e.g. 9100). The device learns the controller's IP from `getpeername()` on the TCP connection — no additional configuration or handshake needed.
+
+### Controller UDP frame reception
+
+The controller binds a single UDP socket on `frame_port` and receives frames from all devices. Frames are demuxed by the `device_id` field in the packet header, not by source address. This supports multiple simulator instances on the same host (same source IP, different `device_id` values).

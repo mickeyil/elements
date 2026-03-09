@@ -10,6 +10,8 @@ from .controller import (
     ProgramFrame,
     StripConfig,
 )
+from .network_device import NetworkDevice
+from .udp_receiver import UdpFrameReceiver
 
 __all__ = [
     "DeviceState",
@@ -20,4 +22,6 @@ __all__ = [
     "ControllerEvent",
     "ProgramFrame",
     "StripConfig",
+    "NetworkDevice",
+    "UdpFrameReceiver",
 ]
