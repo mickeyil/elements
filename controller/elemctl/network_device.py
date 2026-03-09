@@ -150,6 +150,18 @@ class NetworkDevice:
                 self._state = DeviceState.PAUSED
                 self._last_t_rel = t_rel
 
+    @property
+    def is_connected(self) -> bool:
+        """Whether TCP connection is currently established."""
+        return self._connected
+
+    def ensure_connected(self) -> bool:
+        """Attempt to establish TCP connection if not already connected.
+        Returns True if connected (already or newly)."""
+        if self._connected:
+            return True
+        return self._connect()
+
     def close(self) -> None:
         """Disconnect and reset to IDLE. Safe to call multiple times."""
         self._disconnect()
