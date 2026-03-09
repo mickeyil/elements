@@ -56,6 +56,11 @@ class UdsReader:
         out: list[tuple[int, bytes]] = []
         while len(self._buf) >= _HEADER.size:
             length = struct.unpack_from('<I', self._buf, 0)[0]
+            if length < 1:
+                # Invalid frame (no kind byte). Discard the 4-byte length
+                # field to resynchronize.
+                del self._buf[:4]
+                continue
             total = 4 + length  # 4 bytes for the length field itself
             if len(self._buf) < total:
                 break

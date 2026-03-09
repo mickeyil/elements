@@ -10,6 +10,7 @@ import argparse
 import json
 import logging
 import os
+import select
 import signal
 import socket
 import sys
@@ -100,16 +101,23 @@ class UdsServer:
         self._reader = UdsReader()
         log.info('client connected')
 
-        # Send snapshot on connect
+        # Probe all devices, then send snapshot
+        self._service.probe_all()
         snapshot = self._service.build_snapshot()
         self._send_one(encode_json(snapshot))
 
     def _read_client(self) -> None:
         if self._client_sock is None:
             return
+
+        # Non-blocking: only read if data is available
+        readable, _, _ = select.select([self._client_sock], [], [], 0)
+        if not readable:
+            return
+
         try:
             data = self._client_sock.recv(4096)
-        except socket.timeout:
+        except (BlockingIOError, socket.timeout):
             return
         except OSError:
             self._close_client()
@@ -139,7 +147,7 @@ class UdsServer:
             return
         try:
             self._client_sock.sendall(data)
-        except (BrokenPipeError, ConnectionResetError, OSError):
+        except (BrokenPipeError, ConnectionResetError, socket.timeout, OSError):
             self._close_client()
 
     def _close_client(self) -> None:

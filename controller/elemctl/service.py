@@ -211,6 +211,12 @@ class ControllerService:
             'devices': devices,
         }
 
+    def probe_all(self) -> None:
+        """Probe all disconnected devices immediately (ignores throttle)."""
+        for dev in self._devices:
+            if not getattr(dev, 'is_connected', True):
+                dev.ensure_connected()
+
     # ------------------------------------------------------------------
     # Properties
     # ------------------------------------------------------------------
@@ -239,9 +245,8 @@ class ControllerService:
         try:
             exec(source, {'__builtins__': __builtins__})
             return build_manifest(beat=beat, duration=duration)
-        except Exception:
+        finally:
             _builder.reset()
-            raise
 
     def _event_to_dict(self, evt: ControllerEvent) -> dict:
         kind = evt.kind

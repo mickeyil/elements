@@ -112,6 +112,47 @@ class _FakeDevice:
         self._state = DeviceState.IDLE
 
 
+class _FrameProducingDevice(_FakeDevice):
+    """Fake device that produces frames on each tick while PLAYING."""
+
+    def __init__(self, strip_length: int = 5):
+        super().__init__()
+        self._strip_length = strip_length
+        self._gen = 0
+        self._frame_index = 0
+        self._pending_frames: list = []
+
+    def load(self, blob, gen):
+        self._gen = gen
+        self._frame_index = 0
+        return super().load(blob, gen)
+
+    def start(self, t0_ns):
+        self._frame_index = 0
+        self._pending_frames.clear()
+        super().start(t0_ns)
+
+    def tick_once(self, now_ns):
+        if self._state != DeviceState.PLAYING:
+            return
+        from elemctl.device import DeviceFrame
+        t_rel = (now_ns - self._t0_ns) / 1e9
+        # Produce a frame with brightness proportional to pixel index
+        rgb = bytes([0x42] * self._strip_length * 3)
+        self._pending_frames.append(DeviceFrame(
+            gen=self._gen,
+            frame_index=self._frame_index,
+            t_rel=t_rel,
+            rgb=rgb,
+        ))
+        self._frame_index += 1
+
+    def drain_frames(self):
+        out = self._pending_frames[:]
+        self._pending_frames.clear()
+        return out
+
+
 def _make_fake_factory(fake_devices: list[_FakeDevice]):
     """Return a factory that yields pre-created _FakeDevice instances in order."""
     idx = iter(range(len(fake_devices)))
@@ -248,9 +289,21 @@ class TestHandlePlay:
         assert reply['ok'] is True
 
         json_msgs, _ = svc.tick_once()
-        # Should have state→playing event
-        events = [parse_json_payload(m[5:]) for m in json_msgs]  # skip header
-        # Actually let's just check the reply was ok and snapshot reflects playing
+        # Decode events and verify state→playing is present
+        events = []
+        for msg in json_msgs:
+            reader = UdsReader()
+            reader.feed(msg)
+            for kind, payload in reader.messages():
+                if kind == KIND_JSON:
+                    events.append(parse_json_payload(payload))
+
+        state_events = [
+            e for e in events
+            if e.get('event') == 'state' and e.get('state') == 'playing'
+        ]
+        assert len(state_events) >= 1
+
         snap = svc.build_snapshot()
         assert snap['session']['playback_state'] == 'playing'
 
@@ -433,6 +486,19 @@ class TestUdsWire:
         assert abs(t_rel - 1.5) < 0.001
         assert payload[8:] == rgb
 
+    def test_zero_length_skipped(self):
+        """A frame with length=0 must not desynchronize the reader."""
+        valid = encode_json({'ok': True})
+        # Craft a zero-length frame: [u32 length=0]
+        bad = struct.pack('<I', 0)
+        reader = UdsReader()
+        reader.feed(bad + valid)
+        msgs = reader.messages()
+        assert len(msgs) == 1
+        kind, payload = msgs[0]
+        assert kind == KIND_JSON
+        assert parse_json_payload(payload) == {'ok': True}
+
 
 # =========================================================================
 # Part B: UDS integration tests
@@ -523,6 +589,35 @@ class TestUdsConnectSnapshot:
             assert snap['session'] is None
         finally:
             client.close()
+
+    def test_connect_probes_devices_before_snapshot(self, tmp_path):
+        """Initial snapshot reflects freshly probed connectivity."""
+        socket_path = str(tmp_path / 'test.sock')
+        config = _make_config()
+        fakes = [_FakeDevice()]
+        fakes[0].is_connected = False
+        svc = ControllerService(
+            config,
+            receiver_factory=_NoopReceiver,
+            device_factory=_make_fake_factory(fakes),
+        )
+        server = UdsServer(svc, socket_path)
+        thread = threading.Thread(target=server.run, daemon=True)
+        thread.start()
+        assert _wait_for_socket(socket_path)
+
+        client = UdsClient(socket_path)
+        try:
+            msgs = client.recv_messages(timeout=1.0)
+            assert len(msgs) >= 1
+            snap = parse_json_payload(msgs[0][1])
+            # Device was disconnected but probe_all ran on connect
+            assert snap['devices'][0]['connected'] is True
+            assert fakes[0].ensure_connected_calls >= 1
+        finally:
+            client.close()
+            server.shutdown()
+            thread.join(timeout=3.0)
 
 
 class TestUdsLoadPlayRoundTrip:
@@ -616,3 +711,56 @@ class TestUdsReconnect:
             assert snap['session']['session_id'] == 1
         finally:
             client2.close()
+
+
+class TestUdsFrameDelivery:
+    def test_frame_delivery(self, tmp_path):
+        """After load+play, the client receives KIND_FRAME binary messages."""
+        socket_path = str(tmp_path / 'test.sock')
+        config = _make_config()
+        fakes = [_FrameProducingDevice(strip_length=5)]
+        svc = ControllerService(
+            config,
+            receiver_factory=_NoopReceiver,
+            device_factory=_make_fake_factory(fakes),
+        )
+        server = UdsServer(svc, socket_path)
+        thread = threading.Thread(target=server.run, daemon=True)
+        thread.start()
+        assert _wait_for_socket(socket_path)
+
+        client = UdsClient(socket_path)
+        try:
+            # Drain snapshot
+            client.recv_messages(timeout=0.5)
+
+            # Load + play
+            client.send_cmd({
+                'id': 1, 'cmd': 'load',
+                'source': _SIMPLE_DSL, 'beat': 1.0, 'duration': 0.5,
+            })
+            client.recv_messages(timeout=0.5)
+
+            client.send_cmd({'id': 2, 'cmd': 'play'})
+
+            # Collect messages until we get at least one binary frame
+            frames = []
+            msgs = client.recv_messages(timeout=2.0)
+            for kind, payload in msgs:
+                if kind == KIND_FRAME:
+                    frames.append(payload)
+
+            assert len(frames) >= 1, 'expected at least one binary frame'
+
+            # Verify frame structure: [u32 frame_index][f32 t_rel][rgb...]
+            payload = frames[0]
+            assert len(payload) >= 8  # at least header
+            frame_index, t_rel = struct.unpack_from('<If', payload, 0)
+            assert frame_index >= 0
+            assert t_rel >= 0.0
+            rgb = payload[8:]
+            assert len(rgb) == 5 * 3  # 5 pixels * 3 bytes
+        finally:
+            client.close()
+            server.shutdown()
+            thread.join(timeout=3.0)
