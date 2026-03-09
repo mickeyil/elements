@@ -10,6 +10,7 @@ from .controller import (
     ProgramFrame,
     StripConfig,
 )
+from .config import Config, DeviceConfig, ConfigError, load_config
 from .network_device import NetworkDevice
 from .udp_receiver import UdpFrameReceiver
 
@@ -22,6 +23,10 @@ __all__ = [
     "ControllerEvent",
     "ProgramFrame",
     "StripConfig",
+    "Config",
+    "DeviceConfig",
+    "ConfigError",
+    "load_config",
     "NetworkDevice",
     "UdpFrameReceiver",
 ]

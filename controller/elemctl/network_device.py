@@ -150,6 +150,11 @@ class NetworkDevice:
                 self._state = DeviceState.PAUSED
                 self._last_t_rel = t_rel
 
+    def close(self) -> None:
+        """Disconnect and reset to IDLE. Safe to call multiple times."""
+        self._disconnect()
+        self._state = DeviceState.IDLE
+
     # ------------------------------------------------------------------
     # Private
     # ------------------------------------------------------------------
