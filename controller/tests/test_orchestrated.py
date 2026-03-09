@@ -93,7 +93,10 @@ def _wait_for_reply(client: UdsClient, cmd_id: int, result: PlaybackResult,
                     return obj
             # Ingest everything that isn't our reply (events, frames, other replies)
             _ingest_message(kind, payload, result)
-    pytest.fail(f'no reply for command id={cmd_id} within {timeout}s')
+    pytest.fail(
+        f'no reply for command id={cmd_id} within {timeout}s; '
+        f'events={result.events}, errors={result.errors}'
+    )
 
 
 def _load_play_collect(client: UdsClient, dsl: str, beat: float,
@@ -197,11 +200,15 @@ def orchestrated(request, tmp_path):
 
     yield socket_path, sim1, sim2
 
-    # Teardown
+    # Teardown: always stop sims regardless of server thread state
     server.shutdown()
     thread.join(timeout=3.0)
+    thread_exited = not thread.is_alive()
+
     stop_sim(sim1)
     stop_sim(sim2)
+
+    assert thread_exited, 'UDS server thread did not exit after shutdown'
 
     # Dump sim stderr on failure
     rep = getattr(request.node, 'rep_call', None)
@@ -292,6 +299,7 @@ class TestOrchestrated:
                 timeout=5.0,
             )
             assert not result.errors, f'unexpected errors: {result.errors}'
+            assert result.ended, 'controller did not reach ended'
 
             # Find frames where both strips are lit
             both_lit = [
