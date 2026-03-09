@@ -4,9 +4,6 @@ Starts a network_sim C++ process, connects via NetworkDevice, loads a
 compiled blob, starts playback, and verifies that UDP frames arrive.
 """
 
-import signal
-import socket
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -21,34 +18,9 @@ from elemctl.device import DeviceFrame, DeviceState
 from elemctl.network_device import NetworkDevice
 from elemctl.udp_receiver import UdpFrameReceiver
 
-NETWORK_SIM_BIN = _repo / 'build' / 'network_sim'
+from .sim_helpers import find_free_tcp_port, find_free_udp_port, start_sim, stop_sim
+
 STRIP_LENGTH = 5
-
-
-@pytest.hookimpl(tryfirst=True, hookwrapper=True)
-def pytest_runtest_makereport(item, call):
-    """Stash test outcome on the item node so fixtures can inspect it."""
-    outcome = yield
-    rep = outcome.get_result()
-    setattr(item, f'rep_{rep.when}', rep)
-
-
-def _find_free_tcp_port() -> int:
-    """Bind a TCP socket to port 0, read back the assigned port, close."""
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.bind(('', 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
-
-
-def _find_free_udp_port() -> int:
-    """Bind a UDP socket to port 0, read back the assigned port, close."""
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.bind(('', 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
 
 
 def _make_blob() -> bytes:
@@ -64,76 +36,15 @@ def _make_blob() -> bytes:
     return blobs['test']
 
 
-class SimProcess:
-    """Manages a network_sim subprocess with stdout-based readiness detection."""
-
-    def __init__(self, proc: subprocess.Popen, tcp_port: int, frame_port: int):
-        import threading
-        self.proc = proc
-        self.tcp_port = tcp_port
-        self.frame_port = frame_port
-        self._stderr_lines: list[bytes] = []
-        self._ready_event = threading.Event()
-        self._stdout_reader = threading.Thread(target=self._read_stdout, daemon=True)
-        self._stderr_reader = threading.Thread(target=self._read_stderr, daemon=True)
-        self._stdout_reader.start()
-        self._stderr_reader.start()
-
-    def _read_stdout(self) -> None:
-        for line in self.proc.stdout:
-            if b'Waiting for controller' in line:
-                self._ready_event.set()
-
-    def _read_stderr(self) -> None:
-        for line in self.proc.stderr:
-            self._stderr_lines.append(line)
-
-    def wait_ready(self, timeout: float = 5.0) -> bool:
-        """Wait for network_sim to be in accept(). Reusable across reconnects."""
-        result = self._ready_event.wait(timeout=timeout)
-        self._ready_event.clear()
-        return result
-
-    def dump_stderr(self) -> str:
-        """Return collected stderr as a string (for diagnostics on failure)."""
-        return b''.join(self._stderr_lines).decode(errors='replace')
-
-
 @pytest.fixture()
 def sim_process(request):
     """Start network_sim as a subprocess, yield SimProcess."""
-    if not NETWORK_SIM_BIN.exists():
-        pytest.skip(f'network_sim not built at {NETWORK_SIM_BIN}')
+    tcp_port = find_free_tcp_port()
+    frame_port = find_free_udp_port()
 
-    tcp_port = _find_free_tcp_port()
-    frame_port = _find_free_udp_port()
-
-    proc = subprocess.Popen(
-        [
-            str(NETWORK_SIM_BIN),
-            '--tcp-port', str(tcp_port),
-            '--frame-port', str(frame_port),
-            '--strip-length', str(STRIP_LENGTH),
-            '--device-id', '42',
-        ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-
-    sim = SimProcess(proc, tcp_port, frame_port)
-    if not sim.wait_ready():
-        proc.kill()
-        proc.wait()
-        pytest.fail('network_sim did not start listening in time')
-
+    sim = start_sim(tcp_port, frame_port, STRIP_LENGTH, device_id=42)
     yield sim
-
-    proc.send_signal(signal.SIGTERM)
-    try:
-        proc.wait(timeout=3.0)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.wait()
+    stop_sim(sim)
 
     # Surface network_sim stderr on test failure for diagnostics
     rep = getattr(request.node, 'rep_call', None)
