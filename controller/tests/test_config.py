@@ -120,16 +120,20 @@ class TestLoadConfig:
 
     def test_duplicate_strip_id(self, tmp_path):
         data = _valid_config(devices=[
-            _valid_device(device_id=1, strip_id="main", tcp_port=9001),
-            _valid_device(device_id=2, strip_id="main", tcp_port=9002),
+            _valid_device(device_id=1, strip_id="main", tcp_port=9001,
+                          device_uid="uid-1"),
+            _valid_device(device_id=2, strip_id="main", tcp_port=9002,
+                          device_uid="uid-2"),
         ])
         with pytest.raises(ConfigError, match="duplicate strip_id"):
             load_config(_write_config(tmp_path, data))
 
     def test_duplicate_endpoint(self, tmp_path):
         data = _valid_config(devices=[
-            _valid_device(device_id=1, strip_id="a", host="127.0.0.1", tcp_port=9001),
-            _valid_device(device_id=2, strip_id="b", host="127.0.0.1", tcp_port=9001),
+            _valid_device(device_id=1, strip_id="a", host="127.0.0.1", tcp_port=9001,
+                          device_uid="uid-1"),
+            _valid_device(device_id=2, strip_id="b", host="127.0.0.1", tcp_port=9001,
+                          device_uid="uid-2"),
         ])
         with pytest.raises(ConfigError, match="duplicate endpoint"):
             load_config(_write_config(tmp_path, data))
@@ -179,4 +183,72 @@ class TestLoadConfig:
         dev = _valid_device(length=0)
         data = _valid_config(devices=[dev])
         with pytest.raises(ConfigError, match="length"):
+            load_config(_write_config(tmp_path, data))
+
+    # --- discovery_port ---
+
+    def test_discovery_port_parsed(self, tmp_path):
+        data = _valid_config()
+        data["controller"]["discovery_port"] = 9999
+        cfg = load_config(_write_config(tmp_path, data))
+        assert cfg.discovery_port == 9999
+
+    def test_discovery_port_absent_is_none(self, tmp_path):
+        cfg = load_config(_write_config(tmp_path, _valid_config()))
+        assert cfg.discovery_port is None
+
+    def test_discovery_port_wrong_type(self, tmp_path):
+        data = _valid_config()
+        data["controller"]["discovery_port"] = "9999"
+        with pytest.raises(ConfigError, match="discovery_port"):
+            load_config(_write_config(tmp_path, data))
+
+    def test_discovery_port_out_of_range(self, tmp_path):
+        data = _valid_config()
+        data["controller"]["discovery_port"] = 0
+        with pytest.raises(ConfigError, match="1-65535"):
+            load_config(_write_config(tmp_path, data))
+
+    def test_discovery_allows_empty_host(self, tmp_path):
+        data = _valid_config()
+        data["controller"]["discovery_port"] = 9999
+        data["devices"] = [_valid_device(host="", tcp_port=0)]
+        cfg = load_config(_write_config(tmp_path, data))
+        assert cfg.devices[0].host == ""
+        assert cfg.devices[0].tcp_port == 0
+
+    def test_no_discovery_requires_host(self, tmp_path):
+        data = _valid_config(devices=[_valid_device(tcp_port=0)])
+        with pytest.raises(ConfigError, match="tcp_port"):
+            load_config(_write_config(tmp_path, data))
+
+    def test_discovery_mismatched_empty_host_nonempty_port(self, tmp_path):
+        """host="" with tcp_port=9001 is invalid even with discovery enabled."""
+        data = _valid_config()
+        data["controller"]["discovery_port"] = 9999
+        data["devices"] = [_valid_device(host="", tcp_port=9001)]
+        with pytest.raises(ConfigError, match="both be empty"):
+            load_config(_write_config(tmp_path, data))
+
+    def test_no_discovery_empty_host_rejected(self, tmp_path):
+        """host="" is invalid without discovery."""
+        data = _valid_config(devices=[_valid_device(host="", tcp_port=9001)])
+        with pytest.raises(ConfigError, match="host must be non-empty"):
+            load_config(_write_config(tmp_path, data))
+
+    def test_empty_device_uid_rejected(self, tmp_path):
+        data = _valid_config(devices=[_valid_device(device_uid="")])
+        with pytest.raises(ConfigError, match="device_uid must be non-empty"):
+            load_config(_write_config(tmp_path, data))
+
+    # --- device_uid uniqueness ---
+
+    def test_duplicate_device_uid_rejected(self, tmp_path):
+        data = _valid_config(devices=[
+            _valid_device(device_id=1, strip_id="a", tcp_port=9001,
+                          device_uid="same-uid"),
+            _valid_device(device_id=2, strip_id="b", tcp_port=9002,
+                          device_uid="same-uid"),
+        ])
+        with pytest.raises(ConfigError, match="duplicate device_uid"):
             load_config(_write_config(tmp_path, data))

@@ -23,7 +23,7 @@ class ConfigError(ValueError):
 @dataclass
 class DeviceConfig:
     device_id: int      # u16, wire protocol ID
-    device_uid: str     # unique hardware identifier (unused in v1)
+    device_uid: str     # unique hardware identifier (used by discovery)
     device_type: str    # "sim" or "esp32"
     host: str           # IP address
     tcp_port: int       # TCP listen port
@@ -35,6 +35,7 @@ class DeviceConfig:
 class Config:
     frame_port: int             # UDP port for frame receipt
     devices: list[DeviceConfig]
+    discovery_port: int | None = None  # UDP port for HELLO packets
 
 
 def load_config(path: str) -> Config:
@@ -62,6 +63,15 @@ def load_config(path: str) -> Config:
             f"'controller.frame_port' must be 1-65535, got {frame_port}"
         )
 
+    discovery_port = ctrl.get("discovery_port")
+    if discovery_port is not None:
+        if not _is_int(discovery_port):
+            raise ConfigError("'controller.discovery_port' must be an integer")
+        if not (1 <= discovery_port <= 65535):
+            raise ConfigError(
+                f"'controller.discovery_port' must be 1-65535, got {discovery_port}"
+            )
+
     # --- devices section ---
     devices_raw = raw.get("devices")
     if devices_raw is None:
@@ -81,6 +91,7 @@ def load_config(path: str) -> Config:
 
     devices: list[DeviceConfig] = []
     seen_ids: set[int] = set()
+    seen_uids: set[str] = set()
     seen_strip_ids: set[str] = set()
     seen_endpoints: set[tuple[str, int]] = set()
 
@@ -106,10 +117,30 @@ def load_config(path: str) -> Config:
             raise ConfigError(
                 f"devices[{i}].device_id must be 0-65535, got {d['device_id']}"
             )
-        if not (1 <= d["tcp_port"] <= 65535):
+
+        if d["device_uid"] == "":
             raise ConfigError(
-                f"devices[{i}].tcp_port must be 1-65535, got {d['tcp_port']}"
+                f"devices[{i}].device_uid must be non-empty"
             )
+
+        # When discovery is enabled, host="" and tcp_port=0 are valid sentinels
+        # meaning "awaiting discovery". Otherwise require real values.
+        _awaiting = discovery_port is not None and d["host"] == "" and d["tcp_port"] == 0
+        if not _awaiting:
+            if d["host"] == "" and discovery_port is not None:
+                raise ConfigError(
+                    f"devices[{i}]: host and tcp_port must both be empty "
+                    f"or both set when discovery is enabled"
+                )
+            if not (1 <= d["tcp_port"] <= 65535):
+                raise ConfigError(
+                    f"devices[{i}].tcp_port must be 1-65535, got {d['tcp_port']}"
+                )
+            if d["host"] == "":
+                raise ConfigError(
+                    f"devices[{i}].host must be non-empty"
+                )
+
         if d["length"] < 1:
             raise ConfigError(
                 f"devices[{i}].length must be >= 1, got {d['length']}"
@@ -125,16 +156,21 @@ def load_config(path: str) -> Config:
             raise ConfigError(f"duplicate device_id: {d['device_id']}")
         seen_ids.add(d["device_id"])
 
+        if d["device_uid"] in seen_uids:
+            raise ConfigError(f"duplicate device_uid: {d['device_uid']!r}")
+        seen_uids.add(d["device_uid"])
+
         if d["strip_id"] in seen_strip_ids:
             raise ConfigError(f"duplicate strip_id: {d['strip_id']!r}")
         seen_strip_ids.add(d["strip_id"])
 
         endpoint = (d["host"], d["tcp_port"])
-        if endpoint in seen_endpoints:
-            raise ConfigError(
-                f"duplicate endpoint: {d['host']}:{d['tcp_port']}"
-            )
-        seen_endpoints.add(endpoint)
+        if not _awaiting:
+            if endpoint in seen_endpoints:
+                raise ConfigError(
+                    f"duplicate endpoint: {d['host']}:{d['tcp_port']}"
+                )
+            seen_endpoints.add(endpoint)
 
         devices.append(DeviceConfig(
             device_id=d["device_id"],
@@ -146,4 +182,4 @@ def load_config(path: str) -> Config:
             length=d["length"],
         ))
 
-    return Config(frame_port=frame_port, devices=devices)
+    return Config(frame_port=frame_port, devices=devices, discovery_port=discovery_port)

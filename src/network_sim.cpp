@@ -5,6 +5,7 @@
 //
 // Usage:
 //   ./network_sim --tcp-port PORT --frame-port PORT --strip-length N [--device-id ID]
+//                 [--discovery-port PORT] [--discovery-host HOST] [--device-uid UID]
 
 #include "esp_simulated.h"
 
@@ -19,6 +20,7 @@
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <memory>
+#include <string>
 #include <vector>
 
 // Wire protocol command types (must match controller/elemctl/wire.py)
@@ -81,6 +83,23 @@ static void send_ack(int tcp_fd, uint8_t status)
     buf[4] = CMD_ACK;
     buf[5] = status;
     send_all(tcp_fd, buf, 6);
+}
+
+// ---------------------------------------------------------------------------
+// Discovery HELLO packet
+// ---------------------------------------------------------------------------
+
+static constexpr uint16_t DISCOVERY_MAGIC = 0x454C;
+
+static std::vector<uint8_t> build_hello_packet(const std::string& uid, uint16_t tcp_port)
+{
+    std::vector<uint8_t> pkt(5 + uid.size());
+    uint16_t magic = DISCOVERY_MAGIC;
+    memcpy(pkt.data(), &magic, 2);
+    memcpy(pkt.data() + 2, &tcp_port, 2);
+    pkt[4] = (uint8_t)uid.size();
+    memcpy(pkt.data() + 5, uid.data(), uid.size());
+    return pkt;
 }
 
 // ---------------------------------------------------------------------------
@@ -244,6 +263,10 @@ struct Args {
     int frame_port = -1;
     int strip_length = -1;
     int device_id = 0;
+    int discovery_port = -1;
+    std::string discovery_host = "127.0.0.1";
+    bool discovery_host_set = false;
+    std::string device_uid;
 };
 
 static bool parse_args(int argc, char** argv, Args& args)
@@ -257,6 +280,13 @@ static bool parse_args(int argc, char** argv, Args& args)
             args.strip_length = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--device-id") == 0 && i + 1 < argc) {
             args.device_id = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--discovery-port") == 0 && i + 1 < argc) {
+            args.discovery_port = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--discovery-host") == 0 && i + 1 < argc) {
+            args.discovery_host = argv[++i];
+            args.discovery_host_set = true;
+        } else if (strcmp(argv[i], "--device-uid") == 0 && i + 1 < argc) {
+            args.device_uid = argv[++i];
         } else {
             fprintf(stderr, "Unknown argument: %s\n", argv[i]);
             return false;
@@ -266,16 +296,61 @@ static bool parse_args(int argc, char** argv, Args& args)
     if (args.tcp_port < 0 || args.frame_port < 0 || args.strip_length < 1) {
         fprintf(stderr,
                 "Usage: %s --tcp-port PORT --frame-port PORT --strip-length N "
-                "[--device-id ID]\n",
+                "[--device-id ID] [--discovery-port PORT] [--discovery-host HOST] "
+                "[--device-uid UID]\n",
                 argv[0]);
         return false;
     }
+
+    // tcp_port == 0 is valid (ephemeral bind), but other ports must be 1-65535
+    if (args.tcp_port > 65535) {
+        fprintf(stderr, "--tcp-port must be 0-65535\n");
+        return false;
+    }
+    if (args.frame_port < 1 || args.frame_port > 65535) {
+        fprintf(stderr, "--frame-port must be 1-65535\n");
+        return false;
+    }
+
+    bool have_disc_port = args.discovery_port > 0;
+    bool have_uid = !args.device_uid.empty();
+    bool have_disc_host = args.discovery_host_set;
+
+    if (have_disc_port && (args.discovery_port > 65535)) {
+        fprintf(stderr, "--discovery-port must be 1-65535\n");
+        return false;
+    }
+    if (have_disc_host && !(have_disc_port && have_uid)) {
+        fprintf(stderr,
+                "--discovery-host requires --discovery-port and --device-uid\n");
+        return false;
+    }
+    if (have_disc_port != have_uid) {
+        fprintf(stderr, "--discovery-port and --device-uid must be provided together\n");
+        return false;
+    }
+
     return true;
 }
 
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
+
+// Monotonic clock in microseconds
+static int64_t now_us()
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
+}
+
+static void send_hello(int udp_fd, const sockaddr_in& dest,
+                       const std::vector<uint8_t>& pkt)
+{
+    sendto(udp_fd, pkt.data(), pkt.size(), 0,
+           (const sockaddr*)&dest, sizeof(dest));
+}
 
 int main(int argc, char** argv)
 {
@@ -289,7 +364,7 @@ int main(int argc, char** argv)
     auto device = std::make_unique<ESPSimulated>((uint16_t)args.strip_length);
     TransportState state{(uint16_t)args.device_id};
 
-    // TCP server socket
+    // TCP server socket (non-blocking for accept)
     int tcp_server = socket(AF_INET, SOCK_STREAM, 0);
     if (tcp_server < 0) { perror("socket(tcp)"); return 1; }
 
@@ -316,9 +391,28 @@ int main(int argc, char** argv)
         perror("listen"); close(tcp_server); return 1;
     }
 
-    // UDP socket (unbound, for sendto)
+    // Set TCP server non-blocking so we can interleave accept with HELLO sends
+    fcntl(tcp_server, F_SETFL, fcntl(tcp_server, F_GETFL) | O_NONBLOCK);
+
+    // UDP socket (unbound, for sendto frames + optionally HELLO)
     int udp_fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (udp_fd < 0) { perror("socket(udp)"); close(tcp_server); return 1; }
+
+    // Discovery setup
+    bool discovery_enabled = args.discovery_port > 0 && !args.device_uid.empty();
+    std::vector<uint8_t> hello_pkt;
+    sockaddr_in discovery_addr{};
+    if (discovery_enabled) {
+        opt = 1;
+        setsockopt(udp_fd, SOL_SOCKET, SO_BROADCAST, &opt, sizeof(opt));
+        hello_pkt = build_hello_packet(args.device_uid, (uint16_t)args.tcp_port);
+        discovery_addr.sin_family = AF_INET;
+        discovery_addr.sin_port = htons((uint16_t)args.discovery_port);
+        if (inet_pton(AF_INET, args.discovery_host.c_str(), &discovery_addr.sin_addr) != 1) {
+            fprintf(stderr, "invalid --discovery-host: %s\n", args.discovery_host.c_str());
+            close(udp_fd); close(tcp_server); return 1;
+        }
+    }
 
     // TCP read buffer (grows dynamically for large blobs)
     std::vector<uint8_t> tcp_buf(TCP_BUF_INITIAL);
@@ -326,18 +420,38 @@ int main(int argc, char** argv)
 
     printf("network_sim: listening on tcp=%d, frames->udp=%d, strip=%d, device_id=%d\n",
            args.tcp_port, args.frame_port, args.strip_length, args.device_id);
+    if (discovery_enabled)
+        printf("network_sim: discovery -> %s:%d uid=%s\n",
+               args.discovery_host.c_str(), args.discovery_port, args.device_uid.c_str());
     fflush(stdout);
+
+    static constexpr int64_t HELLO_INTERVAL_US = 500000; // 500ms
+    int64_t last_hello_us = 0;
 
     while (g_running) {
         printf("Waiting for controller on port %d...\n", args.tcp_port);
         fflush(stdout);
 
-        int tcp_fd = accept(tcp_server, nullptr, nullptr);
-        if (tcp_fd < 0) {
-            if (!g_running) break;
-            perror("accept");
-            continue;
+        // Non-blocking accept loop — interleave with HELLO sends
+        int tcp_fd = -1;
+        while (g_running && tcp_fd < 0) {
+            tcp_fd = accept(tcp_server, nullptr, nullptr);
+            if (tcp_fd < 0) {
+                if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                    perror("accept");
+                }
+                // Send HELLO if discovery is enabled
+                if (discovery_enabled) {
+                    int64_t now = now_us();
+                    if (now - last_hello_us >= HELLO_INTERVAL_US) {
+                        send_hello(udp_fd, discovery_addr, hello_pkt);
+                        last_hello_us = now;
+                    }
+                }
+                usleep(100000); // 100ms between accept attempts
+            }
         }
+        if (!g_running) break;
 
         printf("Controller connected.\n");
         fflush(stdout);
@@ -363,6 +477,15 @@ int main(int argc, char** argv)
 
             device->tick_once();
             send_frames(udp_fd, controller_addr, state, *device);
+
+            // Continue sending HELLOs during active connection (enables re-discovery)
+            if (discovery_enabled) {
+                int64_t now = now_us();
+                if (now - last_hello_us >= HELLO_INTERVAL_US) {
+                    send_hello(udp_fd, discovery_addr, hello_pkt);
+                    last_hello_us = now;
+                }
+            }
 
             usleep(20000); // ~50fps
         }

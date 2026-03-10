@@ -634,6 +634,70 @@ class TestCapability:
 # =========================================================================
 
 
+# =========================================================================
+# 11. update_address
+# =========================================================================
+
+
+class TestUpdateAddress:
+    def test_no_change_is_noop(self, endpoint, receiver):
+        dev = _make_device(endpoint, receiver)
+        assert _load_device(dev, endpoint)
+        assert dev._connected
+
+        # Same address — should not disconnect
+        dev.update_address('127.0.0.1', endpoint.tcp_port)
+        assert dev._connected
+
+    def test_update_while_disconnected(self, receiver):
+        dev = NetworkDevice(
+            device_id=1, host='', tcp_port=0,
+            device_type='sim', udp_receiver=receiver,
+        )
+        assert not dev._connected
+        dev.update_address('127.0.0.1', 9999)
+        assert dev._host == '127.0.0.1'
+        assert dev._tcp_port == 9999
+
+    def test_update_while_connected_disconnects(self, endpoint, receiver):
+        dev = _make_device(endpoint, receiver)
+        assert _load_device(dev, endpoint)
+        assert dev._connected
+
+        dev.update_address('192.168.1.1', 5555)
+        assert not dev._connected
+        assert dev._host == '192.168.1.1'
+        assert dev._tcp_port == 5555
+
+
+# =========================================================================
+# 12. Unresolved address
+# =========================================================================
+
+
+class TestUnresolvedAddress:
+    def test_ensure_connected_skips_empty_host(self, receiver):
+        dev = NetworkDevice(
+            device_id=1, host='', tcp_port=9001,
+            device_type='sim', udp_receiver=receiver,
+        )
+        assert not dev.ensure_connected()
+
+    def test_ensure_connected_skips_zero_port(self, receiver):
+        dev = NetworkDevice(
+            device_id=1, host='127.0.0.1', tcp_port=0,
+            device_type='sim', udp_receiver=receiver,
+        )
+        assert not dev.ensure_connected()
+
+    def test_ensure_connected_skips_both_unresolved(self, receiver):
+        dev = NetworkDevice(
+            device_id=1, host='', tcp_port=0,
+            device_type='sim', udp_receiver=receiver,
+        )
+        assert not dev.ensure_connected()
+
+
 class TestPollOrdering:
     def test_no_poll_no_frames(self, endpoint, receiver):
         dev = _make_device(endpoint, receiver, device_id=1)

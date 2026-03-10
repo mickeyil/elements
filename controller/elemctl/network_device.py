@@ -155,11 +155,24 @@ class NetworkDevice:
         """Whether TCP connection is currently established."""
         return self._connected
 
+    def update_address(self, host: str, tcp_port: int) -> bool:
+        """Update host/port from discovery. Disconnects if address changed.
+        Returns True if the address actually changed."""
+        if host == self._host and tcp_port == self._tcp_port:
+            return False
+        if self._connected:
+            self._disconnect()
+        self._host = host
+        self._tcp_port = tcp_port
+        return True
+
     def ensure_connected(self) -> bool:
         """Attempt to establish TCP connection if not already connected.
         Returns True if connected (already or newly)."""
         if self._connected:
             return True
+        if not self._has_address():
+            return False
         return self._connect()
 
     def close(self) -> None:
@@ -170,6 +183,9 @@ class NetworkDevice:
     # ------------------------------------------------------------------
     # Private
     # ------------------------------------------------------------------
+
+    def _has_address(self) -> bool:
+        return bool(self._host) and self._tcp_port != 0
 
     def _connect(self) -> bool:
         try:

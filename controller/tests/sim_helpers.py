@@ -65,19 +65,29 @@ class SimProcess:
 
 
 def start_sim(tcp_port: int, frame_port: int, strip_length: int,
-              device_id: int) -> SimProcess:
+              device_id: int, *, discovery_port: int | None = None,
+              discovery_host: str | None = None,
+              device_uid: str | None = None) -> SimProcess:
     """Start a network_sim subprocess and wait for readiness."""
     if not NETWORK_SIM_BIN.exists():
         pytest.skip(f'network_sim not built at {NETWORK_SIM_BIN}')
 
+    cmd = [
+        str(NETWORK_SIM_BIN),
+        '--tcp-port', str(tcp_port),
+        '--frame-port', str(frame_port),
+        '--strip-length', str(strip_length),
+        '--device-id', str(device_id),
+    ]
+    if discovery_port is not None:
+        cmd += ['--discovery-port', str(discovery_port)]
+    if discovery_host is not None:
+        cmd += ['--discovery-host', discovery_host]
+    if device_uid is not None:
+        cmd += ['--device-uid', device_uid]
+
     proc = subprocess.Popen(
-        [
-            str(NETWORK_SIM_BIN),
-            '--tcp-port', str(tcp_port),
-            '--frame-port', str(frame_port),
-            '--strip-length', str(strip_length),
-            '--device-id', str(device_id),
-        ],
+        cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )

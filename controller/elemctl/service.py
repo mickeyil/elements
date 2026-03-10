@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import time
 
-from .config import Config
+from .config import Config, DeviceConfig
 from .controller import (
     Controller,
     ControllerEvent,
@@ -17,6 +17,7 @@ from .controller import (
     ProgramFrame,
     StripConfig,
 )
+from .discovery import DiscoveryReceiver
 from .network_device import NetworkDevice
 from .udp_receiver import UdpFrameReceiver
 from .uds_wire import encode_frame, encode_json
@@ -34,6 +35,7 @@ class ControllerService:
         config: Config,
         receiver_factory=UdpFrameReceiver,
         device_factory=NetworkDevice,
+        discovery_factory=DiscoveryReceiver,
         clock=time.monotonic_ns,
     ):
         self._config = config
@@ -65,6 +67,16 @@ class ControllerService:
             for dc, dev in zip(config.devices, self._devices)
         ]
         self._controller = Controller(self._strips, clock=clock)
+
+        # Discovery (optional)
+        self._discovery = None
+        self._uid_to_device: dict[str, tuple[DeviceConfig, object]] = {}
+        if config.discovery_port is not None:
+            self._discovery = discovery_factory(config.discovery_port)
+            self._uid_to_device = {
+                dc.device_uid: (dc, dev)
+                for dc, dev in zip(config.devices, self._devices)
+            }
 
         # Probe throttle: device_id → last probe time (monotonic_ns)
         self._last_probe_ns: dict[int, int] = {}
@@ -151,6 +163,7 @@ class ControllerService:
         Returns (json_messages, frame_messages) as pre-encoded UDS bytes.
         """
         self._receiver.poll()
+        self._poll_discovery()
         self._controller.tick_once()
 
         # Drain controller events first (before probing mutates connectivity)
@@ -245,6 +258,8 @@ class ControllerService:
         for dev in self._devices:
             dev.close()
         self._receiver.close()
+        if self._discovery is not None:
+            self._discovery.close()
 
     # ------------------------------------------------------------------
     # Private
@@ -256,6 +271,21 @@ class ControllerService:
 
     def _iter_devices(self):
         return zip(self._device_configs, self._devices)
+
+    def _poll_discovery(self) -> None:
+        if self._discovery is None:
+            return
+        self._discovery.poll()
+        for uid, host, tcp_port in self._discovery.drain_discoveries():
+            entry = self._uid_to_device.get(uid)
+            if entry is None:
+                log.debug('discovery: unknown uid %r from %s:%d', uid, host, tcp_port)
+                continue
+            dc, dev = entry
+            changed = dev.update_address(host, tcp_port)
+            if changed:
+                # Clear probe throttle so _probe_devices() connects immediately
+                self._last_probe_ns.pop(dc.device_id, None)
 
     def _probe_devices(self, *, ignore_throttle: bool, sync_baseline: bool) -> None:
         now = self._clock()

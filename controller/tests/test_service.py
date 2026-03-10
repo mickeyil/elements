@@ -783,6 +783,204 @@ class TestUdsReconnect:
             client2.close()
 
 
+# =========================================================================
+# Discovery integration tests
+# =========================================================================
+
+
+class _FakeDiscovery:
+    """Fake DiscoveryReceiver for service tests."""
+
+    def __init__(self, port):
+        self._pending: list[tuple[str, str, int]] = []
+
+    def inject(self, uid: str, host: str, tcp_port: int) -> None:
+        self._pending.append((uid, host, tcp_port))
+
+    def poll(self) -> None:
+        pass
+
+    def drain_discoveries(self) -> list[tuple[str, str, int]]:
+        out = self._pending[:]
+        self._pending.clear()
+        return out
+
+    def close(self) -> None:
+        pass
+
+
+def _make_discovery_service(n_devices=2, fake_devices=None):
+    """Create a ControllerService with discovery enabled."""
+    devices = []
+    for i in range(n_devices):
+        devices.append(DeviceConfig(
+            device_id=i + 1,
+            device_uid=f'sim-{i + 1}',
+            device_type='sim',
+            host='',
+            tcp_port=0,
+            strip_id=f'strip_{chr(ord("a") + i)}',
+            length=5,
+        ))
+    config = Config(frame_port=1, devices=devices, discovery_port=9999)
+    if fake_devices is None:
+        fake_devices = [_FakeDevice() for _ in range(n_devices)]
+        for fd in fake_devices:
+            fd.is_connected = False
+            fd.ensure_connected = lambda: False
+    fake_disc = _FakeDiscovery(9999)
+    svc = ControllerService(
+        config,
+        receiver_factory=_NoopReceiver,
+        device_factory=_make_fake_factory(fake_devices),
+        discovery_factory=lambda port: fake_disc,
+    )
+    return svc, fake_devices, fake_disc
+
+
+class TestDiscoveryIntegration:
+    def test_discovery_updates_device_address(self):
+        fakes = [_FakeDevice()]
+        fakes[0].is_connected = False
+        fakes[0].ensure_connected = lambda: False
+        address_updates = []
+        fakes[0].update_address = lambda h, p: address_updates.append((h, p))
+
+        svc, _, disc = _make_discovery_service(n_devices=1, fake_devices=fakes)
+        disc.inject('sim-1', '10.0.0.1', 8001)
+        svc.tick_once()
+        assert len(address_updates) == 1
+        assert address_updates[0] == ('10.0.0.1', 8001)
+
+    def test_discovery_unknown_uid_ignored(self):
+        fakes = [_FakeDevice()]
+        fakes[0].is_connected = False
+        fakes[0].ensure_connected = lambda: False
+        fakes[0].update_address = lambda h, p: None
+
+        svc, _, disc = _make_discovery_service(n_devices=1, fake_devices=fakes)
+        disc.inject('unknown-device', '10.0.0.1', 8001)
+        svc.tick_once()  # Should not raise
+
+    def test_service_survives_unresolved_startup_then_discovery(self):
+        """Service ticks safely with unresolved devices; discovery updates address."""
+        fakes = [_FakeDevice()]
+        fakes[0].is_connected = False
+        fakes[0].ensure_connected = lambda: False
+        fakes[0]._host = ''
+        fakes[0]._tcp_port = 0
+
+        def update_address(host, tcp_port):
+            fakes[0]._host = host
+            fakes[0]._tcp_port = tcp_port
+
+        fakes[0].update_address = update_address
+
+        svc, _, disc = _make_discovery_service(n_devices=1, fake_devices=fakes)
+
+        # Tick without discovery — service must not crash
+        svc.tick_once()
+
+        # Now inject discovery
+        disc.inject('sim-1', '127.0.0.1', 9001)
+        svc.tick_once()
+        assert fakes[0]._host == '127.0.0.1'
+        assert fakes[0]._tcp_port == 9001
+
+    def test_discovery_triggers_reconnect(self):
+        """Discover same UID with new address triggers address update."""
+        fakes = [_FakeDevice()]
+        fakes[0].is_connected = True
+        fakes[0]._host = '10.0.0.1'
+        fakes[0]._tcp_port = 8001
+        address_updates = []
+
+        def update_address(host, tcp_port):
+            address_updates.append((host, tcp_port))
+
+        fakes[0].update_address = update_address
+
+        svc, _, disc = _make_discovery_service(n_devices=1, fake_devices=fakes)
+
+        # Discover with a different address
+        disc.inject('sim-1', '10.0.0.2', 8002)
+        svc.tick_once()
+        assert len(address_updates) == 1
+        assert address_updates[0] == ('10.0.0.2', 8002)
+
+    def test_discovery_clears_probe_throttle(self):
+        """After discovery updates address, probe should not be throttled."""
+        fakes = [_FakeDevice()]
+        fakes[0].is_connected = False
+        probe_calls = []
+        current_addr = ['', 0]
+
+        def tracking_ensure():
+            probe_calls.append(1)
+            return False  # stay disconnected
+
+        def tracking_update(h, p):
+            if h == current_addr[0] and p == current_addr[1]:
+                return False
+            current_addr[0] = h
+            current_addr[1] = p
+            return True
+
+        fakes[0].ensure_connected = tracking_ensure
+        fakes[0].update_address = tracking_update
+
+        svc, _, disc = _make_discovery_service(n_devices=1, fake_devices=fakes)
+
+        # First tick probes (1 call), sets throttle
+        svc.tick_once()
+        assert len(probe_calls) == 1
+
+        # Second tick without discovery — throttled, no probe
+        svc.tick_once()
+        assert len(probe_calls) == 1
+
+        # Discovery arrives with new address — should clear throttle
+        disc.inject('sim-1', '127.0.0.1', 9001)
+        svc.tick_once()
+        # Probe should run again in the same tick
+        assert len(probe_calls) == 2
+
+    def test_repeated_hello_does_not_defeat_throttle(self):
+        """Identical HELLOs must not clear probe throttle."""
+        fakes = [_FakeDevice()]
+        fakes[0].is_connected = False
+        probe_calls = []
+        current_addr = ['', 0]
+
+        def tracking_ensure():
+            probe_calls.append(1)
+            return False
+
+        def tracking_update(h, p):
+            if h == current_addr[0] and p == current_addr[1]:
+                return False
+            current_addr[0] = h
+            current_addr[1] = p
+            return True
+
+        fakes[0].ensure_connected = tracking_ensure
+        fakes[0].update_address = tracking_update
+
+        svc, _, disc = _make_discovery_service(n_devices=1, fake_devices=fakes)
+
+        # First HELLO — new address, clears throttle, probes
+        disc.inject('sim-1', '127.0.0.1', 9001)
+        svc.tick_once()
+        assert len(probe_calls) == 1
+
+        # Second identical HELLO — should NOT clear throttle
+        disc.inject('sim-1', '127.0.0.1', 9001)
+        svc.tick_once()
+        assert len(probe_calls) == 1, (
+            'repeated identical HELLO should not defeat probe throttle'
+        )
+
+
 class TestUdsFrameDelivery:
     def test_frame_delivery(self, tmp_path):
         """After load+play, the client receives KIND_FRAME binary messages."""
