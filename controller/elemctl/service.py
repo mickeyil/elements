@@ -7,6 +7,7 @@ conversion. The UDS server (serve.py) delegates all logic here.
 from __future__ import annotations
 
 import logging
+import math
 import time
 
 from .config import Config, DeviceConfig
@@ -103,6 +104,9 @@ class ControllerService:
             'status': self._cmd_status,
             'load': self._cmd_load,
             'play': self._cmd_play,
+            'pause': self._cmd_pause,
+            'seek': self._cmd_seek,
+            'debug_seek': self._cmd_debug_seek,
             'stop': self._cmd_stop,
             'shutdown': self._cmd_shutdown,
         }.get(action)
@@ -143,6 +147,18 @@ class ControllerService:
 
     def _cmd_play(self, cmd: dict) -> dict:
         self._controller.play()
+        return {}
+
+    def _cmd_pause(self, cmd: dict) -> dict:
+        self._controller.pause()
+        return {}
+
+    def _cmd_seek(self, cmd: dict) -> dict:
+        self._controller.seek(self._require_t_rel(cmd))
+        return {}
+
+    def _cmd_debug_seek(self, cmd: dict) -> dict:
+        self._controller.debug_seek(self._require_t_rel(cmd))
         return {}
 
     def _cmd_stop(self, cmd: dict) -> dict:
@@ -209,6 +225,7 @@ class ControllerService:
                 'epoch': ctrl.epoch,
                 'playback_state': ctrl.state.name.lower(),
                 'duration': ctrl.duration,
+                'current_t_rel': ctrl.current_t_rel,
                 'safe_intervals': [list(iv) for iv in ctrl.safe_intervals],
                 'strips': [
                     {'name': sc.strip_id, 'length': sc.length}
@@ -348,6 +365,18 @@ class ControllerService:
                 'message': evt.message,
             }
         return {'type': 'event', 'event': 'unknown'}
+
+    @staticmethod
+    def _require_t_rel(cmd: dict) -> float:
+        t_rel = cmd.get('t_rel')
+        if t_rel is None:
+            raise ValueError("missing 't_rel' field")
+        if isinstance(t_rel, bool):
+            raise ValueError("'t_rel' must be a finite number")
+        value = float(t_rel)
+        if not math.isfinite(value):
+            raise ValueError("'t_rel' must be a finite number")
+        return value
 
     @staticmethod
     def _error_reply(cmd_id, message: str) -> dict:

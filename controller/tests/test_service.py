@@ -71,9 +71,12 @@ class _FakeDevice:
     def jump(self, t0_ns, t_rel, gen):
         self._t0_ns = t0_ns
         if self._state != DeviceState.PLAYING:
+            self._paused_t_rel = t_rel
             self._state = DeviceState.PAUSED
 
     def pause(self, now_ns):
+        if self._state == DeviceState.PLAYING:
+            self._paused_t_rel = (now_ns - self._t0_ns) / 1e9
         self._state = DeviceState.PAUSED
 
     def resume(self, t0_ns):
@@ -92,6 +95,8 @@ class _FakeDevice:
     def current_t_rel(self, now_ns):
         if self._state == DeviceState.PLAYING:
             return (now_ns - self._t0_ns) / 1e9
+        if self._state == DeviceState.PAUSED:
+            return getattr(self, '_paused_t_rel', 0.0)
         return 0.0
 
     def drain_frames(self):
@@ -101,7 +106,8 @@ class _FakeDevice:
         return False
 
     def debug_seek(self, t_rel, now_ns):
-        pass
+        self._paused_t_rel = t_rel
+        self._state = DeviceState.PAUSED
 
     def ensure_connected(self):
         self.ensure_connected_calls += 1
@@ -191,15 +197,25 @@ def _make_config(n_devices=1):
     return Config(frame_port=1, devices=devices)
 
 
-def _make_service(n_devices=1, fake_devices=None):
+class _FakeClock:
+    def __init__(self):
+        self.now = 0
+
+    def __call__(self):
+        return self.now
+
+
+def _make_service(n_devices=1, fake_devices=None, clock=None):
     config = _make_config(n_devices)
     if fake_devices is None:
         fake_devices = [_FakeDevice() for _ in range(n_devices)]
-    return ControllerService(
-        config,
+    kwargs = dict(
         receiver_factory=_NoopReceiver,
         device_factory=_make_fake_factory(fake_devices),
-    ), fake_devices
+    )
+    if clock is not None:
+        kwargs['clock'] = clock
+    return ControllerService(config, **kwargs), fake_devices
 
 
 # =========================================================================
@@ -979,6 +995,149 @@ class TestDiscoveryIntegration:
         assert len(probe_calls) == 1, (
             'repeated identical HELLO should not defeat probe throttle'
         )
+
+
+class _DebugFakeDevice(_FakeDevice):
+    """Fake device that supports debug_seek."""
+
+    def supports_debug_seek(self):
+        return True
+
+
+class TestHandlePause:
+    def test_pause_happy_path(self):
+        clock = _FakeClock()
+        svc, _ = _make_service(clock=clock)
+        svc.handle_cmd({
+            'id': 1, 'cmd': 'load',
+            'source': _SIMPLE_DSL, 'beat': 1.0, 'duration': 0.5,
+        })
+        svc.handle_cmd({'id': 2, 'cmd': 'play'})
+        clock.now += 100_000_000  # 100 ms
+        svc.tick_once()
+
+        reply = svc.handle_cmd({'id': 3, 'cmd': 'pause'})
+        assert reply['ok'] is True
+
+        snap = svc.build_snapshot()
+        assert snap['session']['playback_state'] == 'paused'
+        assert snap['session']['current_t_rel'] == pytest.approx(0.1)
+
+    def test_pause_emits_state_event(self):
+        clock = _FakeClock()
+        svc, _ = _make_service(clock=clock)
+        svc.handle_cmd({
+            'id': 1, 'cmd': 'load',
+            'source': _SIMPLE_DSL, 'beat': 1.0, 'duration': 0.5,
+        })
+        svc.handle_cmd({'id': 2, 'cmd': 'play'})
+        clock.now += 100_000_000
+        svc.tick_once()
+
+        svc.handle_cmd({'id': 3, 'cmd': 'pause'})
+        json_msgs, _ = svc.tick_once()
+        events = _decode_json_msgs(json_msgs)
+        paused = [
+            e for e in events
+            if e.get('event') == 'state' and e.get('state') == 'paused'
+        ]
+        assert len(paused) == 1
+
+
+# DSL with a gap so the compiler produces safe intervals for seek tests
+_GAP_DSL = """\
+from elements.dsl import strip, spark, sec
+s = strip('test', length=5)
+sp = spark(color='white', fade=1.0)
+sp.schedule(s.pixels('0-4'), at=sec(0.5), duration=sec(0.5))
+"""
+
+
+class TestHandleSeek:
+    def test_seek_missing_t_rel(self):
+        svc, _ = _make_service()
+        reply = svc.handle_cmd({'id': 1, 'cmd': 'seek'})
+        assert reply['ok'] is False
+        assert 't_rel' in reply['error']
+
+    def test_seek_rejects_bool(self):
+        svc, _ = _make_service()
+        reply = svc.handle_cmd({'id': 1, 'cmd': 'seek', 't_rel': True})
+        assert reply['ok'] is False
+        assert 'finite' in reply['error']
+
+    def test_seek_rejects_nan(self):
+        svc, _ = _make_service()
+        reply = svc.handle_cmd({'id': 1, 'cmd': 'seek', 't_rel': float('nan')})
+        assert reply['ok'] is False
+        assert 'finite' in reply['error']
+
+    def test_seek_rejects_inf(self):
+        svc, _ = _make_service()
+        reply = svc.handle_cmd({'id': 1, 'cmd': 'seek', 't_rel': float('inf')})
+        assert reply['ok'] is False
+        assert 'finite' in reply['error']
+
+    def test_seek_rejects_invalid_string(self):
+        svc, _ = _make_service()
+        reply = svc.handle_cmd({'id': 1, 'cmd': 'seek', 't_rel': 'abc'})
+        assert reply['ok'] is False
+
+    def test_seek_from_loaded_updates_snapshot(self):
+        svc, _ = _make_service()
+        # _GAP_DSL has safe_interval [0.0, 0.5); seek to 0.75 snaps to 0.0
+        svc.handle_cmd({
+            'id': 1, 'cmd': 'load',
+            'source': _GAP_DSL, 'beat': 1.0, 'duration': 1.0,
+        })
+        svc.tick_once()
+
+        reply = svc.handle_cmd({'id': 2, 'cmd': 'seek', 't_rel': 0.75})
+        assert reply['ok'] is True
+
+        snap = svc.build_snapshot()
+        assert snap['session']['playback_state'] == 'paused'
+        assert snap['session']['epoch'] == 1  # advanced from initial 0
+        assert snap['session']['current_t_rel'] == pytest.approx(0.0)
+
+
+class TestHandleDebugSeek:
+    def test_debug_seek_missing_t_rel(self):
+        svc, _ = _make_service()
+        reply = svc.handle_cmd({'id': 1, 'cmd': 'debug_seek'})
+        assert reply['ok'] is False
+        assert 't_rel' in reply['error']
+
+    def test_debug_seek_from_loaded_updates_snapshot(self):
+        fakes = [_DebugFakeDevice()]
+        svc, _ = _make_service(fake_devices=fakes)
+        svc.handle_cmd({
+            'id': 1, 'cmd': 'load',
+            'source': _SIMPLE_DSL, 'beat': 1.0, 'duration': 0.5,
+        })
+        svc.tick_once()
+
+        reply = svc.handle_cmd({'id': 2, 'cmd': 'debug_seek', 't_rel': 0.2})
+        assert reply['ok'] is True
+
+        snap = svc.build_snapshot()
+        assert snap['session']['playback_state'] == 'paused'
+        assert snap['session']['current_t_rel'] == pytest.approx(0.2)
+
+    def test_debug_seek_unsupported_emits_error(self):
+        svc, _ = _make_service()  # default _FakeDevice, supports_debug_seek=False
+        svc.handle_cmd({
+            'id': 1, 'cmd': 'load',
+            'source': _SIMPLE_DSL, 'beat': 1.0, 'duration': 0.5,
+        })
+        svc.handle_cmd({'id': 2, 'cmd': 'play'})
+        svc.tick_once()
+
+        svc.handle_cmd({'id': 3, 'cmd': 'debug_seek', 't_rel': 0.1})
+        json_msgs, _ = svc.tick_once()
+        events = _decode_json_msgs(json_msgs)
+        errors = [e for e in events if e.get('event') == 'error']
+        assert len(errors) >= 1
 
 
 class TestUdsFrameDelivery:
