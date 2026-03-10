@@ -69,6 +69,12 @@ class ControllerService:
         # Probe throttle: device_id → last probe time (monotonic_ns)
         self._last_probe_ns: dict[int, int] = {}
 
+        # Baseline connectivity for transition detection
+        self._prev_connected: dict[int, bool] = {
+            dc.device_id: self._is_connected(dev)
+            for dc, dev in zip(config.devices, self._devices)
+        }
+
     # ------------------------------------------------------------------
     # Command handling
     # ------------------------------------------------------------------
@@ -147,20 +153,26 @@ class ControllerService:
         self._receiver.poll()
         self._controller.tick_once()
 
-        # Probe disconnected devices (throttled)
-        now = self._clock()
-        for i, dev in enumerate(self._devices):
-            dc = self._device_configs[i]
-            if not getattr(dev, 'is_connected', True):
-                last = self._last_probe_ns.get(dc.device_id, 0)
-                if now - last >= _PROBE_INTERVAL_NS:
-                    self._last_probe_ns[dc.device_id] = now
-                    dev.ensure_connected()
-
-        # Convert events
+        # Drain controller events first (before probing mutates connectivity)
         json_msgs: list[bytes] = []
         for evt in self._controller.drain_events():
             json_msgs.append(encode_json(self._event_to_dict(evt)))
+
+        self._probe_devices(ignore_throttle=False, sync_baseline=False)
+
+        # Detect connectivity transitions
+        for dc, dev in self._iter_devices():
+            connected = self._is_connected(dev)
+            if connected != self._prev_connected[dc.device_id]:
+                self._prev_connected[dc.device_id] = connected
+                json_msgs.append(encode_json({
+                    'type': 'event',
+                    'event': 'device_status',
+                    'device_id': dc.device_id,
+                    'device_uid': dc.device_uid,
+                    'strip': dc.strip_id,
+                    'connected': connected,
+                }))
 
         # Convert program frames
         frame_msgs: list[bytes] = []
@@ -192,9 +204,8 @@ class ControllerService:
             }
 
         devices = []
-        for i, dc in enumerate(self._device_configs):
-            dev = self._devices[i]
-            connected = getattr(dev, 'is_connected', True)
+        for dc, dev in self._iter_devices():
+            connected = self._is_connected(dev)
             devices.append({
                 'device_id': dc.device_id,
                 'device_uid': dc.device_uid,
@@ -207,15 +218,15 @@ class ControllerService:
             'type': 'event',
             'event': 'snapshot',
             'protocol_version': 1,
+            'online_count': sum(1 for d in devices if d['connected']),
+            'expected_count': len(self._devices),
             'session': session,
             'devices': devices,
         }
 
     def probe_all(self) -> None:
         """Probe all disconnected devices immediately (ignores throttle)."""
-        for dev in self._devices:
-            if not getattr(dev, 'is_connected', True):
-                dev.ensure_connected()
+        self._probe_devices(ignore_throttle=True, sync_baseline=True)
 
     # ------------------------------------------------------------------
     # Properties
@@ -238,6 +249,27 @@ class ControllerService:
     # ------------------------------------------------------------------
     # Private
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _is_connected(dev) -> bool:
+        return getattr(dev, 'is_connected', True)
+
+    def _iter_devices(self):
+        return zip(self._device_configs, self._devices)
+
+    def _probe_devices(self, *, ignore_throttle: bool, sync_baseline: bool) -> None:
+        now = self._clock()
+        for dc, dev in self._iter_devices():
+            if self._is_connected(dev):
+                continue
+            if not ignore_throttle:
+                last = self._last_probe_ns.get(dc.device_id, 0)
+                if now - last < _PROBE_INTERVAL_NS:
+                    continue
+                self._last_probe_ns[dc.device_id] = now
+            dev.ensure_connected()
+            if sync_baseline:
+                self._prev_connected[dc.device_id] = self._is_connected(dev)
 
     def _compile(self, source: str, beat: float, duration: float):
         from elements.dsl import _builder, build_manifest

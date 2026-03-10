@@ -276,34 +276,18 @@ class TestHandleLoad:
 
 
 class TestHandlePlay:
-    def test_play_after_load(self):
+    def test_play_reply_and_snapshot(self):
         svc, _ = _make_service()
         svc.handle_cmd({
             'id': 1, 'cmd': 'load',
             'source': _SIMPLE_DSL, 'beat': 1.0, 'duration': 0.5,
         })
-        # Drain events from load
         svc.tick_once()
 
         reply = svc.handle_cmd({'id': 2, 'cmd': 'play'})
         assert reply['ok'] is True
 
-        json_msgs, _ = svc.tick_once()
-        # Decode events and verify state→playing is present
-        events = []
-        for msg in json_msgs:
-            reader = UdsReader()
-            reader.feed(msg)
-            for kind, payload in reader.messages():
-                if kind == KIND_JSON:
-                    events.append(parse_json_payload(payload))
-
-        state_events = [
-            e for e in events
-            if e.get('event') == 'state' and e.get('state') == 'playing'
-        ]
-        assert len(state_events) >= 1
-
+        svc.tick_once()
         snap = svc.build_snapshot()
         assert snap['session']['playback_state'] == 'playing'
 
@@ -358,8 +342,6 @@ class TestTickProbesDisconnected:
         fakes = [_FakeDevice()]
         fakes[0].is_connected = False
         # Keep it disconnected so it keeps trying
-        original_ensure = fakes[0].ensure_connected
-
         def stay_disconnected():
             fakes[0].ensure_connected_calls += 1
             return False
@@ -375,36 +357,167 @@ class TestTickProbesDisconnected:
         assert fakes[0].ensure_connected_calls == 1
 
 
-class TestStatusReflectsConnectivityChange:
-    def test_disconnected_then_connected(self):
+class TestPresenceSnapshot:
+    def test_snapshot_aggregate_all_connected(self):
+        svc, _ = _make_service(n_devices=2)
+        snap = svc.build_snapshot()
+        assert snap['online_count'] == 2
+        assert snap['expected_count'] == 2
+        # Consistency: online_count matches per-device connected flags
+        assert snap['online_count'] == sum(
+            1 for d in snap['devices'] if d['connected']
+        )
+
+    def test_snapshot_aggregate_one_disconnected(self):
+        fakes = [_FakeDevice(), _FakeDevice()]
+        fakes[1].is_connected = False
+        svc, _ = _make_service(n_devices=2, fake_devices=fakes)
+        snap = svc.build_snapshot()
+        assert snap['online_count'] == 1
+        assert snap['expected_count'] == 2
+        assert snap['online_count'] == sum(
+            1 for d in snap['devices'] if d['connected']
+        )
+
+
+def _decode_json_msgs(json_msgs):
+    """Decode list of UDS-encoded bytes into dicts."""
+    events = []
+    for msg in json_msgs:
+        reader = UdsReader()
+        reader.feed(msg)
+        for kind, payload in reader.messages():
+            if kind == KIND_JSON:
+                events.append(parse_json_payload(payload))
+    return events
+
+
+class TestPresenceEvents:
+    def test_offline_to_online_emits_event(self):
         fakes = [_FakeDevice()]
         fakes[0].is_connected = False
         svc, _ = _make_service(fake_devices=fakes)
 
+        # tick_once probes and reconnects (ensure_connected sets is_connected=True)
+        json_msgs, _ = svc.tick_once()
+        events = _decode_json_msgs(json_msgs)
+
+        status_events = [e for e in events if e.get('event') == 'device_status']
+        assert len(status_events) == 1
+        evt = status_events[0]
+        assert evt['connected'] is True
+        assert evt['device_id'] == 1
+        assert evt['device_uid'] == 'sim-1'
+        assert evt['strip'] == 'test'
+
+        # Snapshot stays aligned
         snap = svc.build_snapshot()
-        assert snap['devices'][0]['connected'] is False
+        assert snap['online_count'] == snap['expected_count']
 
-        # Tick probes and connects
-        svc.tick_once()
+    def test_online_to_offline_emits_event(self):
+        fakes = [_FakeDevice()]
+        fakes[0].is_connected = True
+        svc, _ = _make_service(fake_devices=fakes)
+
+        # Device goes offline externally; prevent probe from reconnecting
+        fakes[0].is_connected = False
+        fakes[0].ensure_connected = lambda: False
+        json_msgs, _ = svc.tick_once()
+        events = _decode_json_msgs(json_msgs)
+
+        status_events = [e for e in events if e.get('event') == 'device_status']
+        assert len(status_events) == 1
+        assert status_events[0]['connected'] is False
 
         snap = svc.build_snapshot()
-        assert snap['devices'][0]['connected'] is True
+        assert snap['online_count'] == 0
 
+    def test_no_event_when_stable(self):
+        svc, fakes = _make_service()
+        # All connected at init, stays connected
+        json_msgs, _ = svc.tick_once()
+        events = _decode_json_msgs(json_msgs)
+        assert not any(e.get('event') == 'device_status' for e in events)
 
-class TestTickProducesEvents:
-    def test_events_after_load_play(self):
-        svc, _ = _make_service()
+        json_msgs, _ = svc.tick_once()
+        events = _decode_json_msgs(json_msgs)
+        assert not any(e.get('event') == 'device_status' for e in events)
+
+    def test_event_ordering_controller_first(self):
+        fakes = [_FakeDevice()]
+        fakes[0].is_connected = False
+        svc, _ = _make_service(fake_devices=fakes)
+
+        # Load + play to generate controller events
         svc.handle_cmd({
             'id': 1, 'cmd': 'load',
             'source': _SIMPLE_DSL, 'beat': 1.0, 'duration': 0.5,
         })
         svc.handle_cmd({'id': 2, 'cmd': 'play'})
 
+        # tick_once should drain controller events, then probe, then detect transition
         json_msgs, _ = svc.tick_once()
-        # tick_once returns events generated by play()
-        # (load events were already drained by handle_cmd → Controller.load
-        # emits events, but they're drained by the next tick_once or handle_cmd)
-        assert len(json_msgs) >= 0  # events depend on timing
+        events = _decode_json_msgs(json_msgs)
+
+        # Find positions of controller events vs device_status
+        controller_indices = [
+            i for i, e in enumerate(events)
+            if e.get('event') in ('state', 'session_start')
+        ]
+        status_indices = [
+            i for i, e in enumerate(events)
+            if e.get('event') == 'device_status'
+        ]
+        assert controller_indices, 'expected at least one controller event'
+        assert status_indices, 'expected a device_status event'
+        assert max(controller_indices) < min(status_indices), (
+            'controller events must appear before device_status'
+        )
+
+
+class TestProbeAllBaseline:
+    def test_probe_all_does_not_cause_spurious_event(self):
+        """probe_all() on client connect must not cause a spurious
+        device_status event on the next tick_once()."""
+        fakes = [_FakeDevice()]
+        fakes[0].is_connected = False
+        svc, _ = _make_service(fake_devices=fakes)
+
+        # Simulate what UdsServer does on client connect
+        svc.probe_all()
+
+        # Device is now connected; snapshot should reflect that
+        snap = svc.build_snapshot()
+        assert snap['devices'][0]['connected'] is True
+
+        # Next tick must NOT emit a spurious device_status connected=true
+        json_msgs, _ = svc.tick_once()
+        events = _decode_json_msgs(json_msgs)
+        status_events = [e for e in events if e.get('event') == 'device_status']
+        assert status_events == [], (
+            'probe_all() should sync baseline — no spurious transition event'
+        )
+
+
+class TestTickProducesEvents:
+    def test_play_emits_state_playing(self):
+        svc, _ = _make_service()
+        svc.handle_cmd({
+            'id': 1, 'cmd': 'load',
+            'source': _SIMPLE_DSL, 'beat': 1.0, 'duration': 0.5,
+        })
+        # Drain load events
+        svc.tick_once()
+
+        svc.handle_cmd({'id': 2, 'cmd': 'play'})
+        json_msgs, _ = svc.tick_once()
+        events = _decode_json_msgs(json_msgs)
+
+        playing = [
+            e for e in events
+            if e.get('event') == 'state' and e.get('state') == 'playing'
+        ]
+        assert len(playing) == 1
 
 
 class TestUnknownCommand:
@@ -528,6 +641,7 @@ def uds_service(tmp_path):
 
     server.shutdown()
     thread.join(timeout=3.0)
+    assert not thread.is_alive(), 'server thread did not exit after shutdown'
 
 
 class TestUdsConnectSnapshot:
@@ -573,6 +687,7 @@ class TestUdsConnectSnapshot:
             client.close()
             server.shutdown()
             thread.join(timeout=3.0)
+            assert not thread.is_alive(), 'server thread did not exit'
 
 
 class TestUdsLoadPlayRoundTrip:
@@ -719,3 +834,4 @@ class TestUdsFrameDelivery:
             client.close()
             server.shutdown()
             thread.join(timeout=3.0)
+            assert not thread.is_alive(), 'server thread did not exit'
