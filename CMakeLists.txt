@@ -26,6 +26,9 @@ target_include_directories(elements_core PUBLIC src)
 add_executable(network_sim src/network_sim.cpp)
 target_link_libraries(network_sim elements_core)
 
+add_executable(strip_render src/strip_render.cpp)
+target_link_libraries(strip_render elements_core)
+
 # ---------------------------------------------------------------------------
 # Tests (Catch2, fetched at configure time)
 # ---------------------------------------------------------------------------
