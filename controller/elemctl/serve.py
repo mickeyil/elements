@@ -18,6 +18,7 @@ import time
 
 from .config import ConfigError, load_config
 from .service import ControllerService
+from .slogger import configure_logger
 from .uds_wire import UdsReader, encode_json, parse_json_payload, KIND_JSON
 
 log = logging.getLogger(__name__)
@@ -170,10 +171,7 @@ def main() -> None:
     parser.add_argument('--socket', required=True, help='UDS socket path')
 
     args = parser.parse_args()
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(levelname)s %(name)s: %(message)s',
-    )
+    configure_logger(level="INFO")
 
     try:
         config = load_config(args.config)

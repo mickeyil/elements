@@ -14,6 +14,7 @@ from pathlib import Path
 from .config import Config, ConfigError, load_config
 from .controller import Controller, ControllerState, StripConfig
 from .network_device import NetworkDevice
+from .slogger import configure_logger
 from .udp_receiver import UdpFrameReceiver
 
 log = logging.getLogger(__name__)
@@ -145,7 +146,7 @@ def main() -> None:
     parser.add_argument("program", help="DSL program (.py)")
 
     args = parser.parse_args()
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    configure_logger(level="INFO")
 
     try:
         config = load_config(args.config)
