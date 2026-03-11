@@ -6,10 +6,16 @@ Usage: python -m elemctl.tui [--socket PATH]
 from __future__ import annotations
 
 import argparse
+import ast
 import json
+import math
+import os
 import queue
 import select
+import sys
 import threading
+from dataclasses import dataclass
+from pathlib import Path
 
 from prompt_toolkit import Application
 from prompt_toolkit.buffer import Buffer
@@ -18,9 +24,103 @@ from prompt_toolkit.layout.containers import HSplit, Window
 from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
 from prompt_toolkit.layout.layout import Layout
 
-from .config import DEFAULT_SOCKET_PATH
+from .config import DEFAULT_ANIMATIONS_PATH, DEFAULT_SOCKET_PATH
 from .uds_client import UdsClient
 from .uds_wire import KIND_FRAME, KIND_JSON, parse_json_payload
+
+
+# ------------------------------------------------------------------
+# Animation metadata
+# ------------------------------------------------------------------
+
+@dataclass
+class AnimationEntry:
+    name: str           # stem, e.g. "spark_demo"
+    path: str           # absolute path
+    beat: float | None
+    duration: float | None
+    error: str | None   # set if metadata extraction failed
+
+
+def extract_metadata(path: str) -> tuple[float, float]:
+    """Extract BEAT and DURATION from a DSL animation file using ast.
+
+    Returns (beat, duration). Raises ValueError on any problem.
+    """
+    try:
+        source = Path(path).read_text()
+    except OSError as e:
+        raise ValueError(f"cannot read file: {e}")
+
+    try:
+        tree = ast.parse(source, filename=path)
+    except SyntaxError as e:
+        raise ValueError(f"syntax error: {e}")
+
+    beat = None
+    duration = None
+
+    for node in ast.iter_child_nodes(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        if len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        if not isinstance(target, ast.Name):
+            continue
+        if target.id not in ('BEAT', 'DURATION'):
+            continue
+        if not isinstance(node.value, ast.Constant):
+            raise ValueError(
+                f"{target.id} must be a numeric literal"
+            )
+        val = node.value.value
+        if not isinstance(val, (int, float)) or isinstance(val, bool):
+            raise ValueError(
+                f"{target.id} must be a numeric literal, got {type(val).__name__}"
+            )
+        if isinstance(val, float) and (math.isinf(val) or math.isnan(val)):
+            raise ValueError(f"{target.id} must be finite")
+        if val <= 0:
+            raise ValueError(f"{target.id} must be positive, got {val}")
+        if target.id == 'BEAT':
+            if beat is not None:
+                raise ValueError("duplicate BEAT assignment")
+            beat = val
+        else:
+            if duration is not None:
+                raise ValueError("duplicate DURATION assignment")
+            duration = val
+
+    if beat is None:
+        raise ValueError("missing BEAT")
+    if duration is None:
+        raise ValueError("missing DURATION")
+
+    return beat, duration
+
+
+def scan_animations(directory: str) -> list[AnimationEntry]:
+    """Scan a directory for .py animation files. Returns sorted entries."""
+    expanded = os.path.expanduser(directory)
+    if not os.path.isdir(expanded):
+        return []
+
+    entries: list[AnimationEntry] = []
+    for p in sorted(Path(expanded).glob('*.py')):
+        try:
+            beat, duration = extract_metadata(str(p))
+            entries.append(AnimationEntry(
+                name=p.stem, path=str(p),
+                beat=beat, duration=duration, error=None,
+            ))
+        except ValueError as e:
+            entries.append(AnimationEntry(
+                name=p.stem, path=str(p),
+                beat=None, duration=None, error=str(e),
+            ))
+
+    return entries
 
 
 # ------------------------------------------------------------------
@@ -28,6 +128,7 @@ from .uds_wire import KIND_FRAME, KIND_JSON, parse_json_payload
 # ------------------------------------------------------------------
 
 _QUIT_SENTINEL = object()
+_RESCAN_SENTINEL = object()
 
 _COMMANDS = {
     'status', 'play', 'pause', 'stop', 'shutdown',
@@ -60,6 +161,14 @@ def parse_command(text: str, next_id: int) -> tuple[dict | None | object, str | 
             return None, "/quit does not take arguments"
         return _QUIT_SENTINEL, None
 
+    if name == 'rescan':
+        if len(parts) > 1:
+            return None, "/rescan does not take arguments"
+        return _RESCAN_SENTINEL, None
+
+    if name == 'load':
+        return _parse_load(parts, next_id)
+
     if name not in _COMMANDS:
         return None, f"unknown command: /{name}"
 
@@ -67,6 +176,36 @@ def parse_command(text: str, next_id: int) -> tuple[dict | None | object, str | 
         return None, f"/{name} does not take arguments"
 
     return {'cmd': name, 'id': next_id}, None
+
+
+def _parse_load(parts: list[str], next_id: int) -> tuple[dict | None, str | None]:
+    """Parse /load <target> [loop]."""
+    if len(parts) < 2:
+        return None, "/load requires a target (name or #index)"
+
+    args = parts[1].split()
+    target_str = args[0]
+    rest = args[1:]
+
+    # Parse loop flag
+    loop = False
+    if rest:
+        if len(rest) > 1 or rest[0].lower() != 'loop':
+            return None, f"/load: unexpected arguments: {' '.join(rest)}"
+        loop = True
+
+    # Parse target: #N or name
+    if target_str.startswith('#'):
+        idx_str = target_str[1:]
+        try:
+            idx = int(idx_str)
+        except ValueError:
+            return None, f"/load: invalid index: {target_str}"
+        if idx < 1:
+            return None, f"/load: index must be >= 1, got {idx}"
+        return {'cmd': 'load', 'target': None, 'index': idx, 'loop': loop, 'id': next_id}, None
+
+    return {'cmd': 'load', 'target': target_str, 'index': None, 'loop': loop, 'id': next_id}, None
 
 
 # ------------------------------------------------------------------
@@ -153,8 +292,10 @@ def _format_controller_event(msg: dict) -> str:
 class TuiApp:
     """Full-screen TUI shell for elemctl."""
 
-    def __init__(self, socket_path: str):
+    def __init__(self, socket_path: str, animations_dir: str = DEFAULT_ANIMATIONS_PATH):
         self._socket_path = socket_path
+        self._animations_dir = animations_dir
+        self._animation_list: list[AnimationEntry] = []
         self._client: UdsClient | None = None
         self._shutdown = threading.Event()
         self._next_id = 1
@@ -232,6 +373,14 @@ class TuiApp:
             self._exit()
             return
 
+        if cmd is _RESCAN_SENTINEL:
+            self._do_rescan()
+            return
+
+        if isinstance(cmd, dict) and cmd.get('cmd') == 'load':
+            self._do_load(cmd)
+            return
+
         self._append_log(f"> {text}")
         self._next_id += 1
 
@@ -241,6 +390,82 @@ class TuiApp:
 
         try:
             self._client.send_cmd(cmd)
+        except OSError as e:
+            self._append_log(f"[tui] send failed: {e}")
+
+    # ------------------------------------------------------------------
+    # /rescan and /load
+    # ------------------------------------------------------------------
+
+    def _do_rescan(self) -> None:
+        self._animation_list = scan_animations(self._animations_dir)
+        entries = self._animation_list
+        if not entries:
+            self._append_log(f"[rescan] no animations in {self._animations_dir}")
+            return
+        self._append_log(
+            f"[rescan] {len(entries)} animation(s) in {self._animations_dir}:"
+        )
+        for i, e in enumerate(entries, 1):
+            if e.error:
+                self._append_log(f"  #{i}  {e.name:<16s} ERROR: {e.error}")
+            else:
+                self._append_log(
+                    f"  #{i}  {e.name:<16s} beat={e.beat} duration={e.duration}"
+                )
+
+    def _do_load(self, cmd: dict) -> None:
+        # Auto-rescan if list is empty
+        if not self._animation_list:
+            self._animation_list = scan_animations(self._animations_dir)
+
+        index = cmd.get('index')
+        target = cmd.get('target')
+        loop = cmd.get('loop', False)
+
+        if index is not None:
+            if index < 1 or index > len(self._animation_list):
+                self._append_log(
+                    f"[tui] index #{index} out of range "
+                    f"(have {len(self._animation_list)} animations)"
+                )
+                return
+            entry = self._animation_list[index - 1]
+        else:
+            matches = [e for e in self._animation_list if e.name == target]
+            if not matches:
+                self._append_log(f"[tui] animation not found: {target}")
+                return
+            entry = matches[0]
+
+        if entry.error:
+            self._append_log(f"[tui] cannot load {entry.name}: {entry.error}")
+            return
+
+        try:
+            source = Path(entry.path).read_text()
+        except OSError as e:
+            self._append_log(f"[tui] cannot read {entry.path}: {e}")
+            return
+
+        wire_cmd = {
+            'cmd': 'load',
+            'source': source,
+            'beat': entry.beat,
+            'duration': entry.duration,
+            'loop': loop,
+            'id': self._next_id,
+        }
+        loop_str = ' loop' if loop else ''
+        self._append_log(f"> /load {entry.name}{loop_str}")
+        self._next_id += 1
+
+        if self._client is None:
+            self._append_log("[tui] not connected")
+            return
+
+        try:
+            self._client.send_cmd(wire_cmd)
         except OSError as e:
             self._append_log(f"[tui] send failed: {e}")
 
@@ -331,8 +556,31 @@ def main() -> None:
         '--socket', default=DEFAULT_SOCKET_PATH,
         help='UDS socket path (default: %(default)s)',
     )
+    parser.add_argument(
+        '--animations', default=None,
+        help='Animations directory (default: <repo>/animations/)',
+    )
+    parser.add_argument(
+        '--config', default=None,
+        help='Config file (used to read animations_dir if --animations not set)',
+    )
     args = parser.parse_args()
-    TuiApp(args.socket).run()
+
+    # Resolve animations dir: CLI arg > config > default
+    if args.animations is not None:
+        animations_dir = args.animations
+    elif args.config is not None:
+        from .config import ConfigError, load_config, resolve_config_path
+        try:
+            cfg = load_config(resolve_config_path(args.config))
+        except (ConfigError, json.JSONDecodeError, OSError) as e:
+            print(f"elemctl.tui: config error: {e}", file=sys.stderr)
+            raise SystemExit(1)
+        animations_dir = cfg.animations_dir or DEFAULT_ANIMATIONS_PATH
+    else:
+        animations_dir = DEFAULT_ANIMATIONS_PATH
+
+    TuiApp(args.socket, animations_dir=animations_dir).run()
 
 
 if __name__ == '__main__':

@@ -8,9 +8,11 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 DEFAULT_CONFIG_PATH = '~/.config/elemctl/config.json'
 DEFAULT_SOCKET_PATH = '/tmp/elemctl.sock'
+DEFAULT_ANIMATIONS_PATH = str(Path(__file__).resolve().parent.parent.parent / 'animations')
 
 _VALID_DEVICE_TYPES = {"sim", "esp32"}
 
@@ -51,6 +53,7 @@ class Config:
     frame_port: int             # UDP port for frame receipt
     devices: list[DeviceConfig]
     discovery_port: int | None = None  # UDP port for HELLO packets
+    animations_dir: str | None = None  # override for animations directory
 
 
 def load_config(path: str) -> Config:
@@ -77,6 +80,11 @@ def load_config(path: str) -> Config:
         raise ConfigError(
             f"'controller.frame_port' must be 1-65535, got {frame_port}"
         )
+
+    animations_dir = ctrl.get("animations_dir")
+    if animations_dir is not None:
+        if not isinstance(animations_dir, str):
+            raise ConfigError("'controller.animations_dir' must be a string")
 
     discovery_port = ctrl.get("discovery_port")
     if discovery_port is not None:
@@ -197,4 +205,7 @@ def load_config(path: str) -> Config:
             length=d["length"],
         ))
 
-    return Config(frame_port=frame_port, devices=devices, discovery_port=discovery_port)
+    return Config(
+        frame_port=frame_port, devices=devices,
+        discovery_port=discovery_port, animations_dir=animations_dir,
+    )

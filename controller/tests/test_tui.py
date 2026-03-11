@@ -1,11 +1,14 @@
-"""Tests for TUI non-UI logic: format_event, parse_command, UdsClient.recv_once."""
+"""Tests for TUI non-UI logic: format_event, parse_command, metadata, scan."""
 
 import json
 import socket
 
 import pytest
 
-from elemctl.tui import format_event, parse_command, _QUIT_SENTINEL
+from elemctl.tui import (
+    format_event, parse_command, extract_metadata, scan_animations,
+    AnimationEntry, _QUIT_SENTINEL, _RESCAN_SENTINEL,
+)
 from elemctl.uds_wire import KIND_JSON, KIND_FRAME, UdsReader, encode_json
 from elemctl.uds_client import UdsClient
 
@@ -213,6 +216,72 @@ class TestParseCommand:
         assert cmd is None
         assert 'does not take arguments' in err
 
+    # /rescan
+    def test_rescan(self):
+        cmd, err = parse_command('/rescan', 1)
+        assert cmd is _RESCAN_SENTINEL
+        assert err is None
+
+    def test_rescan_extra_args_rejected(self):
+        cmd, err = parse_command('/rescan foo', 1)
+        assert cmd is None
+        assert 'does not take arguments' in err
+
+    # /load
+    def test_load_by_name(self):
+        cmd, err = parse_command('/load spark_demo', 5)
+        assert err is None
+        assert cmd == {
+            'cmd': 'load', 'target': 'spark_demo',
+            'index': None, 'loop': False, 'id': 5,
+        }
+
+    def test_load_by_index(self):
+        cmd, err = parse_command('/load #3', 1)
+        assert err is None
+        assert cmd == {
+            'cmd': 'load', 'target': None,
+            'index': 3, 'loop': False, 'id': 1,
+        }
+
+    def test_load_with_loop(self):
+        cmd, err = parse_command('/load #3 loop', 2)
+        assert err is None
+        assert cmd['loop'] is True
+        assert cmd['index'] == 3
+
+    def test_load_name_with_loop(self):
+        cmd, err = parse_command('/load spark_demo loop', 1)
+        assert err is None
+        assert cmd['target'] == 'spark_demo'
+        assert cmd['loop'] is True
+
+    def test_load_no_target(self):
+        cmd, err = parse_command('/load', 1)
+        assert cmd is None
+        assert 'requires a target' in err
+
+    def test_load_keyword_args_rejected(self):
+        cmd, err = parse_command('/load spark_demo beat=0.5', 1)
+        assert cmd is None
+        assert 'unexpected arguments' in err
+
+    def test_load_index_zero(self):
+        cmd, err = parse_command('/load #0', 1)
+        assert cmd is None
+        assert 'must be >= 1' in err
+
+    def test_load_index_negative(self):
+        cmd, err = parse_command('/load #-1', 1)
+        assert cmd is None
+        # -1 is parsed by int() but fails the >= 1 check
+        assert 'must be >= 1' in err
+
+    def test_load_index_not_int(self):
+        cmd, err = parse_command('/load #abc', 1)
+        assert cmd is None
+        assert 'invalid index' in err
+
 
 # ---------------------------------------------------------------------------
 # UdsClient.recv_once smoke test (socketpair, no threading)
@@ -266,3 +335,138 @@ class TestRecvOnce:
                 client.recv_once()
         finally:
             b.close()
+
+
+# ---------------------------------------------------------------------------
+# extract_metadata tests
+# ---------------------------------------------------------------------------
+
+class TestExtractMetadata:
+    def test_valid_float(self, tmp_path):
+        f = tmp_path / "prog.py"
+        f.write_text("BEAT = 0.5\nDURATION = 8.0\n")
+        beat, dur = extract_metadata(str(f))
+        assert beat == 0.5
+        assert dur == 8.0
+
+    def test_valid_int(self, tmp_path):
+        f = tmp_path / "prog.py"
+        f.write_text("BEAT = 1\nDURATION = 8\n")
+        beat, dur = extract_metadata(str(f))
+        assert beat == 1
+        assert dur == 8
+
+    def test_missing_beat(self, tmp_path):
+        f = tmp_path / "prog.py"
+        f.write_text("DURATION = 8.0\n")
+        with pytest.raises(ValueError, match="missing BEAT"):
+            extract_metadata(str(f))
+
+    def test_missing_duration(self, tmp_path):
+        f = tmp_path / "prog.py"
+        f.write_text("BEAT = 0.5\n")
+        with pytest.raises(ValueError, match="missing DURATION"):
+            extract_metadata(str(f))
+
+    def test_string_value(self, tmp_path):
+        f = tmp_path / "prog.py"
+        f.write_text('BEAT = "fast"\nDURATION = 8.0\n')
+        with pytest.raises(ValueError, match="numeric literal"):
+            extract_metadata(str(f))
+
+    def test_expression_rejected(self, tmp_path):
+        f = tmp_path / "prog.py"
+        f.write_text("BEAT = 60 / 120\nDURATION = 8.0\n")
+        with pytest.raises(ValueError, match="numeric literal"):
+            extract_metadata(str(f))
+
+    def test_syntax_error(self, tmp_path):
+        f = tmp_path / "prog.py"
+        f.write_text("BEAT = (\n")
+        with pytest.raises(ValueError, match="syntax error"):
+            extract_metadata(str(f))
+
+    def test_non_positive_value(self, tmp_path):
+        f = tmp_path / "prog.py"
+        f.write_text("BEAT = 0\nDURATION = 8.0\n")
+        with pytest.raises(ValueError, match="must be positive"):
+            extract_metadata(str(f))
+
+    def test_negative_value(self, tmp_path):
+        """BEAT = -1 is ast.UnaryOp, not ast.Constant."""
+        f = tmp_path / "prog.py"
+        f.write_text("BEAT = -1\nDURATION = 8.0\n")
+        with pytest.raises(ValueError, match="numeric literal"):
+            extract_metadata(str(f))
+
+    def test_nonexistent_file(self):
+        with pytest.raises(ValueError, match="cannot read"):
+            extract_metadata("/no/such/file.py")
+
+    def test_extra_code_ignored(self, tmp_path):
+        f = tmp_path / "prog.py"
+        f.write_text("BEAT = 0.5\nDURATION = 4.0\nx = 42\nimport os\n")
+        beat, dur = extract_metadata(str(f))
+        assert beat == 0.5
+        assert dur == 4.0
+
+    def test_duplicate_beat_rejected(self, tmp_path):
+        f = tmp_path / "prog.py"
+        f.write_text("BEAT = 0.5\nBEAT = 1.0\nDURATION = 2.0\n")
+        with pytest.raises(ValueError, match="duplicate BEAT"):
+            extract_metadata(str(f))
+
+    def test_duplicate_duration_rejected(self, tmp_path):
+        f = tmp_path / "prog.py"
+        f.write_text("BEAT = 0.5\nDURATION = 2.0\nDURATION = 4.0\n")
+        with pytest.raises(ValueError, match="duplicate DURATION"):
+            extract_metadata(str(f))
+
+
+# ---------------------------------------------------------------------------
+# scan_animations tests
+# ---------------------------------------------------------------------------
+
+class TestScanAnimations:
+    def test_empty_directory(self, tmp_path):
+        assert scan_animations(str(tmp_path)) == []
+
+    def test_nonexistent_directory(self):
+        assert scan_animations("/no/such/dir") == []
+
+    def test_valid_files(self, tmp_path):
+        (tmp_path / "alpha.py").write_text("BEAT = 1\nDURATION = 4\n")
+        (tmp_path / "beta.py").write_text("BEAT = 0.5\nDURATION = 8.0\n")
+        entries = scan_animations(str(tmp_path))
+        assert len(entries) == 2
+        assert entries[0].name == "alpha"
+        assert entries[0].beat == 1
+        assert entries[0].duration == 4
+        assert entries[0].error is None
+        assert entries[1].name == "beta"
+        assert entries[1].beat == 0.5
+        assert entries[1].duration == 8.0
+
+    def test_invalid_file(self, tmp_path):
+        (tmp_path / "broken.py").write_text("x = 1\n")
+        entries = scan_animations(str(tmp_path))
+        assert len(entries) == 1
+        assert entries[0].name == "broken"
+        assert entries[0].beat is None
+        assert entries[0].duration is None
+        assert entries[0].error is not None
+
+    def test_non_py_excluded(self, tmp_path):
+        (tmp_path / "notes.txt").write_text("hello\n")
+        (tmp_path / "prog.py").write_text("BEAT = 1\nDURATION = 2\n")
+        entries = scan_animations(str(tmp_path))
+        assert len(entries) == 1
+        assert entries[0].name == "prog"
+
+    def test_sorted_alphabetically(self, tmp_path):
+        (tmp_path / "zebra.py").write_text("BEAT = 1\nDURATION = 2\n")
+        (tmp_path / "apple.py").write_text("BEAT = 1\nDURATION = 2\n")
+        (tmp_path / "mango.py").write_text("BEAT = 1\nDURATION = 2\n")
+        entries = scan_animations(str(tmp_path))
+        names = [e.name for e in entries]
+        assert names == ["apple", "mango", "zebra"]
