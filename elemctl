@@ -1,0 +1,143 @@
+#!/usr/bin/env python3
+"""Self-bootstrapping launcher for elemctl.
+
+Creates/manages a venv at ~/.elements/venv with third-party deps.
+Repo code (controller/, compiler/) is added to sys.path at runtime,
+so the current checkout always runs regardless of which clone invokes this.
+"""
+
+import hashlib
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+SCRIPT_PATH = str(Path(__file__).resolve())
+REPO_ROOT = Path(SCRIPT_PATH).parent
+VENV_DIR = Path.home() / '.elements' / 'venv'
+VENV_PYTHON = VENV_DIR / 'bin' / 'python'
+REQUIREMENTS = REPO_ROOT / 'requirements.txt'
+STAMP_FILE = VENV_DIR / '.deps-stamp.json'
+
+_USAGE = """\
+usage: elemctl <command> [args]
+
+commands:
+  tui      interactive TUI shell
+  serve    start controller service
+  run      compile and run a DSL program
+  setup    install/update dependencies"""
+
+_SUBCOMMANDS = {'tui', 'serve', 'run', 'setup'}
+
+
+def _inside_venv():
+    """True if the current interpreter lives inside the managed venv."""
+    try:
+        Path(sys.prefix).resolve().relative_to(VENV_DIR.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def _current_stamp():
+    """Compute stamp dict for current state."""
+    req_hash = hashlib.sha256(REQUIREMENTS.read_bytes()).hexdigest()
+    py_ver = f'{sys.version_info.major}.{sys.version_info.minor}'
+    return {'python': py_ver, 'requirements_sha256': req_hash}
+
+
+def _needs_install():
+    """True if deps need (re)installing based on content hash + Python version."""
+    if not STAMP_FILE.exists():
+        return True
+    try:
+        saved = json.loads(STAMP_FILE.read_text())
+    except (json.JSONDecodeError, OSError):
+        return True
+    return saved != _current_stamp()
+
+
+def _install_deps():
+    """Run pip install and update the stamp file."""
+    print('elemctl: installing dependencies...', file=sys.stderr)
+    subprocess.run(
+        [str(VENV_PYTHON), '-m', 'pip', 'install',
+         '-r', str(REQUIREMENTS)],
+        check=True,
+    )
+    STAMP_FILE.write_text(json.dumps(_current_stamp()))
+
+
+def _ensure_venv(force=False):
+    """Create venv if needed, install deps if needed, then execv into it.
+
+    Never returns — replaces the current process with the venv Python.
+    """
+    if not VENV_PYTHON.exists():
+        print('elemctl: creating venv at', VENV_DIR, file=sys.stderr)
+        subprocess.run(
+            [sys.executable, '-m', 'venv', str(VENV_DIR)],
+            check=True,
+        )
+
+    if force or _needs_install():
+        _install_deps()
+
+    env = os.environ.copy()
+    if force:
+        env['_ELEMCTL_SETUP_DONE'] = '1'
+    os.execve(str(VENV_PYTHON), [str(VENV_PYTHON), SCRIPT_PATH, *sys.argv[1:]], env)
+
+
+def main():
+    if sys.version_info < (3, 10):
+        print('elemctl: requires Python >= 3.10', file=sys.stderr)
+        sys.exit(1)
+
+    # Parse subcommand before any bootstrap
+    sub = sys.argv[1] if len(sys.argv) > 1 else None
+
+    if sub in (None, '--help', '-h'):
+        print(_USAGE)
+        sys.exit(0)
+
+    if sub not in _SUBCOMMANDS:
+        print(f'elemctl: unknown command: {sub}', file=sys.stderr)
+        print(_USAGE, file=sys.stderr)
+        sys.exit(1)
+
+    # Bootstrap into managed venv if needed
+    if not _inside_venv():
+        _ensure_venv(force=(sub == 'setup'))
+        # _ensure_venv never returns — after execv, _inside_venv() is True
+        # and we skip straight to dispatch below
+
+    # Inside venv — add repo code to sys.path
+    controller_path = str(REPO_ROOT / 'controller')
+    compiler_path = str(REPO_ROOT / 'compiler')
+    for p in (compiler_path, controller_path):
+        if p not in sys.path:
+            sys.path.insert(0, p)
+
+    # Pop subcommand so downstream argparse sees clean args
+    del sys.argv[1]
+
+    if sub == 'tui':
+        from elemctl.tui import main as m
+        m()
+    elif sub == 'serve':
+        from elemctl.serve import main as m
+        m()
+    elif sub == 'run':
+        from elemctl.run import main as m
+        m()
+    elif sub == 'setup':
+        if not os.environ.pop('_ELEMCTL_SETUP_DONE', None):
+            _install_deps()
+        print(f'elemctl: venv ready at {VENV_DIR}')
+
+
+if __name__ == '__main__':
+    main()
