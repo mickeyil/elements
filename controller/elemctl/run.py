@@ -11,7 +11,9 @@ import threading
 import time
 from pathlib import Path
 
-from .config import Config, ConfigError, load_config
+from .config import (
+    DEFAULT_CONFIG_PATH, Config, ConfigError, load_config, resolve_config_path,
+)
 from .controller import Controller, ControllerState, StripConfig
 from .network_device import NetworkDevice
 from .slogger import configure_logger
@@ -139,7 +141,10 @@ def main() -> None:
         prog="elemctl",
         description="Elements LED controller",
     )
-    parser.add_argument("--config", required=True, help="config JSON path")
+    parser.add_argument(
+        "--config", default=DEFAULT_CONFIG_PATH,
+        help="config JSON path (default: %(default)s)",
+    )
     parser.add_argument("--beat", type=float, required=True, help="beat duration (seconds)")
     parser.add_argument("--duration", type=float, required=True, help="program duration (seconds)")
     parser.add_argument("--loop", action="store_true", help="restart on end")
@@ -149,8 +154,9 @@ def main() -> None:
     configure_logger(level="INFO")
 
     try:
-        config = load_config(args.config)
-    except (ConfigError, FileNotFoundError, json.JSONDecodeError) as e:
+        config_path = resolve_config_path(args.config)
+        config = load_config(config_path)
+    except (ConfigError, json.JSONDecodeError) as e:
         log.error("config error: %s", e)
         sys.exit(1)
 

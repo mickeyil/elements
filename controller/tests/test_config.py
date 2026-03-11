@@ -4,7 +4,10 @@ import json
 
 import pytest
 
-from elemctl.config import Config, ConfigError, DeviceConfig, load_config
+from elemctl.config import (
+    Config, ConfigError, DEFAULT_CONFIG_PATH, DeviceConfig,
+    load_config, resolve_config_path,
+)
 
 
 def _write_config(tmp_path, data):
@@ -252,3 +255,52 @@ class TestLoadConfig:
         ])
         with pytest.raises(ConfigError, match="duplicate device_uid"):
             load_config(_write_config(tmp_path, data))
+
+
+class TestResolveConfigPath:
+    def test_returns_path_for_existing_file(self, tmp_path):
+        p = tmp_path / "config.json"
+        p.write_text("{}")
+        assert resolve_config_path(str(p)) == str(p)
+
+    def test_raises_for_nonexistent_file(self):
+        with pytest.raises(ConfigError, match="config file not found"):
+            resolve_config_path("/nonexistent/config.json")
+
+    def test_error_mentions_default_path(self):
+        with pytest.raises(ConfigError, match=DEFAULT_CONFIG_PATH):
+            resolve_config_path("/nonexistent/config.json")
+
+    def test_expands_tilde(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        cfg = tmp_path / "my_config.json"
+        cfg.write_text("{}")
+        result = resolve_config_path("~/my_config.json")
+        assert result == str(cfg)
+        assert "~" not in result
+
+
+class TestServeMainDefaults:
+    """Smoke tests verifying serve.main() exposes default args via argparse."""
+
+    def test_no_args_exits_with_config_error(self, monkeypatch):
+        """Zero-arg invocation fails with a clear config-not-found message."""
+        from elemctl.serve import main as serve_main
+
+        monkeypatch.setattr('sys.argv', ['elemctl.serve'])
+        # Default config path won't exist → should exit(1) with config error
+        with pytest.raises(SystemExit) as exc_info:
+            serve_main()
+        assert exc_info.value.code == 1
+
+    def test_help_shows_defaults(self, capsys, monkeypatch):
+        """--help output includes the default paths."""
+        monkeypatch.setattr('sys.argv', ['elemctl.serve', '--help'])
+        with pytest.raises(SystemExit) as exc_info:
+            from elemctl.serve import main as serve_main
+            serve_main()
+        assert exc_info.value.code == 0
+        out = capsys.readouterr().out
+        assert DEFAULT_CONFIG_PATH in out
+        from elemctl.config import DEFAULT_SOCKET_PATH
+        assert DEFAULT_SOCKET_PATH in out

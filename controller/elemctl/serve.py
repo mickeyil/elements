@@ -16,7 +16,10 @@ import socket
 import sys
 import time
 
-from .config import ConfigError, load_config
+from .config import (
+    DEFAULT_CONFIG_PATH, DEFAULT_SOCKET_PATH, ConfigError,
+    load_config, resolve_config_path,
+)
 from .service import ControllerService
 from .slogger import configure_logger
 from .uds_wire import UdsReader, encode_json, parse_json_payload, KIND_JSON
@@ -167,20 +170,28 @@ def main() -> None:
         prog='elemctl.serve',
         description='Elements controller service (UDS)',
     )
-    parser.add_argument('--config', required=True, help='config JSON path')
-    parser.add_argument('--socket', required=True, help='UDS socket path')
+    parser.add_argument(
+        '--config', default=DEFAULT_CONFIG_PATH,
+        help='config JSON path (default: %(default)s)',
+    )
+    parser.add_argument(
+        '--socket', default=DEFAULT_SOCKET_PATH,
+        help='UDS socket path (default: %(default)s)',
+    )
 
     args = parser.parse_args()
     configure_logger(level="INFO")
 
     try:
-        config = load_config(args.config)
-    except (ConfigError, FileNotFoundError, json.JSONDecodeError) as e:
+        config_path = resolve_config_path(args.config)
+        config = load_config(config_path)
+    except (ConfigError, json.JSONDecodeError) as e:
         log.error('config error: %s', e)
         sys.exit(1)
 
     service = ControllerService(config)
-    server = UdsServer(service, args.socket)
+    socket_path = os.path.expanduser(args.socket)
+    server = UdsServer(service, socket_path)
 
     def _on_signal(signum, frame):
         server.shutdown()
@@ -189,3 +200,7 @@ def main() -> None:
     signal.signal(signal.SIGINT, _on_signal)
 
     server.run()
+
+
+if __name__ == '__main__':
+    main()

@@ -6,7 +6,11 @@ Reads a JSON config describing the controller and device topology.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
+
+DEFAULT_CONFIG_PATH = '~/.config/elemctl/config.json'
+DEFAULT_SOCKET_PATH = '/tmp/elemctl.sock'
 
 _VALID_DEVICE_TYPES = {"sim", "esp32"}
 
@@ -18,6 +22,17 @@ def _is_int(val) -> bool:
 
 class ConfigError(ValueError):
     """Raised for invalid or missing config."""
+
+
+def resolve_config_path(path: str) -> str:
+    """Expand ~ and verify the config file exists. Raises ConfigError if missing."""
+    resolved = os.path.expanduser(path)
+    if not os.path.isfile(resolved):
+        raise ConfigError(
+            f"config file not found: {resolved}\n"
+            f"create your config at {DEFAULT_CONFIG_PATH} or pass --config"
+        )
+    return resolved
 
 
 @dataclass
