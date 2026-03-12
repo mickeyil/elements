@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime
 import logging
+import os
 import sys
 
 
@@ -97,6 +98,9 @@ def configure_logger(
 
     if logfile and not has_file:
         mode = "w" if overwrite else "a"
+        parent = os.path.dirname(os.path.abspath(os.path.expanduser(logfile)))
+        if parent:
+            os.makedirs(parent, exist_ok=True)
         file_handler = logging.FileHandler(logfile, mode=mode)
         file_handler.setFormatter(_MillisFormatter(_ColorFormatter._BASE))
         logger.addHandler(file_handler)

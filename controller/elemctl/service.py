@@ -202,6 +202,7 @@ class ControllerService:
                     'device_id': dc.device_id,
                     'device_uid': dc.device_uid,
                     'strip': dc.strip_id,
+                    'length': dc.length,
                     'connected': connected,
                 }))
 
@@ -242,6 +243,7 @@ class ControllerService:
                 'device_id': dc.device_id,
                 'device_uid': dc.device_uid,
                 'strip': dc.strip_id,
+                'length': dc.length,
                 'device_type': dc.device_type,
                 'connected': connected,
             })
@@ -303,7 +305,10 @@ class ControllerService:
             dc, dev = entry
             changed = dev.update_address(host, tcp_port)
             if changed:
-                log.info('discovery: %s -> %s:%d', dc.device_uid, host, tcp_port)
+                log.info(
+                    'discovery: connected %s at %s:%d (strip %s, %d LEDs)',
+                    dc.device_uid, host, tcp_port, dc.strip_id, dc.length,
+                )
                 # Clear probe throttle so _probe_devices() connects immediately
                 self._last_probe_ns.pop(dc.device_id, None)
 

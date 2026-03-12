@@ -5,8 +5,9 @@ import json
 import pytest
 
 from elemctl.config import (
-    Config, ConfigError, DEFAULT_CONFIG_PATH, DEFAULT_DISCOVERY_PORT, DeviceConfig,
-    load_config, resolve_config_path,
+    Config, ConfigError, DEFAULT_CONFIG_PATH, DEFAULT_DISCOVERY_PORT,
+    DEFAULT_LOGS_PATH, DeviceConfig, load_config, resolve_config_path,
+    resolve_runtime_path,
 )
 
 
@@ -200,6 +201,18 @@ class TestLoadConfig:
         cfg = load_config(_write_config(tmp_path, _valid_config()))
         assert cfg.discovery_port == DEFAULT_DISCOVERY_PORT
 
+    def test_logs_dir_parsed(self, tmp_path):
+        data = _valid_config()
+        data["controller"]["logs_dir"] = "~/elemctl-logs"
+        cfg = load_config(_write_config(tmp_path, data))
+        assert cfg.logs_dir == "~/elemctl-logs"
+
+    def test_logs_dir_wrong_type(self, tmp_path):
+        data = _valid_config()
+        data["controller"]["logs_dir"] = 123
+        with pytest.raises(ConfigError, match="logs_dir"):
+            load_config(_write_config(tmp_path, data))
+
     def test_discovery_port_null_disables_discovery(self, tmp_path):
         data = _valid_config()
         data["controller"]["discovery_port"] = None
@@ -292,6 +305,17 @@ class TestResolveConfigPath:
         result = resolve_config_path("~/my_config.json")
         assert result == str(cfg)
         assert "~" not in result
+
+
+class TestResolveRuntimePath:
+    def test_prefers_cli_override(self):
+        assert resolve_runtime_path("~/cli", "~/cfg", DEFAULT_LOGS_PATH).endswith("/cli")
+
+    def test_falls_back_to_config(self):
+        assert resolve_runtime_path(None, "~/cfg", DEFAULT_LOGS_PATH).endswith("/cfg")
+
+    def test_uses_default(self):
+        assert resolve_runtime_path(None, None, DEFAULT_LOGS_PATH) == DEFAULT_LOGS_PATH
 
 
 class TestServeMainDefaults:

@@ -10,6 +10,7 @@
 // is provided by the controller via CMD_CONFIGURE after TCP connect.
 
 #include "esp_simulated.h"
+#include "slogger.h"
 
 #include <cerrno>
 #include <cstdio>
@@ -150,8 +151,8 @@ static int poll_tcp_commands(int tcp_fd,
         }
 
         // Reject absurdly large messages to prevent OOM from corrupted headers
-        if (msg_len > TCP_MSG_MAX) {
-            fprintf(stderr, "network_sim: message too large (%u bytes), closing connection\n", msg_len);
+            if (msg_len > TCP_MSG_MAX) {
+            slog::error("network_sim: message too large (%u bytes), closing connection", msg_len);
             return -1;
         }
 
@@ -295,6 +296,7 @@ struct Args {
     int discovery_port = DEFAULT_DISCOVERY_PORT;
     std::string discovery_host = "127.0.0.1";
     std::string device_uid;
+    std::string log_file;
 };
 
 static bool parse_args(int argc, char** argv, Args& args)
@@ -308,6 +310,8 @@ static bool parse_args(int argc, char** argv, Args& args)
             args.discovery_host = argv[++i];
         } else if (strcmp(argv[i], "--device-uid") == 0 && i + 1 < argc) {
             args.device_uid = argv[++i];
+        } else if (strcmp(argv[i], "--log-file") == 0 && i + 1 < argc) {
+            args.log_file = argv[++i];
         } else {
             fprintf(stderr, "Unknown argument: %s\n", argv[i]);
             return false;
@@ -317,7 +321,7 @@ static bool parse_args(int argc, char** argv, Args& args)
     if (args.device_uid.empty()) {
         fprintf(stderr,
                 "Usage: %s --device-uid UID [--tcp-port PORT] [--discovery-port PORT] "
-                "[--discovery-host HOST]\n",
+                "[--discovery-host HOST] [--log-file PATH]\n",
                 argv[0]);
         return false;
     }
@@ -359,6 +363,8 @@ int main(int argc, char** argv)
     Args args;
     if (!parse_args(argc, argv, args))
         return 1;
+
+    slog::init(args.log_file);
 
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
@@ -417,17 +423,15 @@ int main(int argc, char** argv)
     std::vector<uint8_t> tcp_buf(TCP_BUF_INITIAL);
     size_t tcp_buf_used = 0;
 
-    printf("network_sim: listening on tcp=%d\n", args.tcp_port);
-    printf("network_sim: discovery -> %s:%d uid=%s\n",
-           args.discovery_host.c_str(), args.discovery_port, args.device_uid.c_str());
-    fflush(stdout);
+    slog::info("network_sim: listening on tcp=%d", args.tcp_port);
+    slog::info("network_sim: discovery -> %s:%d uid=%s",
+               args.discovery_host.c_str(), args.discovery_port, args.device_uid.c_str());
 
     static constexpr int64_t HELLO_INTERVAL_US = 500000; // 500ms
     int64_t last_hello_us = 0;
 
     while (g_running) {
-        printf("Waiting for controller on port %d...\n", args.tcp_port);
-        fflush(stdout);
+        slog::info("Waiting for controller on port %d...", args.tcp_port);
 
         // Non-blocking accept loop — interleave with HELLO sends
         int tcp_fd = -1;
@@ -448,8 +452,7 @@ int main(int argc, char** argv)
         }
         if (!g_running) break;
 
-        printf("Controller connected.\n");
-        fflush(stdout);
+        slog::info("Controller connected.");
 
         // Learn controller IP from accepted connection
         sockaddr_in peer{};
@@ -489,8 +492,7 @@ int main(int argc, char** argv)
         }
 
         close(tcp_fd);
-        printf("Controller disconnected.\n");
-        fflush(stdout);
+        slog::info("Controller disconnected.");
 
         device.reset();
         state.device_id = 0;
@@ -498,6 +500,6 @@ int main(int argc, char** argv)
 
     close(udp_fd);
     close(tcp_server);
-    printf("network_sim: shutdown.\n");
+    slog::info("network_sim: shutdown.");
     return 0;
 }

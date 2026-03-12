@@ -8,7 +8,16 @@ import os
 import sys
 from pathlib import Path
 
-from .config import DEFAULT_CONFIG_PATH, Config, ConfigError, DeviceConfig, load_config, resolve_config_path
+from .config import (
+    DEFAULT_CONFIG_PATH,
+    DEFAULT_LOGS_PATH,
+    Config,
+    ConfigError,
+    DeviceConfig,
+    load_config,
+    resolve_config_path,
+    resolve_runtime_path,
+)
 
 NETWORK_SIM_BIN = Path(__file__).resolve().parent.parent.parent / 'build' / 'network_sim'
 
@@ -19,6 +28,7 @@ def build_sim_command(
     *,
     discovery_host: str = '127.0.0.1',
     tcp_port: int = 0,
+    log_file: str | None = None,
     network_sim_bin: Path = NETWORK_SIM_BIN,
 ) -> list[str]:
     """Build argv for launching network_sim for a known sim device."""
@@ -33,13 +43,16 @@ def build_sim_command(
     if not network_sim_bin.is_file():
         raise ValueError(f'network_sim not built at {network_sim_bin}')
 
-    return [
+    cmd = [
         str(network_sim_bin),
         '--tcp-port', str(tcp_port),
         '--discovery-port', str(config.discovery_port),
         '--discovery-host', discovery_host,
         '--device-uid', device.device_uid,
     ]
+    if log_file is not None:
+        cmd += ['--log-file', log_file]
+    return cmd
 
 
 def _find_device(config: Config, device_uid: str) -> DeviceConfig:
@@ -72,16 +85,23 @@ def main() -> None:
         '--tcp-port', type=int, default=0,
         help='TCP listen port for the sim, 0 means ephemeral (default: %(default)s)',
     )
+    parser.add_argument(
+        '--log-dir', default=None,
+        help='logs directory (default: controller.logs_dir or <repo>/logs)',
+    )
     args = parser.parse_args()
 
     try:
         config_path = resolve_config_path(args.config)
         config = load_config(config_path)
+        log_dir = resolve_runtime_path(args.log_dir, config.logs_dir, DEFAULT_LOGS_PATH)
+        Path(log_dir).mkdir(parents=True, exist_ok=True)
         cmd = build_sim_command(
             config,
             args.device_uid,
             discovery_host=args.discovery_host,
             tcp_port=args.tcp_port,
+            log_file=str(Path(log_dir) / f'{args.device_uid}.log'),
         )
     except (ConfigError, json.JSONDecodeError, ValueError) as e:
         print(f'elemctl sim: {e}', file=sys.stderr)

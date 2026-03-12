@@ -235,6 +235,8 @@ class TestSnapshotIdle:
         assert snap['session'] is None
         assert len(snap['devices']) == 1
         assert snap['devices'][0]['device_id'] == 1
+        assert snap['devices'][0]['strip'] == 'test'
+        assert snap['devices'][0]['length'] == 5
         assert snap['devices'][0]['connected'] is True
 
     def test_snapshot_shows_disconnected(self):
@@ -426,6 +428,7 @@ class TestPresenceEvents:
         assert evt['device_id'] == 1
         assert evt['device_uid'] == 'sim-1'
         assert evt['strip'] == 'test'
+        assert evt['length'] == 5
 
         # Snapshot stays aligned
         snap = svc.build_snapshot()
@@ -1008,7 +1011,10 @@ class TestDiscoveryIntegration:
         with caplog.at_level(logging.INFO):
             svc.tick_once()
 
-        assert 'discovery: sim-1 -> 127.0.0.1:9001' in caplog.text
+        assert (
+            'discovery: connected sim-1 at 127.0.0.1:9001 (strip strip_a, 5 LEDs)'
+            in caplog.text
+        )
 
 
 class _DebugFakeDevice(_FakeDevice):

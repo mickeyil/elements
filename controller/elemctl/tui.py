@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import datetime
 import json
 import math
 import os
@@ -24,7 +25,12 @@ from prompt_toolkit.layout.containers import HSplit, VerticalAlign, Window
 from prompt_toolkit.layout.controls import BufferControl
 from prompt_toolkit.layout.layout import Layout
 
-from .config import DEFAULT_ANIMATIONS_PATH, DEFAULT_SOCKET_PATH
+from .config import (
+    DEFAULT_ANIMATIONS_PATH,
+    DEFAULT_LOGS_PATH,
+    DEFAULT_SOCKET_PATH,
+    resolve_runtime_path,
+)
 from .uds_client import UdsClient
 from .uds_wire import KIND_FRAME, KIND_JSON, parse_json_payload
 
@@ -129,6 +135,7 @@ def scan_animations(directory: str) -> list[AnimationEntry]:
 
 _QUIT_SENTINEL = object()
 _RESCAN_SENTINEL = object()
+_HELP_SENTINEL = object()
 
 _COMMANDS = {
     'status', 'play', 'pause', 'stop', 'shutdown',
@@ -156,10 +163,15 @@ def parse_command(text: str, next_id: int) -> tuple[dict | None | object, str | 
     parts = body.split(None, 1)
     name = parts[0].lower()
 
-    if name == 'quit':
+    if name in {'quit', 'exit'}:
         if len(parts) > 1:
-            return None, "/quit does not take arguments"
+            return None, f"/{name} does not take arguments"
         return _QUIT_SENTINEL, None
+
+    if name == 'help':
+        if len(parts) > 1:
+            return None, "/help does not take arguments"
+        return _HELP_SENTINEL, None
 
     if name == 'rescan':
         if len(parts) > 1:
@@ -212,18 +224,45 @@ def _parse_load(parts: list[str], next_id: int) -> tuple[dict | None, str | None
 # Event formatting
 # ------------------------------------------------------------------
 
+def _format_timestamp(now: datetime.datetime | None = None) -> str:
+    dt = now or datetime.datetime.now()
+    return dt.strftime("%Y-%m-%d %H:%M:%S.") + f"{dt.microsecond // 1000:03d}"
+
+
+def format_transcript_line(
+    source: str,
+    message: str,
+    *,
+    now: datetime.datetime | None = None,
+) -> str:
+    return f"[{_format_timestamp(now)}] [{source}] {message}"
+
+
+def _format_device_summary(dev: dict) -> str:
+    uid = msg_get(dev, 'device_uid', '?')
+    strip = msg_get(dev, 'strip', '?')
+    length = dev.get('length')
+    if isinstance(length, int) and not isinstance(length, bool):
+        return f"{uid} ({strip}, {length} LEDs)"
+    return f"{uid} ({strip})"
+
+
+def msg_get(msg: dict, key: str, default):
+    return msg.get(key, default)
+
+
 def format_event(kind: int, payload: bytes) -> str | None:
     """Format a UDS message as a single-line log entry. Returns None for frames."""
     if kind == KIND_FRAME:
         return None  # silently counted, not displayed
 
     if kind != KIND_JSON:
-        return f"[unknown] kind={kind} len={len(payload)}"
+        return f"unknown message kind={kind} len={len(payload)}"
 
     try:
         msg = parse_json_payload(payload)
     except (json.JSONDecodeError, UnicodeDecodeError):
-        return f"[unknown] bad json len={len(payload)}"
+        return f"bad json message len={len(payload)}"
 
     msg_type = msg.get('type')
 
@@ -231,14 +270,14 @@ def format_event(kind: int, payload: bytes) -> str | None:
         rid = msg.get('id')
         if msg.get('ok'):
             result = msg.get('result', {})
-            return f"[reply:{rid}] ok {json.dumps(result, separators=(',', ':'))}"
+            return f"reply {rid} ok {json.dumps(result, separators=(',', ':'))}"
         else:
-            return f"[reply:{rid}] ERROR: {msg.get('error', '?')}"
+            return f"reply {rid} ERROR: {msg.get('error', '?')}"
 
     if msg_type == 'event':
         return _format_controller_event(msg)
 
-    return f"[unknown] {json.dumps(msg, separators=(',', ':'))}"
+    return f"unknown message {json.dumps(msg, separators=(',', ':'))}"
 
 
 def _format_controller_event(msg: dict) -> str:
@@ -247,42 +286,67 @@ def _format_controller_event(msg: dict) -> str:
     if event == 'snapshot':
         online = msg.get('online_count', '?')
         expected = msg.get('expected_count', '?')
+        devices = msg.get('devices', [])
+        connected = [
+            _format_device_summary(dev)
+            for dev in devices
+            if dev.get('connected')
+        ]
+        offline = [
+            _format_device_summary(dev)
+            for dev in devices
+            if not dev.get('connected')
+        ]
+        device_text = f"devices online {online}/{expected}"
+        if connected:
+            device_text += f": {', '.join(connected)}"
+        else:
+            device_text += ": none"
+        if offline:
+            device_text += f"; offline: {', '.join(offline)}"
         session = msg.get('session')
         if session:
             state = session.get('playback_state', '?')
             sid = session.get('session_id')
-            return f"[snapshot] state={state} online={online}/{expected} session={sid}"
-        return f"[snapshot] state=idle online={online}/{expected} session=None"
+            t_rel = session.get('current_t_rel')
+            duration = session.get('duration')
+            if isinstance(t_rel, (int, float)) and isinstance(duration, (int, float)):
+                return f"{state} session={sid} t={t_rel:.2f}/{duration:.2f}s; {device_text}"
+            return f"{state} session={sid}; {device_text}"
+        return f"idle, no active session; {device_text}"
 
     if event == 'state':
         state = msg.get('state', '?')
         epoch = msg.get('epoch', '?')
         sid = msg.get('session_id', '?')
-        return f"[state] {state} epoch={epoch} session={sid}"
+        return f"state {state} epoch={epoch} session={sid}"
 
     if event == 'device_status':
         uid = msg.get('device_uid', '?')
         strip = msg.get('strip', '?')
+        length = msg.get('length')
         connected = msg.get('connected')
         status = 'connected' if connected else 'disconnected'
-        return f"[device] {uid} ({strip}) {status}"
+        if isinstance(length, int) and not isinstance(length, bool):
+            return f"device {uid} {status} ({strip}, {length} LEDs)"
+        return f"device {uid} {status} ({strip})"
 
     if event == 'session_start':
         sid = msg.get('session_id', '?')
         epoch = msg.get('epoch', '?')
         duration = msg.get('duration', '?')
         strips = ', '.join(s.get('name', '?') for s in msg.get('strips', []))
-        return f"[session] id={sid} epoch={epoch} duration={duration}s strips=[{strips}]"
+        return f"session {sid} started epoch={epoch} duration={duration}s strips=[{strips}]"
 
     if event == 'loop':
         epoch = msg.get('epoch', '?')
         sid = msg.get('session_id', '?')
-        return f"[loop] epoch={epoch} session={sid}"
+        return f"loop epoch={epoch} session={sid}"
 
     if event == 'error':
-        return f"[error] {msg.get('message', '?')}"
+        return f"error: {msg.get('message', '?')}"
 
-    return f"[unknown] {json.dumps(msg, separators=(',', ':'))}"
+    return f"unknown event {json.dumps(msg, separators=(',', ':'))}"
 
 
 # ------------------------------------------------------------------
@@ -292,7 +356,12 @@ def _format_controller_event(msg: dict) -> str:
 class TuiApp:
     """Full-screen TUI shell for elemctl."""
 
-    def __init__(self, socket_path: str, animations_dir: str = DEFAULT_ANIMATIONS_PATH):
+    def __init__(
+        self,
+        socket_path: str,
+        animations_dir: str = DEFAULT_ANIMATIONS_PATH,
+        log_file: str | None = None,
+    ):
         self._socket_path = socket_path
         self._animations_dir = animations_dir
         self._animation_list: list[AnimationEntry] = []
@@ -302,6 +371,11 @@ class TuiApp:
         self._log_lines: list[str] = []
         self._pending_logs: queue.Queue[str] = queue.Queue()
         self._reader_thread: threading.Thread | None = None
+        self._log_fp = (
+            open(log_file, 'a', encoding='utf-8', buffering=1)
+            if log_file is not None
+            else None
+        )
 
         # prompt_toolkit widgets
         self._log_buffer = Buffer(read_only=True)
@@ -344,26 +418,26 @@ class TuiApp:
 
     def run(self) -> None:
         """Connect and run the TUI. Blocks until exit."""
-        try:
-            self._client = UdsClient(self._socket_path)
-        except (OSError, ConnectionError) as e:
-            self._append_log(f"[tui] connection failed: {e}")
-            self._append_log("[tui] start the service with: python -m elemctl.serve")
-            self._append_log("[tui] press Ctrl-C to exit")
-            self._app.run()
-            return
-
-        self._append_log(f"[tui] connected to {self._socket_path}")
-
         self._reader_thread = threading.Thread(target=self._reader_loop, daemon=True)
-        self._reader_thread.start()
-
         try:
+            try:
+                self._client = UdsClient(self._socket_path)
+            except (OSError, ConnectionError) as e:
+                self._local_log(f"connection failed: {e}")
+                self._local_log("start the service with: ./elemctl serve")
+                self._local_log("press Ctrl-C to exit")
+                self._app.run()
+                return
+
+            self._local_log(f"connected to {self._socket_path}")
+            self._reader_thread.start()
             self._app.run()
         finally:
             self._shutdown.set()
             if self._client is not None:
                 self._client.close()
+            if self._log_fp is not None:
+                self._log_fp.close()
 
     # ------------------------------------------------------------------
     # Input handling
@@ -375,11 +449,15 @@ class TuiApp:
 
         if cmd is None:
             if error:
-                self._append_log(f"[tui] {error}")
+                self._local_log(error)
             return
 
         if cmd is _QUIT_SENTINEL:
             self._exit()
+            return
+
+        if cmd is _HELP_SENTINEL:
+            self._show_help()
             return
 
         if cmd is _RESCAN_SENTINEL:
@@ -390,36 +468,49 @@ class TuiApp:
             self._do_load(cmd)
             return
 
-        self._append_log(f"> {text}")
+        self._local_log(f"> {text}")
         self._next_id += 1
 
         if self._client is None:
-            self._append_log("[tui] not connected")
+            self._local_log("not connected")
             return
 
         try:
             self._client.send_cmd(cmd)
         except OSError as e:
-            self._append_log(f"[tui] send failed: {e}")
+            self._local_log(f"send failed: {e}")
 
     # ------------------------------------------------------------------
-    # /rescan and /load
+    # /help, /rescan and /load
     # ------------------------------------------------------------------
+
+    def _show_help(self) -> None:
+        self._local_log("commands:")
+        self._local_log("  /help               show this help")
+        self._local_log("  /status             show controller status")
+        self._local_log("  /play               start playback")
+        self._local_log("  /pause              pause playback")
+        self._local_log("  /stop               stop playback")
+        self._local_log("  /shutdown           stop the controller service")
+        self._local_log("  /rescan             rescan the animations directory")
+        self._local_log("  /load NAME [loop]   load an animation by name")
+        self._local_log("  /load #N [loop]     load an animation by list index")
+        self._local_log("  /quit, /exit        quit the TUI")
 
     def _do_rescan(self) -> None:
         self._animation_list = scan_animations(self._animations_dir)
         entries = self._animation_list
         if not entries:
-            self._append_log(f"[rescan] no animations in {self._animations_dir}")
+            self._local_log(f"no animations in {self._animations_dir}")
             return
-        self._append_log(
-            f"[rescan] {len(entries)} animation(s) in {self._animations_dir}:"
+        self._local_log(
+            f"{len(entries)} animation(s) in {self._animations_dir}:"
         )
         for i, e in enumerate(entries, 1):
             if e.error:
-                self._append_log(f"  #{i}  {e.name:<16s} ERROR: {e.error}")
+                self._local_log(f"  #{i}  {e.name:<16s} ERROR: {e.error}")
             else:
-                self._append_log(
+                self._local_log(
                     f"  #{i}  {e.name:<16s} beat={e.beat} duration={e.duration}"
                 )
 
@@ -434,8 +525,8 @@ class TuiApp:
 
         if index is not None:
             if index < 1 or index > len(self._animation_list):
-                self._append_log(
-                    f"[tui] index #{index} out of range "
+                self._local_log(
+                    f"index #{index} out of range "
                     f"(have {len(self._animation_list)} animations)"
                 )
                 return
@@ -443,18 +534,18 @@ class TuiApp:
         else:
             matches = [e for e in self._animation_list if e.name == target]
             if not matches:
-                self._append_log(f"[tui] animation not found: {target}")
+                self._local_log(f"animation not found: {target}")
                 return
             entry = matches[0]
 
         if entry.error:
-            self._append_log(f"[tui] cannot load {entry.name}: {entry.error}")
+            self._local_log(f"cannot load {entry.name}: {entry.error}")
             return
 
         try:
             source = Path(entry.path).read_text()
         except OSError as e:
-            self._append_log(f"[tui] cannot read {entry.path}: {e}")
+            self._local_log(f"cannot read {entry.path}: {e}")
             return
 
         wire_cmd = {
@@ -466,17 +557,17 @@ class TuiApp:
             'id': self._next_id,
         }
         loop_str = ' loop' if loop else ''
-        self._append_log(f"> /load {entry.name}{loop_str}")
+        self._local_log(f"> /load {entry.name}{loop_str}")
         self._next_id += 1
 
         if self._client is None:
-            self._append_log("[tui] not connected")
+            self._local_log("not connected")
             return
 
         try:
             self._client.send_cmd(wire_cmd)
         except OSError as e:
-            self._append_log(f"[tui] send failed: {e}")
+            self._local_log(f"send failed: {e}")
 
     # ------------------------------------------------------------------
     # Reader thread
@@ -499,7 +590,7 @@ class TuiApp:
             try:
                 messages = client.recv_once()
             except (ConnectionError, OSError):
-                self._enqueue_log("[tui] disconnected")
+                self._enqueue_log(format_transcript_line('tui', 'disconnected'))
                 break
 
             for kind, payload in messages:
@@ -507,11 +598,20 @@ class TuiApp:
                     continue
                 line = format_event(kind, payload)
                 if line is not None:
-                    self._enqueue_log(line)
+                    self._enqueue_log(format_transcript_line('ctrl', line))
 
     # ------------------------------------------------------------------
     # Log pane
     # ------------------------------------------------------------------
+
+    def _local_log(self, message: str) -> None:
+        self._append_log(format_transcript_line('tui', message))
+
+    def _write_transcript_line(self, line: str) -> None:
+        if self._log_fp is None:
+            return
+        self._log_fp.write(line + '\n')
+        self._log_fp.flush()
 
     def _enqueue_log(self, line: str) -> None:
         """Thread-safe: push a log line for the UI thread to drain."""
@@ -521,6 +621,7 @@ class TuiApp:
     def _append_log(self, line: str) -> None:
         """UI-thread only: directly append a log line and update the buffer."""
         self._log_lines.append(line)
+        self._write_transcript_line(line)
         self._flush_log_buffer()
 
     def _drain_pending_logs(self, app) -> None:
@@ -532,6 +633,7 @@ class TuiApp:
             except queue.Empty:
                 break
             self._log_lines.append(line)
+            self._write_transcript_line(line)
             drained = True
         if drained:
             self._flush_log_buffer()
@@ -573,23 +675,37 @@ def main() -> None:
         '--config', default=None,
         help='Config file (used to read animations_dir if --animations not set)',
     )
+    parser.add_argument(
+        '--log-dir', default=None,
+        help='logs directory (default: controller.logs_dir or <repo>/logs)',
+    )
     args = parser.parse_args()
 
-    # Resolve animations dir: CLI arg > config > default
-    if args.animations is not None:
-        animations_dir = args.animations
-    elif args.config is not None:
+    cfg = None
+    if args.config is not None:
         from .config import ConfigError, load_config, resolve_config_path
         try:
             cfg = load_config(resolve_config_path(args.config))
         except (ConfigError, json.JSONDecodeError, OSError) as e:
             print(f"elemctl.tui: config error: {e}", file=sys.stderr)
             raise SystemExit(1)
-        animations_dir = cfg.animations_dir or DEFAULT_ANIMATIONS_PATH
-    else:
-        animations_dir = DEFAULT_ANIMATIONS_PATH
+    animations_dir = resolve_runtime_path(
+        args.animations,
+        cfg.animations_dir if cfg is not None else None,
+        DEFAULT_ANIMATIONS_PATH,
+    )
+    log_dir = resolve_runtime_path(
+        args.log_dir,
+        cfg.logs_dir if cfg is not None else None,
+        DEFAULT_LOGS_PATH,
+    )
+    Path(log_dir).mkdir(parents=True, exist_ok=True)
 
-    TuiApp(args.socket, animations_dir=animations_dir).run()
+    TuiApp(
+        args.socket,
+        animations_dir=animations_dir,
+        log_file=str(Path(log_dir) / 'tui.log'),
+    ).run()
 
 
 if __name__ == '__main__':

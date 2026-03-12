@@ -14,6 +14,7 @@ DEFAULT_CONFIG_PATH = '~/.config/elemctl/config.json'
 DEFAULT_SOCKET_PATH = '/tmp/elemctl.sock'
 DEFAULT_DISCOVERY_PORT = 6040
 DEFAULT_ANIMATIONS_PATH = str(Path(__file__).resolve().parent.parent.parent / 'animations')
+DEFAULT_LOGS_PATH = str(Path(__file__).resolve().parent.parent.parent / 'logs')
 
 _VALID_DEVICE_TYPES = {"sim", "esp32"}
 
@@ -55,6 +56,16 @@ class Config:
     devices: list[DeviceConfig]
     discovery_port: int | None = None  # UDP port for HELLO packets; None disables
     animations_dir: str | None = None  # override for animations directory
+    logs_dir: str | None = None        # override for logs directory
+
+
+def resolve_runtime_path(
+    cli_override: str | None,
+    config_value: str | None,
+    default: str,
+) -> str:
+    """Resolve a runtime path with CLI > config > default precedence."""
+    return os.path.expanduser(cli_override or config_value or default)
 
 
 def load_config(path: str) -> Config:
@@ -86,6 +97,11 @@ def load_config(path: str) -> Config:
     if animations_dir is not None:
         if not isinstance(animations_dir, str):
             raise ConfigError("'controller.animations_dir' must be a string")
+
+    logs_dir = ctrl.get("logs_dir")
+    if logs_dir is not None:
+        if not isinstance(logs_dir, str):
+            raise ConfigError("'controller.logs_dir' must be a string")
 
     if "discovery_port" not in ctrl:
         discovery_port = DEFAULT_DISCOVERY_PORT
@@ -212,4 +228,5 @@ def load_config(path: str) -> Config:
     return Config(
         frame_port=frame_port, devices=devices,
         discovery_port=discovery_port, animations_dir=animations_dir,
+        logs_dir=logs_dir,
     )

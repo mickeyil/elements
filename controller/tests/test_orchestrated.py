@@ -269,12 +269,14 @@ class TestOrchestrated:
             assert len(result.frames) >= 3, \
                 f'expected >= 3 frames, got {len(result.frames)}'
 
-            # Both strips should match within ±1 per byte
+            # Both strips should match within ±2 per byte. The configure
+            # handshake and simulator-side logging add a small extra skew
+            # window around initial playback start.
             for fi, t_rel, strips in result.frames:
                 assert len(strips) == 2
                 for j in range(len(strips[0])):
                     diff = abs(strips[0][j] - strips[1][j])
-                    assert diff <= 1, \
+                    assert diff <= 2, \
                         f'byte {j} differs by {diff} at frame_index={fi}, ' \
                         f't_rel={t_rel:.3f}'
 

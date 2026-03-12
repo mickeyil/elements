@@ -32,10 +32,12 @@ class TestBuildSimCommand:
     def test_happy_path(self, tmp_path):
         fake_bin = tmp_path / 'network_sim'
         fake_bin.write_text('')
+        log_file = tmp_path / 'logs' / 'sim-1.log'
 
         cmd = build_sim_command(
             _config(),
             'sim-1',
+            log_file=str(log_file),
             network_sim_bin=fake_bin,
         )
 
@@ -45,6 +47,7 @@ class TestBuildSimCommand:
             '--discovery-port', str(DEFAULT_DISCOVERY_PORT),
             '--discovery-host', '127.0.0.1',
             '--device-uid', 'sim-1',
+            '--log-file', str(log_file),
         ]
 
     def test_overrides_discovery_host_and_tcp_port(self, tmp_path):

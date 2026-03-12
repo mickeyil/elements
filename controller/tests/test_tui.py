@@ -1,5 +1,6 @@
 """Tests for TUI non-UI logic: format_event, parse_command, metadata, scan."""
 
+import datetime
 import json
 import socket
 
@@ -7,7 +8,7 @@ import pytest
 
 from elemctl.tui import (
     format_event, parse_command, extract_metadata, scan_animations,
-    AnimationEntry, _QUIT_SENTINEL, _RESCAN_SENTINEL,
+    format_transcript_line, _HELP_SENTINEL, _QUIT_SENTINEL, _RESCAN_SENTINEL,
 )
 from elemctl.uds_wire import KIND_JSON, KIND_FRAME, UdsReader, encode_json
 from elemctl.uds_client import UdsClient
@@ -22,14 +23,31 @@ def _json_payload(obj: dict) -> bytes:
 
 
 class TestFormatEvent:
+    def test_format_transcript_line(self):
+        result = format_transcript_line(
+            'tui',
+            'connected to /tmp/elemctl.sock',
+            now=datetime.datetime(2026, 3, 12, 6, 2, 12, 544000),
+        )
+        assert result == '[2026-03-12 06:02:12.544] [tui] connected to /tmp/elemctl.sock'
+
     def test_snapshot_idle(self):
         msg = {
             'type': 'event', 'event': 'snapshot',
             'online_count': 2, 'expected_count': 3,
             'session': None,
+            'devices': [
+                {'device_uid': 'sim-1', 'strip': 'main', 'length': 10, 'connected': True},
+                {'device_uid': 'sim-2', 'strip': 'aux', 'length': 20, 'connected': True},
+                {'device_uid': 'sim-3', 'strip': 'back', 'length': 30, 'connected': False},
+            ],
         }
         result = format_event(KIND_JSON, _json_payload(msg))
-        assert result == '[snapshot] state=idle online=2/3 session=None'
+        assert result == (
+            'idle, no active session; devices online 2/3: '
+            'sim-1 (main, 10 LEDs), sim-2 (aux, 20 LEDs); '
+            'offline: sim-3 (back, 30 LEDs)'
+        )
 
     def test_snapshot_with_session(self):
         msg = {
@@ -38,10 +56,19 @@ class TestFormatEvent:
             'session': {
                 'playback_state': 'playing',
                 'session_id': 5,
+                'current_t_rel': 1.25,
+                'duration': 8.0,
             },
+            'devices': [
+                {'device_uid': 'sim-1', 'strip': 'main', 'length': 10, 'connected': True},
+                {'device_uid': 'sim-2', 'strip': 'aux', 'length': 20, 'connected': False},
+            ],
         }
         result = format_event(KIND_JSON, _json_payload(msg))
-        assert result == '[snapshot] state=playing online=1/2 session=5'
+        assert result == (
+            'playing session=5 t=1.25/8.00s; devices online 1/2: '
+            'sim-1 (main, 10 LEDs); offline: sim-2 (aux, 20 LEDs)'
+        )
 
     def test_state_event(self):
         msg = {
@@ -49,23 +76,23 @@ class TestFormatEvent:
             'state': 'playing', 'epoch': 1, 'session_id': 3,
         }
         result = format_event(KIND_JSON, _json_payload(msg))
-        assert result == '[state] playing epoch=1 session=3'
+        assert result == 'state playing epoch=1 session=3'
 
     def test_device_connected(self):
         msg = {
             'type': 'event', 'event': 'device_status',
-            'device_uid': 'sim-1', 'strip': 'strip_a', 'connected': True,
+            'device_uid': 'sim-1', 'strip': 'strip_a', 'length': 10, 'connected': True,
         }
         result = format_event(KIND_JSON, _json_payload(msg))
-        assert result == '[device] sim-1 (strip_a) connected'
+        assert result == 'device sim-1 connected (strip_a, 10 LEDs)'
 
     def test_device_disconnected(self):
         msg = {
             'type': 'event', 'event': 'device_status',
-            'device_uid': 'sim-2', 'strip': 'strip_b', 'connected': False,
+            'device_uid': 'sim-2', 'strip': 'strip_b', 'length': 20, 'connected': False,
         }
         result = format_event(KIND_JSON, _json_payload(msg))
-        assert result == '[device] sim-2 (strip_b) disconnected'
+        assert result == 'device sim-2 disconnected (strip_b, 20 LEDs)'
 
     def test_session_start(self):
         msg = {
@@ -74,7 +101,7 @@ class TestFormatEvent:
             'strips': [{'name': 'strip_a'}, {'name': 'strip_b'}],
         }
         result = format_event(KIND_JSON, _json_payload(msg))
-        assert result == "[session] id=1 epoch=0 duration=2.0s strips=[strip_a, strip_b]"
+        assert result == "session 1 started epoch=0 duration=2.0s strips=[strip_a, strip_b]"
 
     def test_loop(self):
         msg = {
@@ -82,7 +109,7 @@ class TestFormatEvent:
             'epoch': 3, 'session_id': 1,
         }
         result = format_event(KIND_JSON, _json_payload(msg))
-        assert result == '[loop] epoch=3 session=1'
+        assert result == 'loop epoch=3 session=1'
 
     def test_error(self):
         msg = {
@@ -90,17 +117,17 @@ class TestFormatEvent:
             'message': 'something broke',
         }
         result = format_event(KIND_JSON, _json_payload(msg))
-        assert result == '[error] something broke'
+        assert result == 'error: something broke'
 
     def test_reply_ok(self):
         msg = {'type': 'reply', 'id': 7, 'ok': True, 'result': {'x': 1}}
         result = format_event(KIND_JSON, _json_payload(msg))
-        assert result == '[reply:7] ok {"x":1}'
+        assert result == 'reply 7 ok {"x":1}'
 
     def test_reply_error(self):
         msg = {'type': 'reply', 'id': 3, 'ok': False, 'error': 'bad cmd'}
         result = format_event(KIND_JSON, _json_payload(msg))
-        assert result == '[reply:3] ERROR: bad cmd'
+        assert result == 'reply 3 ERROR: bad cmd'
 
     def test_frame_returns_none(self):
         assert format_event(KIND_FRAME, b'\x00' * 20) is None
@@ -108,20 +135,20 @@ class TestFormatEvent:
     def test_unknown_event(self):
         msg = {'type': 'event', 'event': 'future_thing', 'data': 42}
         result = format_event(KIND_JSON, _json_payload(msg))
-        assert '[unknown]' in result
+        assert result.startswith('unknown event')
 
     def test_unknown_kind(self):
         result = format_event(0xFF, b'hello')
-        assert result == '[unknown] kind=255 len=5'
+        assert result == 'unknown message kind=255 len=5'
 
     def test_unknown_msg_type(self):
         msg = {'type': 'something_else', 'x': 1}
         result = format_event(KIND_JSON, _json_payload(msg))
-        assert '[unknown]' in result
+        assert result.startswith('unknown message')
 
     def test_bad_json(self):
         result = format_event(KIND_JSON, b'\xff\xfe')
-        assert '[unknown]' in result
+        assert 'bad json' in result
         assert 'bad json' in result
 
 
@@ -155,6 +182,16 @@ class TestParseCommand:
     def test_quit(self):
         cmd, err = parse_command('/quit', 1)
         assert cmd is _QUIT_SENTINEL
+        assert err is None
+
+    def test_exit_alias(self):
+        cmd, err = parse_command('/exit', 1)
+        assert cmd is _QUIT_SENTINEL
+        assert err is None
+
+    def test_help(self):
+        cmd, err = parse_command('/help', 1)
+        assert cmd is _HELP_SENTINEL
         assert err is None
 
     def test_unknown_command(self):
@@ -213,6 +250,11 @@ class TestParseCommand:
 
     def test_quit_extra_args_rejected(self):
         cmd, err = parse_command('/quit please', 1)
+        assert cmd is None
+        assert 'does not take arguments' in err
+
+    def test_help_extra_args_rejected(self):
+        cmd, err = parse_command('/help now', 1)
         assert cmd is None
         assert 'does not take arguments' in err
 

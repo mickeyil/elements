@@ -13,12 +13,13 @@ import os
 import select
 import signal
 import socket
+import struct
 import sys
 import time
 
 from .config import (
-    DEFAULT_CONFIG_PATH, DEFAULT_SOCKET_PATH, ConfigError,
-    load_config, resolve_config_path,
+    DEFAULT_CONFIG_PATH, DEFAULT_LOGS_PATH, DEFAULT_SOCKET_PATH, ConfigError,
+    load_config, resolve_config_path, resolve_runtime_path,
 )
 from .service import ControllerService
 from .slogger import configure_logger
@@ -27,6 +28,77 @@ from .uds_wire import UdsReader, encode_json, parse_json_payload, KIND_JSON
 log = logging.getLogger(__name__)
 
 _TICK_INTERVAL = 0.020  # ~50Hz
+
+
+def _peer_label(argv: list[str]) -> str | None:
+    if not argv:
+        return None
+
+    exe = os.path.basename(argv[0])
+    if exe == 'elemctl' and len(argv) > 1:
+        sub = argv[1]
+        if sub in {'tui', 'serve', 'sim', 'run'}:
+            return f'elemctl {sub}'
+
+    if '-m' in argv:
+        try:
+            mod = argv[argv.index('-m') + 1]
+        except IndexError:
+            mod = ''
+        if mod == 'elemctl.tui':
+            return 'elemctl tui'
+        if mod == 'elemctl.serve':
+            return 'elemctl serve'
+        if mod == 'elemctl.sim':
+            return 'elemctl sim'
+        if mod == 'elemctl':
+            for arg in argv[argv.index('-m') + 2:]:
+                if arg in {'tui', 'serve', 'sim', 'run'}:
+                    return f'elemctl {arg}'
+
+    if exe.startswith('python'):
+        for arg in argv[1:]:
+            if arg in {'tui', 'serve', 'sim', 'run'}:
+                return f'elemctl {arg}'
+            if arg == 'elemctl.tui':
+                return 'elemctl tui'
+            if arg == 'elemctl.serve':
+                return 'elemctl serve'
+            if arg == 'elemctl.sim':
+                return 'elemctl sim'
+
+    return exe or None
+
+
+def _describe_peer(conn: socket.socket) -> str | None:
+    if not hasattr(socket, 'SO_PEERCRED'):
+        return None
+
+    try:
+        raw = conn.getsockopt(
+            socket.SOL_SOCKET,
+            socket.SO_PEERCRED,
+            struct.calcsize('3i'),
+        )
+        pid, _uid, _gid = struct.unpack('3i', raw)
+    except (AttributeError, OSError, struct.error):
+        return None
+
+    label = None
+    try:
+        with open(f'/proc/{pid}/cmdline', 'rb') as f:
+            argv = [
+                arg.decode(errors='replace')
+                for arg in f.read().split(b'\0')
+                if arg
+            ]
+        label = _peer_label(argv)
+    except OSError:
+        pass
+
+    if label:
+        return f'{label} pid={pid}'
+    return f'pid={pid}'
 
 
 class UdsServer:
@@ -39,6 +111,7 @@ class UdsServer:
 
         self._server_sock: socket.socket | None = None
         self._client_sock: socket.socket | None = None
+        self._client_desc: str | None = None
         self._reader = UdsReader()
 
     def run(self) -> None:
@@ -102,8 +175,12 @@ class UdsServer:
 
         conn.settimeout(1.0)
         self._client_sock = conn
+        self._client_desc = _describe_peer(conn)
         self._reader = UdsReader()
-        log.info('client connected')
+        if self._client_desc is not None:
+            log.info('client connected: %s', self._client_desc)
+        else:
+            log.info('client connected')
 
         # Probe all devices, then send snapshot
         self._service.probe_all()
@@ -161,7 +238,12 @@ class UdsServer:
             except OSError:
                 pass
             self._client_sock = None
-            log.info('client disconnected')
+            desc = self._client_desc
+            self._client_desc = None
+            if desc is not None:
+                log.info('client disconnected: %s', desc)
+            else:
+                log.info('client disconnected')
 
 
 def main() -> None:
@@ -178,6 +260,10 @@ def main() -> None:
         '--socket', default=DEFAULT_SOCKET_PATH,
         help='UDS socket path (default: %(default)s)',
     )
+    parser.add_argument(
+        '--log-dir', default=None,
+        help='logs directory (default: controller.logs_dir or <repo>/logs)',
+    )
 
     args = parser.parse_args()
     configure_logger(level="INFO")
@@ -188,6 +274,12 @@ def main() -> None:
     except (ConfigError, json.JSONDecodeError) as e:
         log.error('config error: %s', e)
         sys.exit(1)
+
+    log_dir = resolve_runtime_path(args.log_dir, config.logs_dir, DEFAULT_LOGS_PATH)
+    configure_logger(
+        logfile=os.path.join(log_dir, 'serve.log'),
+        level="INFO",
+    )
 
     service = ControllerService(config)
     socket_path = os.path.expanduser(args.socket)
