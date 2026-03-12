@@ -36,9 +36,6 @@ def build_sim_command(
     return [
         str(network_sim_bin),
         '--tcp-port', str(tcp_port),
-        '--frame-port', str(config.frame_port),
-        '--strip-length', str(device.length),
-        '--device-id', str(device.device_id),
         '--discovery-port', str(config.discovery_port),
         '--discovery-host', discovery_host,
         '--device-uid', device.device_uid,

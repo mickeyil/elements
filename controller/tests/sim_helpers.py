@@ -75,16 +75,14 @@ def start_sim(tcp_port: int, frame_port: int, strip_length: int,
     cmd = [
         str(NETWORK_SIM_BIN),
         '--tcp-port', str(tcp_port),
-        '--frame-port', str(frame_port),
-        '--strip-length', str(strip_length),
-        '--device-id', str(device_id),
     ]
+    if device_uid is None:
+        device_uid = f'sim-{device_id}'
+    cmd += ['--device-uid', device_uid]
     if discovery_port is not None:
         cmd += ['--discovery-port', str(discovery_port)]
     if discovery_host is not None:
         cmd += ['--discovery-host', discovery_host]
-    if device_uid is not None:
-        cmd += ['--device-uid', device_uid]
 
     proc = subprocess.Popen(
         cmd,

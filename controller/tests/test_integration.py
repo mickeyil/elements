@@ -66,6 +66,8 @@ class TestIntegration:
             host='127.0.0.1',
             tcp_port=tcp_port,
             device_type='sim',
+            strip_length=STRIP_LENGTH,
+            frame_port=frame_port,
             udp_receiver=receiver,
         )
 
@@ -110,6 +112,8 @@ class TestIntegration:
             host='127.0.0.1',
             tcp_port=tcp_port,
             device_type='sim',
+            strip_length=STRIP_LENGTH,
+            frame_port=frame_port,
             udp_receiver=receiver,
         )
 
@@ -128,6 +132,8 @@ class TestIntegration:
             host='127.0.0.1',
             tcp_port=tcp_port,
             device_type='sim',
+            strip_length=STRIP_LENGTH,
+            frame_port=frame_port,
             udp_receiver=receiver,
         )
 
@@ -185,6 +191,8 @@ class TestIntegration:
             host='127.0.0.1',
             tcp_port=tcp_port,
             device_type='sim',
+            strip_length=STRIP_LENGTH,
+            frame_port=frame_port,
             udp_receiver=receiver,
         )
 
@@ -211,6 +219,8 @@ class TestIntegration:
             host='127.0.0.1',
             tcp_port=tcp_port,
             device_type='sim',
+            strip_length=STRIP_LENGTH,
+            frame_port=frame_port,
             udp_receiver=receiver1,
         )
 
@@ -246,6 +256,8 @@ class TestIntegration:
             host='127.0.0.1',
             tcp_port=tcp_port,
             device_type='sim',
+            strip_length=STRIP_LENGTH,
+            frame_port=frame_port,
             udp_receiver=receiver2,
         )
 

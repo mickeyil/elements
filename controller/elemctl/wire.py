@@ -12,6 +12,7 @@ import struct
 from .device import DeviceFrame
 
 # Command type constants
+CMD_CONFIGURE = 0x04
 CMD_LOAD = 0x10
 CMD_START = 0x11
 CMD_JUMP = 0x12
@@ -28,6 +29,10 @@ UDP_FRAME_HEADER = struct.Struct('<HHIf')
 def encode_load(device_id: int, gen: int, blob: bytes) -> bytes:
     payload = struct.pack('<HH', device_id, gen) + blob
     return struct.pack('<IB', 1 + len(payload), CMD_LOAD) + payload
+
+
+def encode_configure(device_id: int, strip_length: int, frame_port: int) -> bytes:
+    return struct.pack('<IBHHH', 7, CMD_CONFIGURE, device_id, strip_length, frame_port)
 
 
 def encode_start(t0_us: int) -> bytes:

@@ -54,6 +54,8 @@ class ControllerService:
                 host=dc.host,
                 tcp_port=dc.tcp_port,
                 device_type=dc.device_type,
+                strip_length=dc.length,
+                frame_port=config.frame_port,
                 udp_receiver=self._receiver,
             )
             self._devices.append(dev)

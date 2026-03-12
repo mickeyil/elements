@@ -13,6 +13,7 @@ import socket
 from .device import DeviceFrame, DeviceState
 from .udp_receiver import UdpFrameReceiver
 from .wire import (
+    encode_configure,
     encode_debug_seek,
     encode_jump,
     encode_load,
@@ -37,12 +38,16 @@ class NetworkDevice:
         host: str,
         tcp_port: int,
         device_type: str,
+        strip_length: int,
+        frame_port: int,
         udp_receiver: UdpFrameReceiver,
     ):
         self._device_id = device_id
         self._host = host
         self._tcp_port = tcp_port
         self._device_type = device_type
+        self._strip_length = strip_length
+        self._frame_port = frame_port
         self._udp_receiver = udp_receiver
 
         self._sock: socket.socket | None = None
@@ -194,6 +199,20 @@ class NetworkDevice:
             sock.connect((self._host, self._tcp_port))
             self._sock = sock
             self._connected = True
+            if not self._send(encode_configure(
+                self._device_id,
+                self._strip_length,
+                self._frame_port,
+            )):
+                return False
+            status = self._recv_ack()
+            if status != 0:
+                log.warning(
+                    'configure for %s:%d failed with status=%s',
+                    self._host, self._tcp_port, status,
+                )
+                self._disconnect()
+                return False
             return True
         except OSError as e:
             log.warning('connect to %s:%d failed: %s', self._host, self._tcp_port, e)

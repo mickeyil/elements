@@ -4,9 +4,10 @@
 // commands to an ESPSimulated instance, and sends RGB frames back over UDP.
 //
 // Usage:
-//   ./network_sim --tcp-port PORT --frame-port PORT --strip-length N [--device-id ID]
-//                 [--device-uid UID] [--discovery-port PORT] [--discovery-host HOST]
-// If --device-uid is provided without --discovery-port, discovery defaults to 6040.
+//   ./network_sim --device-uid UID [--tcp-port PORT]
+//                 [--discovery-port PORT] [--discovery-host HOST]
+// Discovery is mandatory. Runtime config (device_id, strip_length, frame_port)
+// is provided by the controller via CMD_CONFIGURE after TCP connect.
 
 #include "esp_simulated.h"
 
@@ -25,6 +26,7 @@
 #include <vector>
 
 // Wire protocol command types (must match controller/elemctl/wire.py)
+static constexpr uint8_t CMD_CONFIGURE  = 0x04;
 static constexpr uint8_t CMD_LOAD       = 0x10;
 static constexpr uint8_t CMD_START      = 0x11;
 static constexpr uint8_t CMD_JUMP       = 0x12;
@@ -112,8 +114,11 @@ static constexpr size_t TCP_BUF_INITIAL = 32768;
 static constexpr size_t TCP_MSG_MAX = 4 * 1024 * 1024;
 
 // Returns: 0 = ok, -1 = connection closed/error
-static int poll_tcp_commands(int tcp_fd, ESPSimulated& device,
+static int poll_tcp_commands(int tcp_fd,
+                             std::unique_ptr<ESPSimulated>& device,
                              TransportState& state,
+                             sockaddr_in& controller_addr,
+                             bool& configured,
                              std::vector<uint8_t>& buf, size_t& buf_used)
 {
     // Ensure room for at least one recv chunk
@@ -163,7 +168,26 @@ static int poll_tcp_commands(int tcp_fd, ESPSimulated& device,
         uint32_t payload_len = msg_len - 1;
 
         switch (cmd_type) {
+        case CMD_CONFIGURE: {
+            if (configured) { send_ack(tcp_fd, 1); break; }
+            if (payload_len < 6) { send_ack(tcp_fd, 1); break; }
+            uint16_t device_id, strip_length, frame_port;
+            memcpy(&device_id, payload, 2);
+            memcpy(&strip_length, payload + 2, 2);
+            memcpy(&frame_port, payload + 4, 2);
+            if (strip_length < 1 || frame_port < 1) {
+                send_ack(tcp_fd, 1);
+                break;
+            }
+            device = std::make_unique<ESPSimulated>(strip_length);
+            state.device_id = device_id;
+            controller_addr.sin_port = htons(frame_port);
+            configured = true;
+            send_ack(tcp_fd, 0);
+            break;
+        }
         case CMD_LOAD: {
+            if (!configured || !device) { send_ack(tcp_fd, 2); break; }
             if (payload_len < 4) { send_ack(tcp_fd, 1); break; }
             uint16_t dev_id, gen;
             memcpy(&dev_id, payload, 2);
@@ -171,18 +195,20 @@ static int poll_tcp_commands(int tcp_fd, ESPSimulated& device,
             state.device_id = dev_id;
             const uint8_t* blob = payload + 4;
             size_t blob_len = payload_len - 4;
-            bool ok = device.handle_load(blob, blob_len, gen);
+            bool ok = device->handle_load(blob, blob_len, gen);
             send_ack(tcp_fd, ok ? 0 : 1);
             break;
         }
         case CMD_START: {
+            if (!configured || !device) break;
             if (payload_len < 8) break;
             int64_t t0;
             memcpy(&t0, payload, 8);
-            device.handle_start(t0);
+            device->handle_start(t0);
             break;
         }
         case CMD_JUMP: {
+            if (!configured || !device) break;
             if (payload_len < 14) break;
             int64_t t0;
             float t_rel;
@@ -190,33 +216,36 @@ static int poll_tcp_commands(int tcp_fd, ESPSimulated& device,
             memcpy(&t0, payload, 8);
             memcpy(&t_rel, payload + 8, 4);
             memcpy(&gen, payload + 12, 2);
-            device.handle_jump(t0, t_rel, gen);
+            device->handle_jump(t0, t_rel, gen);
             break;
         }
         case CMD_PAUSE:
-            device.handle_pause();
+            if (configured && device) device->handle_pause();
             break;
         case CMD_RESUME: {
+            if (!configured || !device) break;
             if (payload_len < 8) break;
             int64_t t0;
             memcpy(&t0, payload, 8);
-            device.handle_resume(t0);
+            device->handle_resume(t0);
             break;
         }
         case CMD_STOP:
-            device.handle_stop();
+            if (configured && device) device->handle_stop();
             break;
         case CMD_DEBUG_SEEK: {
+            if (!configured || !device) break;
             if (payload_len < 4) break;
             float t_rel;
             memcpy(&t_rel, payload, 4);
-            device.debug_seek(t_rel);
+            device->debug_seek(t_rel);
             break;
         }
         case CMD_DEBUG_STEP: {
+            if (!configured || !device) break;
             if (payload_len < 1) break;
             int8_t direction = (int8_t)payload[0];
-            device.debug_step(direction);
+            device->debug_step(direction);
             break;
         }
         default:
@@ -259,37 +288,24 @@ static void send_frames(int udp_fd, const sockaddr_in& controller_addr,
 // CLI argument parsing
 // ---------------------------------------------------------------------------
 
+static constexpr int DEFAULT_DISCOVERY_PORT = 6040;
+
 struct Args {
-    int tcp_port = -1;
-    int frame_port = -1;
-    int strip_length = -1;
-    int device_id = 0;
-    int discovery_port = -1;
-    bool discovery_port_set = false;
+    int tcp_port = 0;
+    int discovery_port = DEFAULT_DISCOVERY_PORT;
     std::string discovery_host = "127.0.0.1";
-    bool discovery_host_set = false;
     std::string device_uid;
 };
-
-static constexpr int DEFAULT_DISCOVERY_PORT = 6040;
 
 static bool parse_args(int argc, char** argv, Args& args)
 {
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--tcp-port") == 0 && i + 1 < argc) {
             args.tcp_port = atoi(argv[++i]);
-        } else if (strcmp(argv[i], "--frame-port") == 0 && i + 1 < argc) {
-            args.frame_port = atoi(argv[++i]);
-        } else if (strcmp(argv[i], "--strip-length") == 0 && i + 1 < argc) {
-            args.strip_length = atoi(argv[++i]);
-        } else if (strcmp(argv[i], "--device-id") == 0 && i + 1 < argc) {
-            args.device_id = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--discovery-port") == 0 && i + 1 < argc) {
             args.discovery_port = atoi(argv[++i]);
-            args.discovery_port_set = true;
         } else if (strcmp(argv[i], "--discovery-host") == 0 && i + 1 < argc) {
             args.discovery_host = argv[++i];
-            args.discovery_host_set = true;
         } else if (strcmp(argv[i], "--device-uid") == 0 && i + 1 < argc) {
             args.device_uid = argv[++i];
         } else {
@@ -298,42 +314,22 @@ static bool parse_args(int argc, char** argv, Args& args)
         }
     }
 
-    if (args.tcp_port < 0 || args.frame_port < 0 || args.strip_length < 1) {
+    if (args.device_uid.empty()) {
         fprintf(stderr,
-                "Usage: %s --tcp-port PORT --frame-port PORT --strip-length N "
-                "[--device-id ID] [--device-uid UID] [--discovery-port PORT] "
+                "Usage: %s --device-uid UID [--tcp-port PORT] [--discovery-port PORT] "
                 "[--discovery-host HOST]\n",
                 argv[0]);
         return false;
     }
 
     // tcp_port == 0 is valid (ephemeral bind), but other ports must be 1-65535
-    if (args.tcp_port > 65535) {
+    if (args.tcp_port < 0 || args.tcp_port > 65535) {
         fprintf(stderr, "--tcp-port must be 0-65535\n");
         return false;
     }
-    if (args.frame_port < 1 || args.frame_port > 65535) {
-        fprintf(stderr, "--frame-port must be 1-65535\n");
-        return false;
-    }
-
-    bool have_uid = !args.device_uid.empty();
-    bool have_disc_host = args.discovery_host_set;
-
-    if (args.discovery_port_set && (args.discovery_port < 1 || args.discovery_port > 65535)) {
+    if (args.discovery_port < 1 || args.discovery_port > 65535) {
         fprintf(stderr, "--discovery-port must be 1-65535\n");
         return false;
-    }
-    if (have_disc_host && !have_uid) {
-        fprintf(stderr, "--discovery-host requires --device-uid\n");
-        return false;
-    }
-    if (args.discovery_port_set && !have_uid) {
-        fprintf(stderr, "--discovery-port requires --device-uid\n");
-        return false;
-    }
-    if (have_uid && !args.discovery_port_set) {
-        args.discovery_port = DEFAULT_DISCOVERY_PORT;
     }
 
     return true;
@@ -367,8 +363,8 @@ int main(int argc, char** argv)
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
 
-    auto device = std::make_unique<ESPSimulated>((uint16_t)args.strip_length);
-    TransportState state{(uint16_t)args.device_id};
+    std::unique_ptr<ESPSimulated> device;
+    TransportState state{0};
 
     // TCP server socket (non-blocking for accept)
     int tcp_server = socket(AF_INET, SOCK_STREAM, 0);
@@ -405,30 +401,25 @@ int main(int argc, char** argv)
     if (udp_fd < 0) { perror("socket(udp)"); close(tcp_server); return 1; }
 
     // Discovery setup
-    bool discovery_enabled = args.discovery_port > 0 && !args.device_uid.empty();
     std::vector<uint8_t> hello_pkt;
     sockaddr_in discovery_addr{};
-    if (discovery_enabled) {
-        opt = 1;
-        setsockopt(udp_fd, SOL_SOCKET, SO_BROADCAST, &opt, sizeof(opt));
-        hello_pkt = build_hello_packet(args.device_uid, (uint16_t)args.tcp_port);
-        discovery_addr.sin_family = AF_INET;
-        discovery_addr.sin_port = htons((uint16_t)args.discovery_port);
-        if (inet_pton(AF_INET, args.discovery_host.c_str(), &discovery_addr.sin_addr) != 1) {
-            fprintf(stderr, "invalid --discovery-host: %s\n", args.discovery_host.c_str());
-            close(udp_fd); close(tcp_server); return 1;
-        }
+    opt = 1;
+    setsockopt(udp_fd, SOL_SOCKET, SO_BROADCAST, &opt, sizeof(opt));
+    hello_pkt = build_hello_packet(args.device_uid, (uint16_t)args.tcp_port);
+    discovery_addr.sin_family = AF_INET;
+    discovery_addr.sin_port = htons((uint16_t)args.discovery_port);
+    if (inet_pton(AF_INET, args.discovery_host.c_str(), &discovery_addr.sin_addr) != 1) {
+        fprintf(stderr, "invalid --discovery-host: %s\n", args.discovery_host.c_str());
+        close(udp_fd); close(tcp_server); return 1;
     }
 
     // TCP read buffer (grows dynamically for large blobs)
     std::vector<uint8_t> tcp_buf(TCP_BUF_INITIAL);
     size_t tcp_buf_used = 0;
 
-    printf("network_sim: listening on tcp=%d, frames->udp=%d, strip=%d, device_id=%d\n",
-           args.tcp_port, args.frame_port, args.strip_length, args.device_id);
-    if (discovery_enabled)
-        printf("network_sim: discovery -> %s:%d uid=%s\n",
-               args.discovery_host.c_str(), args.discovery_port, args.device_uid.c_str());
+    printf("network_sim: listening on tcp=%d\n", args.tcp_port);
+    printf("network_sim: discovery -> %s:%d uid=%s\n",
+           args.discovery_host.c_str(), args.discovery_port, args.device_uid.c_str());
     fflush(stdout);
 
     static constexpr int64_t HELLO_INTERVAL_US = 500000; // 500ms
@@ -447,12 +438,10 @@ int main(int argc, char** argv)
                     perror("accept");
                 }
                 // Send HELLO if discovery is enabled
-                if (discovery_enabled) {
-                    int64_t now = now_us();
-                    if (now - last_hello_us >= HELLO_INTERVAL_US) {
-                        send_hello(udp_fd, discovery_addr, hello_pkt);
-                        last_hello_us = now;
-                    }
+                int64_t now = now_us();
+                if (now - last_hello_us >= HELLO_INTERVAL_US) {
+                    send_hello(udp_fd, discovery_addr, hello_pkt);
+                    last_hello_us = now;
                 }
                 usleep(100000); // 100ms between accept attempts
             }
@@ -469,8 +458,9 @@ int main(int argc, char** argv)
 
         sockaddr_in controller_addr{};
         controller_addr.sin_family = AF_INET;
-        controller_addr.sin_port = htons((uint16_t)args.frame_port);
+        controller_addr.sin_port = 0;
         controller_addr.sin_addr = peer.sin_addr;
+        bool configured = false;
 
         // Set TCP non-blocking for recv
         fcntl(tcp_fd, F_SETFL, O_NONBLOCK);
@@ -478,19 +468,21 @@ int main(int argc, char** argv)
         tcp_buf_used = 0;
 
         while (g_running) {
-            int rc = poll_tcp_commands(tcp_fd, *device, state, tcp_buf, tcp_buf_used);
+            int rc = poll_tcp_commands(
+                tcp_fd, device, state, controller_addr, configured, tcp_buf, tcp_buf_used
+            );
             if (rc < 0) break; // connection closed
 
-            device->tick_once();
-            send_frames(udp_fd, controller_addr, state, *device);
+            if (device) {
+                device->tick_once();
+                send_frames(udp_fd, controller_addr, state, *device);
+            }
 
             // Continue sending HELLOs during active connection (enables re-discovery)
-            if (discovery_enabled) {
-                int64_t now = now_us();
-                if (now - last_hello_us >= HELLO_INTERVAL_US) {
-                    send_hello(udp_fd, discovery_addr, hello_pkt);
-                    last_hello_us = now;
-                }
+            int64_t now = now_us();
+            if (now - last_hello_us >= HELLO_INTERVAL_US) {
+                send_hello(udp_fd, discovery_addr, hello_pkt);
+                last_hello_us = now;
             }
 
             usleep(20000); // ~50fps
@@ -500,10 +492,8 @@ int main(int argc, char** argv)
         printf("Controller disconnected.\n");
         fflush(stdout);
 
-        // Full reset for next connection — reconstruct the device so a
-        // reconnecting controller starts from a clean IDLE state.
-        device = std::make_unique<ESPSimulated>((uint16_t)args.strip_length);
-        state.device_id = (uint16_t)args.device_id;
+        device.reset();
+        state.device_id = 0;
     }
 
     close(udp_fd);

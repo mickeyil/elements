@@ -42,9 +42,6 @@ class TestBuildSimCommand:
         assert cmd == [
             str(fake_bin),
             '--tcp-port', '0',
-            '--frame-port', '9002',
-            '--strip-length', '60',
-            '--device-id', '1',
             '--discovery-port', str(DEFAULT_DISCOVERY_PORT),
             '--discovery-host', '127.0.0.1',
             '--device-uid', 'sim-1',

@@ -164,7 +164,7 @@ def _make_fake_factory(fake_devices: list[_FakeDevice]):
     """Return a factory that yields pre-created _FakeDevice instances in order."""
     idx = iter(range(len(fake_devices)))
 
-    def factory(device_id, host, tcp_port, device_type, udp_receiver):
+    def factory(device_id, host, tcp_port, device_type, strip_length, frame_port, udp_receiver):
         return fake_devices[next(idx)]
 
     return factory

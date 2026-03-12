@@ -88,9 +88,7 @@ def sim_process(request):
         [
             str(NETWORK_SIM_BIN),
             '--tcp-port', str(tcp_port),
-            '--frame-port', str(frame_port),
-            '--strip-length', str(STRIP_LENGTH),
-            '--device-id', '1',
+            '--device-uid', 'sim-test',
         ],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -223,7 +221,7 @@ class _SilentDevice:
     ever arrive.
     """
 
-    def __init__(self, device_id, host, tcp_port, device_type, udp_receiver):
+    def __init__(self, device_id, host, tcp_port, device_type, strip_length, frame_port, udp_receiver):
         self._state = DeviceState.IDLE
         self._t0_ns = 0
 

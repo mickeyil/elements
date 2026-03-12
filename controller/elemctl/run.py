@@ -52,6 +52,8 @@ def run_controller(
                 host=dc.host,
                 tcp_port=dc.tcp_port,
                 device_type=dc.device_type,
+                strip_length=dc.length,
+                frame_port=config.frame_port,
                 udp_receiver=receiver,
             )
             devices.append(dev)

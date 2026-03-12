@@ -29,6 +29,7 @@ The controller opens a persistent TCP connection to each device. Commands are le
 Command types:
 
 ```
+CMD_CONFIGURE:    type = 0x04, payload = [device_id: u16] [strip_length: u16] [frame_port: u16] -> 7 bytes total
 CMD_LOAD:         type = 0x10, payload = [device_id: u16] [gen: u16] [blob: variable] -> 5+ bytes total
 CMD_START:        type = 0x11, payload = [t0: i64]                     -> 9 bytes total
 CMD_JUMP:         type = 0x12, payload = [t0: i64] [t_rel: f32] [gen: u16] -> 15 bytes total
@@ -46,10 +47,10 @@ Response (device → controller, same TCP connection):
 
 ```
 CMD_ACK:          type = 0x80, payload = [status: u8]                  -> 2 bytes total
-                  status: 0 = ok, 1 = decode error
+                  status: 0 = ok, 1 = invalid payload/config, 2 = not configured
 ```
 
-The device sends an ACK after LOAD (with decode status). Other commands are fire-and-forget from the controller's perspective — the TCP connection itself provides delivery guarantee.
+The device sends an ACK after CONFIGURE and LOAD. Other commands are fire-and-forget from the controller's perspective — the TCP connection itself provides delivery guarantee.
 
 **CMD_JUMP vs CMD_DEBUG_SEEK:** CMD_JUMP is a lightweight seek available on all devices. It carries a shared absolute `t0` (like CMD_START) so all devices stay synchronized, `t_rel` for precise frame rendering when paused, and a `gen` value the device echoes on outbound UDP so the controller can drop stale in-flight frames. Valid only within reset-safe intervals (see `controller.md`). CMD_DEBUG_SEEK is simulator-only: it replays from t=0 to the target, producing correct output at any arbitrary time.
 
@@ -57,7 +58,9 @@ The device sends an ACK after LOAD (with decode status). Other commands are fire
 
 **Generation counter (`gen`):** LOAD and JUMP carry a `gen` value (u16) that the device stores and includes on every outbound UDP frame. The controller increments `gen` on each LOAD and JUMP, and drops any incoming UDP frame whose `gen` doesn't match the current expected value. This prevents stale in-flight frames from being forwarded to the browser with the wrong epoch.
 
-**Device identity (`device_id`):** LOAD carries a `device_id` (u16) assigned from the controller's static config. The device stores it and echoes it on every outbound UDP packet (frames and telemetry). This allows the controller to receive all device frames on a single shared UDP port and demux by `device_id`. This is necessary because multiple simulator instances on the same host share a source IP, making source-address-based demux unreliable.
+**Device identity (`device_id`):** The controller assigns `device_id` during CONFIGURE and the device echoes it on every outbound UDP packet. LOAD still carries `device_id` redundantly for compatibility and optional validation. This allows the controller to receive all device frames on a single shared UDP port and demux by `device_id`. This is necessary because multiple simulator instances on the same host share a source IP, making source-address-based demux unreliable.
+
+**Runtime config handshake:** `network_sim` starts with discovery identity and TCP listen state only. After TCP connect, the controller sends CONFIGURE with `device_id`, `strip_length`, and `frame_port`. Until CONFIGURE succeeds, LOAD is rejected with ACK status `2` and all other commands are ignored.
 
 ---
 
@@ -73,7 +76,7 @@ static uint32_t tcp_buf_len = 0;
 
 // Called each loop iteration. Non-blocking: reads whatever is available,
 // processes complete commands, leaves partial data for next call.
-void poll_tcp_commands(int tcp_fd, PlaybackDevice& device) {
+void poll_tcp_commands(int tcp_fd, /* ... */) {
     // Non-blocking read — append to buffer
     int n = recv(tcp_fd, tcp_buf + tcp_buf_len,
                  sizeof(tcp_buf) - tcp_buf_len, MSG_DONTWAIT);
@@ -92,12 +95,23 @@ void poll_tcp_commands(int tcp_fd, PlaybackDevice& device) {
         uint32_t payload_len = msg_len - 1;
 
         switch (type) {
+            case 0x04: {  // CMD_CONFIGURE
+                uint16_t device_id, strip_length, frame_port;
+                memcpy(&device_id, payload, 2);
+                memcpy(&strip_length, payload + 2, 2);
+                memcpy(&frame_port, payload + 4, 2);
+                // Construct/configure the playback device here.
+                break;
+            }
             case 0x10: {  // CMD_LOAD
+                if (!configured) {
+                    // ACK status 2 = not configured
+                    break;
+                }
                 if (payload_len < 4) break;
                 uint16_t device_id, gen;
                 memcpy(&device_id, payload, 2);
                 memcpy(&gen, payload + 2, 2);
-                _device_id = device_id;  // store for outbound UDP
                 bool ok = device.handle_load(payload + 4, payload_len - 4, gen);
                 uint8_t ack[] = {0x80, ok ? (uint8_t)0 : (uint8_t)1};
                 // send_tcp_ack(tcp_fd, ack, sizeof(ack));  // length-prefixed
@@ -489,7 +503,7 @@ Two seek mechanisms exist with different tradeoffs:
 [device_id: u16] [gen: u16] [frame_index: u32] [t_rel: f32] [rgb: bytes...]
 ```
 
-`device_id` is stored by the device from CMD_LOAD and echoed on every outbound UDP packet.
+`device_id` is assigned by CONFIGURE and echoed on every outbound UDP packet. CMD_LOAD still carries it redundantly.
 
 ### Frame destination
 

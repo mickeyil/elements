@@ -11,6 +11,7 @@ from elemctl.network_device import NetworkDevice
 from elemctl.udp_receiver import UdpFrameReceiver
 from elemctl.wire import (
     CMD_ACK,
+    CMD_CONFIGURE,
     CMD_DEBUG_SEEK,
     CMD_JUMP,
     CMD_LOAD,
@@ -19,6 +20,7 @@ from elemctl.wire import (
     CMD_START,
     CMD_STOP,
     UDP_FRAME_HEADER,
+    encode_configure,
     encode_load,
     encode_start,
     parse_ack,
@@ -129,14 +131,33 @@ def _make_device(
     receiver: UdpFrameReceiver,
     device_id: int = 1,
     device_type: str = 'sim',
+    strip_length: int = 5,
 ) -> NetworkDevice:
     return NetworkDevice(
         device_id=device_id,
         host='127.0.0.1',
         tcp_port=endpoint.tcp_port,
         device_type=device_type,
+        strip_length=strip_length,
+        frame_port=_receiver_port(receiver),
         udp_receiver=receiver,
     )
+
+
+def _expect_configure(
+    endpoint: FakeEndpoint,
+    *,
+    device_id: int = 1,
+    strip_length: int = 5,
+    frame_port: int,
+) -> None:
+    cmd_type, payload = endpoint.read_command()
+    assert cmd_type == CMD_CONFIGURE
+    got_device_id, got_strip_length, got_frame_port = struct.unpack_from('<HHH', payload, 0)
+    assert got_device_id == device_id
+    assert got_strip_length == strip_length
+    assert got_frame_port == frame_port
+    endpoint.send_ack(0)
 
 
 def _load_device(dev: NetworkDevice, ep: FakeEndpoint, gen: int = 1) -> bool:
@@ -145,6 +166,12 @@ def _load_device(dev: NetworkDevice, ep: FakeEndpoint, gen: int = 1) -> bool:
 
     def server_side():
         ep.accept()
+        _expect_configure(
+            ep,
+            device_id=dev._device_id,
+            strip_length=dev._strip_length,
+            frame_port=dev._frame_port,
+        )
         ep.read_command()
         ep.send_ack(0)
 
@@ -166,6 +193,16 @@ def _sec(t: float) -> int:
 
 
 class TestWireEncoding:
+    def test_encode_configure(self):
+        msg = encode_configure(device_id=5, strip_length=10, frame_port=9002)
+        length = struct.unpack_from('<I', msg, 0)[0]
+        assert length == 7
+        assert msg[4] == CMD_CONFIGURE
+        device_id, strip_length, frame_port = struct.unpack_from('<HHH', msg, 5)
+        assert device_id == 5
+        assert strip_length == 10
+        assert frame_port == 9002
+
     def test_encode_load(self):
         msg = encode_load(device_id=5, gen=2, blob=b'\xAA\xBB')
         # length prefix
@@ -227,16 +264,53 @@ class TestConnection:
         assert dev._connected
         assert dev.state() == DeviceState.LOADED
 
+    def test_connect_sends_configure_first(self, endpoint, receiver):
+        dev = _make_device(endpoint, receiver, device_id=7, strip_length=9)
+
+        def server_side():
+            endpoint.accept()
+            _expect_configure(
+                endpoint,
+                device_id=7,
+                strip_length=9,
+                frame_port=_receiver_port(receiver),
+            )
+            cmd_type, _payload = endpoint.read_command()
+            assert cmd_type == CMD_LOAD
+            endpoint.send_ack(0)
+
+        t = threading.Thread(target=server_side, daemon=True)
+        t.start()
+        assert dev.load(b'\x00', 1)
+        t.join(timeout=3.0)
+
     def test_connect_failure(self, receiver):
         dev = NetworkDevice(
             device_id=1,
             host='127.0.0.1',
             tcp_port=1,  # unlikely to be listening
             device_type='sim',
+            strip_length=5,
+            frame_port=_receiver_port(receiver),
             udp_receiver=receiver,
         )
         assert not dev.load(b'\x00', 1)
         assert dev.state() == DeviceState.IDLE
+
+    def test_configure_ack_failure_disconnects(self, endpoint, receiver):
+        dev = _make_device(endpoint, receiver)
+
+        def server_side():
+            endpoint.accept()
+            cmd_type, _payload = endpoint.read_command()
+            assert cmd_type == CMD_CONFIGURE
+            endpoint.send_ack(1)
+
+        t = threading.Thread(target=server_side, daemon=True)
+        t.start()
+        assert not dev.load(b'\x00', 1)
+        t.join(timeout=3.0)
+        assert not dev._connected
 
 
 # =========================================================================
@@ -250,6 +324,12 @@ class TestLoad:
 
         def server_side():
             endpoint.accept()
+            _expect_configure(
+                endpoint,
+                device_id=7,
+                strip_length=5,
+                frame_port=_receiver_port(receiver),
+            )
             cmd_type, payload = endpoint.read_command()
             assert cmd_type == CMD_LOAD
             device_id, gen = struct.unpack_from('<HH', payload, 0)
@@ -271,6 +351,12 @@ class TestLoad:
 
         def server_side():
             endpoint.accept()
+            _expect_configure(
+                endpoint,
+                device_id=1,
+                strip_length=5,
+                frame_port=_receiver_port(receiver),
+            )
             endpoint.read_command()
             endpoint.send_ack(1)  # decode error
 
@@ -341,6 +427,12 @@ class TestLoad:
 
         def server_side():
             endpoint.accept()
+            _expect_configure(
+                endpoint,
+                device_id=1,
+                strip_length=5,
+                frame_port=_receiver_port(receiver),
+            )
             endpoint.read_command()
             # Send ACK in two separate writes to simulate fragmentation
             ack = struct.pack('<IBB', 2, CMD_ACK, 0)
@@ -497,7 +589,8 @@ class TestCurrentTRel:
     def test_idle_returns_zero(self, receiver):
         dev = NetworkDevice(
             device_id=1, host='127.0.0.1', tcp_port=1,
-            device_type='sim', udp_receiver=receiver,
+            device_type='sim', strip_length=5,
+            frame_port=_receiver_port(receiver), udp_receiver=receiver,
         )
         assert dev.current_t_rel(_sec(10.0)) == 0.0
 
@@ -576,7 +669,8 @@ class TestErrors:
     def test_load_tcp_failure_returns_false(self, receiver):
         dev = NetworkDevice(
             device_id=1, host='127.0.0.1', tcp_port=1,
-            device_type='sim', udp_receiver=receiver,
+            device_type='sim', strip_length=5,
+            frame_port=_receiver_port(receiver), udp_receiver=receiver,
         )
         assert not dev.load(b'\x00', 1)
         assert not dev._connected
@@ -617,14 +711,16 @@ class TestCapability:
     def test_sim_supports_debug_seek(self, receiver):
         dev = NetworkDevice(
             device_id=1, host='127.0.0.1', tcp_port=1,
-            device_type='sim', udp_receiver=receiver,
+            device_type='sim', strip_length=5,
+            frame_port=_receiver_port(receiver), udp_receiver=receiver,
         )
         assert dev.supports_debug_seek()
 
     def test_esp32_no_debug_seek(self, receiver):
         dev = NetworkDevice(
             device_id=1, host='127.0.0.1', tcp_port=1,
-            device_type='esp32', udp_receiver=receiver,
+            device_type='esp32', strip_length=5,
+            frame_port=_receiver_port(receiver), udp_receiver=receiver,
         )
         assert not dev.supports_debug_seek()
 
@@ -652,7 +748,8 @@ class TestUpdateAddress:
     def test_update_while_disconnected(self, receiver):
         dev = NetworkDevice(
             device_id=1, host='', tcp_port=0,
-            device_type='sim', udp_receiver=receiver,
+            device_type='sim', strip_length=5,
+            frame_port=_receiver_port(receiver), udp_receiver=receiver,
         )
         assert not dev._connected
         dev.update_address('127.0.0.1', 9999)
@@ -679,21 +776,24 @@ class TestUnresolvedAddress:
     def test_ensure_connected_skips_empty_host(self, receiver):
         dev = NetworkDevice(
             device_id=1, host='', tcp_port=9001,
-            device_type='sim', udp_receiver=receiver,
+            device_type='sim', strip_length=5,
+            frame_port=_receiver_port(receiver), udp_receiver=receiver,
         )
         assert not dev.ensure_connected()
 
     def test_ensure_connected_skips_zero_port(self, receiver):
         dev = NetworkDevice(
             device_id=1, host='127.0.0.1', tcp_port=0,
-            device_type='sim', udp_receiver=receiver,
+            device_type='sim', strip_length=5,
+            frame_port=_receiver_port(receiver), udp_receiver=receiver,
         )
         assert not dev.ensure_connected()
 
     def test_ensure_connected_skips_both_unresolved(self, receiver):
         dev = NetworkDevice(
             device_id=1, host='', tcp_port=0,
-            device_type='sim', udp_receiver=receiver,
+            device_type='sim', strip_length=5,
+            frame_port=_receiver_port(receiver), udp_receiver=receiver,
         )
         assert not dev.ensure_connected()
 
