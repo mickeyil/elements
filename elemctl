@@ -25,11 +25,12 @@ usage: elemctl <command> [args]
 
 commands:
   tui      interactive TUI shell
+  sim      launch a configured network simulator
   serve    start controller service
   run      compile and run a DSL program
   setup    install/update dependencies"""
 
-_SUBCOMMANDS = {'tui', 'serve', 'run', 'setup'}
+_SUBCOMMANDS = {'tui', 'sim', 'serve', 'run', 'setup'}
 
 
 def _inside_venv():
@@ -126,6 +127,9 @@ def main():
 
     if sub == 'tui':
         from elemctl.tui import main as m
+        m()
+    elif sub == 'sim':
+        from elemctl.sim import main as m
         m()
     elif sub == 'serve':
         from elemctl.serve import main as m

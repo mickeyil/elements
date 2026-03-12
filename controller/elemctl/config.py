@@ -12,6 +12,7 @@ from pathlib import Path
 
 DEFAULT_CONFIG_PATH = '~/.config/elemctl/config.json'
 DEFAULT_SOCKET_PATH = '/tmp/elemctl.sock'
+DEFAULT_DISCOVERY_PORT = 6040
 DEFAULT_ANIMATIONS_PATH = str(Path(__file__).resolve().parent.parent.parent / 'animations')
 
 _VALID_DEVICE_TYPES = {"sim", "esp32"}
@@ -52,7 +53,7 @@ class DeviceConfig:
 class Config:
     frame_port: int             # UDP port for frame receipt
     devices: list[DeviceConfig]
-    discovery_port: int | None = None  # UDP port for HELLO packets
+    discovery_port: int | None = None  # UDP port for HELLO packets; None disables
     animations_dir: str | None = None  # override for animations directory
 
 
@@ -86,14 +87,17 @@ def load_config(path: str) -> Config:
         if not isinstance(animations_dir, str):
             raise ConfigError("'controller.animations_dir' must be a string")
 
-    discovery_port = ctrl.get("discovery_port")
-    if discovery_port is not None:
-        if not _is_int(discovery_port):
-            raise ConfigError("'controller.discovery_port' must be an integer")
-        if not (1 <= discovery_port <= 65535):
-            raise ConfigError(
-                f"'controller.discovery_port' must be 1-65535, got {discovery_port}"
-            )
+    if "discovery_port" not in ctrl:
+        discovery_port = DEFAULT_DISCOVERY_PORT
+    else:
+        discovery_port = ctrl["discovery_port"]
+        if discovery_port is not None:
+            if not _is_int(discovery_port):
+                raise ConfigError("'controller.discovery_port' must be an integer or null")
+            if not (1 <= discovery_port <= 65535):
+                raise ConfigError(
+                    f"'controller.discovery_port' must be 1-65535, got {discovery_port}"
+                )
 
     # --- devices section ---
     devices_raw = raw.get("devices")

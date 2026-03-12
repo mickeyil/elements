@@ -301,6 +301,7 @@ class ControllerService:
             dc, dev = entry
             changed = dev.update_address(host, tcp_port)
             if changed:
+                log.info('discovery: %s -> %s:%d', dc.device_uid, host, tcp_port)
                 # Clear probe throttle so _probe_devices() connects immediately
                 self._last_probe_ns.pop(dc.device_id, None)
 

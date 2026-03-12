@@ -1,6 +1,7 @@
 """Tests for ControllerService and UdsServer."""
 
 import json
+import logging
 import socket
 import struct
 import sys
@@ -995,6 +996,19 @@ class TestDiscoveryIntegration:
         assert len(probe_calls) == 1, (
             'repeated identical HELLO should not defeat probe throttle'
         )
+
+    def test_discovery_logs_known_uid_address_change(self, caplog):
+        fakes = [_FakeDevice()]
+        fakes[0].is_connected = False
+        fakes[0].update_address = lambda h, p: True
+
+        svc, _, disc = _make_discovery_service(n_devices=1, fake_devices=fakes)
+        disc.inject('sim-1', '127.0.0.1', 9001)
+
+        with caplog.at_level(logging.INFO):
+            svc.tick_once()
+
+        assert 'discovery: sim-1 -> 127.0.0.1:9001' in caplog.text
 
 
 class _DebugFakeDevice(_FakeDevice):

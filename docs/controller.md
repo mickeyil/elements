@@ -1,6 +1,6 @@
 # Controller & Web App
 
-> **Status: Partially implemented.** SimController (`src/sim_controller.h/cpp`) implements in-process sim-only controller logic: session/playback state, shared-time orchestration, frame assembly, seek, looping. It depends on `ControllerDevice` (`src/controller_device.h`), an abstract device interface. `SimDevice` (`src/sim_device.h`) adapts `ESPSimulated` to this interface; future networked device wrappers will implement it directly. The networked controller, web app, and transport layers described below are not yet implemented.
+> **Status: Partially implemented.** The Python controller service, Unix-socket control API, discovery receiver, and `network_sim` transport are implemented. The web app and multi-client browser-facing transport described below are not yet implemented.
 
 ## Base-station config
 
@@ -52,7 +52,15 @@ The DSL declares strip names and lengths: `strip("main_left", length=150)`. The 
 
 ### Relationship to device discovery
 
-The config replaces dynamic discovery. The controller reads it at startup and knows every device's address, role, and capabilities. ESPSimulated processes are started separately and listen on the configured IPs/ports. No multicast, no announcements — the config is the truth.
+The config is the inventory of known devices and strip topology. Discovery fills in live network addresses for those known devices at runtime.
+
+- `device_uid` is the stable hardware identity (for example a MAC suffix on real hardware, or `sim-1` for a simulator)
+- `strip_id` and `length` are controller-owned strip configuration
+- the controller listens for UDP HELLO packets on `discovery_port`
+- when `discovery_port` is omitted from config, it defaults to `6040`
+- when `discovery_port` is `null`, discovery is disabled and devices must use static `host` + `tcp_port`
+
+Discovery does not add unknown devices automatically. Unknown `device_uid` values are ignored until they are added to config.
 
 ---
 

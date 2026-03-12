@@ -1,0 +1,16 @@
+{
+  "controller": {
+    "frame_port": 9002
+  },
+  "devices": [
+    {
+      "device_id": 1,
+      "device_uid": "sim-1",
+      "device_type": "sim",
+      "host": "",
+      "tcp_port": 0,
+      "strip_id": "main",
+      "length": 60
+    }
+  ]
+}

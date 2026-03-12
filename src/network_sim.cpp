@@ -5,7 +5,8 @@
 //
 // Usage:
 //   ./network_sim --tcp-port PORT --frame-port PORT --strip-length N [--device-id ID]
-//                 [--discovery-port PORT] [--discovery-host HOST] [--device-uid UID]
+//                 [--device-uid UID] [--discovery-port PORT] [--discovery-host HOST]
+// If --device-uid is provided without --discovery-port, discovery defaults to 6040.
 
 #include "esp_simulated.h"
 
@@ -264,10 +265,13 @@ struct Args {
     int strip_length = -1;
     int device_id = 0;
     int discovery_port = -1;
+    bool discovery_port_set = false;
     std::string discovery_host = "127.0.0.1";
     bool discovery_host_set = false;
     std::string device_uid;
 };
+
+static constexpr int DEFAULT_DISCOVERY_PORT = 6040;
 
 static bool parse_args(int argc, char** argv, Args& args)
 {
@@ -282,6 +286,7 @@ static bool parse_args(int argc, char** argv, Args& args)
             args.device_id = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--discovery-port") == 0 && i + 1 < argc) {
             args.discovery_port = atoi(argv[++i]);
+            args.discovery_port_set = true;
         } else if (strcmp(argv[i], "--discovery-host") == 0 && i + 1 < argc) {
             args.discovery_host = argv[++i];
             args.discovery_host_set = true;
@@ -296,8 +301,8 @@ static bool parse_args(int argc, char** argv, Args& args)
     if (args.tcp_port < 0 || args.frame_port < 0 || args.strip_length < 1) {
         fprintf(stderr,
                 "Usage: %s --tcp-port PORT --frame-port PORT --strip-length N "
-                "[--device-id ID] [--discovery-port PORT] [--discovery-host HOST] "
-                "[--device-uid UID]\n",
+                "[--device-id ID] [--device-uid UID] [--discovery-port PORT] "
+                "[--discovery-host HOST]\n",
                 argv[0]);
         return false;
     }
@@ -312,22 +317,23 @@ static bool parse_args(int argc, char** argv, Args& args)
         return false;
     }
 
-    bool have_disc_port = args.discovery_port > 0;
     bool have_uid = !args.device_uid.empty();
     bool have_disc_host = args.discovery_host_set;
 
-    if (have_disc_port && (args.discovery_port > 65535)) {
+    if (args.discovery_port_set && (args.discovery_port < 1 || args.discovery_port > 65535)) {
         fprintf(stderr, "--discovery-port must be 1-65535\n");
         return false;
     }
-    if (have_disc_host && !(have_disc_port && have_uid)) {
-        fprintf(stderr,
-                "--discovery-host requires --discovery-port and --device-uid\n");
+    if (have_disc_host && !have_uid) {
+        fprintf(stderr, "--discovery-host requires --device-uid\n");
         return false;
     }
-    if (have_disc_port != have_uid) {
-        fprintf(stderr, "--discovery-port and --device-uid must be provided together\n");
+    if (args.discovery_port_set && !have_uid) {
+        fprintf(stderr, "--discovery-port requires --device-uid\n");
         return false;
+    }
+    if (have_uid && !args.discovery_port_set) {
+        args.discovery_port = DEFAULT_DISCOVERY_PORT;
     }
 
     return true;

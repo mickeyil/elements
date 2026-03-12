@@ -1,6 +1,6 @@
 # Transport & Clock Sync
 
-> **Status: Design document.** Not yet implemented. Describes the device communication protocol, wire formats, and custom clock synchronization.
+> **Status: Mixed.** The TCP command transport, ACK handling, UDP frame return path, and discovery HELLO flow are implemented for the controller and `network_sim`. The custom clock sync portions described below remain design-level.
 
 ## Transport architecture
 

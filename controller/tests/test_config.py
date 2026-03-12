@@ -5,7 +5,7 @@ import json
 import pytest
 
 from elemctl.config import (
-    Config, ConfigError, DEFAULT_CONFIG_PATH, DeviceConfig,
+    Config, ConfigError, DEFAULT_CONFIG_PATH, DEFAULT_DISCOVERY_PORT, DeviceConfig,
     load_config, resolve_config_path,
 )
 
@@ -196,14 +196,20 @@ class TestLoadConfig:
         cfg = load_config(_write_config(tmp_path, data))
         assert cfg.discovery_port == 9999
 
-    def test_discovery_port_absent_is_none(self, tmp_path):
+    def test_discovery_port_absent_uses_default(self, tmp_path):
         cfg = load_config(_write_config(tmp_path, _valid_config()))
+        assert cfg.discovery_port == DEFAULT_DISCOVERY_PORT
+
+    def test_discovery_port_null_disables_discovery(self, tmp_path):
+        data = _valid_config()
+        data["controller"]["discovery_port"] = None
+        cfg = load_config(_write_config(tmp_path, data))
         assert cfg.discovery_port is None
 
     def test_discovery_port_wrong_type(self, tmp_path):
         data = _valid_config()
         data["controller"]["discovery_port"] = "9999"
-        with pytest.raises(ConfigError, match="discovery_port"):
+        with pytest.raises(ConfigError, match="integer or null"):
             load_config(_write_config(tmp_path, data))
 
     def test_discovery_port_out_of_range(self, tmp_path):
@@ -220,8 +226,15 @@ class TestLoadConfig:
         assert cfg.devices[0].host == ""
         assert cfg.devices[0].tcp_port == 0
 
-    def test_no_discovery_requires_host(self, tmp_path):
+    def test_discovery_default_allows_empty_host(self, tmp_path):
+        data = _valid_config(devices=[_valid_device(host="", tcp_port=0)])
+        cfg = load_config(_write_config(tmp_path, data))
+        assert cfg.devices[0].host == ""
+        assert cfg.devices[0].tcp_port == 0
+
+    def test_discovery_disabled_requires_host(self, tmp_path):
         data = _valid_config(devices=[_valid_device(tcp_port=0)])
+        data["controller"]["discovery_port"] = None
         with pytest.raises(ConfigError, match="tcp_port"):
             load_config(_write_config(tmp_path, data))
 
@@ -236,6 +249,7 @@ class TestLoadConfig:
     def test_no_discovery_empty_host_rejected(self, tmp_path):
         """host="" is invalid without discovery."""
         data = _valid_config(devices=[_valid_device(host="", tcp_port=9001)])
+        data["controller"]["discovery_port"] = None
         with pytest.raises(ConfigError, match="host must be non-empty"):
             load_config(_write_config(tmp_path, data))
 

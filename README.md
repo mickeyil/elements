@@ -26,6 +26,47 @@ Or run individually:
 ./build/test_engine
 ```
 
+## Local Smoke Test
+
+Build the simulator:
+
+```bash
+cmake -B build
+cmake --build build --target network_sim
+```
+
+Then use three terminals:
+
+```bash
+./elemctl serve --config examples/single-sim.json
+```
+
+```bash
+./elemctl sim sim-1 --config examples/single-sim.json
+```
+
+```bash
+./elemctl tui
+```
+
+In the TUI:
+
+```text
+/rescan
+/load #1
+/play
+```
+
+Expected result:
+- the `serve` terminal logs a discovery line for `sim-1`
+- the TUI shows the device come online
+- `/rescan` lists `demo_main`
+- `/load` and `/play` succeed without manual port/length flags
+
+Notes:
+- discovery defaults to UDP port `6040` when `controller.discovery_port` is omitted
+- set `"discovery_port": null` in the config to disable discovery explicitly
+
 ## Project structure
 
 ```

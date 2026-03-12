@@ -1,6 +1,6 @@
 # Elements — Design Document
 
-> **Status: Mixed.** Core pipeline (compiler, decoder, engine, compositor, PlaybackDevice base class, ESPSimulated) and SimController (in-process sim-only controller) are implemented. Hardware setup, build system, and project phases are current. Transport and web app are designed but not yet implemented — see `transport.md` and `controller.md`.
+> **Status: Mixed.** Core pipeline (compiler, decoder, engine, compositor, PlaybackDevice base class, ESPSimulated), the Python controller service, UDS control API, and simulator transport are implemented. Hardware setup, build system, and project phases are current. The web app and some higher-level transport/design sections are still forward-looking — see `transport.md` and `controller.md`.
 
 ## Overview
 
@@ -47,7 +47,8 @@ The controller is the long-running authority. It compiles DSL programs, routes p
 - Base station and ESP32 share the same WiFi network
 - No firewall or routing restrictions between them
 - Base station runs controller + web app as separate processes
-- Static config maps strip names to device IPs
+- Static config maps strip names to device identities and runtime strip config
+- Device discovery resolves live IP/TCP endpoints for known devices (default UDP discovery port: `6040`)
 - Multiple ESP32 devices synced to the same controller
 
 ---
