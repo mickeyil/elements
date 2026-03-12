@@ -33,6 +33,7 @@ from .config import (
 )
 from .uds_client import UdsClient
 from .uds_wire import KIND_FRAME, KIND_JSON, parse_json_payload
+from .version import get_runtime_version
 
 
 # ------------------------------------------------------------------
@@ -230,39 +231,34 @@ def _format_timestamp(now: datetime.datetime | None = None) -> str:
 
 
 def format_transcript_line(
-    source: str,
     message: str,
     *,
     now: datetime.datetime | None = None,
 ) -> str:
-    return f"[{_format_timestamp(now)}] [{source}] {message}"
+    return f"[{_format_timestamp(now)}] {message}"
 
 
 def _format_device_summary(dev: dict) -> str:
-    uid = msg_get(dev, 'device_uid', '?')
-    strip = msg_get(dev, 'strip', '?')
+    uid = dev.get('device_uid', '?')
+    strip = dev.get('strip', '?')
     length = dev.get('length')
     if isinstance(length, int) and not isinstance(length, bool):
-        return f"{uid} ({strip}, {length} LEDs)"
-    return f"{uid} ({strip})"
+        return f'{uid}: strip "{strip}" with {length} LEDs'
+    return f'{uid}: strip "{strip}"'
 
 
-def msg_get(msg: dict, key: str, default):
-    return msg.get(key, default)
-
-
-def format_event(kind: int, payload: bytes) -> str | None:
-    """Format a UDS message as a single-line log entry. Returns None for frames."""
+def format_event(kind: int, payload: bytes) -> list[str] | None:
+    """Format a UDS message as transcript line(s). Returns None for frames."""
     if kind == KIND_FRAME:
         return None  # silently counted, not displayed
 
     if kind != KIND_JSON:
-        return f"unknown message kind={kind} len={len(payload)}"
+        return [f'ctrl: unknown message kind={kind} len={len(payload)}']
 
     try:
         msg = parse_json_payload(payload)
     except (json.JSONDecodeError, UnicodeDecodeError):
-        return f"bad json message len={len(payload)}"
+        return [f'ctrl: bad json message len={len(payload)}']
 
     msg_type = msg.get('type')
 
@@ -270,56 +266,52 @@ def format_event(kind: int, payload: bytes) -> str | None:
         rid = msg.get('id')
         if msg.get('ok'):
             result = msg.get('result', {})
-            return f"reply {rid} ok {json.dumps(result, separators=(',', ':'))}"
+            return [f'ctrl: reply {rid} ok {json.dumps(result, separators=(",", ":"))}']
         else:
-            return f"reply {rid} ERROR: {msg.get('error', '?')}"
+            return [f'ctrl: reply {rid} ERROR: {msg.get("error", "?")}']
 
     if msg_type == 'event':
         return _format_controller_event(msg)
 
-    return f"unknown message {json.dumps(msg, separators=(',', ':'))}"
+    return [f'ctrl: unknown message {json.dumps(msg, separators=(",", ":"))}']
 
 
-def _format_controller_event(msg: dict) -> str:
+def _format_controller_event(msg: dict) -> list[str]:
     event = msg.get('event')
 
     if event == 'snapshot':
-        online = msg.get('online_count', '?')
-        expected = msg.get('expected_count', '?')
         devices = msg.get('devices', [])
         connected = [
             _format_device_summary(dev)
             for dev in devices
             if dev.get('connected')
         ]
-        offline = [
-            _format_device_summary(dev)
-            for dev in devices
-            if not dev.get('connected')
-        ]
-        device_text = f"devices online {online}/{expected}"
-        if connected:
-            device_text += f": {', '.join(connected)}"
-        else:
-            device_text += ": none"
-        if offline:
-            device_text += f"; offline: {', '.join(offline)}"
         session = msg.get('session')
+        lines: list[str] = []
         if session:
             state = session.get('playback_state', '?')
             sid = session.get('session_id')
             t_rel = session.get('current_t_rel')
             duration = session.get('duration')
             if isinstance(t_rel, (int, float)) and isinstance(duration, (int, float)):
-                return f"{state} session={sid} t={t_rel:.2f}/{duration:.2f}s; {device_text}"
-            return f"{state} session={sid}; {device_text}"
-        return f"idle, no active session; {device_text}"
+                lines.append(f'ctrl: {state} session={sid} t={t_rel:.2f}/{duration:.2f}s')
+            else:
+                lines.append(f'ctrl: {state} session={sid}')
+        else:
+            lines.append('ctrl: idle')
+
+        if connected:
+            lines.append('devices online:')
+            lines.extend(f'  {line}' for line in connected)
+        else:
+            lines.append('devices online: none')
+        return lines
 
     if event == 'state':
         state = msg.get('state', '?')
         epoch = msg.get('epoch', '?')
         sid = msg.get('session_id', '?')
-        return f"state {state} epoch={epoch} session={sid}"
+        return [f'ctrl: state {state} epoch={epoch} session={sid}']
 
     if event == 'device_status':
         uid = msg.get('device_uid', '?')
@@ -328,25 +320,25 @@ def _format_controller_event(msg: dict) -> str:
         connected = msg.get('connected')
         status = 'connected' if connected else 'disconnected'
         if isinstance(length, int) and not isinstance(length, bool):
-            return f"device {uid} {status} ({strip}, {length} LEDs)"
-        return f"device {uid} {status} ({strip})"
+            return [f'ctrl: device {uid} {status} ({strip}, {length} LEDs)']
+        return [f'ctrl: device {uid} {status} ({strip})']
 
     if event == 'session_start':
         sid = msg.get('session_id', '?')
         epoch = msg.get('epoch', '?')
         duration = msg.get('duration', '?')
         strips = ', '.join(s.get('name', '?') for s in msg.get('strips', []))
-        return f"session {sid} started epoch={epoch} duration={duration}s strips=[{strips}]"
+        return [f'ctrl: session {sid} started epoch={epoch} duration={duration}s strips=[{strips}]']
 
     if event == 'loop':
         epoch = msg.get('epoch', '?')
         sid = msg.get('session_id', '?')
-        return f"loop epoch={epoch} session={sid}"
+        return [f'ctrl: loop epoch={epoch} session={sid}']
 
     if event == 'error':
-        return f"error: {msg.get('message', '?')}"
+        return [f'ctrl: error: {msg.get("message", "?")}']
 
-    return f"unknown event {json.dumps(msg, separators=(',', ':'))}"
+    return [f'ctrl: unknown event {json.dumps(msg, separators=(",", ":"))}']
 
 
 # ------------------------------------------------------------------
@@ -366,6 +358,7 @@ class TuiApp:
         self._animations_dir = animations_dir
         self._animation_list: list[AnimationEntry] = []
         self._client: UdsClient | None = None
+        self._client_lock = threading.Lock()
         self._shutdown = threading.Event()
         self._next_id = 1
         self._log_lines: list[str] = []
@@ -420,22 +413,14 @@ class TuiApp:
         """Connect and run the TUI. Blocks until exit."""
         self._reader_thread = threading.Thread(target=self._reader_loop, daemon=True)
         try:
-            try:
-                self._client = UdsClient(self._socket_path)
-            except (OSError, ConnectionError) as e:
-                self._local_log(f"connection failed: {e}")
-                self._local_log("start the service with: ./elemctl serve")
-                self._local_log("press Ctrl-C to exit")
-                self._app.run()
-                return
-
-            self._local_log(f"connected to {self._socket_path}")
+            self._local_log(f'elements tui started. version: {get_runtime_version()}')
             self._reader_thread.start()
             self._app.run()
         finally:
             self._shutdown.set()
-            if self._client is not None:
-                self._client.close()
+            self._clear_client()
+            if self._reader_thread is not None:
+                self._reader_thread.join(timeout=1.0)
             if self._log_fp is not None:
                 self._log_fp.close()
 
@@ -471,12 +456,13 @@ class TuiApp:
         self._local_log(f"> {text}")
         self._next_id += 1
 
-        if self._client is None:
+        client = self._get_client()
+        if client is None:
             self._local_log("not connected")
             return
 
         try:
-            self._client.send_cmd(cmd)
+            client.send_cmd(cmd)
         except OSError as e:
             self._local_log(f"send failed: {e}")
 
@@ -560,12 +546,13 @@ class TuiApp:
         self._local_log(f"> /load {entry.name}{loop_str}")
         self._next_id += 1
 
-        if self._client is None:
+        client = self._get_client()
+        if client is None:
             self._local_log("not connected")
             return
 
         try:
-            self._client.send_cmd(wire_cmd)
+            client.send_cmd(wire_cmd)
         except OSError as e:
             self._local_log(f"send failed: {e}")
 
@@ -574,15 +561,36 @@ class TuiApp:
     # ------------------------------------------------------------------
 
     def _reader_loop(self) -> None:
-        client = self._client
-        if client is None:
-            return
-
+        waiting_logged = False
         while not self._shutdown.is_set():
+            client = self._get_client()
+            if client is None:
+                try:
+                    client = UdsClient(self._socket_path)
+                except (ConnectionError, OSError):
+                    if not waiting_logged:
+                        self._enqueue_log(format_transcript_line(
+                            f'waiting for controller at {self._socket_path}'
+                        ))
+                        waiting_logged = True
+                    self._shutdown.wait(1.0)
+                    continue
+                self._set_client(client)
+                self._enqueue_log(format_transcript_line(
+                    f'connected to {self._socket_path}'
+                ))
+                waiting_logged = False
+                continue
+
             try:
                 readable, _, _ = select.select([client.fileno()], [], [], 0.1)
             except (OSError, ValueError):
-                break
+                if self._drop_client(client):
+                    self._enqueue_log(format_transcript_line(
+                        f'disconnected from {self._socket_path}'
+                    ))
+                waiting_logged = False
+                continue
 
             if not readable:
                 continue
@@ -590,28 +598,62 @@ class TuiApp:
             try:
                 messages = client.recv_once()
             except (ConnectionError, OSError):
-                self._enqueue_log(format_transcript_line('tui', 'disconnected'))
-                break
+                if self._drop_client(client):
+                    self._enqueue_log(format_transcript_line(
+                        f'disconnected from {self._socket_path}'
+                    ))
+                waiting_logged = False
+                continue
 
             for kind, payload in messages:
                 if kind == KIND_FRAME:
                     continue
-                line = format_event(kind, payload)
-                if line is not None:
-                    self._enqueue_log(format_transcript_line('ctrl', line))
+                lines = format_event(kind, payload)
+                if lines is not None:
+                    for line in lines:
+                        self._enqueue_log(format_transcript_line(line))
+
+    def _get_client(self) -> UdsClient | None:
+        with self._client_lock:
+            return self._client
+
+    def _set_client(self, client: UdsClient) -> None:
+        with self._client_lock:
+            self._client = client
+
+    def _drop_client(self, client: UdsClient) -> bool:
+        with self._client_lock:
+            if self._client is not client:
+                return False
+            self._client = None
+        try:
+            client.close()
+        except OSError:
+            pass
+        return True
+
+    def _clear_client(self) -> None:
+        with self._client_lock:
+            client = self._client
+            self._client = None
+        if client is None:
+            return
+        try:
+            client.close()
+        except OSError:
+            pass
 
     # ------------------------------------------------------------------
     # Log pane
     # ------------------------------------------------------------------
 
     def _local_log(self, message: str) -> None:
-        self._append_log(format_transcript_line('tui', message))
+        self._append_log(format_transcript_line(message))
 
     def _write_transcript_line(self, line: str) -> None:
         if self._log_fp is None:
             return
         self._log_fp.write(line + '\n')
-        self._log_fp.flush()
 
     def _enqueue_log(self, line: str) -> None:
         """Thread-safe: push a log line for the UI thread to drain."""

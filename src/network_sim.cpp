@@ -10,6 +10,7 @@
 // is provided by the controller via CMD_CONFIGURE after TCP connect.
 
 #include "esp_simulated.h"
+#include "elements_version.h"
 #include "slogger.h"
 
 #include <cerrno>
@@ -151,7 +152,7 @@ static int poll_tcp_commands(int tcp_fd,
         }
 
         // Reject absurdly large messages to prevent OOM from corrupted headers
-            if (msg_len > TCP_MSG_MAX) {
+        if (msg_len > TCP_MSG_MAX) {
             slog::error("network_sim: message too large (%u bytes), closing connection", msg_len);
             return -1;
         }
@@ -365,6 +366,7 @@ int main(int argc, char** argv)
         return 1;
 
     slog::init(args.log_file);
+    slog::info("elements simulator started. version: %s", ELEMENTS_VERSION);
 
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);

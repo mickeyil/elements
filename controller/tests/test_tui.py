@@ -3,11 +3,12 @@
 import datetime
 import json
 import socket
+from pathlib import Path
 
 import pytest
 
 from elemctl.tui import (
-    format_event, parse_command, extract_metadata, scan_animations,
+    TuiApp, format_event, parse_command, extract_metadata, scan_animations,
     format_transcript_line, _HELP_SENTINEL, _QUIT_SENTINEL, _RESCAN_SENTINEL,
 )
 from elemctl.uds_wire import KIND_JSON, KIND_FRAME, UdsReader, encode_json
@@ -25,11 +26,10 @@ def _json_payload(obj: dict) -> bytes:
 class TestFormatEvent:
     def test_format_transcript_line(self):
         result = format_transcript_line(
-            'tui',
             'connected to /tmp/elemctl.sock',
             now=datetime.datetime(2026, 3, 12, 6, 2, 12, 544000),
         )
-        assert result == '[2026-03-12 06:02:12.544] [tui] connected to /tmp/elemctl.sock'
+        assert result == '[2026-03-12 06:02:12.544] connected to /tmp/elemctl.sock'
 
     def test_snapshot_idle(self):
         msg = {
@@ -43,11 +43,12 @@ class TestFormatEvent:
             ],
         }
         result = format_event(KIND_JSON, _json_payload(msg))
-        assert result == (
-            'idle, no active session; devices online 2/3: '
-            'sim-1 (main, 10 LEDs), sim-2 (aux, 20 LEDs); '
-            'offline: sim-3 (back, 30 LEDs)'
-        )
+        assert result == [
+            'ctrl: idle',
+            'devices online:',
+            '  sim-1: strip "main" with 10 LEDs',
+            '  sim-2: strip "aux" with 20 LEDs',
+        ]
 
     def test_snapshot_with_session(self):
         msg = {
@@ -65,10 +66,11 @@ class TestFormatEvent:
             ],
         }
         result = format_event(KIND_JSON, _json_payload(msg))
-        assert result == (
-            'playing session=5 t=1.25/8.00s; devices online 1/2: '
-            'sim-1 (main, 10 LEDs); offline: sim-2 (aux, 20 LEDs)'
-        )
+        assert result == [
+            'ctrl: playing session=5 t=1.25/8.00s',
+            'devices online:',
+            '  sim-1: strip "main" with 10 LEDs',
+        ]
 
     def test_state_event(self):
         msg = {
@@ -76,7 +78,7 @@ class TestFormatEvent:
             'state': 'playing', 'epoch': 1, 'session_id': 3,
         }
         result = format_event(KIND_JSON, _json_payload(msg))
-        assert result == 'state playing epoch=1 session=3'
+        assert result == ['ctrl: state playing epoch=1 session=3']
 
     def test_device_connected(self):
         msg = {
@@ -84,7 +86,7 @@ class TestFormatEvent:
             'device_uid': 'sim-1', 'strip': 'strip_a', 'length': 10, 'connected': True,
         }
         result = format_event(KIND_JSON, _json_payload(msg))
-        assert result == 'device sim-1 connected (strip_a, 10 LEDs)'
+        assert result == ['ctrl: device sim-1 connected (strip_a, 10 LEDs)']
 
     def test_device_disconnected(self):
         msg = {
@@ -92,7 +94,7 @@ class TestFormatEvent:
             'device_uid': 'sim-2', 'strip': 'strip_b', 'length': 20, 'connected': False,
         }
         result = format_event(KIND_JSON, _json_payload(msg))
-        assert result == 'device sim-2 disconnected (strip_b, 20 LEDs)'
+        assert result == ['ctrl: device sim-2 disconnected (strip_b, 20 LEDs)']
 
     def test_session_start(self):
         msg = {
@@ -101,7 +103,7 @@ class TestFormatEvent:
             'strips': [{'name': 'strip_a'}, {'name': 'strip_b'}],
         }
         result = format_event(KIND_JSON, _json_payload(msg))
-        assert result == "session 1 started epoch=0 duration=2.0s strips=[strip_a, strip_b]"
+        assert result == ['ctrl: session 1 started epoch=0 duration=2.0s strips=[strip_a, strip_b]']
 
     def test_loop(self):
         msg = {
@@ -109,7 +111,7 @@ class TestFormatEvent:
             'epoch': 3, 'session_id': 1,
         }
         result = format_event(KIND_JSON, _json_payload(msg))
-        assert result == 'loop epoch=3 session=1'
+        assert result == ['ctrl: loop epoch=3 session=1']
 
     def test_error(self):
         msg = {
@@ -117,17 +119,17 @@ class TestFormatEvent:
             'message': 'something broke',
         }
         result = format_event(KIND_JSON, _json_payload(msg))
-        assert result == 'error: something broke'
+        assert result == ['ctrl: error: something broke']
 
     def test_reply_ok(self):
         msg = {'type': 'reply', 'id': 7, 'ok': True, 'result': {'x': 1}}
         result = format_event(KIND_JSON, _json_payload(msg))
-        assert result == 'reply 7 ok {"x":1}'
+        assert result == ['ctrl: reply 7 ok {"x":1}']
 
     def test_reply_error(self):
         msg = {'type': 'reply', 'id': 3, 'ok': False, 'error': 'bad cmd'}
         result = format_event(KIND_JSON, _json_payload(msg))
-        assert result == 'reply 3 ERROR: bad cmd'
+        assert result == ['ctrl: reply 3 ERROR: bad cmd']
 
     def test_frame_returns_none(self):
         assert format_event(KIND_FRAME, b'\x00' * 20) is None
@@ -135,21 +137,20 @@ class TestFormatEvent:
     def test_unknown_event(self):
         msg = {'type': 'event', 'event': 'future_thing', 'data': 42}
         result = format_event(KIND_JSON, _json_payload(msg))
-        assert result.startswith('unknown event')
+        assert result == ['ctrl: unknown event {"type":"event","event":"future_thing","data":42}']
 
     def test_unknown_kind(self):
         result = format_event(0xFF, b'hello')
-        assert result == 'unknown message kind=255 len=5'
+        assert result == ['ctrl: unknown message kind=255 len=5']
 
     def test_unknown_msg_type(self):
         msg = {'type': 'something_else', 'x': 1}
         result = format_event(KIND_JSON, _json_payload(msg))
-        assert result.startswith('unknown message')
+        assert result == ['ctrl: unknown message {"type":"something_else","x":1}']
 
     def test_bad_json(self):
         result = format_event(KIND_JSON, b'\xff\xfe')
-        assert 'bad json' in result
-        assert 'bad json' in result
+        assert result == ['ctrl: bad json message len=2']
 
 
 # ---------------------------------------------------------------------------
@@ -336,6 +337,58 @@ def _make_client_pair():
     client._sock = b
     client._reader = UdsReader()
     return a, b, client
+
+
+class TestTuiReconnect:
+    def test_reader_loop_reconnects_after_disconnect(self, monkeypatch, tmp_path):
+        created: list[object] = []
+        logs: list[str] = []
+
+        class FakeClient:
+            def __init__(self, socket_path: str):
+                self.socket_path = socket_path
+                self.index = len(created)
+                self.closed = False
+                created.append(self)
+
+            def fileno(self):
+                return self
+
+            def recv_once(self):
+                if self.index == 0:
+                    raise ConnectionError('server closed connection')
+                raise AssertionError('second client should not be read before shutdown')
+
+            def close(self):
+                self.closed = True
+
+        def fake_select(read, _write, _exc, _timeout):
+            return read, [], []
+
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            log_file=str(Path(tmp_path) / 'tui.log'),
+        )
+
+        def capture(line: str) -> None:
+            logs.append(line)
+            if sum('connected to /tmp/elemctl.sock' in item for item in logs) >= 2:
+                app._shutdown.set()
+
+        monkeypatch.setattr('elemctl.tui.UdsClient', FakeClient)
+        monkeypatch.setattr('elemctl.tui.select.select', fake_select)
+        monkeypatch.setattr(app, '_enqueue_log', capture)
+
+        try:
+            app._reader_loop()
+        finally:
+            app._clear_client()
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        assert any('connected to /tmp/elemctl.sock' in line for line in logs)
+        assert any('disconnected from /tmp/elemctl.sock' in line for line in logs)
+        assert sum('connected to /tmp/elemctl.sock' in line for line in logs) == 2
 
 
 class TestRecvOnce:

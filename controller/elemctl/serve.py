@@ -24,6 +24,7 @@ from .config import (
 from .service import ControllerService
 from .slogger import configure_logger
 from .uds_wire import UdsReader, encode_json, parse_json_payload, KIND_JSON
+from .version import get_runtime_version
 
 log = logging.getLogger(__name__)
 
@@ -280,6 +281,7 @@ def main() -> None:
         logfile=os.path.join(log_dir, 'serve.log'),
         level="INFO",
     )
+    log.info('elements controller started. version: %s', get_runtime_version())
 
     service = ControllerService(config)
     socket_path = os.path.expanduser(args.socket)

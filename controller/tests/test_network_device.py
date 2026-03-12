@@ -1,5 +1,6 @@
 """Tests for NetworkDevice + UdpFrameReceiver + wire encoding."""
 
+import logging
 import socket
 import struct
 import threading
@@ -311,6 +312,55 @@ class TestConnection:
         assert not dev.load(b'\x00', 1)
         t.join(timeout=3.0)
         assert not dev._connected
+
+    def test_initial_connect_failure_logs_only_once(self, receiver, caplog):
+        dev = NetworkDevice(
+            device_id=1,
+            host='127.0.0.1',
+            tcp_port=1,
+            device_type='sim',
+            strip_length=5,
+            frame_port=_receiver_port(receiver),
+            udp_receiver=receiver,
+        )
+        with caplog.at_level(logging.WARNING):
+            assert not dev.ensure_connected()
+            assert not dev.ensure_connected()
+
+        warnings = [
+            rec.getMessage() for rec in caplog.records
+            if 'connect to 127.0.0.1:1 failed' in rec.getMessage()
+        ]
+        assert len(warnings) == 1
+
+    def test_reconnect_failures_after_prior_success_are_quiet(self, endpoint, receiver, caplog):
+        dev = _make_device(endpoint, receiver)
+
+        def server_side():
+            endpoint.accept()
+            _expect_configure(
+                endpoint,
+                device_id=dev._device_id,
+                strip_length=dev._strip_length,
+                frame_port=dev._frame_port,
+            )
+
+        t = threading.Thread(target=server_side, daemon=True)
+        t.start()
+        assert dev.ensure_connected()
+        t.join(timeout=3.0)
+
+        dev.update_address('127.0.0.1', 1)
+
+        with caplog.at_level(logging.WARNING):
+            assert not dev.ensure_connected()
+            assert not dev.ensure_connected()
+
+        warnings = [
+            rec.getMessage() for rec in caplog.records
+            if 'connect to 127.0.0.1:1 failed' in rec.getMessage()
+        ]
+        assert warnings == []
 
 
 # =========================================================================
@@ -683,6 +733,17 @@ class TestErrors:
         # Close the underlying socket to force send failure
         dev._sock.close()
         dev.start(_sec(0.0))
+        assert not dev._connected
+
+    def test_tick_once_detects_peer_disconnect(self, endpoint, receiver):
+        dev = _make_device(endpoint, receiver)
+        assert _load_device(dev, endpoint)
+        assert dev._connected
+
+        endpoint._conn.close()
+        endpoint._conn = None
+
+        dev.tick_once(_sec(1.0))
         assert not dev._connected
 
     def test_malformed_udp_dropped(self, endpoint, receiver):

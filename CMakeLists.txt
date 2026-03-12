@@ -3,6 +3,7 @@ project(elements CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+find_package(Git QUIET)
 
 # ---------------------------------------------------------------------------
 # Library: elements core (desktop build, not ESP32)
@@ -25,6 +26,20 @@ target_include_directories(elements_core PUBLIC src)
 
 add_executable(network_sim src/network_sim.cpp)
 target_link_libraries(network_sim elements_core)
+set(GENERATED_DIR ${CMAKE_BINARY_DIR}/generated)
+set(ELEMENTS_VERSION_HEADER ${GENERATED_DIR}/elements_version.h)
+add_custom_target(generate_network_sim_version ALL
+    COMMAND ${CMAKE_COMMAND}
+        -DOUTPUT=${ELEMENTS_VERSION_HEADER}
+        -DREPO_ROOT=${CMAKE_SOURCE_DIR}
+        -DGIT_EXECUTABLE=${GIT_EXECUTABLE}
+        -P ${CMAKE_SOURCE_DIR}/cmake/GenerateVersionHeader.cmake
+    BYPRODUCTS ${ELEMENTS_VERSION_HEADER}
+    COMMENT "Generating network_sim version header"
+    VERBATIM
+)
+add_dependencies(network_sim generate_network_sim_version)
+target_include_directories(network_sim PRIVATE ${GENERATED_DIR})
 
 add_executable(strip_render src/strip_render.cpp)
 target_link_libraries(strip_render elements_core)

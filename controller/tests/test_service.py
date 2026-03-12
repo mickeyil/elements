@@ -160,6 +160,15 @@ class _FrameProducingDevice(_FakeDevice):
         return out
 
 
+class _TickCountingDevice(_FakeDevice):
+    def __init__(self):
+        super().__init__()
+        self.tick_calls = 0
+
+    def tick_once(self, now_ns):
+        self.tick_calls += 1
+
+
 def _make_fake_factory(fake_devices: list[_FakeDevice]):
     """Return a factory that yields pre-created _FakeDevice instances in order."""
     idx = iter(range(len(fake_devices)))
@@ -245,6 +254,12 @@ class TestSnapshotIdle:
         svc, _ = _make_service(fake_devices=fakes)
         snap = svc.build_snapshot()
         assert snap['devices'][0]['connected'] is False
+
+    def test_idle_tick_once_still_ticks_devices(self):
+        fake = _TickCountingDevice()
+        svc, _ = _make_service(fake_devices=[fake])
+        svc.tick_once()
+        assert fake.tick_calls == 1
 
 
 class TestHandleLoad:
@@ -1012,7 +1027,7 @@ class TestDiscoveryIntegration:
             svc.tick_once()
 
         assert (
-            'discovery: connected sim-1 at 127.0.0.1:9001 (strip strip_a, 5 LEDs)'
+            'discovery: connected to sim-1 at 127.0.0.1:9001 (strip strip_a, 5 LEDs)'
             in caplog.text
         )
 

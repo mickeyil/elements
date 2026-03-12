@@ -182,6 +182,10 @@ class ControllerService:
         """
         self._receiver.poll()
         self._poll_discovery()
+        if self._controller.state == ControllerState.IDLE:
+            now = self._clock()
+            for dev in self._devices:
+                dev.tick_once(now)
         self._controller.tick_once()
 
         # Drain controller events first (before probing mutates connectivity)
@@ -306,7 +310,7 @@ class ControllerService:
             changed = dev.update_address(host, tcp_port)
             if changed:
                 log.info(
-                    'discovery: connected %s at %s:%d (strip %s, %d LEDs)',
+                    'discovery: connected to %s at %s:%d (strip %s, %d LEDs)',
                     dc.device_uid, host, tcp_port, dc.strip_id, dc.length,
                 )
                 # Clear probe throttle so _probe_devices() connects immediately

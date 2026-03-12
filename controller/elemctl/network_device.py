@@ -8,6 +8,7 @@ optimistically based on commands sent.
 from __future__ import annotations
 
 import logging
+import select
 import socket
 
 from .device import DeviceFrame, DeviceState
@@ -52,6 +53,8 @@ class NetworkDevice:
 
         self._sock: socket.socket | None = None
         self._connected = False
+        self._ever_connected = False
+        self._connect_error_logged = False
         self._state = DeviceState.IDLE
         self._gen = 0
         self._t0_us: int = 0
@@ -126,6 +129,7 @@ class NetworkDevice:
     def tick_once(self, now_ns: int) -> None:
         frames = self._udp_receiver.drain(self._device_id)
         self._frames.extend(frames)
+        self._check_liveness()
 
     def state(self) -> DeviceState:
         return self._state
@@ -169,6 +173,7 @@ class NetworkDevice:
             self._disconnect()
         self._host = host
         self._tcp_port = tcp_port
+        self._connect_error_logged = False
         return True
 
     def ensure_connected(self) -> bool:
@@ -213,9 +218,13 @@ class NetworkDevice:
                 )
                 self._disconnect()
                 return False
+            self._ever_connected = True
+            self._connect_error_logged = False
             return True
         except OSError as e:
-            log.warning('connect to %s:%d failed: %s', self._host, self._tcp_port, e)
+            if not self._ever_connected and not self._connect_error_logged:
+                log.warning('connect to %s:%d failed: %s', self._host, self._tcp_port, e)
+                self._connect_error_logged = True
             return False
 
     def _disconnect(self) -> None:
@@ -263,3 +272,35 @@ class NetworkDevice:
         if data is None:
             return None
         return parse_ack(data)
+
+    def _check_liveness(self) -> None:
+        if not self._connected or self._sock is None:
+            return
+
+        try:
+            readable, _, _ = select.select([self._sock], [], [], 0)
+        except (OSError, ValueError) as e:
+            log.warning(
+                'liveness check for %s:%d failed: %s',
+                self._host, self._tcp_port, e,
+            )
+            self._disconnect()
+            return
+
+        if not readable:
+            return
+
+        try:
+            peek = self._sock.recv(1, socket.MSG_PEEK)
+        except BlockingIOError:
+            return
+        except OSError as e:
+            log.warning(
+                'liveness recv from %s:%d failed: %s',
+                self._host, self._tcp_port, e,
+            )
+            self._disconnect()
+            return
+
+        if not peek:
+            self._disconnect()
