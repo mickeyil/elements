@@ -7,9 +7,12 @@ from pathlib import Path
 
 import pytest
 
+from elemctl.config import load_config
 from elemctl.tui import (
     TuiApp, format_event, parse_command, extract_metadata, scan_animations,
-    format_transcript_line, _HELP_SENTINEL, _QUIT_SENTINEL, _RESCAN_SENTINEL,
+    format_transcript_line, parse_length, validate_device_uid,
+    validate_strip_id, _CANCEL_SENTINEL, _DEVICES_SENTINEL, _HELP_SENTINEL,
+    _NEWDEVICE_SENTINEL, _QUIT_SENTINEL, _RESCAN_SENTINEL,
 )
 from elemctl.uds_wire import KIND_JSON, KIND_FRAME, UdsReader, encode_json
 from elemctl.uds_client import UdsClient
@@ -195,6 +198,26 @@ class TestParseCommand:
         assert cmd is _HELP_SENTINEL
         assert err is None
 
+    def test_cancel(self):
+        cmd, err = parse_command('/cancel', 1)
+        assert cmd is _CANCEL_SENTINEL
+        assert err is None
+
+    def test_devices(self):
+        cmd, err = parse_command('/devices', 1)
+        assert cmd is _DEVICES_SENTINEL
+        assert err is None
+
+    def test_newdevice(self):
+        cmd, err = parse_command('/newdevice', 1)
+        assert cmd is _NEWDEVICE_SENTINEL
+        assert err is None
+
+    def test_rmdevice(self):
+        cmd, err = parse_command('/rmdevice sim-1', 1)
+        assert cmd == {'cmd': 'rmdevice', 'device_uid': 'sim-1'}
+        assert err is None
+
     def test_unknown_command(self):
         cmd, err = parse_command('/foo', 1)
         assert cmd is None
@@ -256,6 +279,11 @@ class TestParseCommand:
 
     def test_help_extra_args_rejected(self):
         cmd, err = parse_command('/help now', 1)
+        assert cmd is None
+        assert 'does not take arguments' in err
+
+    def test_cancel_extra_args_rejected(self):
+        cmd, err = parse_command('/cancel now', 1)
         assert cmd is None
         assert 'does not take arguments' in err
 
@@ -325,6 +353,28 @@ class TestParseCommand:
         assert cmd is None
         assert 'invalid index' in err
 
+    def test_rmdevice_requires_uid(self):
+        cmd, err = parse_command('/rmdevice', 1)
+        assert cmd is None
+        assert 'requires a device uid' in err
+
+
+class TestNewDeviceValidation:
+    def test_validate_device_uid(self):
+        assert validate_device_uid('sim-1') is None
+        assert validate_device_uid('AA:BB:CC:DD:EE:FF') is None
+        assert validate_device_uid('bad uid')
+
+    def test_validate_strip_id(self):
+        assert validate_strip_id('main_left') is None
+        assert validate_strip_id('main-left') is None
+        assert validate_strip_id('main left')
+
+    def test_parse_length(self):
+        assert parse_length('60') == (60, None)
+        assert parse_length('0')[1] is not None
+        assert parse_length('abc')[1] is not None
+
 
 # ---------------------------------------------------------------------------
 # UdsClient.recv_once smoke test (socketpair, no threading)
@@ -367,6 +417,7 @@ class TestTuiReconnect:
 
         app = TuiApp(
             '/tmp/elemctl.sock',
+            '/tmp/config.json',
             log_file=str(Path(tmp_path) / 'tui.log'),
         )
 
@@ -389,6 +440,148 @@ class TestTuiReconnect:
         assert any('connected to /tmp/elemctl.sock' in line for line in logs)
         assert any('disconnected from /tmp/elemctl.sock' in line for line in logs)
         assert sum('connected to /tmp/elemctl.sock' in line for line in logs) == 2
+
+
+class TestNewDeviceWizard:
+    def test_newdevice_wizard_saves_config(self, tmp_path):
+        config_path = tmp_path / 'config.json'
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(config_path),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+
+        try:
+            app._start_newdevice()
+            app._handle_newdevice_input('sim')
+            app._handle_newdevice_input('sim-1')
+            app._handle_newdevice_input('main')
+            app._handle_newdevice_input('60')
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        cfg = load_config(str(config_path))
+        assert cfg.devices[0].device_uid == 'sim-1'
+        assert cfg.devices[0].device_type == 'sim'
+        assert cfg.devices[0].strip_id == 'main'
+        assert cfg.devices[0].length == 60
+        assert app._wizard_prompt == ''
+
+    def test_newdevice_wizard_cancel(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+
+        try:
+            app._start_newdevice()
+            app._handle_newdevice_input('/cancel')
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        assert app._new_device is None
+        assert app._wizard_prompt == ''
+
+    def test_newdevice_wizard_sets_prompt_in_label(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+
+        try:
+            app._start_newdevice()
+            assert 'device type' in app._wizard_prompt
+            app._handle_newdevice_input('sim')
+            assert app._wizard_prompt.endswith('device uid')
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+    def test_newdevice_save_failure_cancels_wizard(self, monkeypatch, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+
+        monkeypatch.setattr('elemctl.tui.save_config_doc', lambda *args, **kwargs: (_ for _ in ()).throw(OSError('disk full')))
+
+        try:
+            app._start_newdevice()
+            app._handle_newdevice_input('sim')
+            app._handle_newdevice_input('sim-1')
+            app._handle_newdevice_input('main')
+            app._handle_newdevice_input('60')
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        assert app._new_device is None
+        assert app._wizard_prompt == ''
+        assert any('cannot save config: disk full' in line for line in app._log_lines)
+
+    def test_rmdevice_last_device_has_clear_error(self, tmp_path):
+        config_path = tmp_path / 'config.json'
+        config_path.write_text(json.dumps({
+            'controller': {'frame_port': 9002},
+            'devices': [{
+                'device_id': 1,
+                'device_uid': 'sim-1',
+                'device_type': 'sim',
+                'host': '',
+                'tcp_port': 0,
+                'strip_id': 'main',
+                'length': 60,
+            }],
+        }))
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(config_path),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+
+        try:
+            app._do_rmdevice('sim-1')
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        assert any('cannot remove the last configured device' in line for line in app._log_lines)
+
+
+class TestTuiMain:
+    def test_missing_config_path_is_allowed(self, monkeypatch, tmp_path):
+        called = {}
+
+        class FakeApp:
+            def __init__(self, socket_path, config_path, animations_dir, log_file):
+                called["socket_path"] = socket_path
+                called["config_path"] = config_path
+                called["animations_dir"] = animations_dir
+                called["log_file"] = log_file
+
+            def run(self):
+                called["ran"] = True
+
+        monkeypatch.setattr('elemctl.tui.TuiApp', FakeApp)
+        monkeypatch.setattr(
+            'sys.argv',
+            [
+                'elemctl.tui',
+                '--config', str(tmp_path / 'missing.json'),
+                '--log-dir', str(tmp_path / 'logs'),
+            ],
+        )
+
+        from elemctl.tui import main as tui_main
+        tui_main()
+
+        assert called["config_path"] == str(tmp_path / 'missing.json')
+        assert called["ran"] is True
 
 
 class TestRecvOnce:

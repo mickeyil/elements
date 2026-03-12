@@ -12,6 +12,7 @@ import json
 import math
 import os
 import queue
+import re
 import select
 import sys
 import threading
@@ -20,16 +21,28 @@ from pathlib import Path
 
 from prompt_toolkit import Application
 from prompt_toolkit.buffer import Buffer
+from prompt_toolkit.filters import Condition
 from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.layout.containers import HSplit, VerticalAlign, Window
-from prompt_toolkit.layout.controls import BufferControl
+from prompt_toolkit.layout.containers import ConditionalContainer, HSplit, VerticalAlign, Window
+from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
 from prompt_toolkit.layout.layout import Layout
 
 from .config import (
     DEFAULT_ANIMATIONS_PATH,
+    DEFAULT_CONFIG_PATH,
     DEFAULT_LOGS_PATH,
     DEFAULT_SOCKET_PATH,
+    ConfigError,
+    load_config,
     resolve_runtime_path,
+)
+from .config_edit import (
+    add_device,
+    load_config_doc,
+    make_device_entry,
+    next_device_id,
+    remove_device,
+    save_config_doc,
 )
 from .uds_client import UdsClient
 from .uds_wire import KIND_FRAME, KIND_JSON, parse_json_payload
@@ -137,10 +150,27 @@ def scan_animations(directory: str) -> list[AnimationEntry]:
 _QUIT_SENTINEL = object()
 _RESCAN_SENTINEL = object()
 _HELP_SENTINEL = object()
+_DEVICES_SENTINEL = object()
+_NEWDEVICE_SENTINEL = object()
+_CANCEL_SENTINEL = object()
 
 _COMMANDS = {
     'status', 'play', 'pause', 'stop', 'shutdown',
 }
+_DEVICE_UID_RE = re.compile(r'^[A-Za-z0-9._:-]+$')
+_STRIP_ID_RE = re.compile(r'^[A-Za-z0-9_-]+$')
+
+
+@dataclass
+class NewDeviceWizard:
+    step_index: int = 0
+    device_type: str = 'esp32'
+    device_uid: str | None = None
+    strip_id: str | None = None
+    length: int | None = None
+
+
+_NEW_DEVICE_STEPS = ('device_type', 'device_uid', 'strip_id', 'length')
 
 
 def parse_command(text: str, next_id: int) -> tuple[dict | None | object, str | None]:
@@ -174,10 +204,28 @@ def parse_command(text: str, next_id: int) -> tuple[dict | None | object, str | 
             return None, "/help does not take arguments"
         return _HELP_SENTINEL, None
 
+    if name == 'cancel':
+        if len(parts) > 1:
+            return None, "/cancel does not take arguments"
+        return _CANCEL_SENTINEL, None
+
     if name == 'rescan':
         if len(parts) > 1:
             return None, "/rescan does not take arguments"
         return _RESCAN_SENTINEL, None
+
+    if name == 'devices':
+        if len(parts) > 1:
+            return None, "/devices does not take arguments"
+        return _DEVICES_SENTINEL, None
+
+    if name == 'newdevice':
+        if len(parts) > 1:
+            return None, "/newdevice does not take arguments"
+        return _NEWDEVICE_SENTINEL, None
+
+    if name == 'rmdevice':
+        return _parse_rmdevice(parts)
 
     if name == 'load':
         return _parse_load(parts, next_id)
@@ -219,6 +267,43 @@ def _parse_load(parts: list[str], next_id: int) -> tuple[dict | None, str | None
         return {'cmd': 'load', 'target': None, 'index': idx, 'loop': loop, 'id': next_id}, None
 
     return {'cmd': 'load', 'target': target_str, 'index': None, 'loop': loop, 'id': next_id}, None
+
+
+def _parse_rmdevice(parts: list[str]) -> tuple[dict | None, str | None]:
+    if len(parts) < 2:
+        return None, "/rmdevice requires a device uid"
+    args = parts[1].split()
+    if len(args) != 1:
+        return None, "/rmdevice takes exactly one device uid"
+    return {'cmd': 'rmdevice', 'device_uid': args[0]}, None
+
+
+def validate_device_uid(device_uid: str) -> str | None:
+    if not device_uid:
+        return "device uid is required"
+    if not _DEVICE_UID_RE.fullmatch(device_uid):
+        return "device uid may only contain letters, numbers, ., _, -, and :"
+    return None
+
+
+def validate_strip_id(strip_id: str) -> str | None:
+    if not strip_id:
+        return "strip id is required"
+    if not _STRIP_ID_RE.fullmatch(strip_id):
+        return "strip id may only contain letters, numbers, _ and -"
+    return None
+
+
+def parse_length(text: str) -> tuple[int | None, str | None]:
+    if not text:
+        return None, "length is required"
+    try:
+        length = int(text)
+    except ValueError:
+        return None, f"length must be an integer, got {text!r}"
+    if length < 1:
+        return None, f"length must be >= 1, got {length}"
+    return length, None
 
 
 # ------------------------------------------------------------------
@@ -351,12 +436,16 @@ class TuiApp:
     def __init__(
         self,
         socket_path: str,
+        config_path: str,
         animations_dir: str = DEFAULT_ANIMATIONS_PATH,
         log_file: str | None = None,
     ):
         self._socket_path = socket_path
+        self._config_path = config_path
         self._animations_dir = animations_dir
         self._animation_list: list[AnimationEntry] = []
+        self._new_device: NewDeviceWizard | None = None
+        self._wizard_prompt = ''
         self._client: UdsClient | None = None
         self._client_lock = threading.Lock()
         self._shutdown = threading.Event()
@@ -372,6 +461,9 @@ class TuiApp:
 
         # prompt_toolkit widgets
         self._log_buffer = Buffer(read_only=True)
+        self._wizard_label = FormattedTextControl(
+            text=lambda: self._wizard_prompt,
+        )
         input_control = BufferControl(buffer=Buffer(
             name='input',
             accept_handler=self._on_input,
@@ -391,6 +483,14 @@ class TuiApp:
             wrap_lines=True,
             dont_extend_height=True,
         )
+        wizard_window = ConditionalContainer(
+            Window(
+                height=1,
+                content=self._wizard_label,
+                style='class:wizard',
+            ),
+            filter=Condition(lambda: self._new_device is not None),
+        )
 
         self._app = Application(
             layout=Layout(
@@ -398,6 +498,7 @@ class TuiApp:
                     [
                         log_window,
                         Window(height=1, char='─', style='class:separator'),
+                        wizard_window,
                         Window(height=1, content=input_control),
                     ],
                     align=VerticalAlign.BOTTOM,
@@ -430,6 +531,10 @@ class TuiApp:
 
     def _on_input(self, buff: Buffer) -> None:
         text = buff.text
+        if self._new_device is not None:
+            self._handle_newdevice_input(text)
+            return
+
         cmd, error = parse_command(text, self._next_id)
 
         if cmd is None:
@@ -445,12 +550,28 @@ class TuiApp:
             self._show_help()
             return
 
+        if cmd is _CANCEL_SENTINEL:
+            self._local_log("no active wizard")
+            return
+
         if cmd is _RESCAN_SENTINEL:
             self._do_rescan()
             return
 
+        if cmd is _DEVICES_SENTINEL:
+            self._do_devices()
+            return
+
+        if cmd is _NEWDEVICE_SENTINEL:
+            self._start_newdevice()
+            return
+
         if isinstance(cmd, dict) and cmd.get('cmd') == 'load':
             self._do_load(cmd)
+            return
+
+        if isinstance(cmd, dict) and cmd.get('cmd') == 'rmdevice':
+            self._do_rmdevice(cmd['device_uid'])
             return
 
         self._local_log(f"> {text}")
@@ -473,6 +594,10 @@ class TuiApp:
     def _show_help(self) -> None:
         self._local_log("commands:")
         self._local_log("  /help               show this help")
+        self._local_log("  /devices            list configured devices")
+        self._local_log("  /newdevice          add a configured device via wizard")
+        self._local_log("  /rmdevice UID       remove a configured device")
+        self._local_log("  /cancel             cancel the active wizard")
         self._local_log("  /status             show controller status")
         self._local_log("  /play               start playback")
         self._local_log("  /pause              pause playback")
@@ -482,6 +607,175 @@ class TuiApp:
         self._local_log("  /load NAME [loop]   load an animation by name")
         self._local_log("  /load #N [loop]     load an animation by list index")
         self._local_log("  /quit, /exit        quit the TUI")
+
+    def _load_config_doc(self) -> dict | None:
+        try:
+            return load_config_doc(self._config_path)
+        except (ConfigError, json.JSONDecodeError, OSError) as e:
+            self._local_log(f"config error: {e}")
+            return None
+
+    def _do_devices(self) -> None:
+        doc = self._load_config_doc()
+        if doc is None:
+            return
+        devices = doc.get('devices', [])
+        if not devices:
+            self._local_log(f"no configured devices in {self._config_path}")
+            return
+        self._local_log(f"configured devices in {self._config_path}:")
+        for dev in devices:
+            uid = dev.get('device_uid', '?')
+            dev_type = dev.get('device_type', '?')
+            strip = dev.get('strip_id', '?')
+            length = dev.get('length', '?')
+            device_id = dev.get('device_id', '?')
+            self._local_log(
+                f'  {uid}: {dev_type}, strip "{strip}", {length} LEDs (id {device_id})'
+            )
+
+    def _do_rmdevice(self, device_uid: str) -> None:
+        doc = self._load_config_doc()
+        if doc is None:
+            return
+        devices = doc.get('devices', [])
+        if isinstance(devices, list) and len(devices) <= 1:
+            self._local_log("cannot remove the last configured device")
+            return
+        try:
+            remove_device(doc, device_uid)
+            save_config_doc(self._config_path, doc)
+        except ConfigError as e:
+            self._local_log(f"cannot remove {device_uid}: {e}")
+            return
+        except OSError as e:
+            self._local_log(f"cannot save config: {e}")
+            return
+        self._local_log(f"removed device {device_uid}")
+        self._local_log("restart serve to apply config changes")
+
+    def _start_newdevice(self) -> None:
+        if self._new_device is not None:
+            self._local_log("new device wizard already active; type /cancel to abort")
+            return
+        self._new_device = NewDeviceWizard()
+        self._local_log("new device wizard started; type /cancel to abort")
+        self._prompt_newdevice()
+
+    def _cancel_newdevice(self) -> None:
+        self._set_wizard_prompt('')
+        self._new_device = None
+        self._local_log("new device wizard cancelled")
+
+    def _prompt_newdevice(self) -> None:
+        wizard = self._new_device
+        if wizard is None:
+            return
+        field = _NEW_DEVICE_STEPS[wizard.step_index]
+        if field == 'device_type':
+            self._set_wizard_prompt(
+                f"new device — device type (sim/esp32) [default: {wizard.device_type}]"
+            )
+        elif field == 'device_uid':
+            self._set_wizard_prompt("new device — device uid")
+        elif field == 'strip_id':
+            self._set_wizard_prompt("new device — strip id")
+        else:
+            self._set_wizard_prompt("new device — length (LEDs)")
+
+    def _set_wizard_prompt(self, message: str) -> None:
+        self._wizard_prompt = message
+        self._app.invalidate()
+
+    def _handle_newdevice_input(self, text: str) -> None:
+        wizard = self._new_device
+        if wizard is None:
+            return
+
+        stripped = text.strip()
+        if stripped == '/cancel':
+            self._cancel_newdevice()
+            return
+        if stripped.startswith('/'):
+            self._local_log("new device wizard active; finish the field or /cancel")
+            self._prompt_newdevice()
+            return
+
+        doc = self._load_config_doc()
+        if doc is None:
+            return
+        devices = doc.get('devices', [])
+
+        field = _NEW_DEVICE_STEPS[wizard.step_index]
+        if field == 'device_type':
+            value = stripped.lower() or wizard.device_type
+            if value not in {'sim', 'esp32'}:
+                self._local_log("device type must be sim or esp32")
+                self._prompt_newdevice()
+                return
+            wizard.device_type = value
+        elif field == 'device_uid':
+            error = validate_device_uid(stripped)
+            if error is not None:
+                self._local_log(error)
+                self._prompt_newdevice()
+                return
+            if any(d.get('device_uid') == stripped for d in devices if isinstance(d, dict)):
+                self._local_log(f"device uid already exists: {stripped}")
+                self._prompt_newdevice()
+                return
+            wizard.device_uid = stripped
+        elif field == 'strip_id':
+            error = validate_strip_id(stripped)
+            if error is not None:
+                self._local_log(error)
+                self._prompt_newdevice()
+                return
+            if any(d.get('strip_id') == stripped for d in devices if isinstance(d, dict)):
+                self._local_log(f"strip id already exists: {stripped}")
+                self._prompt_newdevice()
+                return
+            wizard.strip_id = stripped
+        else:
+            length, error = parse_length(stripped)
+            if error is not None:
+                self._local_log(error)
+                self._prompt_newdevice()
+                return
+            wizard.length = length
+
+        wizard.step_index += 1
+        if wizard.step_index < len(_NEW_DEVICE_STEPS):
+            self._prompt_newdevice()
+            return
+
+        entry = make_device_entry(
+            device_uid=wizard.device_uid or "",
+            device_type=wizard.device_type,
+            strip_id=wizard.strip_id or "",
+            length=wizard.length or 0,
+            device_id=next_device_id(doc),
+        )
+        add_device(doc, entry)
+        try:
+            save_config_doc(self._config_path, doc)
+        except ConfigError as e:
+            self._local_log(f"cannot save config: {e}")
+            self._set_wizard_prompt('')
+            self._new_device = None
+            return
+        except OSError as e:
+            self._local_log(f"cannot save config: {e}")
+            self._set_wizard_prompt('')
+            self._new_device = None
+            return
+
+        self._local_log(
+            f'added device {wizard.device_uid} ({wizard.device_type}, strip "{wizard.strip_id}", {wizard.length} LEDs)'
+        )
+        self._local_log("restart serve to apply config changes")
+        self._set_wizard_prompt('')
+        self._new_device = None
 
     def _do_rescan(self) -> None:
         self._animation_list = scan_animations(self._animations_dir)
@@ -715,7 +1009,7 @@ def main() -> None:
     )
     parser.add_argument(
         '--config', default=None,
-        help='Config file (used to read animations_dir if --animations not set)',
+        help=f'Config file path to read and edit (default: {DEFAULT_CONFIG_PATH})',
     )
     parser.add_argument(
         '--log-dir', default=None,
@@ -723,11 +1017,11 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    config_path = os.path.expanduser(args.config or DEFAULT_CONFIG_PATH)
     cfg = None
-    if args.config is not None:
-        from .config import ConfigError, load_config, resolve_config_path
+    if os.path.isfile(config_path):
         try:
-            cfg = load_config(resolve_config_path(args.config))
+            cfg = load_config(config_path)
         except (ConfigError, json.JSONDecodeError, OSError) as e:
             print(f"elemctl.tui: config error: {e}", file=sys.stderr)
             raise SystemExit(1)
@@ -745,6 +1039,7 @@ def main() -> None:
 
     TuiApp(
         args.socket,
+        config_path=config_path,
         animations_dir=animations_dir,
         log_file=str(Path(log_dir) / 'tui.log'),
     ).run()

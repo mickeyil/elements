@@ -1,0 +1,130 @@
+"""Helpers for editing elemctl config docs while preserving unknown fields."""
+
+from __future__ import annotations
+
+import json
+import os
+import tempfile
+from pathlib import Path
+
+from .config import (
+    DEFAULT_DISCOVERY_PORT,
+    DEFAULT_FRAME_PORT,
+    ConfigError,
+    load_config_obj,
+)
+
+
+def ensure_editor_shape(doc: dict) -> dict:
+    """Ensure the config doc has the minimum editable shape.
+
+    Mutates and returns the raw dict, preserving unknown fields.
+    """
+    if not isinstance(doc, dict):
+        raise ConfigError("config must be a JSON object")
+
+    ctrl = doc.get("controller")
+    if ctrl is None:
+        ctrl = {}
+        doc["controller"] = ctrl
+    if not isinstance(ctrl, dict):
+        raise ConfigError("'controller' must be an object")
+    ctrl.setdefault("frame_port", DEFAULT_FRAME_PORT)
+    if "discovery_port" not in ctrl:
+        ctrl["discovery_port"] = DEFAULT_DISCOVERY_PORT
+
+    devices = doc.get("devices")
+    if devices is None:
+        devices = []
+        doc["devices"] = devices
+    if not isinstance(devices, list):
+        raise ConfigError("'devices' must be a list")
+
+    return doc
+
+
+def load_config_doc(path: str) -> dict:
+    """Load an editable config doc, or return a skeleton if missing."""
+    resolved = os.path.expanduser(path)
+    if not os.path.exists(resolved):
+        return ensure_editor_shape({})
+
+    with open(resolved) as f:
+        raw = json.load(f)
+    return ensure_editor_shape(raw)
+
+
+def next_device_id(doc: dict) -> int:
+    """Return the lowest unused positive device_id."""
+    devices = ensure_editor_shape(doc)["devices"]
+    used = {
+        d.get("device_id")
+        for d in devices
+        if isinstance(d, dict) and isinstance(d.get("device_id"), int)
+    }
+    candidate = 1
+    while candidate in used:
+        candidate += 1
+    return candidate
+
+
+def make_device_entry(
+    *,
+    device_uid: str,
+    device_type: str,
+    strip_id: str,
+    length: int,
+    device_id: int,
+) -> dict:
+    """Build a discovery-mode device entry for the config doc."""
+    return {
+        "device_id": device_id,
+        "device_uid": device_uid,
+        "device_type": device_type,
+        "host": "",
+        "tcp_port": 0,
+        "strip_id": strip_id,
+        "length": length,
+    }
+
+
+def add_device(doc: dict, entry: dict) -> None:
+    """Append a device entry to the raw config doc."""
+    ensure_editor_shape(doc)["devices"].append(entry)
+
+
+def remove_device(doc: dict, device_uid: str) -> None:
+    """Remove a device by uid. Raises ConfigError if missing."""
+    devices = ensure_editor_shape(doc)["devices"]
+    for idx, device in enumerate(devices):
+        if isinstance(device, dict) and device.get("device_uid") == device_uid:
+            del devices[idx]
+            return
+    raise ConfigError(f"device not found: {device_uid}")
+
+
+def save_config_doc(path: str, doc: dict) -> None:
+    """Validate and atomically save the config doc."""
+    load_config_obj(doc)
+
+    resolved = Path(os.path.expanduser(path))
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+
+    fd, tmp_path = tempfile.mkstemp(
+        prefix=f".{resolved.name}.tmp-",
+        suffix=".json",
+        dir=str(resolved.parent),
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(doc, f, indent=2)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, resolved)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise

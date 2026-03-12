@@ -12,6 +12,7 @@ from pathlib import Path
 
 DEFAULT_CONFIG_PATH = '~/.config/elemctl/config.json'
 DEFAULT_SOCKET_PATH = '/tmp/elemctl.sock'
+DEFAULT_FRAME_PORT = 9002
 DEFAULT_DISCOVERY_PORT = 6040
 DEFAULT_ANIMATIONS_PATH = str(Path(__file__).resolve().parent.parent.parent / 'animations')
 DEFAULT_LOGS_PATH = str(Path(__file__).resolve().parent.parent.parent / 'logs')
@@ -73,6 +74,11 @@ def load_config(path: str) -> Config:
     with open(path) as f:
         raw = json.load(f)
 
+    return load_config_obj(raw)
+
+
+def load_config_obj(raw: dict) -> Config:
+    """Validate a raw config object and return Config."""
     if not isinstance(raw, dict):
         raise ConfigError("config must be a JSON object")
 
