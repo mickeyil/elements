@@ -20,8 +20,8 @@ from pathlib import Path
 from prompt_toolkit import Application
 from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.layout.containers import HSplit, Window
-from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
+from prompt_toolkit.layout.containers import HSplit, VerticalAlign, Window
+from prompt_toolkit.layout.controls import BufferControl
 from prompt_toolkit.layout.layout import Layout
 
 from .config import DEFAULT_ANIMATIONS_PATH, DEFAULT_SOCKET_PATH
@@ -319,13 +319,22 @@ class TuiApp:
         def _(event):
             self._exit()
 
+        log_window = Window(
+            content=BufferControl(buffer=self._log_buffer),
+            wrap_lines=True,
+            dont_extend_height=True,
+        )
+
         self._app = Application(
             layout=Layout(
-                HSplit([
-                    Window(content=BufferControl(buffer=self._log_buffer), wrap_lines=True),
-                    Window(height=1, content=FormattedTextControl([('class:separator', '─' * 200)])),
-                    Window(height=1, content=input_control),
-                ]),
+                HSplit(
+                    [
+                        log_window,
+                        Window(height=1, char='─', style='class:separator'),
+                        Window(height=1, content=input_control),
+                    ],
+                    align=VerticalAlign.BOTTOM,
+                ),
                 focused_element=input_control,
             ),
             key_bindings=kb,
