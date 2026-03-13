@@ -469,12 +469,12 @@ def _decode_tui_message(kind: int, payload: bytes) -> tuple[list[str] | None, li
         return None, []
 
     if kind != KIND_JSON:
-        return [f'ctrl: unknown message kind={kind} len={len(payload)}'], []
+        return [f'unknown message kind={kind} len={len(payload)}'], []
 
     try:
         msg = parse_json_payload(payload)
     except (json.JSONDecodeError, UnicodeDecodeError):
-        return [f'ctrl: bad json message len={len(payload)}'], []
+        return [f'bad json message len={len(payload)}'], []
 
     return _format_message(msg), _panel_updates_from_message(msg)
 
@@ -498,15 +498,15 @@ def _format_message(msg: dict) -> list[str]:
                 and set(result.keys()) == {'message'}
                 and isinstance(result.get('message'), str)
             ):
-                return [f'ctrl: {result["message"]}']
-            return [f'ctrl: reply {rid} ok {json.dumps(result, separators=(",", ":"))}']
+                return [result["message"]]
+            return [f'reply {rid} ok {json.dumps(result, separators=(",", ":"))}']
         else:
-            return [f'ctrl: reply {rid} ERROR: {msg.get("error", "?")}']
+            return [f'reply {rid} ERROR: {msg.get("error", "?")}']
 
     if msg_type == 'event':
         return _format_controller_event(msg)
 
-    return [f'ctrl: unknown message {json.dumps(msg, separators=(",", ":"))}']
+    return [f'unknown message {json.dumps(msg, separators=(",", ":"))}']
 
 
 def _format_controller_event(msg: dict) -> list[str]:
@@ -527,11 +527,11 @@ def _format_controller_event(msg: dict) -> list[str]:
             t_rel = session.get('current_t_rel')
             duration = session.get('duration')
             if isinstance(t_rel, (int, float)) and isinstance(duration, (int, float)):
-                lines.append(f'ctrl: {state} session={sid} t={t_rel:.2f}/{duration:.2f}s')
+                lines.append(f'{state} session={sid} t={t_rel:.2f}/{duration:.2f}s')
             else:
-                lines.append(f'ctrl: {state} session={sid}')
+                lines.append(f'{state} session={sid}')
         else:
-            lines.append('ctrl: idle')
+            lines.append('controller is idle')
 
         if connected:
             lines.append('devices online:')
@@ -544,7 +544,7 @@ def _format_controller_event(msg: dict) -> list[str]:
         state = msg.get('state', '?')
         epoch = msg.get('epoch', '?')
         sid = msg.get('session_id', '?')
-        return [f'ctrl: state {state} epoch={epoch} session={sid}']
+        return [f'state {state} epoch={epoch} session={sid}']
 
     if event == 'device_status':
         uid = msg.get('device_uid', '?')
@@ -553,25 +553,25 @@ def _format_controller_event(msg: dict) -> list[str]:
         connected = msg.get('connected')
         status = 'connected' if connected else 'disconnected'
         if isinstance(length, int) and not isinstance(length, bool):
-            return [f'ctrl: device {uid} {status} ({strip}, {length} LEDs)']
-        return [f'ctrl: device {uid} {status} ({strip})']
+            return [f'device {uid} {status} ({strip}, {length} LEDs)']
+        return [f'device {uid} {status} ({strip})']
 
     if event == 'session_start':
         sid = msg.get('session_id', '?')
         epoch = msg.get('epoch', '?')
         duration = msg.get('duration', '?')
         strips = ', '.join(s.get('name', '?') for s in msg.get('strips', []))
-        return [f'ctrl: session {sid} started epoch={epoch} duration={duration}s strips=[{strips}]']
+        return [f'session {sid} started epoch={epoch} duration={duration}s strips=[{strips}]']
 
     if event == 'loop':
         epoch = msg.get('epoch', '?')
         sid = msg.get('session_id', '?')
-        return [f'ctrl: loop epoch={epoch} session={sid}']
+        return [f'loop epoch={epoch} session={sid}']
 
     if event == 'error':
-        return [f'ctrl: error: {msg.get("message", "?")}']
+        return [f'error: {msg.get("message", "?")}']
 
-    return [f'ctrl: unknown event {json.dumps(msg, separators=(",", ":"))}']
+    return [f'unknown event {json.dumps(msg, separators=(",", ":"))}']
 
 
 # ------------------------------------------------------------------
@@ -602,6 +602,7 @@ class TuiApp:
         self._pending_panel_updates: queue.Queue[object] = queue.Queue()
         self._device_panel: dict[str, DevicePanelEntry] = {}
         self._controller_connected = False
+        self._controller_disconnected_at_ns = time.monotonic_ns()
         self._reader_thread: threading.Thread | None = None
         self._log_fp = (
             open(log_file, 'a', encoding='utf-8', buffering=1)
@@ -669,7 +670,7 @@ class TuiApp:
                     ),
                     Window(height=1, char='─', style='class:panel.separator'),
                     Window(
-                        height=4,
+                        height=2,
                         content=FormattedTextControl(self._render_panel_summary),
                         dont_extend_height=True,
                         wrap_lines=False,
@@ -722,19 +723,15 @@ class TuiApp:
                 'newdevice.error': 'bg:#3b1f22 #ffb4b4',
                 'frame.border': '#30363d',
                 'frame.label': 'bold #58a6ff',
-                'panel.uid.connected': 'bold #3fb950',
+                'panel.uid.connected': 'bold #00ff5f',
                 'panel.uid.offline': 'bold #f85149',
-                'panel.uid.never': '#5b6573',
                 'panel.meta': '#7d8590',
                 'panel.length': '#8b949e',
                 'panel.badge.offline': 'bold bg:#3d1212 #f85149',
                 'panel.summary.label': '#8b949e',
-                'panel.summary.online': '#3fb950',
-                'panel.summary.offline': '#f85149',
-                'panel.summary.never': '#5b6573',
-                'panel.controller.online': '#3fb950',
-                'panel.controller.offline': '#f85149',
-                'panel.empty': '#5b6573',
+                'panel.summary.online': 'bold #00ff5f',
+                'panel.controller.online': 'bold #00ff5f',
+                'panel.controller.offline': 'bold #f85149',
             }),
         )
 
@@ -755,7 +752,7 @@ class TuiApp:
                 device_uid=uid,
                 strip_id=_normalize_strip_id(dev),
                 length=_normalize_length(dev.get('length')),
-                status='never',
+                status='configured',
             )
         self._device_panel = panel
 
@@ -779,6 +776,10 @@ class TuiApp:
 
     def _apply_panel_update(self, update: object) -> None:
         if isinstance(update, ControllerConnectionUpdate):
+            if update.connected:
+                self._controller_disconnected_at_ns = None
+            elif self._controller_connected:
+                self._controller_disconnected_at_ns = time.monotonic_ns()
             self._controller_connected = update.connected
             return
         if isinstance(update, PanelSnapshotUpdate):
@@ -797,12 +798,12 @@ class TuiApp:
         if info.connected:
             return 'connected', None
         if prev is None:
-            return 'never', None
+            return 'configured', None
         if prev.status == 'connected':
             return 'offline', time.monotonic_ns() if now_ns is None else now_ns
         if prev.status == 'offline':
             return 'offline', prev.disconnected_at_ns
-        return 'never', None
+        return 'configured', None
 
     def _apply_snapshot_update(self, devices: list[PanelDeviceInfo]) -> None:
         previous = self._device_panel
@@ -898,18 +899,28 @@ class TuiApp:
     def _render_panel_rows(self):
         fragments: list[tuple[str, str]] = []
         if not self._device_panel:
-            return [('class:panel.empty', 'no configured devices')]
+            return []
+
+        visible_entries = [
+            entry for entry in self._device_panel.values()
+            if entry.status == 'offline'
+        ]
+        visible_entries.extend(
+            entry for entry in self._device_panel.values()
+            if entry.status == 'connected'
+        )
+        if not visible_entries:
+            return []
 
         first = True
-        for entry in self._device_panel.values():
+        for entry in visible_entries:
             if not first:
                 fragments.append(('', '\n'))
             first = False
             badge = ''
-            uid_style = 'class:panel.uid.never'
             if entry.status == 'connected':
                 uid_style = 'class:panel.uid.connected'
-            elif entry.status == 'offline':
+            else:
                 uid_style = 'class:panel.uid.offline'
                 badge = self._format_panel_age(entry.disconnected_at_ns)
             fragments.extend(
@@ -934,9 +945,10 @@ class TuiApp:
 
     def _render_panel_summary(self):
         fragments: list[tuple[str, str]] = []
-        counts = {'connected': 0, 'offline': 0, 'never': 0}
+        counts = {'connected': 0}
         for entry in self._device_panel.values():
-            counts[entry.status] += 1
+            if entry.status == 'connected':
+                counts['connected'] += 1
 
         controller_style = (
             'class:panel.controller.online'
@@ -946,36 +958,20 @@ class TuiApp:
         fragments.extend(
             self._panel_two_column_fragments(
                 'controller',
-                left_style='class:panel.summary.label',
-                right_text='online' if self._controller_connected else 'offline',
-                right_style=controller_style,
+                left_style=controller_style,
+                right_text='' if self._controller_connected else self._format_panel_age(
+                    self._controller_disconnected_at_ns
+                ),
+                right_style='class:panel.badge.offline',
             )
         )
         fragments.append(('', '\n'))
         fragments.extend(
             self._panel_two_column_fragments(
-                'online',
-                left_style='class:panel.summary.online',
+                'devices',
+                left_style='class:panel.summary.label',
                 right_text=str(counts['connected']),
                 right_style='class:panel.summary.online',
-            )
-        )
-        fragments.append(('', '\n'))
-        fragments.extend(
-            self._panel_two_column_fragments(
-                'offline',
-                left_style='class:panel.summary.offline',
-                right_text=str(counts['offline']),
-                right_style='class:panel.summary.offline',
-            )
-        )
-        fragments.append(('', '\n'))
-        fragments.extend(
-            self._panel_two_column_fragments(
-                'never',
-                left_style='class:panel.summary.never',
-                right_text=str(counts['never']),
-                right_style='class:panel.summary.never',
             )
         )
         return fragments
@@ -1082,12 +1078,15 @@ class TuiApp:
     def _do_devices(self) -> None:
         client = self._get_client()
         if client is not None:
-            cmd = {'cmd': 'status', 'id': self._next_id}
-            self._next_id += 1
-            try:
-                client.send_cmd(cmd)
-            except OSError as e:
-                self._local_log(f"send failed: {e}")
+            if not self._device_panel:
+                self._local_log("no configured devices")
+                return
+            self._local_log("devices:")
+            for entry in self._device_panel.values():
+                length_text = '?' if entry.length is None else str(entry.length)
+                self._local_log(
+                    f'  {entry.device_uid}: strip "{entry.strip_id}", {length_text} LEDs [{entry.status}]'
+                )
             return
 
         doc = self._load_config_doc()

@@ -62,7 +62,7 @@ class TestFormatEvent:
         }
         result = format_event(KIND_JSON, _json_payload(msg))
         assert result == [
-            'ctrl: idle',
+            'controller is idle',
             'devices online:',
             '  sim-1: strip "main" with 10 LEDs',
             '  sim-2: strip "aux" with 20 LEDs',
@@ -85,7 +85,7 @@ class TestFormatEvent:
         }
         result = format_event(KIND_JSON, _json_payload(msg))
         assert result == [
-            'ctrl: playing session=5 t=1.25/8.00s',
+            'playing session=5 t=1.25/8.00s',
             'devices online:',
             '  sim-1: strip "main" with 10 LEDs',
         ]
@@ -97,7 +97,7 @@ class TestFormatEvent:
             'ok': True,
             'result': {'message': 'added device sim-2'},
         }
-        assert format_event(KIND_JSON, _json_payload(msg)) == ['ctrl: added device sim-2']
+        assert format_event(KIND_JSON, _json_payload(msg)) == ['added device sim-2']
 
     def test_reply_snapshot_formats_like_controller_event(self):
         msg = {
@@ -114,7 +114,7 @@ class TestFormatEvent:
             },
         }
         assert format_event(KIND_JSON, _json_payload(msg)) == [
-            'ctrl: idle',
+            'controller is idle',
             'devices online:',
             '  sim-1: strip "main" with 10 LEDs',
         ]
@@ -125,7 +125,7 @@ class TestFormatEvent:
             'state': 'playing', 'epoch': 1, 'session_id': 3,
         }
         result = format_event(KIND_JSON, _json_payload(msg))
-        assert result == ['ctrl: state playing epoch=1 session=3']
+        assert result == ['state playing epoch=1 session=3']
 
     def test_device_connected(self):
         msg = {
@@ -133,7 +133,7 @@ class TestFormatEvent:
             'device_uid': 'sim-1', 'strip': 'strip_a', 'length': 10, 'connected': True,
         }
         result = format_event(KIND_JSON, _json_payload(msg))
-        assert result == ['ctrl: device sim-1 connected (strip_a, 10 LEDs)']
+        assert result == ['device sim-1 connected (strip_a, 10 LEDs)']
 
     def test_device_disconnected(self):
         msg = {
@@ -141,7 +141,7 @@ class TestFormatEvent:
             'device_uid': 'sim-2', 'strip': 'strip_b', 'length': 20, 'connected': False,
         }
         result = format_event(KIND_JSON, _json_payload(msg))
-        assert result == ['ctrl: device sim-2 disconnected (strip_b, 20 LEDs)']
+        assert result == ['device sim-2 disconnected (strip_b, 20 LEDs)']
 
     def test_session_start(self):
         msg = {
@@ -150,7 +150,7 @@ class TestFormatEvent:
             'strips': [{'name': 'strip_a'}, {'name': 'strip_b'}],
         }
         result = format_event(KIND_JSON, _json_payload(msg))
-        assert result == ['ctrl: session 1 started epoch=0 duration=2.0s strips=[strip_a, strip_b]']
+        assert result == ['session 1 started epoch=0 duration=2.0s strips=[strip_a, strip_b]']
 
     def test_loop(self):
         msg = {
@@ -158,7 +158,7 @@ class TestFormatEvent:
             'epoch': 3, 'session_id': 1,
         }
         result = format_event(KIND_JSON, _json_payload(msg))
-        assert result == ['ctrl: loop epoch=3 session=1']
+        assert result == ['loop epoch=3 session=1']
 
     def test_error(self):
         msg = {
@@ -166,17 +166,17 @@ class TestFormatEvent:
             'message': 'something broke',
         }
         result = format_event(KIND_JSON, _json_payload(msg))
-        assert result == ['ctrl: error: something broke']
+        assert result == ['error: something broke']
 
     def test_reply_ok(self):
         msg = {'type': 'reply', 'id': 7, 'ok': True, 'result': {'x': 1}}
         result = format_event(KIND_JSON, _json_payload(msg))
-        assert result == ['ctrl: reply 7 ok {"x":1}']
+        assert result == ['reply 7 ok {"x":1}']
 
     def test_reply_error(self):
         msg = {'type': 'reply', 'id': 3, 'ok': False, 'error': 'bad cmd'}
         result = format_event(KIND_JSON, _json_payload(msg))
-        assert result == ['ctrl: reply 3 ERROR: bad cmd']
+        assert result == ['reply 3 ERROR: bad cmd']
 
     def test_frame_returns_none(self):
         assert format_event(KIND_FRAME, b'\x00' * 20) is None
@@ -184,20 +184,20 @@ class TestFormatEvent:
     def test_unknown_event(self):
         msg = {'type': 'event', 'event': 'future_thing', 'data': 42}
         result = format_event(KIND_JSON, _json_payload(msg))
-        assert result == ['ctrl: unknown event {"type":"event","event":"future_thing","data":42}']
+        assert result == ['unknown event {"type":"event","event":"future_thing","data":42}']
 
     def test_unknown_kind(self):
         result = format_event(0xFF, b'hello')
-        assert result == ['ctrl: unknown message kind=255 len=5']
+        assert result == ['unknown message kind=255 len=5']
 
     def test_unknown_msg_type(self):
         msg = {'type': 'something_else', 'x': 1}
         result = format_event(KIND_JSON, _json_payload(msg))
-        assert result == ['ctrl: unknown message {"type":"something_else","x":1}']
+        assert result == ['unknown message {"type":"something_else","x":1}']
 
     def test_bad_json(self):
         result = format_event(KIND_JSON, b'\xff\xfe')
-        assert result == ['ctrl: bad json message len=2']
+        assert result == ['bad json message len=2']
 
 
 # ---------------------------------------------------------------------------
@@ -509,7 +509,7 @@ class TestDevicePanel:
         )
         try:
             assert list(app._device_panel) == ['sim-1', 'sim-2']
-            assert app._device_panel['sim-1'].status == 'never'
+            assert app._device_panel['sim-1'].status == 'configured'
             assert app._device_panel['sim-2'].strip_id == 'aux'
         finally:
             if app._log_fp is not None:
@@ -527,7 +527,7 @@ class TestDevicePanel:
         }
         lines, updates = _decode_tui_message(KIND_JSON, _json_payload(msg))
         assert lines == [
-            'ctrl: idle',
+            'controller is idle',
             'devices online:',
             '  sim-1: strip "main" with 10 LEDs',
         ]
@@ -548,7 +548,7 @@ class TestDevicePanel:
                 PanelDeviceInfo('sim-2', 'aux', 30, False),
             ]))
             assert app._device_panel['sim-1'].status == 'connected'
-            assert app._device_panel['sim-2'].status == 'never'
+            assert app._device_panel['sim-2'].status == 'configured'
         finally:
             if app._log_fp is not None:
                 app._log_fp.close()
@@ -586,6 +586,56 @@ class TestDevicePanel:
             app._apply_panel_update(ControllerConnectionUpdate(False))
             assert app._controller_connected is False
             assert app._device_panel['sim-1'].status == 'connected'
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+    def test_panel_summary_renders_connected_controller_and_device_count(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        try:
+            app._controller_connected = True
+            app._controller_disconnected_at_ns = None
+            app._device_panel = {
+                'sim-1': DevicePanelEntry(
+                    device_uid='sim-1',
+                    strip_id='main',
+                    length=60,
+                    status='connected',
+                ),
+                'sim-2': DevicePanelEntry(
+                    device_uid='sim-2',
+                    strip_id='aux',
+                    length=30,
+                    status='offline',
+                    disconnected_at_ns=0,
+                ),
+            }
+            text = ''.join(fragment[1] for fragment in app._render_panel_summary())
+            assert 'controller' in text
+            assert 'devices' in text
+            assert '1' in text
+            assert 'online' not in text
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+    def test_panel_summary_renders_controller_offline_age(self, monkeypatch, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        try:
+            app._controller_connected = False
+            app._controller_disconnected_at_ns = 0
+            monkeypatch.setattr('elemctl.tui.time.monotonic_ns', lambda: 65_000_000_000)
+            text = ''.join(fragment[1] for fragment in app._render_panel_summary())
+            assert 'controller' in text
+            assert '1m' in text
         finally:
             if app._log_fp is not None:
                 app._log_fp.close()
@@ -753,7 +803,7 @@ class TestNewDeviceDialog:
             'id': 1,
         }]
 
-    def test_devices_connected_requests_live_status(self, tmp_path):
+    def test_devices_connected_uses_live_panel(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
             str(tmp_path / 'config.json'),
@@ -761,6 +811,20 @@ class TestNewDeviceDialog:
         )
         client = self._FakeClient()
         app._set_client(client)
+        app._device_panel = {
+            'sim-2': DevicePanelEntry(
+                device_uid='sim-2',
+                strip_id='aux',
+                length=30,
+                status='configured',
+            ),
+            'sim-1': DevicePanelEntry(
+                device_uid='sim-1',
+                strip_id='main',
+                length=60,
+                status='connected',
+            ),
+        }
 
         try:
             app._do_devices()
@@ -768,10 +832,10 @@ class TestNewDeviceDialog:
             if app._log_fp is not None:
                 app._log_fp.close()
 
-        assert client.commands == [{
-            'cmd': 'status',
-            'id': 1,
-        }]
+        assert client.commands == []
+        assert app._log_lines[0].endswith('devices:')
+        assert app._log_lines[1].endswith('  sim-2: strip "aux", 30 LEDs [configured]')
+        assert app._log_lines[2].endswith('  sim-1: strip "main", 60 LEDs [connected]')
 
     def test_newdevice_requires_connected_controller(self, tmp_path):
         app = TuiApp(

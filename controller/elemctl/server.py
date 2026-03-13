@@ -286,6 +286,7 @@ def main() -> None:
         level="INFO",
     )
     log.info('elements controller started. version: %s', get_runtime_version())
+    log.info('using config %s', config_path)
 
     service = ControllerService(config, config_path=config_path)
     socket_path = os.path.expanduser(args.socket)
