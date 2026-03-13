@@ -1170,8 +1170,7 @@ class TestDiscoveryIntegration:
         assert fakes[0]._host == '127.0.0.1'
         assert fakes[0]._tcp_port == 9001
 
-    def test_discovery_triggers_reconnect(self):
-        """Discover same UID with new address triggers address update."""
+    def test_discovery_ignores_conflicting_live_duplicate(self):
         fakes = [_FakeDevice()]
         fakes[0].is_connected = True
         fakes[0]._host = '10.0.0.1'
@@ -1184,12 +1183,59 @@ class TestDiscoveryIntegration:
         fakes[0].update_address = update_address
 
         svc, _, disc = _make_discovery_service(n_devices=1, fake_devices=fakes)
+        svc._discovery_cache['sim-1'] = ('10.0.0.1', 8001)
+        svc._last_probe_ns[1] = 123
 
         # Discover with a different address
         disc.inject('sim-1', '10.0.0.2', 8002)
         svc.tick_once()
-        assert len(address_updates) == 1
-        assert address_updates[0] == ('10.0.0.2', 8002)
+        assert address_updates == []
+        assert svc._discovery_cache['sim-1'] == ('10.0.0.1', 8001)
+        assert svc._last_probe_ns[1] == 123
+        assert svc.build_snapshot()['devices'][0]['connected'] is True
+
+    def test_connected_device_without_known_endpoint_accepts_discovery(self):
+        fakes = [_FakeDevice()]
+        fakes[0].is_connected = True
+        address_updates = []
+
+        def update_address(host, tcp_port):
+            address_updates.append((host, tcp_port))
+            return True
+
+        fakes[0].update_address = update_address
+
+        svc, _, disc = _make_discovery_service(n_devices=1, fake_devices=fakes)
+
+        disc.inject('sim-1', '10.0.0.2', 8002)
+        svc.tick_once()
+        assert address_updates == [('10.0.0.2', 8002)]
+
+    def test_alternating_duplicate_hello_does_not_override_live_uid(self):
+        fakes = [_FakeDevice()]
+        fakes[0].is_connected = True
+        fakes[0]._host = '10.0.0.1'
+        fakes[0]._tcp_port = 8001
+        address_updates = []
+
+        def update_address(host, tcp_port):
+            address_updates.append((host, tcp_port))
+
+        fakes[0].update_address = update_address
+
+        svc, _, disc = _make_discovery_service(n_devices=1, fake_devices=fakes)
+        svc._discovery_cache['sim-1'] = ('10.0.0.1', 8001)
+        svc._last_probe_ns[1] = 123
+
+        disc.inject('sim-1', '10.0.0.2', 8002)
+        svc.tick_once()
+        disc.inject('sim-1', '10.0.0.3', 8003)
+        svc.tick_once()
+
+        assert address_updates == []
+        assert svc._discovery_cache['sim-1'] == ('10.0.0.1', 8001)
+        assert svc._last_probe_ns[1] == 123
+        assert svc.build_snapshot()['devices'][0]['connected'] is True
 
     def test_discovery_clears_probe_throttle(self):
         """After discovery updates address, probe should not be throttled."""

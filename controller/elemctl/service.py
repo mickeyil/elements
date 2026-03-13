@@ -350,12 +350,26 @@ class ControllerService:
             return
         self._discovery.poll()
         for uid, host, tcp_port in self._discovery.drain_discoveries():
-            self._discovery_cache[uid] = (host, tcp_port)
             entry = self._uid_to_device.get(uid)
             if entry is None:
+                self._discovery_cache[uid] = (host, tcp_port)
                 log.debug('discovery: unknown uid %r from %s:%d', uid, host, tcp_port)
                 continue
             dc, dev = entry
+            current_host = getattr(dev, '_host', None)
+            current_port = getattr(dev, '_tcp_port', None)
+            current_endpoint_known = bool(current_host) and current_port not in (None, 0)
+            if (
+                self._is_connected(dev)
+                and current_endpoint_known
+                and (host, tcp_port) != (current_host, current_port)
+            ):
+                log.debug(
+                    'discovery: ignoring duplicate live uid %r at %s:%d',
+                    uid, host, tcp_port,
+                )
+                continue
+            self._discovery_cache[uid] = (host, tcp_port)
             changed = dev.update_address(host, tcp_port)
             if changed:
                 log.info(
