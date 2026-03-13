@@ -29,9 +29,6 @@ from .version import get_runtime_version
 log = logging.getLogger(__name__)
 
 _TICK_INTERVAL = 0.020  # ~50Hz
-_SERVER_ALIASES = {'server', 'serve'}
-
-
 def _peer_label(argv: list[str]) -> str | None:
     if not argv:
         return None
@@ -41,7 +38,7 @@ def _peer_label(argv: list[str]) -> str | None:
         sub = argv[1]
         if sub in {'tui', 'sim', 'run'}:
             return f'elemctl {sub}'
-        if sub in _SERVER_ALIASES:
+        if sub == 'server':
             return 'elemctl server'
 
     if '-m' in argv:
@@ -51,7 +48,7 @@ def _peer_label(argv: list[str]) -> str | None:
             mod = ''
         if mod == 'elemctl.tui':
             return 'elemctl tui'
-        if mod in {'elemctl.server', 'elemctl.serve'}:
+        if mod == 'elemctl.server':
             return 'elemctl server'
         if mod == 'elemctl.sim':
             return 'elemctl sim'
@@ -59,18 +56,18 @@ def _peer_label(argv: list[str]) -> str | None:
             for arg in argv[argv.index('-m') + 2:]:
                 if arg in {'tui', 'sim', 'run'}:
                     return f'elemctl {arg}'
-                if arg in _SERVER_ALIASES:
+                if arg == 'server':
                     return 'elemctl server'
 
     if exe.startswith('python'):
         for arg in argv[1:]:
             if arg in {'tui', 'sim', 'run'}:
                 return f'elemctl {arg}'
-            if arg in {'server', 'serve'}:
+            if arg == 'server':
                 return 'elemctl server'
             if arg == 'elemctl.tui':
                 return 'elemctl tui'
-            if arg in {'elemctl.server', 'elemctl.serve'}:
+            if arg == 'elemctl.server':
                 return 'elemctl server'
             if arg == 'elemctl.sim':
                 return 'elemctl sim'

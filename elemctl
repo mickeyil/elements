@@ -27,11 +27,10 @@ commands:
   tui      interactive TUI shell
   sim      launch a configured network simulator
   server   start controller server
-  serve    compatibility alias for server
   run      compile and run a DSL program
   setup    install/update dependencies"""
 
-_SUBCOMMANDS = {'tui', 'sim', 'server', 'serve', 'run', 'setup'}
+_SUBCOMMANDS = {'tui', 'sim', 'server', 'run', 'setup'}
 
 
 def _inside_venv():
@@ -132,7 +131,7 @@ def main():
     elif sub == 'sim':
         from elemctl.sim import main as m
         m()
-    elif sub in {'server', 'serve'}:
+    elif sub == 'server':
         from elemctl.server import main as m
         m()
     elif sub == 'run':
