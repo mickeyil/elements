@@ -318,25 +318,28 @@ class TestResolveRuntimePath:
         assert resolve_runtime_path(None, None, DEFAULT_LOGS_PATH) == DEFAULT_LOGS_PATH
 
 
-class TestServeMainDefaults:
-    """Smoke tests verifying serve.main() exposes default args via argparse."""
+class TestServerMainDefaults:
+    """Smoke tests verifying server.main() exposes default args via argparse."""
 
     def test_no_args_exits_with_config_error(self, monkeypatch):
         """Zero-arg invocation fails with a clear config-not-found message."""
-        from elemctl.serve import main as serve_main
+        from elemctl.server import main as server_main
 
-        monkeypatch.setattr('sys.argv', ['elemctl.serve'])
-        # Default config path won't exist → should exit(1) with config error
+        monkeypatch.setattr(
+            'sys.argv',
+            ['elemctl.server', '--config', '/definitely/missing/config.json'],
+        )
+        # Missing config path should exit(1) with config error
         with pytest.raises(SystemExit) as exc_info:
-            serve_main()
+            server_main()
         assert exc_info.value.code == 1
 
     def test_help_shows_defaults(self, capsys, monkeypatch):
         """--help output includes the default paths."""
-        monkeypatch.setattr('sys.argv', ['elemctl.serve', '--help'])
+        monkeypatch.setattr('sys.argv', ['elemctl.server', '--help'])
         with pytest.raises(SystemExit) as exc_info:
-            from elemctl.serve import main as serve_main
-            serve_main()
+            from elemctl.server import main as server_main
+            server_main()
         assert exc_info.value.code == 0
         out = capsys.readouterr().out
         assert DEFAULT_CONFIG_PATH in out

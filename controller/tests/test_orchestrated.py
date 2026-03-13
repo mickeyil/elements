@@ -18,7 +18,7 @@ _repo = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_repo / 'compiler'))
 
 from elemctl.config import Config, DeviceConfig
-from elemctl.serve import UdsServer
+from elemctl.server import UdsServer
 from elemctl.service import ControllerService
 from elemctl.uds_wire import KIND_FRAME, KIND_JSON, parse_json_payload
 

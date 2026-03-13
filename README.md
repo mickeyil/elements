@@ -38,7 +38,7 @@ cmake --build build --target network_sim
 Then use three terminals:
 
 ```bash
-./elemctl serve --config examples/single-sim.json
+./elemctl server --config examples/single-sim.json
 ```
 
 ```bash
@@ -58,7 +58,7 @@ In the TUI:
 ```
 
 Expected result:
-- the `serve` terminal logs a discovery line for `sim-1`
+- the `server` terminal logs a discovery line for `sim-1`
 - the TUI shows the device come online
 - `/rescan` lists `demo_main`
 - `/load` and `/play` succeed without manual port/length flags

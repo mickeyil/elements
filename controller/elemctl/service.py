@@ -1,7 +1,7 @@
 """ControllerService — long-running service owning Controller + devices.
 
 Testable without sockets. Owns compilation, device lifecycle, and event
-conversion. The UDS server (serve.py) delegates all logic here.
+conversion. The UDS server (server.py) delegates all logic here.
 """
 
 from __future__ import annotations

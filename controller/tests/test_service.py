@@ -19,7 +19,7 @@ from elemctl.config import Config, DeviceConfig, load_config
 from elemctl.controller import ControllerState
 from elemctl.device import DeviceState
 from elemctl.service import ControllerService
-from elemctl.serve import UdsServer
+from elemctl.server import UdsServer
 from elemctl.uds_wire import (
     KIND_FRAME,
     KIND_JSON,
