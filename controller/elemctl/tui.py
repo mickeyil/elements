@@ -27,7 +27,9 @@ from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout.containers import Float, FloatContainer, HSplit, VerticalAlign, Window
 from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
 from prompt_toolkit.layout.layout import Layout
+from prompt_toolkit.mouse_events import MouseEventType
 from prompt_toolkit.styles import Style
+from prompt_toolkit.utils import get_cwidth
 from prompt_toolkit.widgets import Button, Dialog, Label, RadioList, TextArea
 
 from .config import (
@@ -168,6 +170,34 @@ class NewDeviceDialogState:
     cancel_button: Button
     dialog: Dialog
     error_text: str = ''
+
+
+class DialogButton(Button):
+    """Button with explicit focused fragment styles for clearer TUI feedback."""
+
+    def _get_text_fragments(self):
+        width = (
+            self.width
+            - (get_cwidth(self.left_symbol) + get_cwidth(self.right_symbol))
+            + (len(self.text) - get_cwidth(self.text))
+        )
+        text = (f"{{:^{max(0, width)}}}").format(self.text)
+        focused = get_app().layout.has_focus(self)
+        arrow_style = 'class:button.focused.arrow' if focused else 'class:button.arrow'
+        text_style = 'class:button.focused.text' if focused else 'class:button.text'
+
+        def handler(mouse_event) -> None:
+            if (
+                self.handler is not None
+                and mouse_event.event_type == MouseEventType.MOUSE_UP
+            ):
+                self.handler()
+
+        return [
+            (arrow_style, self.left_symbol, handler),
+            (text_style, text, handler),
+            (arrow_style, self.right_symbol, handler),
+        ]
 
 
 def parse_command(text: str, next_id: int) -> tuple[dict | None | object, str | None]:
@@ -525,7 +555,11 @@ class TuiApp:
                 'dialog.body': 'bg:#1f2430 #d8dee9',
                 'dialog shadow': 'bg:#000000',
                 'button': 'bg:#2f3640 #d8dee9',
+                'button.text': 'bg:#2f3640 #d8dee9',
+                'button.arrow': 'bg:#2f3640 #81a1c1',
                 'button.focused': 'bg:#5e81ac #ffffff',
+                'button.focused.text': 'bg:#5e81ac #ffffff bold',
+                'button.focused.arrow': 'bg:#5e81ac #ffffff bold',
                 'frame.border': '#4c566a',
                 'frame.label': 'bold #88c0d0',
                 'radio-selected': 'bg:#2b303b',
@@ -701,8 +735,8 @@ class TuiApp:
         device_uid = TextArea(multiline=False, wrap_lines=False)
         strip_id = TextArea(multiline=False, wrap_lines=False)
         length = TextArea(multiline=False, wrap_lines=False)
-        submit_button = Button('OK', handler=self._submit_newdevice_dialog)
-        cancel_button = Button('Cancel', handler=self._cancel_newdevice_dialog)
+        submit_button = DialogButton('OK', handler=self._submit_newdevice_dialog)
+        cancel_button = DialogButton('Cancel', handler=self._cancel_newdevice_dialog)
         device_uid.buffer.accept_handler = (
             lambda buff: self._focus_dialog_widget(strip_id)
         )
