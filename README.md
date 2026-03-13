@@ -24,6 +24,9 @@ Or run individually:
 ```bash
 ./build/test_decoder
 ./build/test_engine
+./build/test_colors
+./build/test_compositor
+./build/test_animations
 ```
 
 ## Local Smoke Test

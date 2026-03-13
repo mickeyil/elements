@@ -1,6 +1,6 @@
-# Controller & Web App
+# Controller
 
-> **Status: Partially implemented.** The Python controller service, Unix-socket control API, discovery receiver, and `network_sim` transport are implemented. The web app and multi-client browser-facing transport described below are not yet implemented.
+> **Status: Partially implemented.** The Python controller service, Unix-socket control API, discovery receiver, and `network_sim` transport are implemented. The web app described in earlier design drafts is not part of this repo. Artifact caching is not implemented — each `load` recompiles from source.
 
 ## Base-station config
 
@@ -15,19 +15,13 @@ A static config file on the base station is the single source of truth for the p
       "device_id": "esp-01",
       "ip": "192.168.1.10",
       "length": 150,
-      "mode": "sim"
+      "device_type": "sim"
     },
     "main_right": {
       "device_id": "esp-02",
       "ip": "192.168.1.11",
       "length": 150,
-      "mode": "sim"
-    }
-  },
-  "simulation": {
-    "layout": {
-      "main_left":  { "x": 0,   "y": 0, "dx": 1, "dy": 0 },
-      "main_right": { "x": 0,   "y": 2, "dx": 1, "dy": 0 }
+      "device_type": "sim"
     }
   }
 }
@@ -41,10 +35,9 @@ A static config file on the base station is the single source of truth for the p
 | `length` | Controller, compiler | Compile | Validated against DSL-declared strip length at compile time |
 | `device_id` | Controller | Runtime | Human-readable device name for logs/UI |
 | `ip` | Controller | Runtime | Where to open TCP/UDP connections |
-| `mode` | Controller | Runtime | `"sim"` or `"esp"` — determines seek behavior and debug capabilities |
-| `simulation.layout` | Web app, browser | Runtime | Pixel positions for canvas rendering |
+| `device_type` | Controller | Runtime | `"sim"` or `"esp32"` — determines seek behavior and debug capabilities |
 
-The **Compile** fields (`strip_id`, `length`) affect compiled output and are included in `config_hash` for artifact caching. **Runtime** fields are deployment and display concerns — changing them does not invalidate the artifact cache.
+The **Compile** fields (`strip_id`, `length`) affect compiled output. **Runtime** fields are deployment concerns only — changing them does not affect compilation.
 
 ### Relationship to the DSL
 
@@ -76,7 +69,6 @@ dict[str, bytes]   # strip_name -> blob
 
 # What the controller wraps it into:
 {
-    "artifact_id": "sha256(...)",      # compiled artifact identity (see below)
     "duration": 612.0,                 # seconds
     "safe_intervals": [(0.0, 0.0), (12.4, 13.0), (28.0, 29.5), (44.5, 46.0), (58.0, 60.0)],  # reset-safe intervals (global)
     "strips": [                              # ordered list — defines canonical strip order
@@ -88,52 +80,33 @@ dict[str, bytes]   # strip_name -> blob
 
 The blob format and decoder are unchanged. The manifest is controller-level metadata — devices never see it. They receive bare blobs via LOAD as before.
 
-### Artifact caching
+### Compilation (no caching)
 
-The compiled manifest (blobs + safe intervals + duration) should be cached as a single unit keyed by **all compile inputs** — not just source text:
-
-```
-artifact_id = sha256(dsl_source + beat + duration + config_hash + compiler_version)
-```
-
-All components matter:
-- **DSL source** — different program text produces different blobs and safe intervals
-- **beat** — beat duration in seconds; all beat-relative timings resolve differently at different tempos (same DSL at BPM=120 vs BPM=140 produces different blobs)
-- **duration** — total program length; affects event clipping and safe interval boundaries
-- **Config hash** — hashes only the **compile-relevant topology**: `{strip_id: length}` pairs. Deployment details (`ip`, `device_id`, `mode`) and simulation layout are excluded — changing an IP address or switching a device between sim/esp mode must not invalidate the cache, since compilation output is identical
-- **Compiler version** — changes to layer inference, blob format, or safe-interval rules change the output
-
-The key principle: `artifact_id` must cover every input to `compile_program(strips, events, beat, duration)`. If any input changes, the output changes, and the cache must miss. `beat` and `duration` are runtime arguments to the compiler (passed via `build(beat=..., duration=...)`), not embedded in the DSL source text, so they must be included explicitly.
-
-On load, the controller checks the cache first. Cache hit skips compilation entirely and serves the stored manifest. Cache miss triggers compilation and stores the result.
-
-The cache stores the full artifact — blobs, safe intervals, duration, strip metadata. No separate caching of individual components. This keeps blobs and metadata consistent by construction.
+Each `load` command recompiles from source. There is no artifact cache — the controller calls the compiler on every load request. Caching compiled manifests is a potential future optimization but is not implemented.
 
 ### Identity model
 
-Three levels of identity track what's loaded and what's happening:
+Two levels of identity track what's loaded and what's happening:
 
 | Identity | What it means | When it changes |
 |----------|---------------|-----------------|
-| **artifact_id** | Compiled artifact identity — "what exact compiled result is this?" | New source, config change, or compiler version change |
-| **session_id** | Active load — "which live run of this artifact?" | New on each LOAD (even reloading the same artifact) |
+| **session_id** | Active load — "which live run is this?" | New on each LOAD |
 | **epoch** | Continuity marker — "has playback been interrupted?" | Increments on seek, restart, jump |
 
-**Why session_id matters:** When the controller loads a new program, old frames from the previous program may still be in UDP flight. Without session_id, the browser can't distinguish stale frames from current ones.
+**Why session_id matters:** When the controller loads a new program, old frames from the previous program may still be in UDP flight. Without session_id, the client can't distinguish stale frames from current ones.
 
-**Why epoch matters:** Within a session, seek/jump creates a discontinuity. Frames from before the seek have the old epoch; frames after have the new epoch. The browser drops frames with an epoch lower than the current one.
+**Why epoch matters:** Within a session, seek/jump creates a discontinuity. Frames from before the seek have the old epoch; frames after have the new epoch. The client drops frames with an epoch lower than the current one.
 
 ### Example flow
 
 ```
-Controller                              Web App / Browser
+Controller                              Client
     |                                        |
     |  load_program("song_abc")              |
     |  session_id = 42                       |
     |                                        |
     |  { "event": "session_start",           |
     |    "session_id": 42,                   |
-    |    "artifact_id": "song_abc",           |
     |    "duration": 612.0,                  |
     |    "safe_intervals": [...],             |
     |    "strips": [                         |
@@ -141,7 +114,7 @@ Controller                              Web App / Browser
     |      {"name":"main_right","length":150}|
     |    ] }                                 |
     |--------------------------------------->|
-    |                                        |  browser renders seek bar
+    |                                        |  client renders seek bar
     |                                        |  strips[] defines order and
     |  play()                                |     with safe interval markers
     |  epoch = 1                             |
@@ -149,7 +122,7 @@ Controller                              Web App / Browser
     |  program frame (binary):               |
     |  [frame_index=10] [t_rel=0.34]         |
     |  [rgb_strip_0] [rgb_strip_1]           |
-    |--------------------------------------->|  browser renders
+    |--------------------------------------->|  client renders
     |                                        |
     |  ... frames flow ...                   |
     |                                        |
@@ -157,10 +130,10 @@ Controller                              Web App / Browser
     |  epoch = 2                             |
     |                                        |
     |  late frame from epoch 1 arrives       |
-    |--------------------------------------->|  browser drops (epoch < 2)
+    |--------------------------------------->|  client drops (epoch < 2)
     |                                        |
     |  frame from epoch 2 arrives            |
-    |--------------------------------------->|  browser renders
+    |--------------------------------------->|  client renders
 ```
 
 ### Generation counter and frame filtering
@@ -171,7 +144,7 @@ To solve this, LOAD and JUMP commands carry a **generation counter** (`gen`, u16
 
 **When the device starts using the new gen:** synchronously in the command handler, before the next `tick_once()` / `output_frame()` cycle. For `handle_jump()`, this is immediate. For `handle_load()`, `_gen` is set only after successful decode — on decode failure the device clears to black and calls `output_frame()` (so the strip goes dark), then transitions to IDLE. That black frame carries the old gen, not the new one, since `_gen` is only updated on success. The first frame emitted after a successful command carries the new gen; any frames already in the UDP pipeline carry the old gen. This is the invariant that makes controller-side filtering work.
 
-**Telemetry is not gen-filtered.** Gen filtering applies to RGB frames forwarded to the browser. Telemetry (health, errors, decode failures) is always accepted by the controller regardless of gen — otherwise the controller would never learn about a failed LOAD.
+**Telemetry is not gen-filtered.** Gen filtering applies to RGB frames forwarded to the client. Telemetry (health, errors, decode failures) is always accepted by the controller regardless of gen — otherwise the controller would never learn about a failed LOAD.
 
 ```
 Device outbound UDP frame:
@@ -203,13 +176,13 @@ def assemble_program_frame(self, frame_index, strip_index, t_rel, rgb):
         del self.pending_frames[frame_index]
 
 def emit_program_frame(self, frame_index, bucket):
-    """Send assembled program frame to web app over UDS."""
+    """Send assembled program frame to client over UDS."""
     # Binary payload: [frame_index:u32] [t_rel:f32] [rgb_0][rgb_1]...[rgb_N-1]
     # Strip order and lengths defined in session snapshot
     payload = struct.pack('<If', frame_index, bucket["t_rel"])
     for i in range(self.strip_count):
         payload += bucket["strips"][i]
-    self.send_to_web_app(kind=0x02, payload=payload)
+    self.send_to_client(kind=0x02, payload=payload)
 
 # Periodic cleanup: drop incomplete frames past their deadline
 def sweep_stale_frames(self):
@@ -219,13 +192,13 @@ def sweep_stale_frames(self):
             del self.pending_frames[fid]  # incomplete — drop entire frame
 ```
 
-**Frame assembly policy: complete-only.** The controller emits a program frame only when all strips for a given `frame_index` are present. If any strip is missing when the deadline expires, the entire frame is dropped. This keeps semantics clean — the browser only sees coherent frames. One slow device causes dropped frames, not stale-filled partial renders.
+**Frame assembly policy: complete-only.** The controller emits a program frame only when all strips for a given `frame_index` are present. If any strip is missing when the deadline expires, the entire frame is dropped. This keeps semantics clean — the client only sees coherent frames. One slow device causes dropped frames, not stale-filled partial renders.
 
 **Scope:** `gen` filtering applies to LOAD and JUMP only. CMD_DEBUG_SEEK (simulator-only) does not bump `gen`. A stale frame from just before a debug seek could be stamped with the new epoch, but this is at most a single-frame glitch during interactive dev scrubbing — not worth coupling the debug path to the gen protocol.
 
 ### What carries session_id and epoch
 
-Session_id and epoch are controller-level metadata, communicated to the web app / browser via JSON events — not embedded in binary program frames. The session_start event establishes context; epoch changes are sent as separate events. The browser tracks the current session_id and epoch and drops any late-arriving data from a previous epoch.
+Session_id and epoch are controller-level metadata, communicated to the client via JSON events — not embedded in binary program frames. The session_start event establishes context; epoch changes are sent as separate events. The client tracks the current session_id and epoch and drops any late-arriving data from a previous epoch.
 
 Program frames (binary, kind=0x02) carry only `frame_index` and `t_rel` — they are implicitly within the current session/epoch because they flow on the same ordered UDS connection as the events.
 
@@ -261,7 +234,7 @@ If the user seeks to 4.7, it falls within `(4.5, 5.0)` — a valid jump target. 
 
 ```python
 def handle_seek(self, requested_t: float):
-    if self.mode == "sim":
+    if self.all_devices_are_sim():
         # Simulators: arbitrary seek via replay (CMD_DEBUG_SEEK)
         for device in self.devices:
             self.send_debug_seek(device, requested_t)
@@ -280,7 +253,7 @@ def handle_seek(self, requested_t: float):
         self.audio.seek_and_start_at(target, t0)
 
     self.epoch += 1
-    self.notify_web_app(epoch=self.epoch, t_rel=target)
+    self.notify_client(epoch=self.epoch, t_rel=target)
 
 def snap_to_safe_time(self, t: float) -> float | None:
     """Find a safe jump time for the requested seek position.
@@ -297,12 +270,12 @@ def snap_to_safe_time(self, t: float) -> float | None:
     return best
 ```
 
-### Browser seek bar
+### Client seek bar
 
-The controller sends session metadata (including safe intervals) to the web app when a program is loaded. The browser renders safe regions on the seek bar:
+The controller sends session metadata (including safe intervals) to the client when a program is loaded. The client can render safe regions on a seek bar:
 
-- **Simulator mode:** allow arbitrary scrubbing, safe intervals shown as visual highlights
-- **Production mode:** restrict seek to safe intervals only (click within a highlighted region to jump there, or click outside to snap to the nearest safe boundary)
+- **All-sim topology:** allow arbitrary scrubbing, safe intervals shown as visual highlights
+- **All-esp32 topology:** restrict seek to safe intervals only
 
 ### Edge case: programs with few or no interior safe intervals
 
@@ -312,13 +285,13 @@ A program with a single long event spanning the full duration (e.g., one wave fr
 
 ## Controller responsibilities
 
-The controller is the long-running authority on the base station. It is a separate process from the web app.
+The controller is the long-running authority on the base station.
 
 ### What the controller does
 
-1. **Loads static config** — reads the base-station config file at startup. Knows every strip, device, IP, mode.
+1. **Loads static config** — reads the base-station config file at startup. Knows every strip, device, IP, device_type.
 
-2. **Compiles programs** — receives DSL source (from the web app or CLI), compiles it using the Python compiler (`compile_manifest()`), validates strip lengths against config. The compiler returns a `CompiledManifest` with per-strip blobs, duration, and global safe intervals.
+2. **Compiles programs** — receives DSL source (from a client such as the TUI), compiles it using the Python compiler (`compile_manifest()`), validates strip lengths against config. The compiler returns a `CompiledManifest` with per-strip blobs, duration, and global safe intervals. No caching — each load recompiles from source.
 
 3. **Routes blobs to devices** — uses config to map `strip_id -> device_id -> ip`. Sends each blob to the correct device via TCP LOAD. Waits for ACK.
 
@@ -328,24 +301,18 @@ The controller is the long-running authority on the base station. It is a separa
 
 6. **Sends JUMP** — snaps requested seek time to nearest global safe interval, sends CMD_JUMP to all devices, increments epoch.
 
-7. **Syncs clocks** — sends SYNC_REQ probes (UDP) to each device, receives SYNC_RESP (UDP), computes filtered offsets, sends SYNC_RESULT (TCP).
+7. **Syncs clocks (planned)** — clock sync protocol (SYNC_REQ/SYNC_RESP/SYNC_RESULT) is documented in `transport.md` but not yet implemented.
 
 8. **Receives telemetry** — health, errors, timing from all devices (UDP).
 
-9. **Assembles program frames** — receives per-strip RGB frames from simulators, filters by `gen` (drops stale), groups by `frame_index`, emits complete multi-strip program frames to the web app over UDS. The web app relays to browser via WebSocket.
+9. **Assembles program frames** — receives per-strip RGB frames from simulators, filters by `gen` (drops stale), groups by `frame_index`, emits complete multi-strip program frames to clients over UDS.
 
-10. **Exposes a control/event API over UDS** — the web app connects to a Unix Domain Socket to send commands (load, play, pause, seek) and receive events (session start, state changes), program frames, and telemetry. See "Controller ↔ Web app protocol" section.
-
-### What the controller does NOT do
-
-- Does not serve browser assets (that's the web app)
-- Does not speak WebSocket to browsers (that's the web app)
-- Does not manage browser connections or sessions
+10. **Exposes a control/event API over UDS** — a client (currently the TUI) connects to a Unix Domain Socket to send commands (load, play, pause, seek) and receive events (session start, state changes), program frames, and telemetry. See "Controller ↔ Client protocol" section.
 
 ### Compilation flow
 
 ```python
-# Controller receives DSL source from web app
+# Controller receives DSL source from client
 def load_program(self, dsl_source: str):
     # 1. Compile — returns CompiledManifest with blobs + global safe intervals
     strips_config = self.config["strips"]
@@ -362,7 +329,6 @@ def load_program(self, dsl_source: str):
     self.session_id += 1
     self.epoch = 0
     self.manifest = {
-        "artifact_id": sha256(dsl_source + beat + duration + config_hash + compiler_version),
         "session_id": self.session_id,
         "duration": manifest.duration,
         "safe_intervals": manifest.safe_intervals,
@@ -383,45 +349,25 @@ def load_program(self, dsl_source: str):
         if not ok:
             raise Error(f"device {device.id} rejected blob for {strip_data['name']}")
 
-    # 6. Notify web app
+    # 6. Notify client
     self.publish_session_start(self.manifest)
 ```
 
 ---
 
-## Web app responsibilities
-
-The web app is a separate process. It serves browser assets and relays between the controller and the browser.
-
-### What the web app does
-
-1. **Serves browser assets** — HTML, JS, CSS for the visualization UI
-2. **Connects to the controller over UDS** — receives session events, program frames, telemetry on a single ordered connection
-3. **Translates browser commands to controller commands** — browser sends `{"type": "cmd", "id": 1, "cmd": "seek", "t": 30.0}`, web app forwards as JSON over UDS (see "Web app ↔ Browser protocol" section)
-4. **Relays program frames and events to browser** — via WebSocket (JSON text frames for events, binary frames for program frames). Drops binary frames for slow clients
-5. **Exposes metadata to browser** — strip layout, pixel positions (from config, via controller)
-
-### What the web app does NOT do
-
-- Does not compile programs
-- Does not know device IPs
-- Does not manage clock sync
-- Does not track playback state (the controller is authoritative)
-- Does not assemble per-device frames (the controller does that)
-
 ---
 
-## Controller ↔ Web app protocol
+## Controller ↔ Client protocol
 
-A single **Unix Domain Socket (UDS)** connection carries all traffic between the controller and the web app. One connection, one ordering domain, one backpressure story.
+A single **Unix Domain Socket (UDS)** connection carries all traffic between the controller and a client (currently the TUI; a future web app would use the same protocol). One connection, one ordering domain, one backpressure story.
 
-**Exactly one web app client.** The controller accepts one UDS connection from one web app process. Multiple browser clients connect to the web app (via WebSocket), not to the controller — browser fan-out is the web app's concern. This avoids command arbitration and multi-client state fanout on the controller side.
+**Exactly one client.** The controller accepts one UDS connection at a time. This avoids command arbitration and multi-client state fanout on the controller side.
 
 ### Why one connection
 
 - **Ordering is guaranteed.** `session_start` → `epoch_changed` → first program frame always arrive in that order. Two sockets would create cross-stream ordering races.
 - **Reconnect is simple.** Reconnect → receive snapshot → resume frame flow. No need to synchronize multiple connections.
-- **No external dependencies.** No ZMQ, no HTTP server in the controller. Just a Unix socket with length-prefixed records.
+- **No external dependencies.** Just a Unix socket with length-prefixed records.
 
 ### Wire format
 
@@ -437,9 +383,9 @@ Two record kinds:
 
 `payload` is UTF-8 JSON. Every JSON message has a `type` field to distinguish commands, replies, and events.
 
-**Web app → Controller (commands):**
+**Client → Controller (commands):**
 
-Commands carry an `id` (web-app-assigned, incrementing counter) that the controller echoes in the reply.
+Commands carry an `id` (client-assigned, incrementing counter) that the controller echoes in the reply.
 
 ```json
 {"type": "cmd", "id": 1, "cmd": "load", "source": "...", "beat": 0.5, "duration": 300.0, "loop": true}
@@ -449,11 +395,11 @@ Commands carry an `id` (web-app-assigned, incrementing counter) that the control
 {"type": "cmd", "id": 5, "cmd": "stop"}
 ```
 
-`play` means both fresh start and resume — the controller decides which device command to send based on current state (CMD_START from LOADED/ENDED, CMD_RESUME from PAUSED). The web app does not need to distinguish between them.
+`play` means both fresh start and resume — the controller decides which device command to send based on current state (CMD_START from LOADED/ENDED, CMD_RESUME from PAUSED). The client does not need to distinguish between them.
 
-**Controller → Web app (replies):**
+**Controller → Client (replies):**
 
-Replies are **controller-complete** — the reply is sent after the controller has finished all work for the command (compilation, device ACKs, state updates). The web app does not need to track intermediate states or correlate follow-up events.
+Replies are **controller-complete** — the reply is sent after the controller has finished all work for the command (compilation, device ACKs, state updates). The client does not need to track intermediate states or correlate follow-up events.
 
 ```json
 {"type": "reply", "id": 1, "ok": true, "result": {"session_id": 42}}
@@ -461,12 +407,12 @@ Replies are **controller-complete** — the reply is sent after the controller h
 {"type": "reply", "id": 1, "ok": false, "error": "device esp-01 rejected blob"}
 ```
 
-**Controller → Web app (events):**
+**Controller → Client (events):**
 
 Asynchronous state changes and broadcasts — not tied to a specific command.
 
 ```json
-{"type": "event", "event": "session_start", "session_id": 42, "artifact_id": "...",
+{"type": "event", "event": "session_start", "session_id": 42,
  "duration": 612.0, "safe_intervals": [[0.0, 0.0], [12.4, 13.0], ...],
  "strips": [{"name": "main_left", "length": 150}, {"name": "main_right", "length": 150}]}
 {"type": "event", "event": "state", "state": "playing", "epoch": 2}
@@ -487,7 +433,7 @@ Asynchronous state changes and broadcasts — not tied to a specific command.
 - **`device_status`** — device lifecycle change (connected/disconnected). State-oriented — UI updates indicators
 - **`error`** — async failure. Human-oriented — UI shows notification/log. `scope` is `"device"` (one device, includes `device_id` + `strip`) or `"session"` (program-level). No error codes — message is a human-readable string
 
-The `strips` array in `session_start` defines the **canonical strip order and lengths** for the session. Program frames pack RGB blobs in this exact order with no per-entry headers — the web app and browser use the strip list to slice the payload.
+The `strips` array in `session_start` defines the **canonical strip order and lengths** for the session. Program frames pack RGB blobs in this exact order with no per-entry headers — the client uses the strip list to slice the payload.
 
 **Command semantics summary:**
 
@@ -514,33 +460,32 @@ Binary payload, emitted by the controller after assembling all per-strip frames 
 
 ### Snapshot
 
-On every connect (first or reconnect), the controller immediately sends a **snapshot** — a single JSON message containing everything the web app needs to start working. No request needed, no handshake. The web app has one bootstrap path: connect → receive snapshot → ready.
+On every connect (first or reconnect), the controller immediately sends a **snapshot** — a single JSON message containing everything the client needs to start working. No request needed, no handshake. The client has one bootstrap path: connect → receive snapshot → ready.
+
+The snapshot schema matches `build_snapshot()` in `service.py`:
 
 ```json
 {
   "type": "event",
   "event": "snapshot",
   "protocol_version": 1,
-  "controller_state": "running",
+  "online_count": 2,
+  "expected_count": 2,
   "session": {
     "session_id": 42,
-    "artifact_id": "sha256(...)",
     "epoch": 2,
     "playback_state": "playing",
     "duration": 612.0,
+    "current_t_rel": 30.5,
     "safe_intervals": [[0.0, 0.0], [12.4, 13.0], [28.0, 29.5]],
     "strips": [
       {"name": "main_left", "length": 150},
       {"name": "main_right", "length": 150}
     ]
   },
-  "layout": {
-    "main_left":  {"x": 0, "y": 0, "dx": 1, "dy": 0},
-    "main_right": {"x": 0, "y": 2, "dx": 1, "dy": 0}
-  },
   "devices": [
-    {"device_id": "esp-01", "strip": "main_left", "mode": "sim", "status": "connected"},
-    {"device_id": "esp-02", "strip": "main_right", "mode": "sim", "status": "connected"}
+    {"device_id": 0, "device_uid": "sim-1", "strip": "main_left", "length": 150, "device_type": "sim", "connected": true},
+    {"device_id": 1, "device_uid": "sim-2", "strip": "main_right", "length": 150, "device_type": "sim", "connected": true}
   ]
 }
 ```
@@ -552,9 +497,9 @@ If no active session (controller just started, no program loaded yet):
   "type": "event",
   "event": "snapshot",
   "protocol_version": 1,
-  "controller_state": "running",
+  "online_count": 0,
+  "expected_count": 2,
   "session": null,
-  "layout": { ... },
   "devices": [ ... ]
 }
 ```
@@ -563,14 +508,11 @@ If no active session (controller just started, no program loaded yet):
 
 | Field | Purpose |
 |-------|---------|
-| `protocol_version` | Allows the web app to detect incompatible controller versions |
-| `controller_state` | Top-level controller health |
-| `session` | Active session if any — includes all metadata the browser needs to render the seek bar and receive frames. `null` if no program is loaded |
+| `protocol_version` | Allows the client to detect incompatible controller versions |
+| `online_count` / `expected_count` | Quick device health summary |
+| `session` | Active session if any — includes all metadata needed to render the seek bar and receive frames. `null` if no program is loaded |
 | `session.strips` | Canonical strip order and lengths — defines how program frame payloads are sliced |
-| `layout` | Pixel positions for browser canvas rendering (from static config). Included so the web app doesn't need its own config file |
-| `devices` | Per-device status summary — connected/disconnected, mode, which strip each serves |
-
-**Why the controller owns layout:** The static config is the single source of truth for strip topology, device mapping, and simulation layout. Rather than having the web app read a separate config or duplicate data, the controller includes layout in the snapshot. One source, one delivery path.
+| `devices` | Per-device status: `device_id` (numeric), `device_uid` (stable identity), `strip`, `length`, `device_type` (`"sim"` or `"esp32"`), `connected` (boolean) |
 
 After the snapshot, the controller sends incremental events (`state`, `session_start`, etc.) and program frames as they occur. The snapshot is never re-sent mid-connection — it's a connect-time-only message.
 
@@ -578,83 +520,25 @@ After the snapshot, the controller sends incremental events (`state`, `session_s
 
 The UDS socket is **non-blocking**. The controller never blocks on frame delivery.
 
-- **Program frames (kind=0x02) are lossy.** If a write returns EAGAIN/EWOULDBLOCK, the frame is dropped silently. The web app and browser handle gaps in `frame_index` — they render whatever arrives next. No backpressure propagates into the device coordination path.
-- **JSON messages (kind=0x01) are reliable.** Commands, replies, events, and snapshots are infrequent and small. If a JSON write cannot proceed, the web app connection is unhealthy — the controller closes it and waits for reconnect. On reconnect, the web app receives a fresh snapshot and resumes.
+- **Program frames (kind=0x02) are lossy.** If a write returns EAGAIN/EWOULDBLOCK, the frame is dropped silently. The client handles gaps in `frame_index` — it renders whatever arrives next. No backpressure propagates into the device coordination path.
+- **JSON messages (kind=0x01) are reliable.** Commands, replies, events, and snapshots are infrequent and small. If a JSON write cannot proceed, the client connection is unhealthy — the controller closes it and waits for reconnect. On reconnect, the client receives a fresh snapshot and resumes.
 
 ---
 
-## Web app ↔ Browser protocol
+## Future work: Web app and browser protocol
 
-A single **WebSocket** connection carries all traffic between the web app and the browser. Text frames for JSON, binary frames for program data.
-
-### Message shapes
-
-The browser uses the same `type`/`id` message convention as the UDS protocol. Browser-assigned `id` values are independent of the UDS `id` namespace — the web app maps between them.
-
-**Browser → Web app (commands):**
-
-```json
-{"type": "cmd", "id": 1, "cmd": "load", "source": "...", "beat": 0.5, "duration": 300.0, "loop": true}
-{"type": "cmd", "id": 2, "cmd": "play"}
-{"type": "cmd", "id": 3, "cmd": "pause"}
-{"type": "cmd", "id": 4, "cmd": "seek", "t": 30.0}
-{"type": "cmd", "id": 5, "cmd": "stop"}
-```
-
-Same command vocabulary as the UDS protocol. The web app forwards each browser command to the controller as a UDS command (with its own `id`), then maps the controller's reply back to the browser's `id`.
-
-**Web app → Browser (replies):**
-
-```json
-{"type": "reply", "id": 1, "ok": true, "result": {"session_id": 42}}
-{"type": "reply", "id": 4, "ok": true, "result": {"t": 28.0}}
-{"type": "reply", "id": 1, "ok": false, "error": "device esp-01 rejected blob"}
-```
-
-**Web app → Browser (events):**
-
-```json
-{"type": "event", "event": "snapshot", "protocol_version": 1, ...}
-{"type": "event", "event": "session_start", "session_id": 42, ...}
-{"type": "event", "event": "state", "state": "playing", "epoch": 2}
-{"type": "event", "event": "loop", "epoch": 3}
-{"type": "event", "event": "device_status", "device_id": "esp-01", "strip": "main_left", "status": "connected"}
-{"type": "event", "event": "error", "scope": "device", "device_id": "esp-01", "strip": "main_left", "message": "lost TCP connection"}
-```
-
-Events are forwarded from the controller with one transformation: **device IPs are stripped**. The browser does not need (and should not see) device network addresses.
-
-**Web app → Browser (program frames):**
-
-Binary WebSocket frames with the same payload as UDS kind=0x02 program frames:
-
-```
-[frame_index: u32 LE] [t_rel: f32 LE] [rgb_strip_0] [rgb_strip_1] ...
-```
-
-The browser uses the `strips` array from the snapshot to slice the RGB payload, identical to how the web app uses the UDS session snapshot.
-
-### Snapshot on connect
-
-On WebSocket connect, the web app immediately sends a snapshot event — the same snapshot it received from the controller, with IPs stripped. The browser has one bootstrap path: connect → receive snapshot → ready.
-
-If the web app is not yet connected to the controller (or has no snapshot), it sends a snapshot with `controller_state: "connecting"` and `session: null`. Once the UDS connection is established and a controller snapshot arrives, the web app forwards it as a new snapshot event.
-
-### Backpressure
-
-- **Binary frames (program data) are dropped for slow clients.** If a WebSocket send would block or the client's write buffer exceeds a threshold, the web app drops the frame. The browser handles gaps in `frame_index` — it renders whatever arrives. This mirrors the UDS backpressure policy.
-- **JSON frames (commands, replies, events) are never dropped.** These are small and infrequent. If a client cannot keep up with JSON messages, the web app closes the WebSocket — the browser reconnects and receives a fresh snapshot.
+> The web app (a separate process serving browser assets and relaying between the controller and the browser) is not yet implemented. The controller exposes a UDS-based client protocol (see above) that a future web app would connect to.
 
 ---
 
 ## Data flow: end-to-end example
 
-A wave animation on two strips, controller + two ESPSimulated devices, browser display.
+A wave animation on two strips, controller + two ESPSimulated devices.
 
 ### 1. Startup
 
 ```
-Web App                   Controller                     ESPSimulated
+Client                    Controller                     ESPSimulated
    |                         |                              |
    | {"type":"cmd","id":1,   |                              |
    |  "cmd":"load",          |                              |
@@ -713,10 +597,10 @@ ESPSimulated loop iteration:
    |  sleep until next frame (20ms cadence)
 ```
 
-### 3. Controller assembles program frame and forwards to browser
+### 3. Controller assembles program frame and forwards to client
 
 ```
-ESPSimulated (strip 0)    ESPSimulated (strip 1)    Controller              Browser
+ESPSimulated (strip 0)    ESPSimulated (strip 1)    Controller              Client
    |                         |                         |                      |
    |  UDP: [gen, fi=10,      |                         |                      |
    |   t_rel=0.3, rgb]       |                         |                      |
@@ -731,14 +615,14 @@ ESPSimulated (strip 0)    ESPSimulated (strip 1)    Controller              Brow
    |                         |                         |  [fi=10][t_rel=0.3]  |
    |                         |                         |  [rgb_0][rgb_1]      |
    |                         |                         |--------------------->|
-   |                         |                         |     (via web app)    |
+   |                         |                         |     (via UDS)        |
    |                         |                         |                      | render canvas
 ```
 
-### 4. Jump (user clicks within a safe region on seek bar)
+### 4. Jump (client seeks within a safe region)
 
 ```
-Browser                   Controller                Devices (all)
+Client                    Controller                Devices (all)
    |                         |                         |
    | {"type":"cmd","id":3,   |                         |
    |  "cmd":"seek","t":2.5}  |                         |
@@ -770,15 +654,15 @@ Browser                   Controller                Devices (all)
 
 ### 5. Simulator arbitrary seek (debug scrubbing)
 
-When in dev mode with simulators, the controller sends CMD_DEBUG_SEEK for arbitrary positions:
+When all devices are simulators, the controller sends CMD_DEBUG_SEEK for arbitrary positions:
 
 ```
-Browser                   Controller                ESPSimulated
+Client                    Controller                ESPSimulated
    |                         |                         |
    | {"type":"cmd","id":4,   |                         |
    |  "cmd":"seek","t":7.3}  |                         |
    |------------------------>|                         |
-   |                         |  (dev mode, sims)       |
+   |                         |  (all-sim topology)     |
    |                         |  epoch = 3              |
    |                         |  TCP: DEBUG_SEEK(7.3)   |
    |                         |------------------------>|
@@ -826,16 +710,16 @@ Production seek and pause/resume are supported — seek is restricted to safe in
 
 ---
 
-## Device mode and debug coordination
+## Device type and debug coordination
 
-Mixed configurations (real ESPs + simulators in the same show) are not supported. Two clean modes, determined by the base-station config:
+Device type is per-device, not a global mode. Each device in the config has a `device_type` field: `"sim"` (ESPSimulated via `network_sim`) or `"esp32"` (real hardware, planned). Debug commands (CMD_DEBUG_SEEK, CMD_DEBUG_STEP) require an all-simulator topology — the controller checks that every device is `device_type: "sim"` before sending debug commands.
 
-- **Production mode** (`mode: "esp"` for all strips): all real ESPs. Controller sends LOAD, START, JUMP, PAUSE, RESUME, and sync. No replay-based debug commands. Seek is restricted to safe intervals only.
-- **Dev mode** (`mode: "sim"` for all strips): all simulators. Full debug controls (pause/seek/step/jump). Browser supports both arbitrary scrubbing (via CMD_DEBUG_SEEK) and jump-point navigation.
+- **All-sim topology:** Full debug controls (seek/step/jump). Supports both arbitrary scrubbing (via CMD_DEBUG_SEEK) and jump-point navigation (via CMD_JUMP).
+- **All-esp32 topology (planned):** Controller sends LOAD, START, JUMP, PAUSE, RESUME, STOP, and (when implemented) sync. No replay-based debug commands. Seek is restricted to safe intervals only.
 
-Both modes support CMD_JUMP — it works on any device because it only targets times within reset-safe intervals where `reset()` + forward tick is correct.
+Both topologies support CMD_JUMP — it works on any device because it only targets times within reset-safe intervals where `reset()` + forward tick is correct.
 
-When the controller sends a debug command (e.g., seek), it sends it to all simulators via their TCP connections without waiting for acknowledgment (fire-and-forget). Each simulator independently resets, replays, and sends its RGB frame. The browser may receive frames from different simulators a few milliseconds apart — at worst a single-frame glitch during a debug operation, invisible in practice.
+When the controller sends a debug command (e.g., seek), it sends it to all simulators via their TCP connections without waiting for acknowledgment (fire-and-forget). Each simulator independently resets, replays, and sends its RGB frame.
 
 ---
 
@@ -852,7 +736,7 @@ When the controller sends a debug command (e.g., seek), it sends it to all simul
 
 **How end-detection works:** When a device's program finishes, it transitions to ENDED and sends telemetry. The controller treats this as a program-level signal — it does not react per-device. Once the controller determines the program has ended (first ENDED telemetry, since all devices share the same t0 and duration), it issues one coordinated JUMP to all devices with a shared t0 and new gen.
 
-**Loop event:** The controller emits a loop event to the web app so the browser can reset its playback position:
+**Loop event:** The controller emits a loop event to the client so it can reset its playback position:
 ```json
 {"type": "event", "event": "loop", "epoch": 3}
 ```

@@ -6,7 +6,7 @@
 
 ## Overview
 
-Both runtime targets (real ESP32 and desktop simulator) share the same playback logic: blob loading, Engine/Strip lifecycle, per-frame tick, and state management. The base class `PlaybackDevice` captures this shared behavior. Two subclasses — `ESPDevice` (real hardware) and `ESPSimulated` (desktop simulator) — implement the platform-specific parts via virtual methods.
+Both runtime targets (real ESP32 and desktop simulator) share the same playback logic: blob loading, Engine/Strip lifecycle, per-frame tick, and state management. The base class `PlaybackDevice` captures this shared behavior. Current class hierarchy: `PlaybackDevice` (abstract base) → `ESPSimulated` (implemented, in-process desktop simulator) + `ESPDevice` (planned, real hardware). The transport wrapper `network_sim` provides TCP command input and UDP frame output for `ESPSimulated`.
 
 ---
 
@@ -122,9 +122,11 @@ IDLE/ENDED → returns false. LOADED/PAUSED → returns true (alive but not adva
 
 ---
 
-## ESPDevice (real hardware subclass)
+## ESPDevice (planned — real hardware subclass)
 
-Runs on ESP32 under Arduino framework. Uses `esp_timer_get_time()` (monotonic µs) for time, FastLED for output.
+> **Not yet implemented.** The sketch below outlines the intended design for the real ESP32 subclass. Only `ESPSimulated` is implemented today.
+
+Would run on ESP32 under Arduino framework, using `esp_timer_get_time()` (monotonic µs) for time and FastLED for output:
 
 ```cpp
 class ESPDevice : public PlaybackDevice {
@@ -147,28 +149,11 @@ protected:
 };
 ```
 
-Arduino integration:
-
-```cpp
-ESPDevice device(NUM_LEDS);
-
-void setup() {
-    // WiFi, FastLED, TCP server, UDP socket
-    // FastLED.addLeds<WS2811, PIN, GRB>((CRGB*)device.rgb_buf(), NUM_LEDS);
-}
-
-void loop() {
-    poll_tcp_commands(tcp_fd, device);
-    poll_udp_sync(udp_fd);
-    device.tick_once();
-}
-```
-
 ---
 
 ## ESPSimulated (simulator subclass)
 
-In-process desktop simulator with queue-based frame/telemetry capture. Uses `steady_clock` for time, gamma disabled. No sockets — a future transport wrapper will add TCP/UDP.
+In-process desktop simulator with queue-based frame/telemetry capture. Uses `steady_clock` for time, gamma disabled. ESPSimulated itself remains transport-free. A dedicated transport process (`network_sim`) provides TCP command input and UDP frame output.
 
 ```cpp
 struct SimRgbFrame {

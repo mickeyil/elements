@@ -1,18 +1,19 @@
 # Transport & Clock Sync
 
-> **Status: Mixed.** The TCP command transport, ACK handling, UDP frame return path, and discovery HELLO flow are implemented for the controller and `network_sim`. The custom clock sync portions described below remain design-level.
+> **Status: Mixed.** The TCP command transport (CONFIGURE, LOAD, START, JUMP, PAUSE, RESUME, STOP, DEBUG_SEEK, ACK), UDP frame return path, and discovery HELLO flow are implemented for the controller and `network_sim`. The custom clock sync protocol (SYNC_REQ/SYNC_RESP/SYNC_RESULT) described below is **design-only — not yet implemented**.
 
 ## Transport architecture
 
-Three channels per device, split by requirements:
+Two active channels per device:
 
 | Channel | Direction | Purpose | Why this transport |
 |---------|-----------|---------|-------------------|
-| **TCP** | controller → device | LOAD, START, JUMP, PAUSE, RESUME, STOP, SYNC_RESULT, debug commands | Reliable delivery, arbitrary payload size (blobs can exceed UDP MTU) |
-| **UDP inbound** | controller → device | SYNC_REQ | Low-latency RTT measurement — TCP head-of-line blocking and Nagle would corrupt offset calculations |
-| **UDP outbound** | device → controller | SYNC_RESP, telemetry, RGB frames | Fire-and-forget streaming; dropped frame = browser skips one update |
+| **TCP** | bidirectional | Commands (controller → device) and ACKs (device → controller) | Reliable delivery, arbitrary payload size (blobs can exceed UDP MTU) |
+| **UDP outbound** | device → controller | RGB frames | Fire-and-forget streaming; dropped frame = client skips one update |
 
-Each device listens on one TCP port and one UDP port. The controller maintains a persistent TCP connection to each device and sends UDP sync probes to the device's UDP port.
+Each device listens on one TCP port. The controller maintains a persistent TCP connection to each device. Devices send UDP frames to the controller's `frame_port`.
+
+> **Design-only (not yet implemented):** A third channel — UDP inbound (controller → device) for SYNC_REQ clock sync probes — is documented below but not implemented. See "Design-only: clock sync protocol" section.
 
 ---
 
@@ -26,7 +27,7 @@ The controller opens a persistent TCP connection to each device. Commands are le
 
 `length` includes the type byte but not itself. So a START command (type + 8 bytes of t0) has `length = 9`.
 
-Command types:
+Implemented command types (in controller `wire.py`):
 
 ```
 CMD_CONFIGURE:    type = 0x04, payload = [device_id: u16] [strip_length: u16] [frame_port: u16] -> 7 bytes total
@@ -36,21 +37,25 @@ CMD_JUMP:         type = 0x12, payload = [t0: i64] [t_rel: f32] [gen: u16] -> 15
 CMD_PAUSE:        type = 0x13, no payload                              -> 1 byte total
 CMD_RESUME:       type = 0x14, payload = [t0: i64]                     -> 9 bytes total
 CMD_STOP:         type = 0x15, no payload                              -> 1 byte total
-CMD_SYNC_RESULT:  type = 0x03, payload = [seq: u16] [boot_seq: u32] [offset: i64] -> 15 bytes total
-CMD_DEBUG_PAUSE:  type = 0x20, no payload                              -> 1 byte total
-CMD_DEBUG_RESUME: type = 0x21, no payload                              -> 1 byte total
 CMD_DEBUG_SEEK:   type = 0x22, payload = [t_rel: f32]                  -> 5 bytes total
+CMD_ACK:          type = 0x80, payload = [status: u8]                  -> 2 bytes total
+```
+
+Device-side extensions (implemented in `network_sim` only):
+
+```
 CMD_DEBUG_STEP:   type = 0x23, payload = [direction: i8]               -> 2 bytes total
 ```
 
-Response (device → controller, same TCP connection):
+Design-only (not yet implemented):
 
 ```
-CMD_ACK:          type = 0x80, payload = [status: u8]                  -> 2 bytes total
-                  status: 0 = ok, 1 = invalid payload/config, 2 = not configured
+CMD_SYNC_RESULT:  type = 0x03, payload = [seq: u16] [boot_seq: u32] [offset: i64] -> 15 bytes total
+CMD_DEBUG_PAUSE:  type = 0x20, no payload                              -> 1 byte total
+CMD_DEBUG_RESUME: type = 0x21, no payload                              -> 1 byte total
 ```
 
-The device sends an ACK after CONFIGURE and LOAD. Other commands are fire-and-forget from the controller's perspective — the TCP connection itself provides delivery guarantee.
+The device sends an ACK (status: 0 = ok, 1 = invalid payload/config, 2 = not configured) after CONFIGURE and LOAD. Other commands are fire-and-forget from the controller's perspective — the TCP connection itself provides delivery guarantee.
 
 **CMD_JUMP vs CMD_DEBUG_SEEK:** CMD_JUMP is a lightweight seek available on all devices. It carries a shared absolute `t0` (like CMD_START) so all devices stay synchronized, `t_rel` for precise frame rendering when paused, and a `gen` value the device echoes on outbound UDP so the controller can drop stale in-flight frames. Valid only within reset-safe intervals (see `controller.md`). CMD_DEBUG_SEEK is simulator-only: it replays from t=0 to the target, producing correct output at any arbitrary time.
 
@@ -153,13 +158,8 @@ void poll_tcp_commands(int tcp_fd, /* ... */) {
                 device.handle_stop();
                 break;
             }
-            case 0x03: {  // CMD_SYNC_RESULT
-                if (payload_len >= 14) {
-                    // seq (2) + boot_seq (4) + offset (8)
-                    handle_sync_result(payload, payload_len);
-                }
-                break;
-            }
+            // Design-only (not yet implemented):
+            // case 0x03: handle_sync_result(payload, payload_len); break;
             // Debug commands (ESPSimulated only):
             // case 0x20: device.debug_pause(); break;
             // case 0x22: device.debug_seek(read_f32(payload)); break;
@@ -177,9 +177,11 @@ void poll_tcp_commands(int tcp_fd, /* ... */) {
 
 ---
 
-## UDP sync probes (device side)
+## Design-only: UDP sync probes (device side)
 
-Sync probes use a separate UDP socket. The device listens for SYNC_REQ and replies with SYNC_RESP on the same socket:
+> **Not yet implemented.** The following describes the planned sync probe exchange. See "Design-only: clock sync protocol" below for the full protocol.
+
+Sync probes would use a separate UDP socket. The device listens for SYNC_REQ and replies with SYNC_RESP on the same socket:
 
 ```cpp
 void poll_udp_sync(int udp_fd) {
@@ -300,9 +302,11 @@ t_rel = (now_epoch_approx - t0) / 1e6        (microseconds -> float seconds)
 
 All protocol timestamps are **int64_t microseconds** — avoids float byte-order issues and keeps deterministic precision.
 
-### Custom sync protocol (replaces NTP on ESP)
+### Design-only: custom sync protocol (replaces NTP on ESP)
 
-Instead of each ESP running an NTP client, the controller performs a lightweight sync exchange over a dedicated UDP channel. Sync probes use UDP (not the TCP command channel) because RTT measurement requires minimal, predictable latency — TCP's head-of-line blocking and Nagle's algorithm would add jitter that corrupts offset calculations. The computed offset (SYNC_RESULT) is delivered over the TCP command connection since it's a one-shot value, not latency-sensitive.
+> **Not yet implemented.** The sync exchange, filter model, and correction behavior described in this section and all subsections below through "Correction behavior during playback" are design-level only. None of this code exists in the codebase.
+
+Instead of each ESP running an NTP client, the controller would perform a lightweight sync exchange over a dedicated UDP channel. Sync probes use UDP (not the TCP command channel) because RTT measurement requires minimal, predictable latency — TCP's head-of-line blocking and Nagle's algorithm would add jitter that corrupts offset calculations. The computed offset (SYNC_RESULT) would be delivered over the TCP command connection since it's a one-shot value, not latency-sensitive.
 
 **Why not NTP:**
 - NTPClient on ESP is fragile: `forceUpdate()` blocks up to 1s, `getEpochTime()` loses sub-second precision via integer division, managing the library is unnecessary complexity.

@@ -26,10 +26,10 @@ The core design principle: **tight timing sync over complex rendering**. Simple 
 │  │   blobs, syncs,   │     │   relays commands │  │
 │  │   manages sessions│     │   and frames)     │  │
 │  │   + playback)     │     └────────┬──────────┘  │
-│  └────────┬──────────┘              │ WebSocket   │
+│  └────────┬──────────┘              │ (planned)   │
 │           │                         │             │
-│     TCP + UDP                    Browser          │
-│     (device protocol)            (canvas, UI)     │
+│     TCP + UDP                                     │
+│     (device protocol)                             │
 │           │                                       │
 └───────────┼───────────────────────────────────────┘
             │ WiFi (same LAN)
@@ -40,13 +40,13 @@ The core design principle: **tight timing sync over complex rendering**. Simple 
      └─────────────┘
 ```
 
-The controller is the long-running authority. It compiles DSL programs, routes per-strip blobs to devices via a static config, manages clock sync and playback sessions, and exposes a control/event API. The web app is a separate process that relays between the controller and the browser. See `controller.md` for the full architecture, config format, and session identity model.
+The controller is the long-running authority. It compiles DSL programs, routes per-strip blobs to devices via a static config, manages playback sessions, and exposes a control/event API over a Unix Domain Socket. The web app shown above is planned but not yet implemented in this repo — the controller currently provides a UDS-based client protocol and a TUI interface. See `controller.md` for the full architecture, config format, and session identity model.
 
 ### Network Assumptions
 
 - Base station and ESP32 share the same WiFi network
 - No firewall or routing restrictions between them
-- Base station runs controller + web app as separate processes
+- Base station runs the controller (web app is planned but not yet implemented)
 - Static config maps strip names to device identities and runtime strip config
 - Device discovery resolves live IP/TCP endpoints for known devices (default UDP discovery port: `6040`)
 - Multiple ESP32 devices synced to the same controller
@@ -143,7 +143,7 @@ TCP for commands (LOAD, START, JUMP, PAUSE, RESUME, STOP, debug) and clock sync 
 
 ### Solution: Custom controller-led sync protocol
 
-The controller performs a lightweight SYNC_REQ/SYNC_RESP exchange with each ESP over the existing UDP command channel. ESPs are passive responders (timestamp and echo); all filtering, quality tracking, and correction logic lives on the controller.
+The planned design has the controller performing a lightweight SYNC_REQ/SYNC_RESP exchange with each ESP over a dedicated UDP channel. ESPs would be passive responders (timestamp and echo); all filtering, quality tracking, and correction logic would live on the controller. This protocol is documented in `transport.md` but not yet implemented.
 
 **Why not NTP:** A generic NTP client on ESP is fragile — `forceUpdate()` blocks for up to 1s, `getEpochTime()` loses sub-second precision via integer division, and each ESP must manage its own NTP state. The custom protocol is simpler on the ESP side (~15 lines), non-blocking by design, and gives the controller full visibility into sync quality per device.
 
@@ -175,13 +175,12 @@ Detailed design documents:
 
 **→ [compiler.md](compiler.md)** — Python compiler pipeline: parser, time resolution, layer inference, buffer packing, blob emission, safe interval analysis
 
-**→ [playback_device.md](playback_device.md)** — PlaybackDevice base class: state machine, method contracts, ESPDevice/ESPSimulated subclass sketches *(base class implemented, subclasses planned)*
+**→ [playback_device.md](playback_device.md)** — PlaybackDevice base class: state machine, method contracts, ESPSimulated implementation, ESPDevice sketch *(base class and ESPSimulated implemented, ESPDevice planned)*
 
-**→ [transport.md](transport.md)** — Device communication protocol: TCP commands, UDP sync probes, wire formats, custom clock sync *(design)*
+**→ [transport.md](transport.md)** — Device communication protocol: TCP commands, UDP frames, wire formats, custom clock sync *(TCP commands and UDP frames implemented; clock sync design-only)*
 
-**→ [controller.md](controller.md)** — Controller/web-app architecture: config, identity model, frame assembly, reset-safe intervals, protocols, end-to-end flows *(design)*
+**→ [controller.md](controller.md)** — Controller architecture: config, identity model, frame assembly, reset-safe intervals, UDS client protocol, end-to-end flows *(partially implemented)*
 
-**→ [draft_simulator_proposal.md](draft_simulator_proposal.md)** — Simulator: pybind11 + Flask + browser visualization *(early draft, partially superseded by playback_device.md and controller.md)*
 
 **→ [dsl_example.py](dsl_example.py)** — DSL example: wave+shift+sparks test animation
 
@@ -227,14 +226,14 @@ Build and test animation logic on desktop (Linux) without hardware via condition
 - PC simulator for VM testing
 - Memory pool allocator
 
-### Phase 2: Ambient Mode
+### Phase 2: Ambient Mode *(planned)*
 - Implement remaining primitives
 - Store programs on flash (LittleFS)
 - UDP interface for LOAD/START/SYNC protocol
 - WiFi + controller clock sync setup
 - Power-on default program
 
-### Phase 3: Music Sync
+### Phase 3: Music Sync *(planned)*
 - Base station tooling (beat analysis, program compiler)
 - Audio playback with latency compensation
 - End-to-end sync testing
