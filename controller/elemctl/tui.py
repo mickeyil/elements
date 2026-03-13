@@ -20,12 +20,15 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from prompt_toolkit import Application
+from prompt_toolkit.application.current import get_app
 from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.filters import Condition
 from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.layout.containers import ConditionalContainer, HSplit, VerticalAlign, Window
+from prompt_toolkit.layout.containers import Float, FloatContainer, HSplit, VerticalAlign, Window
 from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
 from prompt_toolkit.layout.layout import Layout
+from prompt_toolkit.styles import Style
+from prompt_toolkit.widgets import Button, Dialog, Label, RadioList, TextArea
 
 from .config import (
     DEFAULT_ANIMATIONS_PATH,
@@ -152,7 +155,6 @@ _RESCAN_SENTINEL = object()
 _HELP_SENTINEL = object()
 _DEVICES_SENTINEL = object()
 _NEWDEVICE_SENTINEL = object()
-_CANCEL_SENTINEL = object()
 
 _COMMANDS = {
     'status', 'play', 'pause', 'stop', 'shutdown',
@@ -162,15 +164,15 @@ _STRIP_ID_RE = re.compile(r'^[A-Za-z0-9_-]+$')
 
 
 @dataclass
-class NewDeviceWizard:
-    step_index: int = 0
-    device_type: str = 'esp32'
-    device_uid: str | None = None
-    strip_id: str | None = None
-    length: int | None = None
-
-
-_NEW_DEVICE_STEPS = ('device_type', 'device_uid', 'strip_id', 'length')
+class NewDeviceDialogState:
+    device_type: RadioList
+    device_uid: TextArea
+    strip_id: TextArea
+    length: TextArea
+    submit_button: Button
+    cancel_button: Button
+    dialog: Dialog
+    error_text: str = ''
 
 
 def parse_command(text: str, next_id: int) -> tuple[dict | None | object, str | None]:
@@ -203,11 +205,6 @@ def parse_command(text: str, next_id: int) -> tuple[dict | None | object, str | 
         if len(parts) > 1:
             return None, "/help does not take arguments"
         return _HELP_SENTINEL, None
-
-    if name == 'cancel':
-        if len(parts) > 1:
-            return None, "/cancel does not take arguments"
-        return _CANCEL_SENTINEL, None
 
     if name == 'rescan':
         if len(parts) > 1:
@@ -444,8 +441,7 @@ class TuiApp:
         self._config_path = config_path
         self._animations_dir = animations_dir
         self._animation_list: list[AnimationEntry] = []
-        self._new_device: NewDeviceWizard | None = None
-        self._wizard_prompt = ''
+        self._newdevice_dialog: NewDeviceDialogState | None = None
         self._client: UdsClient | None = None
         self._client_lock = threading.Lock()
         self._shutdown = threading.Event()
@@ -461,15 +457,13 @@ class TuiApp:
 
         # prompt_toolkit widgets
         self._log_buffer = Buffer(read_only=True)
-        self._wizard_label = FormattedTextControl(
-            text=lambda: self._wizard_prompt,
-        )
         input_control = BufferControl(buffer=Buffer(
             name='input',
             accept_handler=self._on_input,
             multiline=False,
         ))
         self._input_buffer = input_control.buffer
+        self._input_control = input_control
 
         kb = KeyBindings()
 
@@ -478,36 +472,66 @@ class TuiApp:
         def _(event):
             self._exit()
 
+        @kb.add('escape', filter=Condition(lambda: self._newdevice_dialog is not None))
+        def _(event):
+            self._cancel_newdevice_dialog()
+
+        @kb.add(
+            'enter',
+            filter=Condition(
+                lambda: self._newdevice_dialog is not None
+                and get_app().layout.has_focus(self._newdevice_dialog.device_type)
+            ),
+            eager=True,
+        )
+        @kb.add(
+            'tab',
+            filter=Condition(
+                lambda: self._newdevice_dialog is not None
+                and get_app().layout.has_focus(self._newdevice_dialog.device_type)
+            ),
+            eager=True,
+        )
+        def _(event):
+            self._commit_newdevice_type_selection()
+            event.app.layout.focus(self._newdevice_dialog.device_uid)
+
         log_window = Window(
             content=BufferControl(buffer=self._log_buffer),
             wrap_lines=True,
             dont_extend_height=True,
         )
-        wizard_window = ConditionalContainer(
-            Window(
-                height=1,
-                content=self._wizard_label,
-                style='class:wizard',
-            ),
-            filter=Condition(lambda: self._new_device is not None),
+        main_body = HSplit(
+            [
+                log_window,
+                Window(height=1, char='─', style='class:separator'),
+                Window(height=1, content=input_control),
+            ],
+            align=VerticalAlign.BOTTOM,
         )
+        self._root_container = FloatContainer(content=main_body, floats=[], modal=True)
 
         self._app = Application(
-            layout=Layout(
-                HSplit(
-                    [
-                        log_window,
-                        Window(height=1, char='─', style='class:separator'),
-                        wizard_window,
-                        Window(height=1, content=input_control),
-                    ],
-                    align=VerticalAlign.BOTTOM,
-                ),
-                focused_element=input_control,
-            ),
+            layout=Layout(self._root_container, focused_element=input_control),
             key_bindings=kb,
             full_screen=True,
             before_render=self._drain_pending_logs,
+            style=Style.from_dict({
+                'separator': '#444444',
+                'dialog': 'bg:#1f2430',
+                'dialog.body': 'bg:#1f2430 #d8dee9',
+                'dialog shadow': 'bg:#000000',
+                'button': 'bg:#2f3640 #d8dee9',
+                'button.focused': 'bg:#5e81ac #ffffff',
+                'frame.border': '#4c566a',
+                'frame.label': 'bold #88c0d0',
+                'radio-selected': 'bg:#2b303b',
+                'radio-checked': '#88c0d0',
+                'dialog.body text-area': 'bg:#11151c #e5e9f0',
+                'newdevice.label': 'bold #81a1c1',
+                'newdevice.help': '#7f8c8d',
+                'newdevice.error': 'bg:#3b1f22 #ffb4b4',
+            }),
         )
 
     def run(self) -> None:
@@ -531,8 +555,7 @@ class TuiApp:
 
     def _on_input(self, buff: Buffer) -> None:
         text = buff.text
-        if self._new_device is not None:
-            self._handle_newdevice_input(text)
+        if self._newdevice_dialog is not None:
             return
 
         cmd, error = parse_command(text, self._next_id)
@@ -548,10 +571,6 @@ class TuiApp:
 
         if cmd is _HELP_SENTINEL:
             self._show_help()
-            return
-
-        if cmd is _CANCEL_SENTINEL:
-            self._local_log("no active wizard")
             return
 
         if cmd is _RESCAN_SENTINEL:
@@ -595,9 +614,8 @@ class TuiApp:
         self._local_log("commands:")
         self._local_log("  /help               show this help")
         self._local_log("  /devices            list configured devices")
-        self._local_log("  /newdevice          add a configured device via wizard")
+        self._local_log("  /newdevice          open new device dialog")
         self._local_log("  /rmdevice UID       remove a configured device")
-        self._local_log("  /cancel             cancel the active wizard")
         self._local_log("  /status             show controller status")
         self._local_log("  /play               start playback")
         self._local_log("  /pause              pause playback")
@@ -655,127 +673,159 @@ class TuiApp:
         self._local_log("restart serve to apply config changes")
 
     def _start_newdevice(self) -> None:
-        if self._new_device is not None:
-            self._local_log("new device wizard already active; type /cancel to abort")
+        if self._newdevice_dialog is not None:
             return
-        self._new_device = NewDeviceWizard()
-        self._local_log("new device wizard started; type /cancel to abort")
-        self._prompt_newdevice()
-
-    def _cancel_newdevice(self) -> None:
-        self._set_wizard_prompt('')
-        self._new_device = None
-        self._local_log("new device wizard cancelled")
-
-    def _prompt_newdevice(self) -> None:
-        wizard = self._new_device
-        if wizard is None:
+        doc = self._load_config_doc()
+        if doc is None:
             return
-        field = _NEW_DEVICE_STEPS[wizard.step_index]
-        if field == 'device_type':
-            self._set_wizard_prompt(
-                f"new device — device type (sim/esp32) [default: {wizard.device_type}]"
-            )
-        elif field == 'device_uid':
-            self._set_wizard_prompt("new device — device uid")
-        elif field == 'strip_id':
-            self._set_wizard_prompt("new device — strip id")
-        else:
-            self._set_wizard_prompt("new device — length (LEDs)")
-
-    def _set_wizard_prompt(self, message: str) -> None:
-        self._wizard_prompt = message
+        self._newdevice_dialog = self._build_newdevice_dialog(doc)
+        self._root_container.floats[:] = [Float(content=self._newdevice_dialog.dialog)]
+        self._app.layout.focus(self._newdevice_dialog.device_type)
         self._app.invalidate()
 
-    def _handle_newdevice_input(self, text: str) -> None:
-        wizard = self._new_device
-        if wizard is None:
-            return
+    def _build_newdevice_dialog(self, doc: dict) -> NewDeviceDialogState:
+        device_type = RadioList(
+            values=[('sim', 'sim'), ('esp32', 'esp32')],
+            default='esp32',
+            select_on_focus=True,
+        )
+        device_uid = TextArea(multiline=False, wrap_lines=False)
+        strip_id = TextArea(multiline=False, wrap_lines=False)
+        length = TextArea(multiline=False, wrap_lines=False)
+        submit_button = Button('OK', handler=self._submit_newdevice_dialog)
+        cancel_button = Button('Cancel', handler=self._cancel_newdevice_dialog)
+        device_uid.buffer.accept_handler = (
+            lambda buff: self._focus_dialog_widget(strip_id)
+        )
+        strip_id.buffer.accept_handler = (
+            lambda buff: self._focus_dialog_widget(length)
+        )
+        length.buffer.accept_handler = (
+            lambda buff: self._focus_dialog_widget(submit_button)
+        )
 
-        stripped = text.strip()
-        if stripped == '/cancel':
-            self._cancel_newdevice()
+        error_control = FormattedTextControl(
+            text=lambda: self._newdevice_dialog.error_text if self._newdevice_dialog else ' '
+        )
+        dialog = Dialog(
+            title='New device',
+            body=HSplit([
+                Label(text='Device type', style='class:newdevice.label'),
+                device_type,
+                Label(text='Device uid', style='class:newdevice.label'),
+                device_uid,
+                Label(text='Strip id', style='class:newdevice.label'),
+                strip_id,
+                Label(text='Length', style='class:newdevice.label'),
+                length,
+                Window(height=1, content=error_control, style='class:newdevice.error'),
+                Label(
+                    text='Enter: next/select   Tab: move   Esc: cancel',
+                    style='class:newdevice.help',
+                ),
+            ]),
+            buttons=[submit_button, cancel_button],
+            with_background=True,
+        )
+        state = NewDeviceDialogState(
+            device_type=device_type,
+            device_uid=device_uid,
+            strip_id=strip_id,
+            length=length,
+            submit_button=submit_button,
+            cancel_button=cancel_button,
+            dialog=dialog,
+        )
+        return state
+
+    def _focus_dialog_widget(self, target) -> bool:
+        self._app.layout.focus(target)
+        return True
+
+    def _commit_newdevice_type_selection(self) -> None:
+        state = self._newdevice_dialog
+        if state is None:
             return
-        if stripped.startswith('/'):
-            self._local_log("new device wizard active; finish the field or /cancel")
-            self._prompt_newdevice()
+        idx = state.device_type._selected_index
+        state.device_type.current_value = state.device_type.values[idx][0]
+
+    def _set_dialog_error(self, message: str, field) -> None:
+        state = self._newdevice_dialog
+        if state is None:
+            return
+        state.error_text = message
+        self._app.layout.focus(field)
+        self._app.invalidate()
+
+    def _cancel_newdevice_dialog(self) -> None:
+        if self._newdevice_dialog is None:
+            return
+        self._newdevice_dialog = None
+        self._root_container.floats.clear()
+        self._app.layout.focus(self._input_control)
+        self._app.invalidate()
+
+    def _submit_newdevice_dialog(self) -> None:
+        state = self._newdevice_dialog
+        if state is None:
             return
 
         doc = self._load_config_doc()
         if doc is None:
             return
+
         devices = doc.get('devices', [])
+        device_type = state.device_type.current_value
+        device_uid = state.device_uid.text.strip()
+        strip_id = state.strip_id.text.strip()
+        length_text = state.length.text.strip()
 
-        field = _NEW_DEVICE_STEPS[wizard.step_index]
-        if field == 'device_type':
-            value = stripped.lower() or wizard.device_type
-            if value not in {'sim', 'esp32'}:
-                self._local_log("device type must be sim or esp32")
-                self._prompt_newdevice()
-                return
-            wizard.device_type = value
-        elif field == 'device_uid':
-            error = validate_device_uid(stripped)
-            if error is not None:
-                self._local_log(error)
-                self._prompt_newdevice()
-                return
-            if any(d.get('device_uid') == stripped for d in devices if isinstance(d, dict)):
-                self._local_log(f"device uid already exists: {stripped}")
-                self._prompt_newdevice()
-                return
-            wizard.device_uid = stripped
-        elif field == 'strip_id':
-            error = validate_strip_id(stripped)
-            if error is not None:
-                self._local_log(error)
-                self._prompt_newdevice()
-                return
-            if any(d.get('strip_id') == stripped for d in devices if isinstance(d, dict)):
-                self._local_log(f"strip id already exists: {stripped}")
-                self._prompt_newdevice()
-                return
-            wizard.strip_id = stripped
-        else:
-            length, error = parse_length(stripped)
-            if error is not None:
-                self._local_log(error)
-                self._prompt_newdevice()
-                return
-            wizard.length = length
+        error = validate_device_uid(device_uid)
+        if error is not None:
+            self._set_dialog_error(error, state.device_uid)
+            return
+        if any(d.get('device_uid') == device_uid for d in devices if isinstance(d, dict)):
+            self._set_dialog_error(
+                f'device uid already exists: {device_uid}',
+                state.device_uid,
+            )
+            return
 
-        wizard.step_index += 1
-        if wizard.step_index < len(_NEW_DEVICE_STEPS):
-            self._prompt_newdevice()
+        error = validate_strip_id(strip_id)
+        if error is not None:
+            self._set_dialog_error(error, state.strip_id)
+            return
+        if any(d.get('strip_id') == strip_id for d in devices if isinstance(d, dict)):
+            self._set_dialog_error(
+                f'strip id already exists: {strip_id}',
+                state.strip_id,
+            )
+            return
+
+        length, error = parse_length(length_text)
+        if error is not None:
+            self._set_dialog_error(error, state.length)
             return
 
         entry = make_device_entry(
-            device_uid=wizard.device_uid or "",
-            device_type=wizard.device_type,
-            strip_id=wizard.strip_id or "",
-            length=wizard.length or 0,
+            device_uid=device_uid,
+            device_type=device_type,
+            strip_id=strip_id,
+            length=length,
             device_id=next_device_id(doc),
         )
         add_device(doc, entry)
         try:
             save_config_doc(self._config_path, doc)
-        except ConfigError as e:
-            self._local_log(f"cannot save config: {e}")
-            self._set_wizard_prompt('')
-            self._new_device = None
-            return
-        except OSError as e:
-            self._local_log(f"cannot save config: {e}")
-            self._set_wizard_prompt('')
-            self._new_device = None
+        except (ConfigError, OSError) as e:
+            self._set_dialog_error(f'cannot save config: {e}', state.device_uid)
             return
 
+        self._cancel_newdevice_dialog()
         self._local_log(
-            f'added device {wizard.device_uid} ({wizard.device_type}, strip "{wizard.strip_id}", {wizard.length} LEDs)'
+            f'added device {device_uid} ({device_type}, strip "{strip_id}", {length} LEDs)'
         )
         self._local_log("restart serve to apply config changes")
-        self._set_wizard_prompt('')
-        self._new_device = None
 
     def _do_rescan(self) -> None:
         self._animation_list = scan_animations(self._animations_dir)

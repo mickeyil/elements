@@ -11,7 +11,7 @@ from elemctl.config import load_config
 from elemctl.tui import (
     TuiApp, format_event, parse_command, extract_metadata, scan_animations,
     format_transcript_line, parse_length, validate_device_uid,
-    validate_strip_id, _CANCEL_SENTINEL, _DEVICES_SENTINEL, _HELP_SENTINEL,
+    validate_strip_id, _DEVICES_SENTINEL, _HELP_SENTINEL,
     _NEWDEVICE_SENTINEL, _QUIT_SENTINEL, _RESCAN_SENTINEL,
 )
 from elemctl.uds_wire import KIND_JSON, KIND_FRAME, UdsReader, encode_json
@@ -198,11 +198,6 @@ class TestParseCommand:
         assert cmd is _HELP_SENTINEL
         assert err is None
 
-    def test_cancel(self):
-        cmd, err = parse_command('/cancel', 1)
-        assert cmd is _CANCEL_SENTINEL
-        assert err is None
-
     def test_devices(self):
         cmd, err = parse_command('/devices', 1)
         assert cmd is _DEVICES_SENTINEL
@@ -279,11 +274,6 @@ class TestParseCommand:
 
     def test_help_extra_args_rejected(self):
         cmd, err = parse_command('/help now', 1)
-        assert cmd is None
-        assert 'does not take arguments' in err
-
-    def test_cancel_extra_args_rejected(self):
-        cmd, err = parse_command('/cancel now', 1)
         assert cmd is None
         assert 'does not take arguments' in err
 
@@ -442,8 +432,27 @@ class TestTuiReconnect:
         assert sum('connected to /tmp/elemctl.sock' in line for line in logs) == 2
 
 
-class TestNewDeviceWizard:
-    def test_newdevice_wizard_saves_config(self, tmp_path):
+class TestNewDeviceDialog:
+    def test_newdevice_dialog_opens_and_closes(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+
+        try:
+            app._start_newdevice()
+            assert app._newdevice_dialog is not None
+            assert len(app._root_container.floats) == 1
+            app._cancel_newdevice_dialog()
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        assert app._newdevice_dialog is None
+        assert app._root_container.floats == []
+
+    def test_newdevice_dialog_saves_config(self, tmp_path):
         config_path = tmp_path / 'config.json'
         app = TuiApp(
             '/tmp/elemctl.sock',
@@ -453,10 +462,13 @@ class TestNewDeviceWizard:
 
         try:
             app._start_newdevice()
-            app._handle_newdevice_input('sim')
-            app._handle_newdevice_input('sim-1')
-            app._handle_newdevice_input('main')
-            app._handle_newdevice_input('60')
+            state = app._newdevice_dialog
+            assert state is not None
+            state.device_type.current_value = 'sim'
+            state.device_uid.text = 'sim-1'
+            state.strip_id.text = 'main'
+            state.length.text = '60'
+            app._submit_newdevice_dialog()
         finally:
             if app._log_fp is not None:
                 app._log_fp.close()
@@ -466,9 +478,9 @@ class TestNewDeviceWizard:
         assert cfg.devices[0].device_type == 'sim'
         assert cfg.devices[0].strip_id == 'main'
         assert cfg.devices[0].length == 60
-        assert app._wizard_prompt == ''
+        assert app._newdevice_dialog is None
 
-    def test_newdevice_wizard_cancel(self, tmp_path):
+    def test_newdevice_dialog_validation_error_stays_open(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
             str(tmp_path / 'config.json'),
@@ -477,52 +489,47 @@ class TestNewDeviceWizard:
 
         try:
             app._start_newdevice()
-            app._handle_newdevice_input('/cancel')
+            state = app._newdevice_dialog
+            assert state is not None
+            state.device_uid.text = 'bad uid'
+            state.strip_id.text = 'main'
+            state.length.text = '60'
+            app._submit_newdevice_dialog()
         finally:
             if app._log_fp is not None:
                 app._log_fp.close()
 
-        assert app._new_device is None
-        assert app._wizard_prompt == ''
+        assert app._newdevice_dialog is not None
+        assert app._newdevice_dialog.error_text == (
+            'device uid may only contain letters, numbers, ., _, -, and :'
+        )
 
-    def test_newdevice_wizard_sets_prompt_in_label(self, tmp_path):
+    def test_newdevice_dialog_save_failure_stays_open(self, monkeypatch, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
             str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
 
-        try:
-            app._start_newdevice()
-            assert 'device type' in app._wizard_prompt
-            app._handle_newdevice_input('sim')
-            assert app._wizard_prompt.endswith('device uid')
-        finally:
-            if app._log_fp is not None:
-                app._log_fp.close()
-
-    def test_newdevice_save_failure_cancels_wizard(self, monkeypatch, tmp_path):
-        app = TuiApp(
-            '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
-            log_file=str(tmp_path / 'tui.log'),
+        monkeypatch.setattr(
+            'elemctl.tui.save_config_doc',
+            lambda *args, **kwargs: (_ for _ in ()).throw(OSError('disk full')),
         )
 
-        monkeypatch.setattr('elemctl.tui.save_config_doc', lambda *args, **kwargs: (_ for _ in ()).throw(OSError('disk full')))
-
         try:
             app._start_newdevice()
-            app._handle_newdevice_input('sim')
-            app._handle_newdevice_input('sim-1')
-            app._handle_newdevice_input('main')
-            app._handle_newdevice_input('60')
+            state = app._newdevice_dialog
+            assert state is not None
+            state.device_uid.text = 'sim-1'
+            state.strip_id.text = 'main'
+            state.length.text = '60'
+            app._submit_newdevice_dialog()
         finally:
             if app._log_fp is not None:
                 app._log_fp.close()
 
-        assert app._new_device is None
-        assert app._wizard_prompt == ''
-        assert any('cannot save config: disk full' in line for line in app._log_lines)
+        assert app._newdevice_dialog is not None
+        assert app._newdevice_dialog.error_text == 'cannot save config: disk full'
 
     def test_rmdevice_last_device_has_clear_error(self, tmp_path):
         config_path = tmp_path / 'config.json'
@@ -551,6 +558,23 @@ class TestNewDeviceWizard:
                 app._log_fp.close()
 
         assert any('cannot remove the last configured device' in line for line in app._log_lines)
+
+    def test_on_input_ignored_while_dialog_open(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+
+        try:
+            app._start_newdevice()
+            app._input_buffer.text = '/status'
+            app._on_input(app._input_buffer)
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        assert app._newdevice_dialog is not None
 
 
 class TestTuiMain:
