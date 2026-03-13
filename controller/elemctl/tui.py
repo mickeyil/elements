@@ -40,12 +40,7 @@ from .config import (
     resolve_runtime_path,
 )
 from .config_edit import (
-    add_device,
     load_config_doc,
-    make_device_entry,
-    next_device_id,
-    remove_device,
-    save_config_doc,
 )
 from .uds_client import UdsClient
 from .uds_wire import KIND_FRAME, KIND_JSON, parse_json_payload
@@ -348,6 +343,14 @@ def format_event(kind: int, payload: bytes) -> list[str] | None:
         rid = msg.get('id')
         if msg.get('ok'):
             result = msg.get('result', {})
+            if isinstance(result, dict) and result.get('event') == 'snapshot':
+                return _format_controller_event(result)
+            if (
+                isinstance(result, dict)
+                and set(result.keys()) == {'message'}
+                and isinstance(result.get('message'), str)
+            ):
+                return [f'ctrl: {result["message"]}']
             return [f'ctrl: reply {rid} ok {json.dumps(result, separators=(",", ":"))}']
         else:
             return [f'ctrl: reply {rid} ERROR: {msg.get("error", "?")}']
@@ -634,6 +637,16 @@ class TuiApp:
             return None
 
     def _do_devices(self) -> None:
+        client = self._get_client()
+        if client is not None:
+            cmd = {'cmd': 'status', 'id': self._next_id}
+            self._next_id += 1
+            try:
+                client.send_cmd(cmd)
+            except OSError as e:
+                self._local_log(f"send failed: {e}")
+            return
+
         doc = self._load_config_doc()
         if doc is None:
             return
@@ -653,37 +666,33 @@ class TuiApp:
             )
 
     def _do_rmdevice(self, device_uid: str) -> None:
-        doc = self._load_config_doc()
-        if doc is None:
+        client = self._get_client()
+        if client is None:
+            self._local_log("controller not connected")
             return
-        devices = doc.get('devices', [])
-        if isinstance(devices, list) and len(devices) <= 1:
-            self._local_log("cannot remove the last configured device")
-            return
+        cmd = {
+            'cmd': 'remove_device',
+            'device_uid': device_uid,
+            'id': self._next_id,
+        }
+        self._next_id += 1
         try:
-            remove_device(doc, device_uid)
-            save_config_doc(self._config_path, doc)
-        except ConfigError as e:
-            self._local_log(f"cannot remove {device_uid}: {e}")
-            return
+            client.send_cmd(cmd)
         except OSError as e:
-            self._local_log(f"cannot save config: {e}")
-            return
-        self._local_log(f"removed device {device_uid}")
-        self._local_log("restart serve to apply config changes")
+            self._local_log(f"send failed: {e}")
 
     def _start_newdevice(self) -> None:
         if self._newdevice_dialog is not None:
             return
-        doc = self._load_config_doc()
-        if doc is None:
+        if self._get_client() is None:
+            self._local_log("controller not connected")
             return
-        self._newdevice_dialog = self._build_newdevice_dialog(doc)
+        self._newdevice_dialog = self._build_newdevice_dialog()
         self._root_container.floats[:] = [Float(content=self._newdevice_dialog.dialog)]
         self._app.layout.focus(self._newdevice_dialog.device_type)
         self._app.invalidate()
 
-    def _build_newdevice_dialog(self, doc: dict) -> NewDeviceDialogState:
+    def _build_newdevice_dialog(self) -> NewDeviceDialogState:
         device_type = RadioList(
             values=[('sim', 'sim'), ('esp32', 'esp32')],
             default='esp32',
@@ -772,9 +781,10 @@ class TuiApp:
 
         doc = self._load_config_doc()
         if doc is None:
+            self._set_dialog_error('config error', state.device_uid)
             return
-
         devices = doc.get('devices', [])
+
         device_type = state.device_type.current_value
         device_uid = state.device_uid.text.strip()
         strip_id = state.strip_id.text.strip()
@@ -807,25 +817,27 @@ class TuiApp:
             self._set_dialog_error(error, state.length)
             return
 
-        entry = make_device_entry(
-            device_uid=device_uid,
-            device_type=device_type,
-            strip_id=strip_id,
-            length=length,
-            device_id=next_device_id(doc),
-        )
-        add_device(doc, entry)
+        client = self._get_client()
+        if client is None:
+            self._set_dialog_error('controller not connected', state.device_uid)
+            return
+
+        cmd = {
+            'cmd': 'add_device',
+            'device_uid': device_uid,
+            'device_type': device_type,
+            'strip_id': strip_id,
+            'length': length,
+            'id': self._next_id,
+        }
+        self._next_id += 1
         try:
-            save_config_doc(self._config_path, doc)
-        except (ConfigError, OSError) as e:
-            self._set_dialog_error(f'cannot save config: {e}', state.device_uid)
+            client.send_cmd(cmd)
+        except OSError as e:
+            self._set_dialog_error(f'send failed: {e}', state.device_uid)
             return
 
         self._cancel_newdevice_dialog()
-        self._local_log(
-            f'added device {device_uid} ({device_type}, strip "{strip_id}", {length} LEDs)'
-        )
-        self._local_log("restart serve to apply config changes")
 
     def _do_rescan(self) -> None:
         self._animation_list = scan_animations(self._animations_dir)

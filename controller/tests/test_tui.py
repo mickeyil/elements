@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-from elemctl.config import load_config
 from elemctl.tui import (
     TuiApp, format_event, parse_command, extract_metadata, scan_animations,
     format_transcript_line, parse_length, validate_device_uid,
@@ -71,6 +70,35 @@ class TestFormatEvent:
         result = format_event(KIND_JSON, _json_payload(msg))
         assert result == [
             'ctrl: playing session=5 t=1.25/8.00s',
+            'devices online:',
+            '  sim-1: strip "main" with 10 LEDs',
+        ]
+
+    def test_reply_message_shortcut(self):
+        msg = {
+            'type': 'reply',
+            'id': 7,
+            'ok': True,
+            'result': {'message': 'added device sim-2'},
+        }
+        assert format_event(KIND_JSON, _json_payload(msg)) == ['ctrl: added device sim-2']
+
+    def test_reply_snapshot_formats_like_controller_event(self):
+        msg = {
+            'type': 'reply',
+            'id': 8,
+            'ok': True,
+            'result': {
+                'event': 'snapshot',
+                'session': None,
+                'devices': [
+                    {'device_uid': 'sim-1', 'strip': 'main', 'length': 10, 'connected': True},
+                    {'device_uid': 'sim-2', 'strip': 'aux', 'length': 20, 'connected': False},
+                ],
+            },
+        }
+        assert format_event(KIND_JSON, _json_payload(msg)) == [
+            'ctrl: idle',
             'devices online:',
             '  sim-1: strip "main" with 10 LEDs',
         ]
@@ -433,12 +461,24 @@ class TestTuiReconnect:
 
 
 class TestNewDeviceDialog:
+    class _FakeClient:
+        def __init__(self):
+            self.commands: list[dict] = []
+            self.closed = False
+
+        def send_cmd(self, cmd: dict) -> None:
+            self.commands.append(cmd)
+
+        def close(self) -> None:
+            self.closed = True
+
     def test_newdevice_dialog_opens_and_closes(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
             str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
+        app._set_client(self._FakeClient())
 
         try:
             app._start_newdevice()
@@ -452,13 +492,14 @@ class TestNewDeviceDialog:
         assert app._newdevice_dialog is None
         assert app._root_container.floats == []
 
-    def test_newdevice_dialog_saves_config(self, tmp_path):
-        config_path = tmp_path / 'config.json'
+    def test_newdevice_dialog_sends_add_device_command(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(config_path),
+            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
+        client = self._FakeClient()
+        app._set_client(client)
 
         try:
             app._start_newdevice()
@@ -473,12 +514,15 @@ class TestNewDeviceDialog:
             if app._log_fp is not None:
                 app._log_fp.close()
 
-        cfg = load_config(str(config_path))
-        assert cfg.devices[0].device_uid == 'sim-1'
-        assert cfg.devices[0].device_type == 'sim'
-        assert cfg.devices[0].strip_id == 'main'
-        assert cfg.devices[0].length == 60
         assert app._newdevice_dialog is None
+        assert client.commands == [{
+            'cmd': 'add_device',
+            'device_uid': 'sim-1',
+            'device_type': 'sim',
+            'strip_id': 'main',
+            'length': 60,
+            'id': 1,
+        }]
 
     def test_newdevice_dialog_validation_error_stays_open(self, tmp_path):
         app = TuiApp(
@@ -486,6 +530,7 @@ class TestNewDeviceDialog:
             str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
+        app._set_client(self._FakeClient())
 
         try:
             app._start_newdevice()
@@ -504,17 +549,18 @@ class TestNewDeviceDialog:
             'device uid may only contain letters, numbers, ., _, -, and :'
         )
 
-    def test_newdevice_dialog_save_failure_stays_open(self, monkeypatch, tmp_path):
+    def test_newdevice_dialog_send_failure_stays_open(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
             str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
 
-        monkeypatch.setattr(
-            'elemctl.tui.save_config_doc',
-            lambda *args, **kwargs: (_ for _ in ()).throw(OSError('disk full')),
-        )
+        class FailingClient(self._FakeClient):
+            def send_cmd(self, cmd: dict) -> None:
+                raise OSError('broken pipe')
+
+        app._set_client(FailingClient())
 
         try:
             app._start_newdevice()
@@ -529,27 +575,16 @@ class TestNewDeviceDialog:
                 app._log_fp.close()
 
         assert app._newdevice_dialog is not None
-        assert app._newdevice_dialog.error_text == 'cannot save config: disk full'
+        assert app._newdevice_dialog.error_text == 'send failed: broken pipe'
 
-    def test_rmdevice_last_device_has_clear_error(self, tmp_path):
-        config_path = tmp_path / 'config.json'
-        config_path.write_text(json.dumps({
-            'controller': {'frame_port': 9002},
-            'devices': [{
-                'device_id': 1,
-                'device_uid': 'sim-1',
-                'device_type': 'sim',
-                'host': '',
-                'tcp_port': 0,
-                'strip_id': 'main',
-                'length': 60,
-            }],
-        }))
+    def test_rmdevice_sends_remove_device_command(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(config_path),
+            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
+        client = self._FakeClient()
+        app._set_client(client)
 
         try:
             app._do_rmdevice('sim-1')
@@ -557,7 +592,47 @@ class TestNewDeviceDialog:
             if app._log_fp is not None:
                 app._log_fp.close()
 
-        assert any('cannot remove the last configured device' in line for line in app._log_lines)
+        assert client.commands == [{
+            'cmd': 'remove_device',
+            'device_uid': 'sim-1',
+            'id': 1,
+        }]
+
+    def test_devices_connected_requests_live_status(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        client = self._FakeClient()
+        app._set_client(client)
+
+        try:
+            app._do_devices()
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        assert client.commands == [{
+            'cmd': 'status',
+            'id': 1,
+        }]
+
+    def test_newdevice_requires_connected_controller(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+
+        try:
+            app._start_newdevice()
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        assert app._newdevice_dialog is None
+        assert any('controller not connected' in line for line in app._log_lines)
 
     def test_on_input_ignored_while_dialog_open(self, tmp_path):
         app = TuiApp(
@@ -565,6 +640,7 @@ class TestNewDeviceDialog:
             str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
+        app._set_client(self._FakeClient())
 
         try:
             app._start_newdevice()

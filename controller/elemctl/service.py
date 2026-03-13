@@ -6,11 +6,21 @@ conversion. The UDS server (serve.py) delegates all logic here.
 
 from __future__ import annotations
 
+import copy
 import logging
 import math
+import re
 import time
 
-from .config import Config, DeviceConfig
+from .config import Config, ConfigError, DeviceConfig, load_config_obj
+from .config_edit import (
+    add_device as add_device_doc,
+    load_config_doc,
+    make_device_entry,
+    next_device_id,
+    remove_device as remove_device_doc,
+    save_config_doc,
+)
 from .controller import (
     Controller,
     ControllerEvent,
@@ -26,6 +36,8 @@ from .uds_wire import encode_frame, encode_json
 log = logging.getLogger(__name__)
 
 _PROBE_INTERVAL_NS = 1_000_000_000  # 1 second
+_DEVICE_UID_RE = re.compile(r'^[A-Za-z0-9._:-]+$')
+_STRIP_ID_RE = re.compile(r'^[A-Za-z0-9_-]+$')
 
 
 class ControllerService:
@@ -34,61 +46,47 @@ class ControllerService:
     def __init__(
         self,
         config: Config,
+        config_path: str | None = None,
         receiver_factory=UdpFrameReceiver,
         device_factory=NetworkDevice,
         discovery_factory=DiscoveryReceiver,
         clock=time.monotonic_ns,
     ):
         self._config = config
+        self._config_path = config_path
         self._clock = clock
         self._shutdown = False
+        self._device_factory = device_factory
+        self._service_events: list[dict] = []
+        self._discovery_cache: dict[str, tuple[str, int]] = {}
 
-        # Create receiver and devices
-        self._receiver = receiver_factory(config.frame_port)
+        if config_path is not None:
+            self._raw_doc = load_config_doc(config_path)
+            self._config = load_config_obj(self._raw_doc)
+        else:
+            self._raw_doc = self._config_to_doc(config)
+
+        # Create receiver and dynamic inventory
+        self._receiver = receiver_factory(self._config.frame_port)
         self._devices: list = []
-        self._device_configs = config.devices
-
-        for dc in config.devices:
-            dev = device_factory(
-                device_id=dc.device_id,
-                host=dc.host,
-                tcp_port=dc.tcp_port,
-                device_type=dc.device_type,
-                strip_length=dc.length,
-                frame_port=config.frame_port,
-                udp_receiver=self._receiver,
-            )
-            self._devices.append(dev)
-
-        # Build strip configs and controller
-        self._strips = [
-            StripConfig(
-                strip_id=dc.strip_id,
-                length=dc.length,
-                device=dev,
-            )
-            for dc, dev in zip(config.devices, self._devices)
-        ]
-        self._controller = Controller(self._strips, clock=clock)
+        self._device_configs: list[DeviceConfig] = []
+        self._strips: list[StripConfig] = []
+        self._controller: Controller | None = None
 
         # Discovery (optional)
         self._discovery = None
         self._uid_to_device: dict[str, tuple[DeviceConfig, object]] = {}
-        if config.discovery_port is not None:
-            self._discovery = discovery_factory(config.discovery_port)
-            self._uid_to_device = {
-                dc.device_uid: (dc, dev)
-                for dc, dev in zip(config.devices, self._devices)
-            }
+        if self._config.discovery_port is not None:
+            self._discovery = discovery_factory(self._config.discovery_port)
 
         # Probe throttle: device_id → last probe time (monotonic_ns)
         self._last_probe_ns: dict[int, int] = {}
 
         # Baseline connectivity for transition detection
-        self._prev_connected: dict[int, bool] = {
-            dc.device_id: self._is_connected(dev)
-            for dc, dev in zip(config.devices, self._devices)
-        }
+        self._prev_connected: dict[int, bool] = {}
+
+        self._reconcile_devices(self._config)
+        self._rebuild_controller()
 
     # ------------------------------------------------------------------
     # Command handling
@@ -110,6 +108,8 @@ class ControllerService:
             'seek': self._cmd_seek,
             'debug_seek': self._cmd_debug_seek,
             'stop': self._cmd_stop,
+            'add_device': self._cmd_add_device,
+            'remove_device': self._cmd_remove_device,
             'shutdown': self._cmd_shutdown,
         }.get(action)
 
@@ -171,6 +171,51 @@ class ControllerService:
         self._shutdown = True
         return {}
 
+    def _cmd_add_device(self, cmd: dict) -> dict:
+        self._require_mutation_quiescent()
+        candidate = copy.deepcopy(self._raw_doc)
+
+        device_type = cmd.get('device_type')
+        device_uid = cmd.get('device_uid')
+        strip_id = cmd.get('strip_id')
+        length = self._require_length(cmd.get('length'))
+
+        self._validate_device_type(device_type)
+        self._validate_device_uid(device_uid)
+        self._validate_strip_id(strip_id)
+
+        entry = make_device_entry(
+            device_uid=device_uid,
+            device_type=device_type,
+            strip_id=strip_id,
+            length=length,
+            device_id=next_device_id(candidate),
+        )
+        add_device_doc(candidate, entry)
+        new_config = self._save_and_validate_candidate(candidate)
+        self._raw_doc = candidate
+        self._reconcile_devices(new_config)
+        self._rebuild_controller()
+        self._queue_snapshot_event()
+        return {'message': f'added device {device_uid}'}
+
+    def _cmd_remove_device(self, cmd: dict) -> dict:
+        self._require_mutation_quiescent()
+        device_uid = cmd.get('device_uid')
+        if not isinstance(device_uid, str) or not device_uid:
+            raise ValueError("missing 'device_uid' field")
+        if len(self._device_configs) <= 1:
+            raise ValueError('cannot remove the last configured device')
+
+        candidate = copy.deepcopy(self._raw_doc)
+        remove_device_doc(candidate, device_uid)
+        new_config = self._save_and_validate_candidate(candidate)
+        self._raw_doc = candidate
+        self._reconcile_devices(new_config)
+        self._rebuild_controller()
+        self._queue_snapshot_event()
+        return {'message': f'removed device {device_uid}'}
+
     # ------------------------------------------------------------------
     # Tick
     # ------------------------------------------------------------------
@@ -190,6 +235,8 @@ class ControllerService:
 
         # Drain controller events first (before probing mutates connectivity)
         json_msgs: list[bytes] = []
+        while self._service_events:
+            json_msgs.append(encode_json(self._service_events.pop(0)))
         for evt in self._controller.drain_events():
             json_msgs.append(encode_json(self._event_to_dict(evt)))
 
@@ -285,6 +332,7 @@ class ControllerService:
         self._receiver.close()
         if self._discovery is not None:
             self._discovery.close()
+        self._discovery_cache.clear()
 
     # ------------------------------------------------------------------
     # Private
@@ -302,6 +350,7 @@ class ControllerService:
             return
         self._discovery.poll()
         for uid, host, tcp_port in self._discovery.drain_discoveries():
+            self._discovery_cache[uid] = (host, tcp_port)
             entry = self._uid_to_device.get(uid)
             if entry is None:
                 log.debug('discovery: unknown uid %r from %s:%d', uid, host, tcp_port)
@@ -393,3 +442,159 @@ class ControllerService:
     @staticmethod
     def _error_reply(cmd_id, message: str) -> dict:
         return {'type': 'reply', 'id': cmd_id, 'ok': False, 'error': message}
+
+    @staticmethod
+    def _config_to_doc(config: Config) -> dict:
+        controller = {
+            'frame_port': config.frame_port,
+            'discovery_port': config.discovery_port,
+        }
+        if config.animations_dir is not None:
+            controller['animations_dir'] = config.animations_dir
+        if config.logs_dir is not None:
+            controller['logs_dir'] = config.logs_dir
+        return {
+            'controller': controller,
+            'devices': [
+                {
+                    'device_id': dc.device_id,
+                    'device_uid': dc.device_uid,
+                    'device_type': dc.device_type,
+                    'host': dc.host,
+                    'tcp_port': dc.tcp_port,
+                    'strip_id': dc.strip_id,
+                    'length': dc.length,
+                }
+                for dc in config.devices
+            ],
+        }
+
+    def _make_device(self, dc: DeviceConfig):
+        dev = self._device_factory(
+            device_id=dc.device_id,
+            host=dc.host,
+            tcp_port=dc.tcp_port,
+            device_type=dc.device_type,
+            strip_length=dc.length,
+            frame_port=self._config.frame_port,
+            udp_receiver=self._receiver,
+        )
+        cached = self._discovery_cache.get(dc.device_uid)
+        if cached is not None:
+            host, tcp_port = cached
+            try:
+                changed = dev.update_address(host, tcp_port)
+            except AttributeError:
+                changed = False
+            if changed:
+                self._last_probe_ns.pop(dc.device_id, None)
+        return dev
+
+    def _reconcile_devices(self, new_config: Config) -> None:
+        current_by_uid = {
+            dc.device_uid: (dc, dev)
+            for dc, dev in zip(self._device_configs, self._devices)
+        }
+        new_devices: list[object] = []
+        new_prev_connected: dict[int, bool] = {}
+        new_last_probe_ns: dict[int, int] = {}
+
+        for dc in new_config.devices:
+            existing = current_by_uid.pop(dc.device_uid, None)
+            if existing is not None and existing[0] == dc:
+                old_dc, dev = existing
+                new_devices.append(dev)
+                new_prev_connected[dc.device_id] = self._is_connected(dev)
+                if old_dc.device_id in self._last_probe_ns:
+                    new_last_probe_ns[dc.device_id] = self._last_probe_ns[old_dc.device_id]
+                continue
+
+            if existing is not None:
+                _old_dc, old_dev = existing
+                old_dev.close()
+
+            dev = self._make_device(dc)
+            new_devices.append(dev)
+            new_prev_connected[dc.device_id] = self._is_connected(dev)
+
+        for _old_dc, dev in current_by_uid.values():
+            dev.close()
+
+        self._config = new_config
+        self._device_configs = list(new_config.devices)
+        self._devices = new_devices
+        self._prev_connected = new_prev_connected
+        self._last_probe_ns = new_last_probe_ns
+        if self._discovery is not None:
+            self._uid_to_device = {
+                dc.device_uid: (dc, dev)
+                for dc, dev in zip(self._device_configs, self._devices)
+            }
+        else:
+            self._uid_to_device = {}
+
+    def _rebuild_controller(self) -> None:
+        self._strips = [
+            StripConfig(strip_id=dc.strip_id, length=dc.length, device=dev)
+            for dc, dev in zip(self._device_configs, self._devices)
+        ]
+        self._controller = Controller(self._strips, clock=self._clock)
+
+    def _queue_snapshot_event(self) -> None:
+        self._service_events.append(self.build_snapshot())
+
+    def _require_mutation_quiescent(self) -> None:
+        allowed = {
+            ControllerState.IDLE,
+            ControllerState.STOPPED,
+            ControllerState.ENDED,
+        }
+        if self._controller.state not in allowed:
+            state = self._controller.state.name.lower()
+            raise ValueError(
+                f'controller must be idle or stopped before changing devices (current state: {state})'
+            )
+        if self._config_path is None:
+            raise ValueError('config path unavailable')
+
+    def _save_and_validate_candidate(self, candidate: dict) -> Config:
+        try:
+            new_config = load_config_obj(candidate)
+        except ConfigError as e:
+            raise ValueError(str(e))
+        try:
+            save_config_doc(self._config_path, candidate)
+        except OSError as e:
+            raise ValueError(f'cannot save config: {e}')
+        return new_config
+
+    @staticmethod
+    def _validate_device_type(device_type) -> None:
+        if device_type not in {'sim', 'esp32'}:
+            raise ValueError("device_type must be 'sim' or 'esp32'")
+
+    @staticmethod
+    def _validate_device_uid(device_uid) -> None:
+        if not isinstance(device_uid, str) or not device_uid:
+            raise ValueError("device uid is required")
+        if not _DEVICE_UID_RE.fullmatch(device_uid):
+            raise ValueError("device uid may only contain letters, numbers, ., _, -, and :")
+
+    @staticmethod
+    def _validate_strip_id(strip_id) -> None:
+        if not isinstance(strip_id, str) or not strip_id:
+            raise ValueError("strip id is required")
+        if not _STRIP_ID_RE.fullmatch(strip_id):
+            raise ValueError("strip id may only contain letters, numbers, _ and -")
+
+    @staticmethod
+    def _require_length(value) -> int:
+        if isinstance(value, bool) or value is None:
+            raise ValueError("length is required")
+        try:
+            length = int(value)
+        except (TypeError, ValueError):
+            raise ValueError(f"length must be an integer, got {value!r}")
+        if length < 1:
+            raise ValueError(f"length must be >= 1, got {length}")
+        return length

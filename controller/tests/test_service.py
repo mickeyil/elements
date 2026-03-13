@@ -1,5 +1,6 @@
 """Tests for ControllerService and UdsServer."""
 
+import copy
 import json
 import logging
 import socket
@@ -14,7 +15,7 @@ import pytest
 _repo = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_repo / 'compiler'))
 
-from elemctl.config import Config, DeviceConfig
+from elemctl.config import Config, DeviceConfig, load_config
 from elemctl.controller import ControllerState
 from elemctl.device import DeviceState
 from elemctl.service import ControllerService
@@ -169,6 +170,25 @@ class _TickCountingDevice(_FakeDevice):
         self.tick_calls += 1
 
 
+class _AddressableFakeDevice(_FakeDevice):
+    def __init__(self):
+        super().__init__()
+        self._host = ''
+        self._tcp_port = 0
+        self.close_calls = 0
+
+    def update_address(self, host, tcp_port):
+        changed = host != self._host or tcp_port != self._tcp_port
+        self._host = host
+        self._tcp_port = tcp_port
+        return changed
+
+    def close(self):
+        self.close_calls += 1
+        self.is_connected = False
+        super().close()
+
+
 def _make_fake_factory(fake_devices: list[_FakeDevice]):
     """Return a factory that yields pre-created _FakeDevice instances in order."""
     idx = iter(range(len(fake_devices)))
@@ -226,6 +246,43 @@ def _make_service(n_devices=1, fake_devices=None, clock=None):
     if clock is not None:
         kwargs['clock'] = clock
     return ControllerService(config, **kwargs), fake_devices
+
+
+def _config_to_doc(config: Config) -> dict:
+    controller = {
+        'frame_port': config.frame_port,
+        'discovery_port': config.discovery_port,
+    }
+    return {
+        'controller': controller,
+        'devices': [
+            {
+                'device_id': dc.device_id,
+                'device_uid': dc.device_uid,
+                'device_type': dc.device_type,
+                'host': dc.host,
+                'tcp_port': dc.tcp_port,
+                'strip_id': dc.strip_id,
+                'length': dc.length,
+            }
+            for dc in config.devices
+        ],
+    }
+
+
+def _make_service_with_path(tmp_path, config: Config, *, device_factory, discovery_factory=None):
+    path = tmp_path / 'config.json'
+    path.write_text(json.dumps(_config_to_doc(config)))
+    resolved_config = load_config(str(path))
+    kwargs = {
+        'config_path': str(path),
+        'receiver_factory': _NoopReceiver,
+        'device_factory': device_factory,
+    }
+    if discovery_factory is not None:
+        kwargs['discovery_factory'] = discovery_factory
+    svc = ControllerService(resolved_config, **kwargs)
+    return svc, path
 
 
 # =========================================================================
@@ -360,6 +417,197 @@ class TestHandleStatus:
         assert reply['ok'] is True
         assert reply['result']['event'] == 'snapshot'
         assert reply['result']['session'] is None
+
+
+class TestConfigMutations:
+    def test_add_device_reuses_unchanged_devices_and_saves(self, tmp_path):
+        config = _make_config(n_devices=2)
+        config.discovery_port = 6040
+        created: list[_AddressableFakeDevice] = []
+
+        def factory(device_id, host, tcp_port, device_type, strip_length, frame_port, udp_receiver):
+            dev = _AddressableFakeDevice()
+            created.append(dev)
+            return dev
+
+        svc, path = _make_service_with_path(tmp_path, config, device_factory=factory)
+        initial_devices = list(svc._devices)
+
+        reply = svc.handle_cmd({
+            'id': 1,
+            'cmd': 'add_device',
+            'device_type': 'sim',
+            'device_uid': 'sim-3',
+            'strip_id': 'strip_c',
+            'length': 7,
+        })
+
+        assert reply['ok'] is True
+        assert reply['result']['message'] == 'added device sim-3'
+        assert len(created) == 3
+        assert svc._devices[0] is initial_devices[0]
+        assert svc._devices[1] is initial_devices[1]
+        assert svc._device_configs[2].device_uid == 'sim-3'
+
+        saved = load_config(str(path))
+        assert [dc.device_uid for dc in saved.devices] == ['sim-1', 'sim-2', 'sim-3']
+
+        json_msgs, _ = svc.tick_once()
+        events = _decode_json_msgs(json_msgs)
+        snapshots = [e for e in events if e.get('event') == 'snapshot']
+        assert snapshots
+        assert [d['device_uid'] for d in snapshots[0]['devices']] == ['sim-1', 'sim-2', 'sim-3']
+
+    def test_remove_device_reuses_unchanged_devices_and_saves(self, tmp_path):
+        config = _make_config(n_devices=2)
+        created: list[_AddressableFakeDevice] = []
+
+        def factory(device_id, host, tcp_port, device_type, strip_length, frame_port, udp_receiver):
+            dev = _AddressableFakeDevice()
+            created.append(dev)
+            return dev
+
+        svc, path = _make_service_with_path(tmp_path, config, device_factory=factory)
+        initial_devices = list(svc._devices)
+        removed = initial_devices[0]
+
+        reply = svc.handle_cmd({
+            'id': 1,
+            'cmd': 'remove_device',
+            'device_uid': 'sim-1',
+        })
+
+        assert reply['ok'] is True
+        assert reply['result']['message'] == 'removed device sim-1'
+        assert len(svc._devices) == 1
+        assert svc._devices[0] is initial_devices[1]
+        assert removed.close_calls == 1
+
+        saved = load_config(str(path))
+        assert [dc.device_uid for dc in saved.devices] == ['sim-2']
+
+    def test_mutations_reject_when_controller_loaded(self, tmp_path):
+        config = _make_config()
+        svc, _path = _make_service_with_path(
+            tmp_path,
+            config,
+            device_factory=lambda *args, **kwargs: _FakeDevice(),
+        )
+
+        svc.handle_cmd({
+            'id': 1, 'cmd': 'load',
+            'source': _SIMPLE_DSL, 'beat': 1.0, 'duration': 0.5,
+        })
+
+        reply = svc.handle_cmd({
+            'id': 2,
+            'cmd': 'add_device',
+            'device_type': 'sim',
+            'device_uid': 'sim-2',
+            'strip_id': 'strip_b',
+            'length': 5,
+        })
+
+        assert reply['ok'] is False
+        assert 'idle or stopped' in reply['error']
+
+    def test_save_failure_leaves_runtime_state_unchanged(self, monkeypatch, tmp_path):
+        config = _make_config()
+        config.discovery_port = 6040
+        svc, path = _make_service_with_path(
+            tmp_path,
+            config,
+            device_factory=lambda *args, **kwargs: _FakeDevice(),
+        )
+        initial_devices = list(svc._devices)
+        initial_doc = copy.deepcopy(svc._raw_doc)
+
+        monkeypatch.setattr(
+            'elemctl.service.save_config_doc',
+            lambda *args, **kwargs: (_ for _ in ()).throw(OSError('disk full')),
+        )
+
+        reply = svc.handle_cmd({
+            'id': 2,
+            'cmd': 'add_device',
+            'device_type': 'sim',
+            'device_uid': 'sim-2',
+            'strip_id': 'strip_b',
+            'length': 5,
+        })
+
+        assert reply['ok'] is False
+        assert 'cannot save config' in reply['error']
+        assert svc._devices == initial_devices
+        assert svc._raw_doc == initial_doc
+        saved = load_config(str(path))
+        assert [dc.device_uid for dc in saved.devices] == ['sim-1']
+
+    def test_add_device_applies_cached_discovery_address(self, tmp_path):
+        config = Config(
+            frame_port=1,
+            discovery_port=9999,
+            devices=[
+                DeviceConfig(
+                    device_id=1,
+                    device_uid='sim-1',
+                    device_type='sim',
+                    host='',
+                    tcp_port=0,
+                    strip_id='strip_a',
+                    length=5,
+                )
+            ],
+        )
+        fake_disc = _FakeDiscovery(9999)
+        created: list[_AddressableFakeDevice] = []
+
+        def factory(device_id, host, tcp_port, device_type, strip_length, frame_port, udp_receiver):
+            dev = _AddressableFakeDevice()
+            created.append(dev)
+            return dev
+
+        svc, _path = _make_service_with_path(
+            tmp_path,
+            config,
+            device_factory=factory,
+            discovery_factory=lambda port: fake_disc,
+        )
+
+        fake_disc.inject('sim-2', '127.0.0.1', 9010)
+        svc.tick_once()
+
+        reply = svc.handle_cmd({
+            'id': 2,
+            'cmd': 'add_device',
+            'device_type': 'sim',
+            'device_uid': 'sim-2',
+            'strip_id': 'strip_b',
+            'length': 5,
+        })
+
+        assert reply['ok'] is True
+        added = svc._devices[1]
+        assert isinstance(added, _AddressableFakeDevice)
+        assert added._host == '127.0.0.1'
+        assert added._tcp_port == 9010
+
+    def test_remove_last_device_rejected(self, tmp_path):
+        config = _make_config()
+        svc, _path = _make_service_with_path(
+            tmp_path,
+            config,
+            device_factory=lambda *args, **kwargs: _FakeDevice(),
+        )
+
+        reply = svc.handle_cmd({
+            'id': 1,
+            'cmd': 'remove_device',
+            'device_uid': 'sim-1',
+        })
+
+        assert reply['ok'] is False
+        assert 'last configured device' in reply['error']
 
 
 class TestTickProbesDisconnected:

@@ -283,7 +283,7 @@ def main() -> None:
     )
     log.info('elements controller started. version: %s', get_runtime_version())
 
-    service = ControllerService(config)
+    service = ControllerService(config, config_path=config_path)
     socket_path = os.path.expanduser(args.socket)
     server = UdsServer(service, socket_path)
 
