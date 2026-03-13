@@ -16,6 +16,7 @@ import re
 import select
 import sys
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -24,13 +25,21 @@ from prompt_toolkit.application.current import get_app
 from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.filters import Condition
 from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.layout.containers import Float, FloatContainer, HSplit, VerticalAlign, Window
+from prompt_toolkit.layout.containers import (
+    DynamicContainer,
+    Float,
+    FloatContainer,
+    HSplit,
+    VSplit,
+    VerticalAlign,
+    Window,
+)
 from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
 from prompt_toolkit.layout.layout import Layout
 from prompt_toolkit.mouse_events import MouseEventType
 from prompt_toolkit.styles import Style
 from prompt_toolkit.utils import get_cwidth
-from prompt_toolkit.widgets import Button, Dialog, Label, RadioList, TextArea
+from prompt_toolkit.widgets import Button, Dialog, Frame, Label, RadioList, TextArea
 
 from .config import (
     DEFAULT_ANIMATIONS_PATH,
@@ -158,6 +167,10 @@ _COMMANDS = {
 }
 _DEVICE_UID_RE = re.compile(r'^[A-Za-z0-9._:-]+$')
 _STRIP_ID_RE = re.compile(r'^[A-Za-z0-9_-]+$')
+_PANEL_MIN_TERMINAL_WIDTH = 80
+_PANEL_WIDTH = 30
+_PANEL_INNER_WIDTH = _PANEL_WIDTH - 2
+_STATUS_REFRESH_S = 2.0
 
 
 @dataclass
@@ -170,6 +183,38 @@ class NewDeviceDialogState:
     cancel_button: Button
     dialog: Dialog
     error_text: str = ''
+
+
+@dataclass(frozen=True)
+class PanelDeviceInfo:
+    device_uid: str
+    strip_id: str
+    length: int | None
+    connected: bool
+
+
+@dataclass
+class DevicePanelEntry:
+    device_uid: str
+    strip_id: str
+    length: int | None
+    status: str
+    disconnected_at_ns: int | None = None
+
+
+@dataclass(frozen=True)
+class PanelSnapshotUpdate:
+    devices: list[PanelDeviceInfo]
+
+
+@dataclass(frozen=True)
+class PanelDeviceStatusUpdate:
+    device: PanelDeviceInfo
+
+
+@dataclass(frozen=True)
+class ControllerConnectionUpdate:
+    connected: bool
 
 
 class DialogButton(Button):
@@ -354,21 +399,94 @@ def _format_device_summary(dev: dict) -> str:
     return f'{uid}: strip "{strip}"'
 
 
-def format_event(kind: int, payload: bytes) -> list[str] | None:
-    """Format a UDS message as transcript line(s). Returns None for frames."""
+def _normalize_length(value) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    return None
+
+
+def _normalize_strip_id(data: dict) -> str:
+    strip = data.get('strip')
+    if isinstance(strip, str) and strip:
+        return strip
+    strip = data.get('strip_id')
+    if isinstance(strip, str) and strip:
+        return strip
+    return '?'
+
+
+def _panel_device_info_from_dict(data: dict) -> PanelDeviceInfo | None:
+    uid = data.get('device_uid')
+    if not isinstance(uid, str) or not uid:
+        return None
+    return PanelDeviceInfo(
+        device_uid=uid,
+        strip_id=_normalize_strip_id(data),
+        length=_normalize_length(data.get('length')),
+        connected=bool(data.get('connected')),
+    )
+
+
+def _panel_updates_from_message(msg: dict) -> list[object]:
+    msg_type = msg.get('type')
+    if msg_type == 'reply' and msg.get('ok'):
+        result = msg.get('result')
+        if isinstance(result, dict) and result.get('event') == 'snapshot':
+            devices = [
+                info
+                for dev in result.get('devices', [])
+                if isinstance(dev, dict)
+                for info in [_panel_device_info_from_dict(dev)]
+                if info is not None
+            ]
+            return [PanelSnapshotUpdate(devices)]
+        return []
+
+    if msg_type != 'event':
+        return []
+
+    event = msg.get('event')
+    if event == 'snapshot':
+        devices = [
+            info
+            for dev in msg.get('devices', [])
+            if isinstance(dev, dict)
+            for info in [_panel_device_info_from_dict(dev)]
+            if info is not None
+        ]
+        return [PanelSnapshotUpdate(devices)]
+
+    if event == 'device_status':
+        info = _panel_device_info_from_dict(msg)
+        if info is not None:
+            return [PanelDeviceStatusUpdate(info)]
+
+    return []
+
+
+def _decode_tui_message(kind: int, payload: bytes) -> tuple[list[str] | None, list[object]]:
     if kind == KIND_FRAME:
-        return None  # silently counted, not displayed
+        return None, []
 
     if kind != KIND_JSON:
-        return [f'ctrl: unknown message kind={kind} len={len(payload)}']
+        return [f'ctrl: unknown message kind={kind} len={len(payload)}'], []
 
     try:
         msg = parse_json_payload(payload)
     except (json.JSONDecodeError, UnicodeDecodeError):
-        return [f'ctrl: bad json message len={len(payload)}']
+        return [f'ctrl: bad json message len={len(payload)}'], []
 
+    return _format_message(msg), _panel_updates_from_message(msg)
+
+
+def format_event(kind: int, payload: bytes) -> list[str] | None:
+    """Format a UDS message as transcript line(s). Returns None for frames."""
+    lines, _ = _decode_tui_message(kind, payload)
+    return lines
+
+
+def _format_message(msg: dict) -> list[str]:
     msg_type = msg.get('type')
-
     if msg_type == 'reply':
         rid = msg.get('id')
         if msg.get('ok'):
@@ -481,12 +599,16 @@ class TuiApp:
         self._next_id = 1
         self._log_lines: list[str] = []
         self._pending_logs: queue.Queue[str] = queue.Queue()
+        self._pending_panel_updates: queue.Queue[object] = queue.Queue()
+        self._device_panel: dict[str, DevicePanelEntry] = {}
+        self._controller_connected = False
         self._reader_thread: threading.Thread | None = None
         self._log_fp = (
             open(log_file, 'a', encoding='utf-8', buffering=1)
             if log_file is not None
             else None
         )
+        self._seed_panel_from_config()
 
         # prompt_toolkit widgets
         self._log_buffer = Buffer(read_only=True)
@@ -534,23 +656,55 @@ class TuiApp:
             wrap_lines=True,
             dont_extend_height=True,
         )
+        self._transcript_body = HSplit(
+            [log_window],
+            align=VerticalAlign.BOTTOM,
+        )
+        right_panel = Frame(
+            HSplit(
+                [
+                    Window(
+                        content=FormattedTextControl(self._render_panel_rows),
+                        wrap_lines=False,
+                    ),
+                    Window(height=1, char='─', style='class:panel.separator'),
+                    Window(
+                        height=4,
+                        content=FormattedTextControl(self._render_panel_summary),
+                        dont_extend_height=True,
+                        wrap_lines=False,
+                    ),
+                ]
+            ),
+            title='devices',
+            width=_PANEL_WIDTH,
+        )
+        self._wide_body = VSplit(
+            [self._transcript_body, right_panel],
+            padding=1,
+        )
         main_body = HSplit(
             [
-                log_window,
+                DynamicContainer(self._select_body_container),
                 Window(height=1, char='─', style='class:separator'),
                 Window(height=1, content=input_control),
             ],
-            align=VerticalAlign.BOTTOM,
         )
-        self._root_container = FloatContainer(content=main_body, floats=[], modal=True)
+        self._root_container = FloatContainer(
+            content=Frame(main_body, title='elemctl'),
+            floats=[],
+            modal=True,
+        )
 
         self._app = Application(
             layout=Layout(self._root_container, focused_element=input_control),
             key_bindings=kb,
             full_screen=True,
-            before_render=self._drain_pending_logs,
+            before_render=self._drain_pending_ui,
+            refresh_interval=_STATUS_REFRESH_S,
             style=Style.from_dict({
                 'separator': '#444444',
+                'panel.separator': '#21262d',
                 'dialog': 'bg:#1f2430',
                 'dialog.body': 'bg:#1f2430 #d8dee9',
                 'dialog shadow': 'bg:#000000',
@@ -560,16 +714,271 @@ class TuiApp:
                 'button.focused': 'bg:#5e81ac #ffffff',
                 'button.focused.text': 'bg:#5e81ac #ffffff bold',
                 'button.focused.arrow': 'bg:#5e81ac #ffffff bold',
-                'frame.border': '#4c566a',
-                'frame.label': 'bold #88c0d0',
                 'radio-selected': 'bg:#2b303b',
                 'radio-checked': '#88c0d0',
                 'dialog.body text-area': 'bg:#11151c #e5e9f0',
                 'newdevice.label': 'bold #81a1c1',
                 'newdevice.help': '#7f8c8d',
                 'newdevice.error': 'bg:#3b1f22 #ffb4b4',
+                'frame.border': '#30363d',
+                'frame.label': 'bold #58a6ff',
+                'panel.uid.connected': 'bold #3fb950',
+                'panel.uid.offline': 'bold #f85149',
+                'panel.uid.never': '#5b6573',
+                'panel.meta': '#7d8590',
+                'panel.length': '#8b949e',
+                'panel.badge.offline': 'bold bg:#3d1212 #f85149',
+                'panel.summary.label': '#8b949e',
+                'panel.summary.online': '#3fb950',
+                'panel.summary.offline': '#f85149',
+                'panel.summary.never': '#5b6573',
+                'panel.controller.online': '#3fb950',
+                'panel.controller.offline': '#f85149',
+                'panel.empty': '#5b6573',
             }),
         )
+
+    def _seed_panel_from_config(self) -> None:
+        try:
+            doc = load_config_doc(self._config_path)
+        except (ConfigError, json.JSONDecodeError, OSError):
+            return
+
+        panel: dict[str, DevicePanelEntry] = {}
+        for dev in doc.get('devices', []):
+            if not isinstance(dev, dict):
+                continue
+            uid = dev.get('device_uid')
+            if not isinstance(uid, str) or not uid:
+                continue
+            panel[uid] = DevicePanelEntry(
+                device_uid=uid,
+                strip_id=_normalize_strip_id(dev),
+                length=_normalize_length(dev.get('length')),
+                status='never',
+            )
+        self._device_panel = panel
+
+    def _select_body_container(self):
+        if self._should_show_panel():
+            return self._wide_body
+        return self._transcript_body
+
+    def _should_show_panel(self) -> bool:
+        app = getattr(self, '_app', None)
+        if app is None:
+            return True
+        try:
+            return app.output.get_size().columns >= _PANEL_MIN_TERMINAL_WIDTH
+        except OSError:
+            return True
+
+    def _enqueue_panel_update(self, update: object) -> None:
+        self._pending_panel_updates.put(update)
+        self._app.invalidate()
+
+    def _apply_panel_update(self, update: object) -> None:
+        if isinstance(update, ControllerConnectionUpdate):
+            self._controller_connected = update.connected
+            return
+        if isinstance(update, PanelSnapshotUpdate):
+            self._apply_snapshot_update(update.devices)
+            return
+        if isinstance(update, PanelDeviceStatusUpdate):
+            self._apply_device_status_update(update.device)
+
+    def _resolve_panel_device_state(
+        self,
+        info: PanelDeviceInfo,
+        prev: DevicePanelEntry | None,
+        *,
+        now_ns: int | None = None,
+    ) -> tuple[str, int | None]:
+        if info.connected:
+            return 'connected', None
+        if prev is None:
+            return 'never', None
+        if prev.status == 'connected':
+            return 'offline', time.monotonic_ns() if now_ns is None else now_ns
+        if prev.status == 'offline':
+            return 'offline', prev.disconnected_at_ns
+        return 'never', None
+
+    def _apply_snapshot_update(self, devices: list[PanelDeviceInfo]) -> None:
+        previous = self._device_panel
+        now_ns = time.monotonic_ns()
+        new_panel: dict[str, DevicePanelEntry] = {}
+        for info in devices:
+            prev = previous.get(info.device_uid)
+            status, disconnected_at_ns = self._resolve_panel_device_state(
+                info,
+                prev,
+                now_ns=now_ns,
+            )
+
+            new_panel[info.device_uid] = DevicePanelEntry(
+                device_uid=info.device_uid,
+                strip_id=info.strip_id,
+                length=info.length,
+                status=status,
+                disconnected_at_ns=disconnected_at_ns,
+            )
+        self._device_panel = new_panel
+
+    def _apply_device_status_update(self, info: PanelDeviceInfo) -> None:
+        prev = self._device_panel.get(info.device_uid)
+        status, disconnected_at_ns = self._resolve_panel_device_state(info, prev)
+
+        self._device_panel[info.device_uid] = DevicePanelEntry(
+            device_uid=info.device_uid,
+            strip_id=info.strip_id,
+            length=info.length,
+            status=status,
+            disconnected_at_ns=disconnected_at_ns,
+        )
+
+    def _panel_truncate(self, text: str, width: int) -> str:
+        if width <= 0:
+            return ''
+        if get_cwidth(text) <= width:
+            return text
+        if width == 1:
+            return '…'
+        out = []
+        used = 0
+        for ch in text:
+            w = get_cwidth(ch)
+            if used + w > width - 1:
+                break
+            out.append(ch)
+            used += w
+        out.append('…')
+        return ''.join(out)
+
+    def _panel_two_column_fragments(
+        self,
+        left_text: str,
+        *,
+        left_style: str,
+        right_text: str = '',
+        right_style: str = '',
+    ) -> list[tuple[str, str]]:
+        width = _PANEL_INNER_WIDTH
+        right_width = get_cwidth(right_text)
+        left_width = width
+        if right_text:
+            left_width = max(1, width - right_width - 1)
+        left_rendered = self._panel_truncate(left_text, left_width)
+        gap = width - get_cwidth(left_rendered) - right_width
+        if right_text:
+            gap = max(1, gap)
+        else:
+            gap = max(0, gap)
+        fragments: list[tuple[str, str]] = [(left_style, left_rendered)]
+        if gap:
+            fragments.append(('', ' ' * gap))
+        if right_text:
+            fragments.append((right_style, right_text))
+        return fragments
+
+    def _format_panel_age(self, disconnected_at_ns: int | None) -> str:
+        if disconnected_at_ns is None:
+            return ''
+        elapsed_s = max(0, int((time.monotonic_ns() - disconnected_at_ns) / 1_000_000_000))
+        if elapsed_s < 60:
+            return f'{elapsed_s}s'
+        elapsed_m = elapsed_s // 60
+        if elapsed_m < 60:
+            return f'{elapsed_m}m'
+        elapsed_h = elapsed_m // 60
+        if elapsed_h < 24:
+            return f'{elapsed_h}h'
+        return f'{elapsed_h // 24}d'
+
+    def _render_panel_rows(self):
+        fragments: list[tuple[str, str]] = []
+        if not self._device_panel:
+            return [('class:panel.empty', 'no configured devices')]
+
+        first = True
+        for entry in self._device_panel.values():
+            if not first:
+                fragments.append(('', '\n'))
+            first = False
+            badge = ''
+            uid_style = 'class:panel.uid.never'
+            if entry.status == 'connected':
+                uid_style = 'class:panel.uid.connected'
+            elif entry.status == 'offline':
+                uid_style = 'class:panel.uid.offline'
+                badge = self._format_panel_age(entry.disconnected_at_ns)
+            fragments.extend(
+                self._panel_two_column_fragments(
+                    entry.device_uid,
+                    left_style=uid_style,
+                    right_text=badge,
+                    right_style='class:panel.badge.offline',
+                )
+            )
+            fragments.append(('', '\n'))
+            length_text = '?' if entry.length is None else str(entry.length)
+            fragments.extend(
+                self._panel_two_column_fragments(
+                    entry.strip_id,
+                    left_style='class:panel.meta',
+                    right_text=length_text,
+                    right_style='class:panel.length',
+                )
+            )
+        return fragments
+
+    def _render_panel_summary(self):
+        fragments: list[tuple[str, str]] = []
+        counts = {'connected': 0, 'offline': 0, 'never': 0}
+        for entry in self._device_panel.values():
+            counts[entry.status] += 1
+
+        controller_style = (
+            'class:panel.controller.online'
+            if self._controller_connected
+            else 'class:panel.controller.offline'
+        )
+        fragments.extend(
+            self._panel_two_column_fragments(
+                'controller',
+                left_style='class:panel.summary.label',
+                right_text='online' if self._controller_connected else 'offline',
+                right_style=controller_style,
+            )
+        )
+        fragments.append(('', '\n'))
+        fragments.extend(
+            self._panel_two_column_fragments(
+                'online',
+                left_style='class:panel.summary.online',
+                right_text=str(counts['connected']),
+                right_style='class:panel.summary.online',
+            )
+        )
+        fragments.append(('', '\n'))
+        fragments.extend(
+            self._panel_two_column_fragments(
+                'offline',
+                left_style='class:panel.summary.offline',
+                right_text=str(counts['offline']),
+                right_style='class:panel.summary.offline',
+            )
+        )
+        fragments.append(('', '\n'))
+        fragments.extend(
+            self._panel_two_column_fragments(
+                'never',
+                left_style='class:panel.summary.never',
+                right_text=str(counts['never']),
+                right_style='class:panel.summary.never',
+            )
+        )
+        return fragments
 
     def run(self) -> None:
         """Connect and run the TUI. Blocks until exit."""
@@ -966,6 +1375,7 @@ class TuiApp:
                     self._shutdown.wait(1.0)
                     continue
                 self._set_client(client)
+                self._enqueue_panel_update(ControllerConnectionUpdate(True))
                 self._enqueue_log(format_transcript_line(
                     f'connected to {self._socket_path}'
                 ))
@@ -976,6 +1386,7 @@ class TuiApp:
                 readable, _, _ = select.select([client.fileno()], [], [], 0.1)
             except (OSError, ValueError):
                 if self._drop_client(client):
+                    self._enqueue_panel_update(ControllerConnectionUpdate(False))
                     self._enqueue_log(format_transcript_line(
                         f'disconnected from {self._socket_path}'
                     ))
@@ -989,6 +1400,7 @@ class TuiApp:
                 messages = client.recv_once()
             except (ConnectionError, OSError):
                 if self._drop_client(client):
+                    self._enqueue_panel_update(ControllerConnectionUpdate(False))
                     self._enqueue_log(format_transcript_line(
                         f'disconnected from {self._socket_path}'
                     ))
@@ -998,7 +1410,9 @@ class TuiApp:
             for kind, payload in messages:
                 if kind == KIND_FRAME:
                     continue
-                lines = format_event(kind, payload)
+                lines, panel_updates = _decode_tui_message(kind, payload)
+                for update in panel_updates:
+                    self._enqueue_panel_update(update)
                 if lines is not None:
                     for line in lines:
                         self._enqueue_log(format_transcript_line(line))
@@ -1056,8 +1470,15 @@ class TuiApp:
         self._write_transcript_line(line)
         self._flush_log_buffer()
 
-    def _drain_pending_logs(self, app) -> None:
+    def _drain_pending_ui(self, app) -> None:
         """Called by prompt_toolkit before each render (UI thread)."""
+        while True:
+            try:
+                update = self._pending_panel_updates.get_nowait()
+            except queue.Empty:
+                break
+            self._apply_panel_update(update)
+
         drained = False
         while True:
             try:

@@ -8,10 +8,26 @@ from pathlib import Path
 import pytest
 
 from elemctl.tui import (
-    TuiApp, format_event, parse_command, extract_metadata, scan_animations,
-    format_transcript_line, parse_length, validate_device_uid,
-    validate_strip_id, _DEVICES_SENTINEL, _HELP_SENTINEL,
-    _NEWDEVICE_SENTINEL, _QUIT_SENTINEL, _RESCAN_SENTINEL,
+    ControllerConnectionUpdate,
+    DevicePanelEntry,
+    PanelDeviceInfo,
+    PanelDeviceStatusUpdate,
+    PanelSnapshotUpdate,
+    TuiApp,
+    _decode_tui_message,
+    format_event,
+    parse_command,
+    extract_metadata,
+    scan_animations,
+    format_transcript_line,
+    parse_length,
+    validate_device_uid,
+    validate_strip_id,
+    _DEVICES_SENTINEL,
+    _HELP_SENTINEL,
+    _NEWDEVICE_SENTINEL,
+    _QUIT_SENTINEL,
+    _RESCAN_SENTINEL,
 )
 from elemctl.uds_wire import KIND_JSON, KIND_FRAME, UdsReader, encode_json
 from elemctl.uds_client import UdsClient
@@ -458,6 +474,145 @@ class TestTuiReconnect:
         assert any('connected to /tmp/elemctl.sock' in line for line in logs)
         assert any('disconnected from /tmp/elemctl.sock' in line for line in logs)
         assert sum('connected to /tmp/elemctl.sock' in line for line in logs) == 2
+
+
+class TestDevicePanel:
+    def test_panel_seeds_from_config(self, tmp_path):
+        config_path = tmp_path / 'config.json'
+        config_path.write_text(json.dumps({
+            'controller': {'frame_port': 9002},
+            'devices': [
+                {
+                    'device_id': 1,
+                    'device_uid': 'sim-1',
+                    'device_type': 'sim',
+                    'host': '',
+                    'tcp_port': 0,
+                    'strip_id': 'main',
+                    'length': 60,
+                },
+                {
+                    'device_id': 2,
+                    'device_uid': 'sim-2',
+                    'device_type': 'sim',
+                    'host': '',
+                    'tcp_port': 0,
+                    'strip_id': 'aux',
+                    'length': 30,
+                },
+            ],
+        }))
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(config_path),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        try:
+            assert list(app._device_panel) == ['sim-1', 'sim-2']
+            assert app._device_panel['sim-1'].status == 'never'
+            assert app._device_panel['sim-2'].strip_id == 'aux'
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+    def test_decode_snapshot_produces_panel_update(self):
+        msg = {
+            'type': 'event',
+            'event': 'snapshot',
+            'session': None,
+            'devices': [
+                {'device_uid': 'sim-1', 'strip': 'main', 'length': 10, 'connected': True},
+                {'device_uid': 'sim-2', 'strip': 'aux', 'length': 20, 'connected': False},
+            ],
+        }
+        lines, updates = _decode_tui_message(KIND_JSON, _json_payload(msg))
+        assert lines == [
+            'ctrl: idle',
+            'devices online:',
+            '  sim-1: strip "main" with 10 LEDs',
+        ]
+        assert updates == [PanelSnapshotUpdate([
+            PanelDeviceInfo('sim-1', 'main', 10, True),
+            PanelDeviceInfo('sim-2', 'aux', 20, False),
+        ])]
+
+    def test_connected_snapshot_bootstraps_panel(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        try:
+            app._apply_panel_update(PanelSnapshotUpdate([
+                PanelDeviceInfo('sim-1', 'main', 60, True),
+                PanelDeviceInfo('sim-2', 'aux', 30, False),
+            ]))
+            assert app._device_panel['sim-1'].status == 'connected'
+            assert app._device_panel['sim-2'].status == 'never'
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+    def test_device_disconnect_sets_offline_timestamp(self, monkeypatch, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        try:
+            app._apply_panel_update(PanelSnapshotUpdate([
+                PanelDeviceInfo('sim-1', 'main', 60, True),
+            ]))
+            monkeypatch.setattr('elemctl.tui.time.monotonic_ns', lambda: 123_000_000_000)
+            app._apply_panel_update(PanelDeviceStatusUpdate(
+                PanelDeviceInfo('sim-1', 'main', 60, False)
+            ))
+            assert app._device_panel['sim-1'].status == 'offline'
+            assert app._device_panel['sim-1'].disconnected_at_ns == 123_000_000_000
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+    def test_controller_disconnect_is_separate_from_device_state(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        try:
+            app._apply_panel_update(PanelSnapshotUpdate([
+                PanelDeviceInfo('sim-1', 'main', 60, True),
+            ]))
+            app._apply_panel_update(ControllerConnectionUpdate(False))
+            assert app._controller_connected is False
+            assert app._device_panel['sim-1'].status == 'connected'
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+    def test_panel_rows_render_offline_badge(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        try:
+            app._device_panel = {
+                'sim-1': DevicePanelEntry(
+                    device_uid='sim-1',
+                    strip_id='main',
+                    length=60,
+                    status='offline',
+                    disconnected_at_ns=0,
+                )
+            }
+            text = ''.join(fragment[1] for fragment in app._render_panel_rows())
+            assert 'sim-1' in text
+            assert 'main' in text
+            assert '60' in text
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
 
 
 class TestNewDeviceDialog:
