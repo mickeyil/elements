@@ -1,6 +1,6 @@
 # Elements — Design Document
 
-> **Status: Mixed.** Core pipeline (compiler, decoder, engine, compositor, PlaybackDevice base class, ESPSimulated), the Python controller service, UDS control API, and simulator transport are implemented. Hardware setup, build system, and project phases are current. The web app and some higher-level transport/design sections are still forward-looking — see `transport.md` and `controller.md`.
+> **Status: Mixed.** Core pipeline (compiler, decoder, engine, compositor, PlaybackDevice base class, ESPSimulated), the Python controller service, UDS control API, simulator transport, and TUI workflow are implemented. Hardware parity, the web app, and some higher-level transport/design sections are still forward-looking — see `transport.md` and `controller.md`.
 
 ## Overview
 
@@ -40,7 +40,7 @@ The core design principle: **tight timing sync over complex rendering**. Simple 
      └─────────────┘
 ```
 
-The controller is the long-running authority. It compiles DSL programs, routes per-strip blobs to devices via a static config, manages playback sessions, and exposes a control/event API over a Unix Domain Socket. The web app shown above is planned but not yet implemented in this repo — the controller currently provides a UDS-based client protocol and a TUI interface. See `controller.md` for the full architecture, config format, and session identity model.
+The controller is the long-running authority. It compiles DSL programs, routes per-strip blobs to devices via the configured inventory, manages playback sessions, and exposes a control/event API over a Unix Domain Socket. The web app shown above is planned but not yet implemented in this repo — the controller currently provides a UDS-based client protocol and a TUI interface. See `controller.md` for the full architecture, config format, and session identity model.
 
 ### Network Assumptions
 
@@ -126,7 +126,7 @@ TCP for commands (LOAD, START, JUMP, PAUSE, RESUME, STOP, debug) and clock sync 
 ### Music Sync Mode
 
 1. **Pre-analysis:** Before playback, the base station analyzes the audio track offline — beat detection, energy analysis, frequency band decomposition
-2. **Compilation:** Results are compiled into a bytecode program (cached for reuse)
+2. **Compilation:** Results are compiled into a bytecode program. There is no artifact cache yet; each load recompiles from source.
 3. **Upload:** LOAD bytecode to device, wait for ACK
 4. **Trigger:** START with absolute timestamp T0
 5. **Playback:** Device executes bytecode against its controller-synced clock
@@ -216,28 +216,17 @@ Build and test animation logic on desktop (Linux) without hardware via condition
 
 ---
 
-## Project Phases (Proposed)
+## Current Focus
 
-### Phase 1: Foundation
-- Port to ESP32 + PlatformIO project structure
-- Implement core abstractions: Strip, Layer, Compositor
-- Define bytecode format specification
-- Implement bytecode VM with 2-3 primitives
-- PC simulator for VM testing
-- Memory pool allocator
+The original phase breakdown is no longer a useful roadmap. The simulator/controller/TUI loop exists today; the most important remaining work is now in higher-level integration and hardware parity.
 
-### Phase 2: Ambient Mode *(planned)*
-- Implement remaining primitives
-- Store programs on flash (LittleFS)
-- UDP interface for LOAD/START/SYNC protocol
-- WiFi + controller clock sync setup
-- Power-on default program
+Current areas of work:
 
-### Phase 3: Music Sync *(planned)*
-- Base station tooling (beat analysis, program compiler)
-- Audio playback with latency compensation
-- End-to-end sync testing
-- Multi-device support
+- **ESP32 parity** — make real hardware follow the same discovery + configure + playback model as `network_sim`
+- **Web client** — add a browser-facing client layer on top of the existing controller protocol
+- **Clock sync implementation** — move the documented custom sync protocol from design to code
+- **Audio-player integration** — implement the controller ↔ audio contract described in `controller.md`
+- **Artifact caching (optional)** — avoid recompiling on every load if it becomes a real bottleneck
 
 ---
 

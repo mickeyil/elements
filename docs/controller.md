@@ -4,26 +4,42 @@
 
 ## Base-station config
 
-A static config file on the base station is the single source of truth for the physical setup. It maps logical strip names (used in the DSL) to physical devices.
+A static config file on the base station is the single source of truth for the physical setup. It defines:
+
+- controller-level runtime settings (`frame_port`, optional `discovery_port`, optional UI/runtime paths)
+- the inventory of known devices
+- the mapping from logical `strip_id` values used by the DSL to concrete devices
+
+When the server is running, it owns this config as live state. TUI mutations such as `/newdevice` and `/rmdevice` are sent to the server, which validates the change, atomically rewrites the config file, and updates runtime state immediately.
 
 ### Example config
 
 ```json
 {
-  "strips": {
-    "main_left": {
-      "device_id": "esp-01",
-      "ip": "192.168.1.10",
-      "length": 150,
-      "device_type": "sim"
+  "controller": {
+    "frame_port": 9002,
+    "discovery_port": 6040
+  },
+  "devices": [
+    {
+      "device_id": 1,
+      "device_uid": "sim-1",
+      "device_type": "sim",
+      "host": "",
+      "tcp_port": 0,
+      "strip_id": "main_left",
+      "length": 150
     },
-    "main_right": {
-      "device_id": "esp-02",
-      "ip": "192.168.1.11",
-      "length": 150,
-      "device_type": "sim"
+    {
+      "device_id": 2,
+      "device_uid": "sim-2",
+      "device_type": "sim",
+      "host": "",
+      "tcp_port": 0,
+      "strip_id": "main_right",
+      "length": 150
     }
-  }
+  ]
 }
 ```
 
@@ -31,13 +47,16 @@ A static config file on the base station is the single source of truth for the p
 
 | Field | Used by | Scope | Purpose |
 |-------|---------|-------|---------|
-| `strip_id` (key) | Controller, compiler | Compile | Logical name — matches DSL `strip("main_left", ...)` |
+| `controller.frame_port` | Controller, devices | Runtime | UDP port where devices send RGB frames |
+| `controller.discovery_port` | Controller, devices | Runtime | UDP port for discovery HELLO packets (`6040` by default, `null` disables discovery) |
+| `device_id` | Controller, device transport | Runtime | Numeric wire identifier echoed on UDP frames |
+| `device_uid` | Controller, discovery | Runtime | Stable device identity (for example a MAC or `sim-1`) |
+| `device_type` | Controller | Runtime | `"sim"` or `"esp32"` — determines debug capability and topology rules |
+| `host` / `tcp_port` | Controller | Runtime | Static endpoint when discovery is disabled; `host=""` + `tcp_port=0` means "await discovery" |
+| `strip_id` | Controller, compiler | Compile | Logical strip name — matches DSL `strip("main_left", ...)` |
 | `length` | Controller, compiler | Compile | Validated against DSL-declared strip length at compile time |
-| `device_id` | Controller | Runtime | Human-readable device name for logs/UI |
-| `ip` | Controller | Runtime | Where to open TCP/UDP connections |
-| `device_type` | Controller | Runtime | `"sim"` or `"esp32"` — determines seek behavior and debug capabilities |
 
-The **Compile** fields (`strip_id`, `length`) affect compiled output. **Runtime** fields are deployment concerns only — changing them does not affect compilation.
+The compile-time fields are `strip_id` and `length`. Runtime fields control discovery, transport, and device identity.
 
 ### Relationship to the DSL
 
@@ -289,68 +308,48 @@ The controller is the long-running authority on the base station.
 
 ### What the controller does
 
-1. **Loads static config** — reads the base-station config file at startup. Knows every strip, device, IP, device_type.
+1. **Loads config and owns it as live state** — reads the base-station config file at startup, keeps the raw config document in memory, and treats it as the authoritative inventory while running.
 
-2. **Compiles programs** — receives DSL source (from a client such as the TUI), compiles it using the Python compiler (`compile_manifest()`), validates strip lengths against config. The compiler returns a `CompiledManifest` with per-strip blobs, duration, and global safe intervals. No caching — each load recompiles from source.
+2. **Compiles programs** — receives DSL source (from a client such as the TUI), compiles it using the Python compiler, validates strip lengths against config, and produces a manifest with per-strip blobs, duration, and global safe intervals. No artifact cache yet — each `load` recompiles from source.
 
-3. **Routes blobs to devices** — uses config to map `strip_id -> device_id -> ip`. Sends each blob to the correct device via TCP LOAD. Waits for ACK.
+3. **Discovers known devices** — listens for UDP HELLO packets, matches them by `device_uid`, caches live `(host, tcp_port)` addresses, and updates known devices in place.
 
-4. **Manages sessions** — assigns `session_id` on each load, tracks `epoch` (incremented on seek/jump/restart). Publishes session state to connected clients.
+4. **Maintains TCP device connections** — reconnects disconnected devices, sends `CMD_CONFIGURE` after connect, and preserves existing device objects across config changes when possible.
 
-5. **Sends START with shared T0** — over TCP to all devices. All devices begin playback from the same absolute time, so animations synchronize across strips.
+5. **Routes blobs and playback commands** — maps manifest strips by `strip_id` to devices, sends LOAD/START/JUMP/PAUSE/RESUME/STOP over TCP, and waits for ACK where required.
 
-6. **Sends JUMP** — snaps requested seek time to nearest global safe interval, sends CMD_JUMP to all devices, increments epoch.
+6. **Manages sessions** — assigns `session_id` on each load, tracks `epoch` (incremented on seek/jump/restart), and exposes current playback state to clients.
 
-7. **Syncs clocks (planned)** — clock sync protocol (SYNC_REQ/SYNC_RESP/SYNC_RESULT) is documented in `transport.md` but not yet implemented.
+7. **Assembles program frames** — receives per-strip RGB frames from simulators, filters by `gen` (drops stale), groups by `frame_index`, and emits complete multi-strip program frames over UDS.
 
-8. **Receives telemetry** — health, errors, timing from all devices (UDP).
+8. **Owns config mutations** — handles `add_device` / `remove_device` requests from the TUI, validates them transactionally, atomically rewrites the config file, incrementally reconciles device objects, and rebuilds the controller while idle.
 
-9. **Assembles program frames** — receives per-strip RGB frames from simulators, filters by `gen` (drops stale), groups by `frame_index`, emits complete multi-strip program frames to clients over UDS.
+9. **Exposes a control/event API over UDS** — a client (currently the TUI) connects to a Unix Domain Socket to send commands and receive replies, events, snapshots, and program frames. See "Controller ↔ Client protocol" below.
 
-10. **Exposes a control/event API over UDS** — a client (currently the TUI) connects to a Unix Domain Socket to send commands (load, play, pause, seek) and receive events (session start, state changes), program frames, and telemetry. See "Controller ↔ Client protocol" section.
+10. **May sync clocks later** — the custom clock sync protocol (SYNC_REQ/SYNC_RESP/SYNC_RESULT) is documented in `transport.md` but not yet implemented.
 
 ### Compilation flow
 
 ```python
 # Controller receives DSL source from client
-def load_program(self, dsl_source: str):
-    # 1. Compile — returns CompiledManifest with blobs + global safe intervals
-    strips_config = self.config["strips"]
-    manifest = compile_manifest_from_dsl(dsl_source, beat=..., duration=...)
-    # manifest.strips: list[CompiledStripArtifact] (strip_id, length, blob)
-    # manifest.safe_intervals: list[tuple[float, float]] (global, pre-intersected)
+def load_program(self, dsl_source: str, beat: float, duration: float):
+    # 1. Compile to a manifest: ordered per-strip blobs + metadata
+    manifest = compile_manifest_from_dsl(dsl_source, beat=beat, duration=duration)
 
-    # 2. Validate strip names/lengths match config
-    for sa in manifest.strips:
-        if sa.strip_id not in strips_config:
-            raise Error(f"strip '{sa.strip_id}' not in config")
+    # 2. Validate every strip in the manifest against configured inventory
+    for strip_artifact in manifest.strips:
+        device = self.device_for_strip(strip_artifact.strip_id)  # by strip_id
 
-    # 3. Build session (strips as ordered list — defines canonical strip order)
+    # 3. Build a controller session and route blobs to the mapped devices
     self.session_id += 1
     self.epoch = 0
-    self.manifest = {
-        "session_id": self.session_id,
-        "duration": manifest.duration,
-        "safe_intervals": manifest.safe_intervals,
-        "strips": [
-            {"name": sa.strip_id, "length": sa.length, "blob": sa.blob}
-            for sa in manifest.strips
-        ],
-    }
-    self.strip_count = len(self.manifest["strips"])
-
-    # 5. Route blobs to devices
     self.gen += 1
-    for i, strip_data in enumerate(self.manifest["strips"]):
-        device = self.device_for_strip(strip_data["name"])  # config lookup
-        self.expected_gen[device.id] = self.gen
-        self.strip_index_for[device.id] = i  # maps device → strip index
-        ok = self.send_load(device.conn, strip_data["blob"], self.gen)
-        if not ok:
-            raise Error(f"device {device.id} rejected blob for {strip_data['name']}")
+    for strip_artifact in manifest.strips:
+        device = self.device_for_strip(strip_artifact.strip_id)
+        self.send_load(device.conn, device.device_id, self.gen, strip_artifact.blob)
 
-    # 6. Notify client
-    self.publish_session_start(self.manifest)
+    # 4. Publish session_start and wait for later play/pause/seek commands
+    self.publish_session_start(manifest)
 ```
 
 ---
@@ -381,18 +380,24 @@ Two record kinds:
 
 #### kind=0x01 — JSON
 
-`payload` is UTF-8 JSON. Every JSON message has a `type` field to distinguish commands, replies, and events.
+`payload` is UTF-8 JSON.
+
+- Commands are plain JSON objects with a `cmd` field.
+- Replies and events include a `type` field (`"reply"` or `"event"`).
 
 **Client → Controller (commands):**
 
 Commands carry an `id` (client-assigned, incrementing counter) that the controller echoes in the reply.
 
 ```json
-{"type": "cmd", "id": 1, "cmd": "load", "source": "...", "beat": 0.5, "duration": 300.0, "loop": true}
-{"type": "cmd", "id": 2, "cmd": "play"}
-{"type": "cmd", "id": 3, "cmd": "pause"}
-{"type": "cmd", "id": 4, "cmd": "seek", "t": 30.0}
-{"type": "cmd", "id": 5, "cmd": "stop"}
+{"id": 1, "cmd": "load", "source": "...", "beat": 0.5, "duration": 300.0, "loop": true}
+{"id": 2, "cmd": "play"}
+{"id": 3, "cmd": "pause"}
+{"id": 4, "cmd": "seek", "t_rel": 30.0}
+{"id": 5, "cmd": "stop"}
+{"id": 6, "cmd": "status"}
+{"id": 7, "cmd": "add_device", "device_type": "sim", "device_uid": "sim-3", "strip_id": "aux", "length": 30}
+{"id": 8, "cmd": "remove_device", "device_uid": "sim-3"}
 ```
 
 `play` means both fresh start and resume — the controller decides which device command to send based on current state (CMD_START from LOADED/ENDED, CMD_RESUME from PAUSED). The client does not need to distinguish between them.
@@ -403,8 +408,10 @@ Replies are **controller-complete** — the reply is sent after the controller h
 
 ```json
 {"type": "reply", "id": 1, "ok": true, "result": {"session_id": 42}}
-{"type": "reply", "id": 4, "ok": true, "result": {"t": 28.0}}
-{"type": "reply", "id": 1, "ok": false, "error": "device esp-01 rejected blob"}
+{"type": "reply", "id": 4, "ok": true, "result": {}}
+{"type": "reply", "id": 6, "ok": true, "result": {"event": "snapshot", "...": "..."}}
+{"type": "reply", "id": 7, "ok": true, "result": {"message": "added device sim-3"}}
+{"type": "reply", "id": 1, "ok": false, "error": "device sim-1 rejected blob"}
 ```
 
 **Controller → Client (events):**
@@ -413,25 +420,23 @@ Asynchronous state changes and broadcasts — not tied to a specific command.
 
 ```json
 {"type": "event", "event": "session_start", "session_id": 42,
+ "epoch": 1,
  "duration": 612.0, "safe_intervals": [[0.0, 0.0], [12.4, 13.0], ...],
  "strips": [{"name": "main_left", "length": 150}, {"name": "main_right", "length": 150}]}
-{"type": "event", "event": "state", "state": "playing", "epoch": 2}
-{"type": "event", "event": "loop", "epoch": 3}
+{"type": "event", "event": "state", "state": "playing", "epoch": 2, "session_id": 42}
+{"type": "event", "event": "loop", "epoch": 3, "session_id": 42}
 {"type": "event", "event": "device_status",
- "device_id": "esp-01", "strip": "main_left", "status": "connected"}
+ "device_id": 1, "device_uid": "sim-1", "strip": "main_left", "length": 150, "connected": true}
 {"type": "event", "event": "device_status",
- "device_id": "esp-01", "strip": "main_left", "status": "disconnected"}
-{"type": "event", "event": "error",
- "scope": "device", "device_id": "esp-01", "strip": "main_left", "message": "lost TCP connection"}
-{"type": "event", "event": "error",
- "scope": "session", "message": "device esp-01 dropped during playback"}
+ "device_id": 1, "device_uid": "sim-1", "strip": "main_left", "length": 150, "connected": false}
+{"type": "event", "event": "error", "message": "load failed: device sim-1 rejected blob"}
 ```
 
 - **`session_start`** — new session loaded, includes all metadata for seek bar and frame slicing
 - **`state`** — playback state change (playing, paused, ended), includes current epoch
 - **`loop`** — program looped back to t=0, includes new epoch
 - **`device_status`** — device lifecycle change (connected/disconnected). State-oriented — UI updates indicators
-- **`error`** — async failure. Human-oriented — UI shows notification/log. `scope` is `"device"` (one device, includes `device_id` + `strip`) or `"session"` (program-level). No error codes — message is a human-readable string
+- **`error`** — async failure. Human-oriented — UI shows notification/log. Current implementation emits a single human-readable `message` field.
 
 The `strips` array in `session_start` defines the **canonical strip order and lengths** for the session. Program frames pack RGB blobs in this exact order with no per-entry headers — the client uses the strip list to slice the payload.
 
@@ -439,11 +444,14 @@ The `strips` array in `session_start` defines the **canonical strip order and le
 
 | Command | Controller-complete means | Reply result |
 |---------|--------------------------|-------------|
-| `load` | Compiled (or cache hit), all devices ACKed LOAD, session created | `{"session_id": N}` |
+| `load` | Compiled from source, all devices ACKed LOAD, session created | `{"session_id": N}` |
 | `play` | State updated; sends START (from LOADED/ENDED) or RESUME (from PAUSED) to all devices + audio | `{}` |
-| `pause` | CMD_PAUSE sent to all devices, paused t_rel collected, audio paused, state updated | `{"t_rel": paused_time}` |
-| `seek` | Time resolved/snapped, JUMP or DEBUG_SEEK sent, epoch updated | `{"t": snapped_time}` |
+| `pause` | CMD_PAUSE sent to all devices, audio paused, state updated | `{}` |
+| `seek` | Time resolved/snapped, JUMP or DEBUG_SEEK sent, epoch updated | `{}` |
 | `stop` | CMD_STOP sent to all devices, output cleared to black, state updated | `{}` |
+| `status` | Snapshot built immediately from current runtime state | snapshot object in `result` |
+| `add_device` | Candidate config validated, saved atomically, inventory reconciled, controller rebuilt (idle/stopped/ended only) | `{"message": "added device ..."}` |
+| `remove_device` | Candidate config validated, saved atomically, inventory reconciled, controller rebuilt (idle/stopped/ended only) | `{"message": "removed device ..."}` |
 
 #### kind=0x02 — Program frame
 
@@ -509,7 +517,7 @@ If no active session (controller just started, no program loaded yet):
 | Field | Purpose |
 |-------|---------|
 | `protocol_version` | Allows the client to detect incompatible controller versions |
-| `online_count` / `expected_count` | Quick device health summary |
+| `online_count` / `expected_count` | Quick device health summary. `expected_count` is currently the configured inventory size. |
 | `session` | Active session if any — includes all metadata needed to render the seek bar and receive frames. `null` if no program is loaded |
 | `session.strips` | Canonical strip order and lengths — defines how program frame payloads are sliced |
 | `devices` | Per-device status: `device_id` (numeric), `device_uid` (stable identity), `strip`, `length`, `device_type` (`"sim"` or `"esp32"`), `connected` (boolean) |
@@ -540,7 +548,7 @@ A wave animation on two strips, controller + two ESPSimulated devices.
 ```
 Client                    Controller                     ESPSimulated
    |                         |                              |
-   | {"type":"cmd","id":1,   |                              |
+   | {"id":1,                |                              |
    |  "cmd":"load",          |                              |
    |  "source":"song_abc.py",|                              |
    |  "beat":0.5,            |                              |
@@ -624,8 +632,9 @@ ESPSimulated (strip 0)    ESPSimulated (strip 1)    Controller              Clie
 ```
 Client                    Controller                Devices (all)
    |                         |                         |
-   | {"type":"cmd","id":3,   |                         |
-   |  "cmd":"seek","t":2.5}  |                         |
+   | {"id":3,                |                         |
+   |  "cmd":"seek",          |                         |
+   |  "t_rel":2.5}           |                         |
    |------------------------>|                         |
    |                         |  2.5 is within safe      |
    |                         |  interval [2.0, 3.0)    |
@@ -659,8 +668,9 @@ When all devices are simulators, the controller sends CMD_DEBUG_SEEK for arbitra
 ```
 Client                    Controller                ESPSimulated
    |                         |                         |
-   | {"type":"cmd","id":4,   |                         |
-   |  "cmd":"seek","t":7.3}  |                         |
+   | {"id":4,                |                         |
+   |  "cmd":"debug_seek",    |                         |
+   |  "t_rel":7.3}           |                         |
    |------------------------>|                         |
    |                         |  (all-sim topology)     |
    |                         |  epoch = 3              |
@@ -731,7 +741,7 @@ When the controller sends a debug command (e.g., seek), it sends it to all simul
 
 **How it's enabled:** The `load` command accepts a `loop` flag:
 ```json
-{"type": "cmd", "id": 1, "cmd": "load", "source": "...", "beat": 0.5, "duration": 300.0, "loop": true}
+{"id": 1, "cmd": "load", "source": "...", "beat": 0.5, "duration": 300.0, "loop": true}
 ```
 
 **How end-detection works:** When a device's program finishes, it transitions to ENDED and sends telemetry. The controller treats this as a program-level signal — it does not react per-device. Once the controller determines the program has ended (first ENDED telemetry, since all devices share the same t0 and duration), it issues one coordinated JUMP to all devices with a shared t0 and new gen.
