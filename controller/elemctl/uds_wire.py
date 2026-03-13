@@ -9,6 +9,10 @@ from __future__ import annotations
 import json
 import struct
 
+PROTOCOL_VERSION = 2
+ROLE_WRITER = 'writer'
+ROLE_OBSERVER = 'observer'
+
 KIND_JSON = 0x01   # UTF-8 JSON
 KIND_FRAME = 0x02  # binary program frame
 

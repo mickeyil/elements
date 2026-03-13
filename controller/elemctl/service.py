@@ -31,7 +31,7 @@ from .controller import (
 from .discovery import DISCOVERY_REASON_DUPLICATE_UID, DiscoveryReceiver
 from .network_device import NetworkDevice
 from .udp_receiver import UdpFrameReceiver
-from .uds_wire import encode_frame, encode_json
+from .uds_wire import PROTOCOL_VERSION, encode_frame, encode_json
 
 log = logging.getLogger(__name__)
 
@@ -302,7 +302,7 @@ class ControllerService:
         return {
             'type': 'event',
             'event': 'snapshot',
-            'protocol_version': 1,
+            'protocol_version': PROTOCOL_VERSION,
             'online_count': sum(1 for d in devices if d['connected']),
             'expected_count': len(self._devices),
             'session': session,

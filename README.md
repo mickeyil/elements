@@ -38,7 +38,7 @@ cmake -B build
 cmake --build build --target network_sim
 ```
 
-Then use three terminals:
+Then use four terminals:
 
 ```bash
 ./elemctl server --config examples/single-sim.json
@@ -50,6 +50,10 @@ Then use three terminals:
 
 ```bash
 ./elemctl tui
+```
+
+```bash
+./elemctl web
 ```
 
 In the TUI:
@@ -65,8 +69,12 @@ Expected result:
 - the TUI shows the device come online
 - `/rescan` lists `demo_main`
 - `/load` and `/play` succeed without manual port/length flags
+- `http://127.0.0.1:8080/` shows the running animation in the browser
 
 Notes:
+- `tui` connects as the single writer client
+- `web` connects as an observer relay and can run alongside the TUI
+
 - discovery defaults to UDP port `6040` when `controller.discovery_port` is omitted
 - set `"discovery_port": null` in the config to disable discovery explicitly
 

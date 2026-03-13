@@ -23,6 +23,8 @@ from elemctl.server import UdsServer
 from elemctl.uds_wire import (
     KIND_FRAME,
     KIND_JSON,
+    PROTOCOL_VERSION,
+    ROLE_OBSERVER,
     UdsReader,
     encode_json,
     parse_json_payload,
@@ -297,7 +299,7 @@ class TestSnapshotIdle:
 
         assert snap['type'] == 'event'
         assert snap['event'] == 'snapshot'
-        assert snap['protocol_version'] == 1
+        assert snap['protocol_version'] == PROTOCOL_VERSION
         assert snap['session'] is None
         assert len(snap['devices']) == 1
         assert snap['devices'][0]['device_id'] == 1
@@ -904,6 +906,14 @@ class TestUdsWire:
 from .uds_helpers import UdsClient, wait_for_socket as _wait_for_socket
 
 
+def _json_dicts(messages):
+    return [parse_json_payload(payload) for kind, payload in messages if kind == KIND_JSON]
+
+
+def _snapshot_from_messages(messages):
+    return next(msg for msg in _json_dicts(messages) if msg.get('event') == 'snapshot')
+
+
 @pytest.fixture()
 def uds_service(tmp_path):
     """Start a UdsServer in a daemon thread, yield socket path."""
@@ -933,10 +943,7 @@ class TestUdsConnectSnapshot:
         client = UdsClient(socket_path)
         try:
             msgs = client.recv_messages(timeout=1.0)
-            assert len(msgs) >= 1
-            kind, payload = msgs[0]
-            assert kind == KIND_JSON
-            snap = parse_json_payload(payload)
+            snap = _snapshot_from_messages(msgs)
             assert snap['event'] == 'snapshot'
             assert snap['session'] is None
         finally:
@@ -961,8 +968,7 @@ class TestUdsConnectSnapshot:
         client = UdsClient(socket_path)
         try:
             msgs = client.recv_messages(timeout=1.0)
-            assert len(msgs) >= 1
-            snap = parse_json_payload(msgs[0][1])
+            snap = _snapshot_from_messages(msgs)
             # Device was disconnected but probe_all ran on connect
             assert snap['devices'][0]['connected'] is True
             assert fakes[0].ensure_connected_calls >= 1
@@ -987,9 +993,7 @@ class TestUdsLoadPlayRoundTrip:
                 'source': _SIMPLE_DSL, 'beat': 1.0, 'duration': 0.5,
             })
             msgs = client.recv_messages(timeout=1.0)
-            replies = [
-                parse_json_payload(p) for k, p in msgs if k == KIND_JSON
-            ]
+            replies = _json_dicts(msgs)
             load_reply = next(r for r in replies if r.get('type') == 'reply')
             assert load_reply['ok'] is True
             assert load_reply['result']['session_id'] == 1
@@ -997,9 +1001,7 @@ class TestUdsLoadPlayRoundTrip:
             # Play
             client.send_cmd({'id': 2, 'cmd': 'play'})
             msgs = client.recv_messages(timeout=1.0)
-            replies = [
-                parse_json_payload(p) for k, p in msgs if k == KIND_JSON
-            ]
+            replies = _json_dicts(msgs)
             play_reply = next(r for r in replies if r.get('type') == 'reply')
             assert play_reply['ok'] is True
         finally:
@@ -1055,15 +1057,99 @@ class TestUdsReconnect:
         client2 = UdsClient(socket_path)
         try:
             msgs = client2.recv_messages(timeout=1.0)
-            assert len(msgs) >= 1
-            kind, payload = msgs[0]
-            assert kind == KIND_JSON
-            snap = parse_json_payload(payload)
+            snap = _snapshot_from_messages(msgs)
             assert snap['event'] == 'snapshot'
             assert snap['session'] is not None
             assert snap['session']['session_id'] == 1
         finally:
             client2.close()
+
+
+class TestUdsRoles:
+    def test_second_writer_rejected(self, uds_service):
+        socket_path, _, _ = uds_service
+        writer = UdsClient(socket_path)
+        try:
+            with pytest.raises(ConnectionError, match='writer role already in use'):
+                UdsClient(socket_path)
+        finally:
+            writer.close()
+
+    def test_multiple_observers_allowed(self, uds_service):
+        socket_path, _, _ = uds_service
+        writer = UdsClient(socket_path)
+        observer1 = UdsClient(socket_path, role=ROLE_OBSERVER)
+        observer2 = UdsClient(socket_path, role=ROLE_OBSERVER)
+        try:
+            snap1 = _snapshot_from_messages(observer1.recv_messages(timeout=1.0))
+            snap2 = _snapshot_from_messages(observer2.recv_messages(timeout=1.0))
+            assert snap1['event'] == 'snapshot'
+            assert snap2['event'] == 'snapshot'
+        finally:
+            observer2.close()
+            observer1.close()
+            writer.close()
+
+    def test_observer_command_rejected(self, uds_service):
+        socket_path, _, _ = uds_service
+        observer = UdsClient(socket_path, role=ROLE_OBSERVER)
+        try:
+            observer.recv_messages(timeout=0.5)
+            observer.send_cmd({'id': 7, 'cmd': 'status'})
+            msgs = observer.recv_messages(timeout=1.0)
+            replies = _json_dicts(msgs)
+            reply = next(r for r in replies if r.get('type') == 'reply')
+            assert reply['id'] == 7
+            assert reply['ok'] is False
+            assert reply['error'] == 'observer connections cannot send commands'
+        finally:
+            observer.close()
+
+    def test_writer_disconnect_frees_slot(self, uds_service):
+        socket_path, _, _ = uds_service
+        writer1 = UdsClient(socket_path)
+        writer1.close()
+        time.sleep(0.1)
+
+        writer2 = UdsClient(socket_path)
+        try:
+            snap = _snapshot_from_messages(writer2.recv_messages(timeout=1.0))
+            assert snap['event'] == 'snapshot'
+        finally:
+            writer2.close()
+
+    def test_observer_connect_does_not_force_probe_all(self, tmp_path):
+        socket_path = str(tmp_path / 'test.sock')
+        config = _make_config()
+        fakes = [_FakeDevice()]
+        svc = ControllerService(
+            config,
+            receiver_factory=_NoopReceiver,
+            device_factory=_make_fake_factory(fakes),
+        )
+        probe_calls = 0
+        real_probe_all = svc.probe_all
+
+        def probe_all_spy():
+            nonlocal probe_calls
+            probe_calls += 1
+            return real_probe_all()
+
+        svc.probe_all = probe_all_spy
+        server = UdsServer(svc, socket_path)
+        thread = threading.Thread(target=server.run, daemon=True)
+        thread.start()
+        assert _wait_for_socket(socket_path)
+
+        observer = UdsClient(socket_path, role=ROLE_OBSERVER)
+        try:
+            observer.recv_messages(timeout=0.5)
+            assert probe_calls == 0
+        finally:
+            observer.close()
+            server.shutdown()
+            thread.join(timeout=3.0)
+            assert not thread.is_alive(), 'server thread did not exit'
 
 
 # =========================================================================

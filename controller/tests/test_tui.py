@@ -476,6 +476,78 @@ class TestTuiReconnect:
         assert sum('connected to /tmp/elemctl.sock' in line for line in logs) == 2
 
 
+class TestBufferedConnectSnapshot:
+    def test_reader_loop_drains_buffered_snapshot_without_select(self, monkeypatch, tmp_path):
+        logs: list[str] = []
+        updates: list[object] = []
+
+        class FakeClient:
+            def __init__(self, socket_path: str):
+                self.socket_path = socket_path
+                self._pending = True
+
+            def fileno(self):
+                raise AssertionError('select should not run while buffered messages exist')
+
+            def has_buffered_messages(self):
+                return self._pending
+
+            def recv_once(self):
+                self._pending = False
+                return [(
+                    KIND_JSON,
+                    encode_json({
+                        'type': 'event',
+                        'event': 'snapshot',
+                        'protocol_version': 2,
+                        'online_count': 1,
+                        'expected_count': 1,
+                        'session': None,
+                        'devices': [{
+                            'device_id': 1,
+                            'device_uid': 'sim-1',
+                            'strip': 'main',
+                            'length': 60,
+                            'device_type': 'sim',
+                            'connected': True,
+                        }],
+                    })[5:],
+                )]
+
+            def close(self):
+                pass
+
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            '/tmp/config.json',
+            log_file=str(Path(tmp_path) / 'tui.log'),
+        )
+
+        def capture_log(line: str) -> None:
+            logs.append(line)
+
+        def capture_update(update: object) -> None:
+            updates.append(update)
+            if isinstance(update, PanelSnapshotUpdate):
+                app._shutdown.set()
+
+        monkeypatch.setattr('elemctl.tui.UdsClient', FakeClient)
+        monkeypatch.setattr(app, '_enqueue_log', capture_log)
+        monkeypatch.setattr(app, '_enqueue_panel_update', capture_update)
+
+        try:
+            app._reader_loop()
+        finally:
+            app._clear_client()
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        assert any('connected to /tmp/elemctl.sock' in line for line in logs)
+        assert any('devices online:' in line for line in logs)
+        assert any('sim-1' in line for line in logs)
+        assert any(isinstance(update, PanelSnapshotUpdate) for update in updates)
+
+
 class TestDevicePanel:
     def test_panel_seeds_from_config(self, tmp_path):
         config_path = tmp_path / 'config.json'

@@ -358,14 +358,18 @@ def load_program(self, dsl_source: str, beat: float, duration: float):
 
 ## Controller ↔ Client protocol
 
-A single **Unix Domain Socket (UDS)** connection carries all traffic between the controller and a client (currently the TUI; a future web app would use the same protocol). One connection, one ordering domain, one backpressure story.
+The controller exposes a **Unix Domain Socket (UDS)** protocol to local clients. Today the supported topology is **one writer plus any number of observers**:
 
-**Exactly one client.** The controller accepts one UDS connection at a time. This avoids command arbitration and multi-client state fanout on the controller side.
+- **Writer** — exactly one command-capable client (currently the TUI)
+- **Observer** — read-only clients that receive snapshots, events, and frames (for example `elemctl web`)
 
-### Why one connection
+All clients share the same ordered event/frame stream from the controller. Replies are point-to-point to the requesting writer connection only.
 
-- **Ordering is guaranteed.** `session_start` → `epoch_changed` → first program frame always arrive in that order. Two sockets would create cross-stream ordering races.
-- **Reconnect is simple.** Reconnect → receive snapshot → resume frame flow. No need to synchronize multiple connections.
+### Why one writer + observers
+
+- **Command arbitration stays simple.** There is still exactly one authority for `load`, `play`, `seek`, and config mutations.
+- **Observers are cheap.** A browser viewer can subscribe without having to reimplement the TUI.
+- **Reconnect stays simple.** Each client reconnects independently and gets a fresh snapshot.
 - **No external dependencies.** Just a Unix socket with length-prefixed records.
 
 ### Wire format
@@ -384,6 +388,17 @@ Two record kinds:
 
 - Commands are plain JSON objects with a `cmd` field.
 - Replies and events include a `type` field (`"reply"` or `"event"`).
+
+**Bootstrap handshake:**
+
+Every client must send `hello` as its first command:
+
+```json
+{"id": 0, "cmd": "hello", "role": "writer", "protocol_version": 2}
+{"id": 0, "cmd": "hello", "role": "observer", "protocol_version": 2}
+```
+
+The controller replies with a normal JSON reply. If the role is accepted, it immediately follows with a snapshot. A second writer is rejected. Observer connections that try to send non-`hello` commands receive an error reply.
 
 **Client → Controller (commands):**
 
@@ -468,7 +483,7 @@ Binary payload, emitted by the controller after assembling all per-strip frames 
 
 ### Snapshot
 
-On every connect (first or reconnect), the controller immediately sends a **snapshot** — a single JSON message containing everything the client needs to start working. No request needed, no handshake. The client has one bootstrap path: connect → receive snapshot → ready.
+After a successful `hello`, the controller immediately sends a **snapshot** — a single JSON message containing everything the client needs to start working. The bootstrap path is: connect → `hello` → reply → snapshot → ready.
 
 The snapshot schema matches `build_snapshot()` in `service.py`:
 
@@ -476,7 +491,7 @@ The snapshot schema matches `build_snapshot()` in `service.py`:
 {
   "type": "event",
   "event": "snapshot",
-  "protocol_version": 1,
+  "protocol_version": 2,
   "online_count": 2,
   "expected_count": 2,
   "session": {
@@ -504,7 +519,7 @@ If no active session (controller just started, no program loaded yet):
 {
   "type": "event",
   "event": "snapshot",
-  "protocol_version": 1,
+  "protocol_version": 2,
   "online_count": 0,
   "expected_count": 2,
   "session": null,
@@ -533,9 +548,16 @@ The UDS socket is **non-blocking**. The controller never blocks on frame deliver
 
 ---
 
-## Future work: Web app and browser protocol
+## Web relay
 
-> The web app (a separate process serving browser assets and relaying between the controller and the browser) is not yet implemented. The controller exposes a UDS-based client protocol (see above) that a future web app would connect to.
+The repo now includes a minimal browser viewer via `elemctl web`.
+
+- `elemctl web` connects to the controller UDS as an **observer**
+- it serves a local HTTP page and WebSocket endpoint
+- it relays snapshots, events, and binary program frames to the browser
+- it does **not** send controller commands
+
+This is intentionally narrower than the TUI. Web-side control parity remains future work.
 
 ---
 

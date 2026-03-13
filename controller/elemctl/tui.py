@@ -1381,19 +1381,21 @@ class TuiApp:
                 waiting_logged = False
                 continue
 
-            try:
-                readable, _, _ = select.select([client.fileno()], [], [], 0.1)
-            except (OSError, ValueError):
-                if self._drop_client(client):
-                    self._enqueue_panel_update(ControllerConnectionUpdate(False))
-                    self._enqueue_log(format_transcript_line(
-                        f'disconnected from {self._socket_path}'
-                    ))
-                waiting_logged = False
-                continue
+            has_buffered = getattr(client, 'has_buffered_messages', lambda: False)
+            if not has_buffered():
+                try:
+                    readable, _, _ = select.select([client.fileno()], [], [], 0.1)
+                except (OSError, ValueError):
+                    if self._drop_client(client):
+                        self._enqueue_panel_update(ControllerConnectionUpdate(False))
+                        self._enqueue_log(format_transcript_line(
+                            f'disconnected from {self._socket_path}'
+                        ))
+                    waiting_logged = False
+                    continue
 
-            if not readable:
-                continue
+                if not readable:
+                    continue
 
             try:
                 messages = client.recv_once()

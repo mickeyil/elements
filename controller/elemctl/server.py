@@ -1,12 +1,13 @@
 """UDS server for the controller service.
 
 Provides a Unix Domain Socket interface wrapping ControllerService.
-Single-client, single-threaded, ~50Hz tick loop.
+Role-aware, single-threaded, ~50Hz tick loop.
 """
 
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import json
 import logging
 import os
@@ -23,12 +24,31 @@ from .config import (
 )
 from .service import ControllerService
 from .slogger import configure_logger
-from .uds_wire import UdsReader, encode_json, parse_json_payload, KIND_JSON
+from .uds_wire import (
+    KIND_JSON,
+    PROTOCOL_VERSION,
+    ROLE_OBSERVER,
+    ROLE_WRITER,
+    UdsReader,
+    encode_json,
+    parse_json_payload,
+)
 from .version import get_runtime_version
 
 log = logging.getLogger(__name__)
 
 _TICK_INTERVAL = 0.020  # ~50Hz
+
+
+@dataclass
+class _ClientConn:
+    sock: socket.socket
+    reader: UdsReader
+    desc: str | None
+    role: str | None = None
+    hello_ok: bool = False
+
+
 def _peer_label(argv: list[str]) -> str | None:
     if not argv:
         return None
@@ -36,7 +56,7 @@ def _peer_label(argv: list[str]) -> str | None:
     exe = os.path.basename(argv[0])
     if exe == 'elemctl' and len(argv) > 1:
         sub = argv[1]
-        if sub in {'tui', 'sim', 'run'}:
+        if sub in {'tui', 'sim', 'run', 'web'}:
             return f'elemctl {sub}'
         if sub == 'server':
             return 'elemctl server'
@@ -52,16 +72,18 @@ def _peer_label(argv: list[str]) -> str | None:
             return 'elemctl server'
         if mod == 'elemctl.sim':
             return 'elemctl sim'
+        if mod == 'elemctl.web':
+            return 'elemctl web'
         if mod == 'elemctl':
             for arg in argv[argv.index('-m') + 2:]:
-                if arg in {'tui', 'sim', 'run'}:
+                if arg in {'tui', 'sim', 'run', 'web'}:
                     return f'elemctl {arg}'
                 if arg == 'server':
                     return 'elemctl server'
 
     if exe.startswith('python'):
         for arg in argv[1:]:
-            if arg in {'tui', 'sim', 'run'}:
+            if arg in {'tui', 'sim', 'run', 'web'}:
                 return f'elemctl {arg}'
             if arg == 'server':
                 return 'elemctl server'
@@ -71,6 +93,8 @@ def _peer_label(argv: list[str]) -> str | None:
                 return 'elemctl server'
             if arg == 'elemctl.sim':
                 return 'elemctl sim'
+            if arg == 'elemctl.web':
+                return 'elemctl web'
 
     return exe or None
 
@@ -107,7 +131,7 @@ def _describe_peer(conn: socket.socket) -> str | None:
 
 
 class UdsServer:
-    """Single-client UDS server wrapping a ControllerService."""
+    """Role-aware multi-client UDS server wrapping a ControllerService."""
 
     def __init__(self, service: ControllerService, socket_path: str):
         self._service = service
@@ -115,9 +139,8 @@ class UdsServer:
         self._running = False
 
         self._server_sock: socket.socket | None = None
-        self._client_sock: socket.socket | None = None
-        self._client_desc: str | None = None
-        self._reader = UdsReader()
+        self._clients: dict[int, _ClientConn] = {}
+        self._writer_fd: int | None = None
 
     def run(self) -> None:
         """Blocking main loop. Returns when shutdown or stopped."""
@@ -129,7 +152,7 @@ class UdsServer:
 
         self._server_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self._server_sock.bind(self._socket_path)
-        self._server_sock.listen(1)
+        self._server_sock.listen(16)
         self._server_sock.setblocking(False)
         self._running = True
 
@@ -137,17 +160,18 @@ class UdsServer:
 
         try:
             while self._running and not self._service.should_shutdown:
-                self._accept_client()
-                self._read_client()
+                self._accept_clients()
+                self._read_clients()
 
                 json_msgs, frame_msgs = self._service.tick_once()
 
-                self._send_messages(json_msgs)
-                self._send_messages(frame_msgs)
+                self._broadcast(json_msgs, reliable=True)
+                self._broadcast(frame_msgs, reliable=False)
 
                 time.sleep(_TICK_INTERVAL)
         finally:
-            self._close_client()
+            for client in list(self._clients.values()):
+                self._close_client(client)
             if self._server_sock is not None:
                 self._server_sock.close()
                 self._server_sock = None
@@ -165,88 +189,221 @@ class UdsServer:
     # Private
     # ------------------------------------------------------------------
 
-    def _accept_client(self) -> None:
+    def _accept_clients(self) -> None:
         if self._server_sock is None:
             return
-        try:
-            conn, _ = self._server_sock.accept()
-        except BlockingIOError:
-            return
-
-        if self._client_sock is not None:
-            # Single-client policy: reject new connection
-            conn.close()
-            return
-
-        conn.settimeout(1.0)
-        self._client_sock = conn
-        self._client_desc = _describe_peer(conn)
-        self._reader = UdsReader()
-        if self._client_desc is not None:
-            log.info('client connected: %s', self._client_desc)
-        else:
-            log.info('client connected')
-
-        # Probe all devices, then send snapshot
-        self._service.probe_all()
-        snapshot = self._service.build_snapshot()
-        self._send_one(encode_json(snapshot))
-
-    def _read_client(self) -> None:
-        if self._client_sock is None:
-            return
-
-        # Non-blocking: only read if data is available
-        readable, _, _ = select.select([self._client_sock], [], [], 0)
-        if not readable:
-            return
-
-        try:
-            data = self._client_sock.recv(4096)
-        except (BlockingIOError, socket.timeout):
-            return
-        except OSError:
-            self._close_client()
-            return
-
-        if not data:
-            self._close_client()
-            return
-
-        self._reader.feed(data)
-        for kind, payload in self._reader.messages():
-            if kind != KIND_JSON:
-                continue
+        while True:
             try:
-                cmd = parse_json_payload(payload)
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                continue
-            reply = self._service.handle_cmd(cmd)
-            self._send_one(encode_json(reply))
-
-    def _send_messages(self, messages: list[bytes]) -> None:
-        for msg in messages:
-            self._send_one(msg)
-
-    def _send_one(self, data: bytes) -> None:
-        if self._client_sock is None:
-            return
-        try:
-            self._client_sock.sendall(data)
-        except (BrokenPipeError, ConnectionResetError, socket.timeout, OSError):
-            self._close_client()
-
-    def _close_client(self) -> None:
-        if self._client_sock is not None:
-            try:
-                self._client_sock.close()
+                conn, _ = self._server_sock.accept()
+            except BlockingIOError:
+                return
             except OSError:
-                pass
-            self._client_sock = None
-            desc = self._client_desc
-            self._client_desc = None
-            if desc is not None:
+                return
+
+            conn.setblocking(False)
+            client = _ClientConn(
+                sock=conn,
+                reader=UdsReader(),
+                desc=_describe_peer(conn),
+            )
+            self._clients[conn.fileno()] = client
+            if client.desc is not None:
+                log.info('client connected: %s', client.desc)
+            else:
+                log.info('client connected')
+
+    def _read_clients(self) -> None:
+        if not self._clients:
+            return
+
+        sockets = [c.sock for c in self._clients.values()]
+        try:
+            readable, _, _ = select.select(sockets, [], [], 0)
+        except OSError:
+            for client in list(self._clients.values()):
+                self._close_client(client)
+            return
+
+        for sock in readable:
+            try:
+                client = self._clients.get(sock.fileno())
+                if client is None:
+                    continue
+                data = sock.recv(4096)
+            except BlockingIOError:
+                continue
+            except OSError:
+                if client is not None:
+                    self._close_client(client)
+                continue
+
+            if not data:
+                if client is not None:
+                    self._close_client(client)
+                continue
+
+            client.reader.feed(data)
+            close_after_message = False
+            for kind, payload in client.reader.messages():
+                if not client.hello_ok:
+                    close_after_message = self._handle_prehello_message(client, kind, payload)
+                    if close_after_message:
+                        break
+                    continue
+
+                if kind != KIND_JSON:
+                    continue
+                try:
+                    cmd = parse_json_payload(payload)
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    continue
+
+                if cmd.get('cmd') == 'hello':
+                    self._send_reply(
+                        client,
+                        cmd.get('id'),
+                        ok=False,
+                        error='hello already completed',
+                    )
+                    continue
+
+                if client.role != ROLE_WRITER:
+                    self._send_reply(
+                        client,
+                        cmd.get('id'),
+                        ok=False,
+                        error='observer connections cannot send commands',
+                    )
+                    continue
+
+                reply = self._service.handle_cmd(cmd)
+                if not self._send_to_client(client, encode_json(reply), reliable=True):
+                    break
+
+            if close_after_message and sock.fileno() in self._clients:
+                self._close_client(client)
+
+    def _handle_prehello_message(self, client: _ClientConn, kind: int, payload: bytes) -> bool:
+        if kind != KIND_JSON:
+            return True
+
+        try:
+            cmd = parse_json_payload(payload)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return True
+
+        cmd_id = cmd.get('id')
+        if cmd.get('cmd') != 'hello':
+            self._send_reply(
+                client,
+                cmd_id,
+                ok=False,
+                error='first command must be hello',
+            )
+            return True
+
+        if cmd.get('protocol_version') != PROTOCOL_VERSION:
+            self._send_reply(
+                client,
+                cmd_id,
+                ok=False,
+                error=(
+                    f'protocol_version mismatch: expected {PROTOCOL_VERSION}, '
+                    f'got {cmd.get("protocol_version")!r}'
+                ),
+            )
+            return True
+
+        role = cmd.get('role')
+        if role not in {ROLE_WRITER, ROLE_OBSERVER}:
+            self._send_reply(
+                client,
+                cmd_id,
+                ok=False,
+                error='role must be "writer" or "observer"',
+            )
+            return True
+
+        if role == ROLE_WRITER and self._writer_fd is not None:
+            self._send_reply(
+                client,
+                cmd_id,
+                ok=False,
+                error='writer role already in use',
+            )
+            return True
+
+        client.role = role
+        client.hello_ok = True
+        if role == ROLE_WRITER:
+            self._writer_fd = client.sock.fileno()
+            self._service.probe_all()
+
+        self._send_reply(client, cmd_id, ok=True, result={'role': role})
+        snapshot = self._service.build_snapshot()
+        self._send_to_client(client, encode_json(snapshot), reliable=True)
+        return False
+
+    def _broadcast(self, messages: list[bytes], *, reliable: bool) -> None:
+        for msg in messages:
+            for client in list(self._clients.values()):
+                if not client.hello_ok:
+                    continue
+                self._send_to_client(client, msg, reliable=reliable)
+
+    def _send_reply(
+        self,
+        client: _ClientConn,
+        cmd_id,
+        *,
+        ok: bool,
+        result: dict | None = None,
+        error: str | None = None,
+    ) -> bool:
+        payload = {'type': 'reply', 'id': cmd_id, 'ok': ok}
+        if ok:
+            payload['result'] = result or {}
+        else:
+            payload['error'] = error or 'error'
+        return self._send_to_client(client, encode_json(payload), reliable=True)
+
+    def _send_to_client(self, client: _ClientConn, data: bytes, *, reliable: bool) -> bool:
+        try:
+            sent = client.sock.send(data)
+        except BlockingIOError:
+            if reliable:
+                self._close_client(client)
+            return False
+        except OSError:
+            self._close_client(client)
+            return False
+
+        if sent == len(data):
+            return True
+
+        # Partial stream writes leave the peer desynchronized; drop the client.
+        self._close_client(client)
+        return False
+
+    def _close_client(self, client: _ClientConn) -> None:
+        fd = client.sock.fileno()
+        if fd == self._writer_fd:
+            self._writer_fd = None
+        self._clients.pop(fd, None)
+        role = client.role
+        desc = client.desc
+        try:
+            client.sock.close()
+        except OSError:
+            pass
+        if desc is not None:
+            if role is not None:
+                log.info('client disconnected: %s role=%s', desc, role)
+            else:
                 log.info('client disconnected: %s', desc)
+        else:
+            if role is not None:
+                log.info('client disconnected: role=%s', role)
             else:
                 log.info('client disconnected')
 

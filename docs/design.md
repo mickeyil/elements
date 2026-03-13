@@ -40,13 +40,13 @@ The core design principle: **tight timing sync over complex rendering**. Simple 
      └─────────────┘
 ```
 
-The controller is the long-running authority. It compiles DSL programs, routes per-strip blobs to devices via the configured inventory, manages playback sessions, and exposes a control/event API over a Unix Domain Socket. The web app shown above is planned but not yet implemented in this repo — the controller currently provides a UDS-based client protocol and a TUI interface. See `controller.md` for the full architecture, config format, and session identity model.
+The controller is the long-running authority. It compiles DSL programs, routes per-strip blobs to devices via the configured inventory, manages playback sessions, and exposes a control/event API over a Unix Domain Socket. This repo now includes a minimal browser viewer (`elemctl web`) that connects as an observer relay; full web-side control parity is still future work. See `controller.md` for the full architecture, config format, and session identity model.
 
 ### Network Assumptions
 
 - Base station and ESP32 share the same WiFi network
 - No firewall or routing restrictions between them
-- Base station runs the controller (web app is planned but not yet implemented)
+- Base station runs the controller and may also run the observer web relay
 - Static config maps strip names to device identities and runtime strip config
 - Device discovery resolves live IP/TCP endpoints for known devices (default UDP discovery port: `6040`)
 - Multiple ESP32 devices synced to the same controller
