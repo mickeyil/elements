@@ -1075,18 +1075,22 @@ class _FakeDiscovery:
     """Fake DiscoveryReceiver for service tests."""
 
     def __init__(self, port):
-        self._pending: list[tuple[str, str, int]] = []
+        self._pending: list[tuple[str, str, int, int]] = []
+        self.sent_rejects: list[tuple[str, int, int]] = []
 
-    def inject(self, uid: str, host: str, tcp_port: int) -> None:
-        self._pending.append((uid, host, tcp_port))
+    def inject(self, uid: str, host: str, tcp_port: int, reply_port: int = 7000) -> None:
+        self._pending.append((uid, host, tcp_port, reply_port))
 
     def poll(self) -> None:
         pass
 
-    def drain_discoveries(self) -> list[tuple[str, str, int]]:
+    def drain_discoveries(self) -> list[tuple[str, str, int, int]]:
         out = self._pending[:]
         self._pending.clear()
         return out
+
+    def send_reject(self, host: str, port: int, reason: int) -> None:
+        self.sent_rejects.append((host, port, reason))
 
     def close(self) -> None:
         pass
@@ -1190,6 +1194,7 @@ class TestDiscoveryIntegration:
         disc.inject('sim-1', '10.0.0.2', 8002)
         svc.tick_once()
         assert address_updates == []
+        assert disc.sent_rejects == [('10.0.0.2', 7000, 1)]
         assert svc._discovery_cache['sim-1'] == ('10.0.0.1', 8001)
         assert svc._last_probe_ns[1] == 123
         assert svc.build_snapshot()['devices'][0]['connected'] is True
@@ -1210,6 +1215,7 @@ class TestDiscoveryIntegration:
         disc.inject('sim-1', '10.0.0.2', 8002)
         svc.tick_once()
         assert address_updates == [('10.0.0.2', 8002)]
+        assert disc.sent_rejects == []
 
     def test_alternating_duplicate_hello_does_not_override_live_uid(self):
         fakes = [_FakeDevice()]
@@ -1233,6 +1239,10 @@ class TestDiscoveryIntegration:
         svc.tick_once()
 
         assert address_updates == []
+        assert disc.sent_rejects == [
+            ('10.0.0.2', 7000, 1),
+            ('10.0.0.3', 7000, 1),
+        ]
         assert svc._discovery_cache['sim-1'] == ('10.0.0.1', 8001)
         assert svc._last_probe_ns[1] == 123
         assert svc.build_snapshot()['devices'][0]['connected'] is True

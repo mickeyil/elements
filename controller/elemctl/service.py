@@ -28,7 +28,7 @@ from .controller import (
     ProgramFrame,
     StripConfig,
 )
-from .discovery import DiscoveryReceiver
+from .discovery import DISCOVERY_REASON_DUPLICATE_UID, DiscoveryReceiver
 from .network_device import NetworkDevice
 from .udp_receiver import UdpFrameReceiver
 from .uds_wire import encode_frame, encode_json
@@ -349,7 +349,7 @@ class ControllerService:
         if self._discovery is None:
             return
         self._discovery.poll()
-        for uid, host, tcp_port in self._discovery.drain_discoveries():
+        for uid, host, tcp_port, reply_port in self._discovery.drain_discoveries():
             entry = self._uid_to_device.get(uid)
             if entry is None:
                 self._discovery_cache[uid] = (host, tcp_port)
@@ -364,6 +364,9 @@ class ControllerService:
                 and current_endpoint_known
                 and (host, tcp_port) != (current_host, current_port)
             ):
+                self._discovery.send_reject(
+                    host, reply_port, DISCOVERY_REASON_DUPLICATE_UID
+                )
                 log.debug(
                     'discovery: ignoring duplicate live uid %r at %s:%d',
                     uid, host, tcp_port,

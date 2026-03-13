@@ -7,9 +7,13 @@ import pytest
 
 from elemctl.discovery import (
     DISCOVERY_MAGIC,
+    DISCOVERY_REASON_DUPLICATE_UID,
+    DISCOVERY_TYPE_REJECT,
     DiscoveryReceiver,
     encode_hello,
+    encode_reject,
     parse_hello,
+    parse_reject,
 )
 
 
@@ -78,6 +82,20 @@ class TestHelloCodec:
         assert parse_hello(pkt) is None
 
 
+class TestRejectCodec:
+    def test_round_trip(self):
+        pkt = encode_reject(DISCOVERY_REASON_DUPLICATE_UID)
+        assert parse_reject(pkt) == DISCOVERY_REASON_DUPLICATE_UID
+
+    def test_parse_reject_wrong_size(self):
+        assert parse_reject(b'\x00\x01\x02') is None
+
+    def test_parse_reject_wrong_magic(self):
+        import struct
+        pkt = struct.pack('<HBB', 0xFFFF, DISCOVERY_TYPE_REJECT, DISCOVERY_REASON_DUPLICATE_UID)
+        assert parse_reject(pkt) is None
+
+
 # =========================================================================
 # 2. DiscoveryReceiver
 # =========================================================================
@@ -107,10 +125,11 @@ class TestDiscoveryReceiver:
         receiver.poll()
         discoveries = receiver.drain_discoveries()
         assert len(discoveries) == 1
-        uid, host, tcp_port = discoveries[0]
+        uid, host, tcp_port, reply_port = discoveries[0]
         assert uid == 'dev-1'
         assert host == '127.0.0.1'
         assert tcp_port == 8888
+        assert reply_port != 0
 
     def test_ignores_garbage(self, receiver):
         port = _receiver_port(receiver)
@@ -148,3 +167,21 @@ class TestDiscoveryReceiver:
         assert len(discoveries) == 2
         uids = {d[0] for d in discoveries}
         assert uids == {'a', 'b'}
+
+    def test_send_reject(self, receiver):
+        port = _receiver_port(receiver)
+        device = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        device.bind(('127.0.0.1', 0))
+        device.settimeout(0.5)
+        device.sendto(encode_hello('dev-3', 3333), ('127.0.0.1', port))
+
+        time.sleep(0.05)
+        receiver.poll()
+        discoveries = receiver.drain_discoveries()
+        assert len(discoveries) == 1
+        _uid, host, _tcp_port, reply_port = discoveries[0]
+
+        receiver.send_reject(host, reply_port, DISCOVERY_REASON_DUPLICATE_UID)
+        data, _addr = device.recvfrom(16)
+        assert parse_reject(data) == DISCOVERY_REASON_DUPLICATE_UID
+        device.close()

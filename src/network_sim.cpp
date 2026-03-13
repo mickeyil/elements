@@ -95,6 +95,8 @@ static void send_ack(int tcp_fd, uint8_t status)
 // ---------------------------------------------------------------------------
 
 static constexpr uint16_t DISCOVERY_MAGIC = 0x454C;
+static constexpr uint8_t DISCOVERY_TYPE_REJECT = 0x01;
+static constexpr uint8_t DISCOVERY_REASON_DUPLICATE_UID = 0x01;
 
 static std::vector<uint8_t> build_hello_packet(const std::string& uid, uint16_t tcp_port)
 {
@@ -359,6 +361,41 @@ static void send_hello(int udp_fd, const sockaddr_in& dest,
            (const sockaddr*)&dest, sizeof(dest));
 }
 
+static bool poll_discovery_reject(int udp_fd, const std::string& device_uid)
+{
+    while (true) {
+        uint8_t buf[16];
+        sockaddr_in sender{};
+        socklen_t sender_len = sizeof(sender);
+        ssize_t n = recvfrom(
+            udp_fd, buf, sizeof(buf), MSG_DONTWAIT,
+            (sockaddr*)&sender, &sender_len
+        );
+        if (n < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK)
+                return false;
+            return false;
+        }
+        if (n != 4)
+            continue;
+
+        uint16_t magic;
+        memcpy(&magic, buf, 2);
+        if (magic != DISCOVERY_MAGIC)
+            continue;
+        if (buf[2] != DISCOVERY_TYPE_REJECT)
+            continue;
+        if (buf[3] != DISCOVERY_REASON_DUPLICATE_UID)
+            continue;
+
+        slog::error(
+            "network_sim: rejected by controller: duplicate device uid %s",
+            device_uid.c_str()
+        );
+        return true;
+    }
+}
+
 int main(int argc, char** argv)
 {
     Args args;
@@ -448,6 +485,11 @@ int main(int argc, char** argv)
                 if (now - last_hello_us >= HELLO_INTERVAL_US) {
                     send_hello(udp_fd, discovery_addr, hello_pkt);
                     last_hello_us = now;
+                }
+                if (poll_discovery_reject(udp_fd, args.device_uid)) {
+                    close(udp_fd);
+                    close(tcp_server);
+                    return 1;
                 }
                 usleep(100000); // 100ms between accept attempts
             }
