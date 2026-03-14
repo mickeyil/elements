@@ -63,6 +63,7 @@ _QUIT_SENTINEL = object()
 _RESCAN_SENTINEL = object()
 _HELP_SENTINEL = object()
 _DEVICES_SENTINEL = object()
+_PROGRAMS_SENTINEL = object()
 _NEWDEVICE_SENTINEL = object()
 
 _COMMANDS = {
@@ -199,6 +200,31 @@ class DeviceRemoveDialogState:
     pending_request_id: int | None = None
 
 
+@dataclass
+class ProgramManagerDialogState:
+    program_list: RadioList | None
+    load_button: Button | None
+    load_loop_button: Button | None
+    publish_button: Button
+    rescan_button: Button
+    close_button: Button
+    dialog: Dialog
+    error_text: str = ''
+    pending_request_id: int | None = None
+
+
+@dataclass
+class ProgramPublishDialogState:
+    path: TextArea
+    program_id: TextArea
+    submit_button: Button
+    cancel_button: Button
+    dialog: Dialog
+    return_selected_program_id: str | None = None
+    error_text: str = ''
+    pending_request_id: int | None = None
+
+
 class DialogButton(Button):
     """Button with explicit focused fragment styles for clearer TUI feedback."""
 
@@ -267,6 +293,11 @@ def parse_command(text: str, next_id: int) -> tuple[dict | None | object, str | 
         if len(parts) > 1:
             return None, "/devices does not take arguments"
         return _DEVICES_SENTINEL, None
+
+    if name == 'programs':
+        if len(parts) > 1:
+            return None, "/programs does not take arguments"
+        return _PROGRAMS_SENTINEL, None
 
     if name == 'newdevice':
         if len(parts) > 1:
@@ -774,6 +805,7 @@ class TuiApp:
         self._device_panel: dict[str, DevicePanelEntry] = {}
         self._device_catalog: list[DeviceCatalogEntry] = []
         self._program_catalog: list[ProgramCatalogEntry] = []
+        self._program_catalog_ready = False
         self._controller_connected = False
         self._controller_disconnected_at_ns = time.monotonic_ns()
         self._reader_thread: threading.Thread | None = None
@@ -835,6 +867,18 @@ class TuiApp:
         )
         def _(event):
             self._start_device_edit()
+
+        @kb.add(
+            'enter',
+            filter=Condition(
+                lambda: isinstance(self._active_modal, ProgramManagerDialogState)
+                and self._active_modal.program_list is not None
+                and get_app().layout.has_focus(self._active_modal.program_list)
+            ),
+            eager=True,
+        )
+        def _(event):
+            self._submit_program_load()
 
         log_window = Window(
             content=BufferControl(buffer=self._log_buffer),
@@ -964,6 +1008,7 @@ class TuiApp:
                 self._controller_disconnected_at_ns = None
             elif self._controller_connected:
                 self._controller_disconnected_at_ns = time.monotonic_ns()
+                self._program_catalog_ready = False
             self._controller_connected = update.connected
             return
         if isinstance(update, PanelSnapshotUpdate):
@@ -979,7 +1024,7 @@ class TuiApp:
             self._apply_device_catalog_status(update.device)
             return
         if isinstance(update, ProgramCatalogUpdate):
-            self._program_catalog = list(update.programs)
+            self._apply_program_catalog_update(update.programs)
             return
         if isinstance(update, CommandReplyUpdate):
             self._apply_command_reply_update(update)
@@ -1059,6 +1104,11 @@ class TuiApp:
         self._device_catalog = updated
         self._refresh_device_manager_dialog()
 
+    def _apply_program_catalog_update(self, programs: list[ProgramCatalogEntry]) -> None:
+        self._program_catalog = list(programs)
+        self._program_catalog_ready = True
+        self._refresh_program_manager_dialog()
+
     def _apply_command_reply_update(self, update: CommandReplyUpdate) -> None:
         modal = self._active_modal
         if isinstance(modal, NewDeviceDialogState):
@@ -1067,6 +1117,31 @@ class TuiApp:
             modal.pending_request_id = None
             if update.ok:
                 self._close_modal()
+            else:
+                modal.error_text = update.error or 'unknown error'
+                self._app.invalidate()
+            return
+        if isinstance(modal, ProgramManagerDialogState):
+            if modal.pending_request_id != update.reply_id:
+                return
+            modal.pending_request_id = None
+            if update.ok:
+                modal.error_text = ''
+                self._app.invalidate()
+            else:
+                modal.error_text = update.error or 'unknown error'
+                self._app.invalidate()
+            return
+        if isinstance(modal, ProgramPublishDialogState):
+            if modal.pending_request_id != update.reply_id:
+                return
+            modal.pending_request_id = None
+            if update.ok:
+                selected_program_id = self._program_id_from_publish_fields(
+                    modal.path.text.strip(),
+                    modal.program_id.text.strip(),
+                )
+                self._open_program_manager(selected_program_id=selected_program_id)
             else:
                 modal.error_text = update.error or 'unknown error'
                 self._app.invalidate()
@@ -1108,6 +1183,9 @@ class TuiApp:
         self._app.invalidate()
 
     def _cancel_active_modal(self) -> None:
+        if isinstance(self._active_modal, ProgramPublishDialogState):
+            self._cancel_program_publish_dialog()
+            return
         self._close_modal()
 
     def _panel_truncate(self, text: str, width: int) -> str:
@@ -1295,6 +1373,10 @@ class TuiApp:
             self._do_devices()
             return
 
+        if cmd is _PROGRAMS_SENTINEL:
+            self._do_programs()
+            return
+
         if cmd is _NEWDEVICE_SENTINEL:
             self._start_newdevice()
             return
@@ -1332,6 +1414,7 @@ class TuiApp:
         self._local_log("commands:")
         self._local_log("  /help               show this help")
         self._local_log("  /devices            manage configured devices")
+        self._local_log("  /programs           manage programs in the controller library")
         self._local_log("  /newdevice          open new device dialog")
         self._local_log("  /rmdevice UID       remove a configured device")
         self._local_log("  /status             show controller status")
@@ -1356,6 +1439,18 @@ class TuiApp:
             self._local_log("device list not available yet")
             return
         self._open_device_manager()
+
+    def _do_programs(self) -> None:
+        client = self._get_client()
+        if client is None:
+            self._local_log("controller not connected")
+            return
+        if self._active_modal is not None:
+            return
+        if not self._program_catalog_ready:
+            self._local_log("program list not available yet")
+            return
+        self._open_program_manager()
 
     def _do_rmdevice(self, device_uid: str) -> None:
         client = self._get_client()
@@ -1511,6 +1606,286 @@ class TuiApp:
             state.pending_request_id = None
             self._set_dialog_error(f'send failed: {e}', state.device_uid)
             return
+
+    def _program_manager_options(self) -> list[tuple[str, str]]:
+        options = []
+        for entry in self._program_catalog:
+            if entry.error:
+                label = f'{entry.program_id:<18s} ERROR  {entry.error}'
+            else:
+                beat_text = '?' if entry.beat is None else f'{entry.beat:g}'
+                duration_text = '?' if entry.duration is None else f'{entry.duration:g}'
+                label = (
+                    f'{entry.program_id:<18s} '
+                    f'beat={beat_text:<6s} '
+                    f'dur={duration_text:<6s} '
+                    '[ok]'
+                )
+            options.append((entry.program_id, label))
+        return options
+
+    def _selected_program_from_manager(self) -> ProgramCatalogEntry | None:
+        if not isinstance(self._active_modal, ProgramManagerDialogState):
+            return None
+        if self._active_modal.program_list is None:
+            return None
+        selected_program_id = self._active_modal.program_list.current_value
+        for entry in self._program_catalog:
+            if entry.program_id == selected_program_id:
+                return entry
+        return self._program_catalog[0] if self._program_catalog else None
+
+    def _refresh_program_manager_dialog(self) -> None:
+        if not isinstance(self._active_modal, ProgramManagerDialogState):
+            return
+        modal = self._active_modal
+        options = self._program_manager_options()
+        if modal.program_list is None:
+            if options:
+                self._open_program_manager(
+                    error_text=modal.error_text,
+                    pending_request_id=modal.pending_request_id,
+                )
+            else:
+                self._app.invalidate()
+            return
+        if not options:
+            self._open_program_manager(
+                error_text=modal.error_text,
+                pending_request_id=modal.pending_request_id,
+            )
+            return
+        selected_program_id = modal.program_list.current_value
+        modal.program_list.values = options
+        if not any(program_id == selected_program_id for program_id, _ in options):
+            selected_program_id = options[0][0]
+        modal.program_list.current_value = selected_program_id
+        self._app.invalidate()
+
+    def _open_program_manager(
+        self,
+        *,
+        selected_program_id: str | None = None,
+        error_text: str = '',
+        pending_request_id: int | None = None,
+    ) -> None:
+        options = self._program_manager_options()
+        error_control = FormattedTextControl(
+            text=lambda: (
+                self._active_modal.error_text
+                if isinstance(self._active_modal, ProgramManagerDialogState)
+                else ' '
+            )
+        )
+        if options:
+            if selected_program_id is None or not any(
+                program_id == selected_program_id for program_id, _ in options
+            ):
+                selected_program_id = options[0][0]
+            program_list = RadioList(
+                values=options,
+                default=selected_program_id,
+                select_on_focus=True,
+            )
+            load_button = DialogButton('Load', handler=self._submit_program_load)
+            load_loop_button = DialogButton(
+                'Load Loop',
+                handler=lambda: self._submit_program_load(loop=True),
+            )
+            publish_button = DialogButton('Publish', handler=self._start_program_publish)
+            rescan_button = DialogButton('Rescan', handler=self._submit_program_rescan)
+            close_button = DialogButton('Close', handler=self._close_modal)
+            dialog = Dialog(
+                title='Programs',
+                body=HSplit([
+                    Label(text='Controller program library', style='class:newdevice.label'),
+                    program_list,
+                    Window(height=1, content=error_control, style='class:newdevice.error'),
+                    Label(
+                        text='Enter: load   Tab: move   Esc: close',
+                        style='class:newdevice.help',
+                    ),
+                ]),
+                buttons=[load_button, load_loop_button, publish_button, rescan_button, close_button],
+                with_background=True,
+            )
+            state = ProgramManagerDialogState(
+                program_list=program_list,
+                load_button=load_button,
+                load_loop_button=load_loop_button,
+                publish_button=publish_button,
+                rescan_button=rescan_button,
+                close_button=close_button,
+                dialog=dialog,
+                error_text=error_text,
+                pending_request_id=pending_request_id,
+            )
+            self._set_modal(state, focus=program_list)
+            return
+
+        publish_button = DialogButton('Publish', handler=self._start_program_publish)
+        rescan_button = DialogButton('Rescan', handler=self._submit_program_rescan)
+        close_button = DialogButton('Close', handler=self._close_modal)
+        dialog = Dialog(
+            title='Programs',
+            body=HSplit([
+                Label(text='No programs in library.', style='class:newdevice.label'),
+                Window(height=1, content=error_control, style='class:newdevice.error'),
+                Label(
+                    text='Publish a local file or rescan the controller library.',
+                    style='class:newdevice.help',
+                ),
+            ]),
+            buttons=[publish_button, rescan_button, close_button],
+            with_background=True,
+        )
+        state = ProgramManagerDialogState(
+            program_list=None,
+            load_button=None,
+            load_loop_button=None,
+            publish_button=publish_button,
+            rescan_button=rescan_button,
+            close_button=close_button,
+            dialog=dialog,
+            error_text=error_text,
+            pending_request_id=pending_request_id,
+        )
+        self._set_modal(state, focus=publish_button)
+
+    def _start_program_publish(self) -> None:
+        if not isinstance(self._active_modal, ProgramManagerDialogState):
+            return
+        if self._active_modal.pending_request_id is not None:
+            return
+
+        selected_program_id = None
+        selected_entry = self._selected_program_from_manager()
+        if selected_entry is not None:
+            selected_program_id = selected_entry.program_id
+
+        path = TextArea(multiline=False, wrap_lines=False)
+        program_id = TextArea(
+            text='' if selected_program_id is None else selected_program_id,
+            multiline=False,
+            wrap_lines=False,
+        )
+        submit_button = DialogButton('Publish', handler=self._submit_program_publish_dialog)
+        cancel_button = DialogButton('Cancel', handler=self._cancel_program_publish_dialog)
+        path.buffer.accept_handler = lambda buff: self._focus_dialog_widget(program_id)
+        program_id.buffer.accept_handler = lambda buff: self._focus_dialog_widget(submit_button)
+        error_control = FormattedTextControl(
+            text=lambda: (
+                self._active_modal.error_text
+                if isinstance(self._active_modal, ProgramPublishDialogState)
+                else ' '
+            )
+        )
+        dialog = Dialog(
+            title='Publish program',
+            body=HSplit([
+                Label(text='Local file path', style='class:newdevice.label'),
+                path,
+                Label(text='Program id (optional)', style='class:newdevice.label'),
+                program_id,
+                Window(height=1, content=error_control, style='class:newdevice.error'),
+                Label(
+                    text='Enter: next   Tab: move   Esc: cancel',
+                    style='class:newdevice.help',
+                ),
+            ]),
+            buttons=[submit_button, cancel_button],
+            with_background=True,
+        )
+        state = ProgramPublishDialogState(
+            path=path,
+            program_id=program_id,
+            submit_button=submit_button,
+            cancel_button=cancel_button,
+            dialog=dialog,
+            return_selected_program_id=selected_program_id,
+        )
+        self._set_modal(state, focus=path)
+
+    def _cancel_program_publish_dialog(self) -> None:
+        state = self._active_modal
+        if not isinstance(state, ProgramPublishDialogState):
+            return
+        self._open_program_manager(selected_program_id=state.return_selected_program_id)
+
+    def _submit_program_publish_dialog(self) -> None:
+        state = self._active_modal
+        if not isinstance(state, ProgramPublishDialogState):
+            return
+        if state.pending_request_id is not None:
+            return
+
+        path = state.path.text.strip()
+        program_id = self._program_id_from_publish_fields(path, state.program_id.text.strip())
+        if not path:
+            state.error_text = 'publish path is required'
+            self._app.layout.focus(state.path)
+            self._app.invalidate()
+            return
+        if not program_id:
+            state.error_text = f"could not derive program id from {path!r}"
+            self._app.layout.focus(state.program_id)
+            self._app.invalidate()
+            return
+
+        source, error = self._read_publish_source(path)
+        if error is not None:
+            state.error_text = error
+            self._app.layout.focus(state.path)
+            self._app.invalidate()
+            return
+
+        cmd_id, error = self._send_program_publish_request(program_id, source)
+        if error is not None:
+            state.error_text = error
+            self._app.invalidate()
+            return
+        state.pending_request_id = cmd_id
+        state.error_text = ''
+
+    def _submit_program_load(self, *, loop: bool = False) -> None:
+        state = self._active_modal
+        if not isinstance(state, ProgramManagerDialogState):
+            return
+        if state.pending_request_id is not None:
+            return
+
+        entry = self._selected_program_from_manager()
+        if entry is None:
+            state.error_text = 'no programs in library'
+            self._app.invalidate()
+            return
+        if entry.error:
+            state.error_text = f'cannot load {entry.program_id}: {entry.error}'
+            self._app.invalidate()
+            return
+
+        cmd_id, error = self._send_program_load_request(entry, loop=loop)
+        if error is not None:
+            state.error_text = error
+            self._app.invalidate()
+            return
+        state.pending_request_id = cmd_id
+        state.error_text = ''
+
+    def _submit_program_rescan(self) -> None:
+        state = self._active_modal
+        if not isinstance(state, ProgramManagerDialogState):
+            return
+        if state.pending_request_id is not None:
+            return
+
+        cmd_id, error = self._send_program_rescan_request()
+        if error is not None:
+            state.error_text = error
+            self._app.invalidate()
+            return
+        state.pending_request_id = cmd_id
+        state.error_text = ''
 
     def _device_manager_options(self) -> list[tuple[str, str]]:
         options = []
@@ -1754,20 +2129,67 @@ class TuiApp:
             state.error_text = f'send failed: {e}'
             self._app.invalidate()
 
-    def _do_rescan(self) -> None:
+    def _send_controller_cmd(self, payload: dict) -> tuple[int | None, str | None]:
         client = self._get_client()
         if client is None:
-            self._local_log("not connected")
-            return
-        try:
-            client.send_cmd({
-                'cmd': 'rescan_programs',
-                'id': self._next_id,
-            })
-        except OSError as e:
-            self._local_log(f"send failed: {e}")
-            return
+            return None, 'not connected'
+        cmd_id = self._next_id
         self._next_id += 1
+        try:
+            client.send_cmd({**payload, 'id': cmd_id})
+        except OSError as e:
+            return None, f'send failed: {e}'
+        return cmd_id, None
+
+    @staticmethod
+    def _program_id_from_publish_fields(path: str, program_id: str) -> str | None:
+        if program_id:
+            return program_id
+        if not path:
+            return None
+        derived = Path(path).stem
+        return derived or None
+
+    @staticmethod
+    def _read_publish_source(path: str) -> tuple[str | None, str | None]:
+        expanded_path = os.path.expanduser(path)
+        try:
+            return Path(expanded_path).read_text(), None
+        except OSError as e:
+            return None, f'cannot read {path}: {e}'
+
+    def _send_program_rescan_request(self) -> tuple[int | None, str | None]:
+        return self._send_controller_cmd({'cmd': 'rescan_programs'})
+
+    def _send_program_load_request(
+        self,
+        entry: ProgramCatalogEntry,
+        *,
+        loop: bool,
+    ) -> tuple[int | None, str | None]:
+        return self._send_controller_cmd({
+            'cmd': 'load_program',
+            'program_id': entry.program_id,
+            'loop': loop,
+        })
+
+    def _send_program_publish_request(
+        self,
+        program_id: str,
+        source: str | None,
+    ) -> tuple[int | None, str | None]:
+        if source is None:
+            return None, 'publish source is required'
+        return self._send_controller_cmd({
+            'cmd': 'publish_program',
+            'program_id': program_id,
+            'source': source,
+        })
+
+    def _do_rescan(self) -> None:
+        _cmd_id, error = self._send_program_rescan_request()
+        if error is not None:
+            self._local_log(error)
 
     def _resolve_program_entry(self, cmd: dict) -> ProgramCatalogEntry | None:
         index = cmd.get('index')
@@ -1798,36 +2220,25 @@ class TuiApp:
             self._local_log("publish program id is required")
             return
 
-        expanded_path = os.path.expanduser(path)
-        try:
-            source = Path(expanded_path).read_text()
-        except OSError as e:
-            self._local_log(f"cannot read {path}: {e}")
+        source, error = self._read_publish_source(path)
+        if error is not None:
+            self._local_log(error)
             return
-
-        client = self._get_client()
-        if client is None:
-            self._local_log("not connected")
-            return
-
-        wire_cmd = {
-            'cmd': 'publish_program',
-            'program_id': program_id,
-            'source': source,
-            'id': self._next_id,
-        }
         if program_id == Path(path).stem:
             self._local_log(f"> /publish {path}")
         else:
             self._local_log(f"> /publish {path} as {program_id}")
-        self._next_id += 1
-
-        try:
-            client.send_cmd(wire_cmd)
-        except OSError as e:
-            self._local_log(f"send failed: {e}")
+        _cmd_id, error = self._send_program_publish_request(program_id, source)
+        if error is not None:
+            self._local_log(error)
 
     def _do_load(self, cmd: dict) -> None:
+        if self._get_client() is None:
+            self._local_log("not connected")
+            return
+        if not self._program_catalog_ready:
+            self._local_log("program list not available yet")
+            return
         if not self._program_catalog:
             self._local_log("no known programs, try /rescan")
             return
@@ -1840,24 +2251,11 @@ class TuiApp:
             self._local_log(f"cannot load {entry.program_id}: {entry.error}")
             return
 
-        client = self._get_client()
-        if client is None:
-            self._local_log("not connected")
-            return
-        wire_cmd = {
-            'cmd': 'load_program',
-            'program_id': entry.program_id,
-            'loop': loop,
-            'id': self._next_id,
-        }
         loop_str = ' loop' if loop else ''
         self._local_log(f"> /load {entry.program_id}{loop_str}")
-        self._next_id += 1
-
-        try:
-            client.send_cmd(wire_cmd)
-        except OSError as e:
-            self._local_log(f"send failed: {e}")
+        _cmd_id, error = self._send_program_load_request(entry, loop=loop)
+        if error is not None:
+            self._local_log(error)
 
     # ------------------------------------------------------------------
     # Reader thread

@@ -19,6 +19,8 @@ from elemctl.tui import (
     PanelDeviceInfo,
     PanelDeviceStatusUpdate,
     PanelSnapshotUpdate,
+    ProgramManagerDialogState,
+    ProgramPublishDialogState,
     ProgramCatalogEntry,
     ProgramCatalogUpdate,
     TuiApp,
@@ -32,6 +34,7 @@ from elemctl.tui import (
     _DEVICES_SENTINEL,
     _HELP_SENTINEL,
     _NEWDEVICE_SENTINEL,
+    _PROGRAMS_SENTINEL,
     _QUIT_SENTINEL,
     _RESCAN_SENTINEL,
 )
@@ -298,6 +301,11 @@ class TestParseCommand:
         assert cmd is _DEVICES_SENTINEL
         assert err is None
 
+    def test_programs(self):
+        cmd, err = parse_command('/programs', 1)
+        assert cmd is _PROGRAMS_SENTINEL
+        assert err is None
+
     def test_newdevice(self):
         cmd, err = parse_command('/newdevice', 1)
         assert cmd is _NEWDEVICE_SENTINEL
@@ -380,6 +388,11 @@ class TestParseCommand:
 
     def test_rescan_extra_args_rejected(self):
         cmd, err = parse_command('/rescan foo', 1)
+        assert cmd is None
+        assert 'does not take arguments' in err
+
+    def test_programs_extra_args_rejected(self):
+        cmd, err = parse_command('/programs foo', 1)
         assert cmd is None
         assert 'does not take arguments' in err
 
@@ -801,6 +814,24 @@ class TestDevicePanel:
                 ProgramCatalogEntry('ambient', 1.0, 8.0, None),
                 ProgramCatalogEntry('broken', None, None, 'missing DURATION'),
             ]
+            assert app._program_catalog_ready is True
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+    def test_controller_disconnect_clears_program_catalog_ready(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        try:
+            app._apply_panel_update(ControllerConnectionUpdate(True))
+            app._apply_panel_update(ProgramCatalogUpdate([
+                ProgramCatalogEntry('ambient', 1.0, 8.0, None),
+            ]))
+            app._apply_panel_update(ControllerConnectionUpdate(False))
+            assert app._program_catalog_ready is False
         finally:
             if app._log_fp is not None:
                 app._log_fp.close()
@@ -1427,6 +1458,78 @@ class TestProgramCatalogCommands:
 
         assert any(line.endswith('not connected') for line in app._log_lines)
 
+    def test_programs_requires_connected_controller(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+
+        try:
+            app._do_programs()
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        assert any(line.endswith('controller not connected') for line in app._log_lines)
+
+    def test_programs_without_catalog_ready_logs_waiting_message(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        app._set_client(self._FakeClient())
+
+        try:
+            app._do_programs()
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        assert any(line.endswith('program list not available yet') for line in app._log_lines)
+
+    def test_programs_empty_catalog_opens_empty_manager(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        app._set_client(self._FakeClient())
+        app._program_catalog_ready = True
+
+        try:
+            app._do_programs()
+            state = app._active_modal
+            assert isinstance(state, ProgramManagerDialogState)
+            assert state.program_list is None
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+    def test_programs_nonempty_catalog_opens_manager(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        app._set_client(self._FakeClient())
+        app._program_catalog_ready = True
+        app._program_catalog = [
+            ProgramCatalogEntry('ambient', 1.0, 8.0, None),
+            ProgramCatalogEntry('broken', None, None, 'missing DURATION'),
+        ]
+
+        try:
+            app._do_programs()
+            state = app._active_modal
+            assert isinstance(state, ProgramManagerDialogState)
+            assert state.program_list is not None
+            assert state.program_list.current_value == 'ambient'
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
     def test_publish_reads_file_and_sends_publish_program(self, tmp_path):
         path = tmp_path / 'ambient.py'
         path.write_text("BEAT = 1.0\nDURATION = 8.0\n")
@@ -1514,6 +1617,239 @@ class TestProgramCatalogCommands:
             for line in app._log_lines
         )
 
+    def test_program_manager_load_sends_load_program(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        client = self._FakeClient()
+        app._set_client(client)
+        app._program_catalog_ready = True
+        app._program_catalog = [ProgramCatalogEntry('ambient', 1.0, 8.0, None)]
+
+        try:
+            app._do_programs()
+            app._submit_program_load()
+            state = app._active_modal
+            assert isinstance(state, ProgramManagerDialogState)
+            assert state.pending_request_id == 1
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        assert client.commands == [{
+            'cmd': 'load_program',
+            'program_id': 'ambient',
+            'loop': False,
+            'id': 1,
+        }]
+
+    def test_program_manager_load_loop_sends_loop_flag(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        client = self._FakeClient()
+        app._set_client(client)
+        app._program_catalog_ready = True
+        app._program_catalog = [ProgramCatalogEntry('ambient', 1.0, 8.0, None)]
+
+        try:
+            app._do_programs()
+            app._submit_program_load(loop=True)
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        assert client.commands == [{
+            'cmd': 'load_program',
+            'program_id': 'ambient',
+            'loop': True,
+            'id': 1,
+        }]
+
+    def test_program_manager_rejects_broken_entry_locally(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        client = self._FakeClient()
+        app._set_client(client)
+        app._program_catalog_ready = True
+        app._program_catalog = [ProgramCatalogEntry('broken', None, None, 'missing DURATION')]
+
+        try:
+            app._do_programs()
+            app._submit_program_load()
+            state = app._active_modal
+            assert isinstance(state, ProgramManagerDialogState)
+            assert state.error_text == 'cannot load broken: missing DURATION'
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        assert client.commands == []
+
+    def test_program_manager_rescan_sends_controller_command(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        client = self._FakeClient()
+        app._set_client(client)
+        app._program_catalog_ready = True
+
+        try:
+            app._do_programs()
+            app._submit_program_rescan()
+            state = app._active_modal
+            assert isinstance(state, ProgramManagerDialogState)
+            assert state.pending_request_id == 1
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        assert client.commands == [{'cmd': 'rescan_programs', 'id': 1}]
+
+    def test_program_manager_reply_error_stays_inline(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        client = self._FakeClient()
+        app._set_client(client)
+        app._program_catalog_ready = True
+        app._program_catalog = [ProgramCatalogEntry('ambient', 1.0, 8.0, None)]
+
+        try:
+            app._do_programs()
+            app._submit_program_load()
+            app._apply_panel_update(CommandReplyUpdate(
+                reply_id=1,
+                ok=False,
+                error='no configured devices',
+            ))
+            state = app._active_modal
+            assert isinstance(state, ProgramManagerDialogState)
+            assert state.error_text == 'no configured devices'
+            assert state.pending_request_id is None
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+    def test_program_publish_dialog_sends_publish_program(self, tmp_path):
+        path = tmp_path / 'ambient.py'
+        path.write_text("BEAT = 1.0\nDURATION = 8.0\n")
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        client = self._FakeClient()
+        app._set_client(client)
+        app._program_catalog_ready = True
+        app._program_catalog = [ProgramCatalogEntry('ambient', 1.0, 8.0, None)]
+
+        try:
+            app._do_programs()
+            app._start_program_publish()
+            state = app._active_modal
+            assert isinstance(state, ProgramPublishDialogState)
+            state.path.text = str(path)
+            state.program_id.text = 'ambient_bg'
+            app._submit_program_publish_dialog()
+            assert state.pending_request_id == 1
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        assert client.commands == [{
+            'cmd': 'publish_program',
+            'program_id': 'ambient_bg',
+            'source': "BEAT = 1.0\nDURATION = 8.0\n",
+            'id': 1,
+        }]
+
+    def test_program_publish_dialog_file_error_stays_inline(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        app._set_client(self._FakeClient())
+        app._program_catalog_ready = True
+
+        try:
+            app._do_programs()
+            app._start_program_publish()
+            state = app._active_modal
+            assert isinstance(state, ProgramPublishDialogState)
+            state.path.text = str(tmp_path / 'missing.py')
+            state.program_id.text = 'missing'
+            app._submit_program_publish_dialog()
+            assert 'cannot read' in state.error_text
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+    def test_program_publish_success_returns_to_manager(self, tmp_path):
+        path = tmp_path / 'ambient.py'
+        path.write_text("BEAT = 1.0\nDURATION = 8.0\n")
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        client = self._FakeClient()
+        app._set_client(client)
+        app._program_catalog_ready = True
+
+        try:
+            app._do_programs()
+            app._start_program_publish()
+            state = app._active_modal
+            assert isinstance(state, ProgramPublishDialogState)
+            state.path.text = str(path)
+            state.program_id.text = 'ambient'
+            app._submit_program_publish_dialog()
+            app._apply_panel_update(CommandReplyUpdate(reply_id=1, ok=True, error=None))
+            assert isinstance(app._active_modal, ProgramManagerDialogState)
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+    def test_programs_updated_refreshes_manager_list_while_open(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        app._set_client(self._FakeClient())
+        app._program_catalog_ready = True
+        app._program_catalog = [ProgramCatalogEntry('ambient', 1.0, 8.0, None)]
+
+        try:
+            app._do_programs()
+            app._apply_panel_update(ProgramCatalogUpdate([
+                ProgramCatalogEntry('ambient', 1.0, 8.0, None),
+                ProgramCatalogEntry('spark_demo', 0.5, 16.0, None),
+            ]))
+            state = app._active_modal
+            assert isinstance(state, ProgramManagerDialogState)
+            assert state.program_list is not None
+            assert [value for value, _label in state.program_list.values] == [
+                'ambient',
+                'spark_demo',
+            ]
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
     def test_load_by_name_sends_load_program(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
@@ -1526,6 +1862,7 @@ class TestProgramCatalogCommands:
             ProgramCatalogEntry('ambient', 1.0, 8.0, None),
             ProgramCatalogEntry('broken', None, None, 'missing DURATION'),
         ]
+        app._program_catalog_ready = True
 
         try:
             app._do_load({'cmd': 'load', 'target': 'ambient', 'index': None, 'loop': True, 'id': 1})
@@ -1553,6 +1890,7 @@ class TestProgramCatalogCommands:
             ProgramCatalogEntry('ambient', 1.0, 8.0, None),
             ProgramCatalogEntry('spark_demo', 0.5, 16.0, None),
         ]
+        app._program_catalog_ready = True
 
         try:
             app._do_load({'cmd': 'load', 'target': None, 'index': 2, 'loop': False, 'id': 1})
@@ -1579,6 +1917,7 @@ class TestProgramCatalogCommands:
         app._program_catalog = [
             ProgramCatalogEntry('broken', None, None, 'missing DURATION'),
         ]
+        app._program_catalog_ready = True
 
         try:
             app._do_load({'cmd': 'load', 'target': 'broken', 'index': None, 'loop': False, 'id': 1})
@@ -1592,7 +1931,7 @@ class TestProgramCatalogCommands:
             for line in app._log_lines
         )
 
-    def test_load_without_catalog_suggests_rescan(self, tmp_path):
+    def test_load_without_catalog_before_snapshot_waits_for_catalog(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
             str(tmp_path / 'config.json'),
@@ -1600,6 +1939,28 @@ class TestProgramCatalogCommands:
         )
         client = self._FakeClient()
         app._set_client(client)
+
+        try:
+            app._do_load({'cmd': 'load', 'target': 'ambient', 'index': None, 'loop': False, 'id': 1})
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        assert client.commands == []
+        assert any(
+            line.endswith('program list not available yet')
+            for line in app._log_lines
+        )
+
+    def test_load_without_catalog_after_snapshot_suggests_rescan(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        client = self._FakeClient()
+        app._set_client(client)
+        app._program_catalog_ready = True
 
         try:
             app._do_load({'cmd': 'load', 'target': 'ambient', 'index': None, 'loop': False, 'id': 1})
@@ -1622,6 +1983,7 @@ class TestProgramCatalogCommands:
         client = self._FakeClient()
         app._set_client(client)
         app._program_catalog = [ProgramCatalogEntry('ambient', 1.0, 8.0, None)]
+        app._program_catalog_ready = True
 
         try:
             app._do_load({'cmd': 'load', 'target': None, 'index': 2, 'loop': False, 'id': 1})
