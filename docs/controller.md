@@ -324,7 +324,7 @@ The controller is the long-running authority on the base station.
 
 8. **Assembles program frames** — receives per-strip RGB frames from simulators, filters by `gen` (drops stale), groups by `frame_index`, and emits complete multi-strip program frames over UDS.
 
-9. **Owns config mutations** — handles `add_device` / `remove_device` requests from the TUI, validates them transactionally, atomically rewrites the config file, incrementally reconciles device objects, and rebuilds the controller while idle.
+9. **Owns config mutations** — handles `add_device` / `edit_device` / `remove_device` requests from the TUI, validates them transactionally, atomically rewrites the config file, incrementally reconciles device objects, and rebuilds the controller while idle.
 
 10. **Exposes a control/event API over UDS** — a client (currently the TUI) connects to a Unix Domain Socket to send commands and receive replies, events, snapshots, and program frames. See "Controller ↔ Client protocol" below.
 
@@ -419,12 +419,15 @@ Commands carry an `id` (client-assigned, incrementing counter) that the controll
 {"id": 8, "cmd": "load_program", "program_id": "demo_main", "loop": true}
 {"id": 9, "cmd": "publish_program", "program_id": "demo_main", "source": "...python source..."}
 {"id": 10, "cmd": "add_device", "device_type": "sim", "device_uid": "sim-3", "strip_id": "aux", "length": 30}
-{"id": 11, "cmd": "remove_device", "device_uid": "sim-3"}
+{"id": 11, "cmd": "edit_device", "target_device_uid": "sim-3", "device_uid": "sim-3", "strip_id": "aux", "length": 60}
+{"id": 12, "cmd": "remove_device", "device_uid": "sim-3"}
 ```
 
 `play` means both fresh start and resume — the controller decides which device command to send based on current state (CMD_START from LOADED/ENDED, CMD_RESUME from PAUSED). The client does not need to distinguish between them.
 
 `status` and the connect-time snapshot are the read path for the current program catalog. `rescan_programs` refreshes the controller-owned library from disk and broadcasts the new catalog to all clients. `publish_program` stores or replaces one known program in that library and broadcasts the updated catalog. Neither command hot-swaps the currently loaded session; new source only takes effect on the next `load_program`.
+
+`edit_device` only allows changing `device_uid`, `strip_id`, and `length`. `device_type` is immutable; changing a device from `sim` to `esp32` is treated as remove + add, not edit.
 
 **Controller → Client (replies):**
 
@@ -483,6 +486,7 @@ The `strips` array in `session_start` defines the **canonical strip order and le
 | `status` | Snapshot built immediately from current runtime state | snapshot object in `result` |
 | `rescan_programs` | Program library rescanned from `animations_dir`, catalog updated, `programs_updated` broadcast queued | `{"programs": [...]}` |
 | `add_device` | Candidate config validated, saved atomically, inventory reconciled, controller rebuilt (idle/stopped/ended only) | `{"message": "added device ..."}` |
+| `edit_device` | Existing device located by `target_device_uid`, editable fields (`device_uid`, `strip_id`, `length`) validated and saved atomically, inventory reconciled, controller rebuilt (idle/stopped/ended only) | `{"message": "updated device ..."}` |
 | `remove_device` | Candidate config validated, saved atomically, inventory reconciled, controller rebuilt (idle/stopped/ended only) | `{"message": "removed device ..."}` |
 
 #### kind=0x02 — Program frame

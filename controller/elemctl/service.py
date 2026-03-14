@@ -24,6 +24,7 @@ from .config import (
 )
 from .config_edit import (
     add_device as add_device_doc,
+    edit_device as edit_device_doc,
     load_config_doc,
     make_device_entry,
     next_device_id,
@@ -131,6 +132,7 @@ class ControllerService:
             'debug_seek': self._cmd_debug_seek,
             'stop': self._cmd_stop,
             'add_device': self._cmd_add_device,
+            'edit_device': self._cmd_edit_device,
             'remove_device': self._cmd_remove_device,
             'shutdown': self._cmd_shutdown,
         }.get(action)
@@ -278,6 +280,45 @@ class ControllerService:
         self._rebuild_controller()
         self._queue_snapshot_event()
         return {'message': f'added device {device_uid}'}
+
+    def _cmd_edit_device(self, cmd: dict) -> dict:
+        self._require_mutation_quiescent()
+        target_device_uid = cmd.get('target_device_uid')
+        device_uid = cmd.get('device_uid')
+        strip_id = cmd.get('strip_id')
+        length = self._require_length(cmd.get('length'))
+
+        if not isinstance(target_device_uid, str) or not target_device_uid:
+            raise ValueError("missing 'target_device_uid' field")
+        if not any(dc.device_uid == target_device_uid for dc in self._device_configs):
+            raise ValueError(f'device not found: {target_device_uid}')
+
+        self._validate_device_uid(device_uid)
+        self._validate_strip_id(strip_id)
+        for dc in self._device_configs:
+            if dc.device_uid == target_device_uid:
+                continue
+            if dc.device_uid == device_uid:
+                raise ValueError(f'device uid already exists: {device_uid}')
+            if dc.strip_id == strip_id:
+                raise ValueError(f'strip id already exists: {strip_id}')
+
+        candidate = copy.deepcopy(self._raw_doc)
+        edit_device_doc(
+            candidate,
+            target_device_uid,
+            device_uid=device_uid,
+            strip_id=strip_id,
+            length=length,
+        )
+        new_config = self._save_and_validate_candidate(candidate)
+        self._raw_doc = candidate
+        self._reconcile_devices(new_config)
+        self._rebuild_controller()
+        self._queue_snapshot_event()
+        if target_device_uid == device_uid:
+            return {'message': f'updated device {device_uid}'}
+        return {'message': f'updated device {target_device_uid} -> {device_uid}'}
 
     def _cmd_remove_device(self, cmd: dict) -> dict:
         self._require_mutation_quiescent()

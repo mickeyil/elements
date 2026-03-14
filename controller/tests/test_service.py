@@ -863,6 +863,151 @@ class TestConfigMutations:
         saved = load_config(str(path))
         assert [dc.device_uid for dc in saved.devices] == ['sim-2']
 
+    def test_edit_device_reuses_unchanged_devices_and_saves(self, tmp_path):
+        config = _make_config(n_devices=2)
+        created: list[_AddressableFakeDevice] = []
+
+        def factory(device_id, host, tcp_port, device_type, strip_length, frame_port, udp_receiver):
+            dev = _AddressableFakeDevice()
+            created.append(dev)
+            return dev
+
+        svc, path = _make_service_with_path(tmp_path, config, device_factory=factory)
+        initial_devices = list(svc._devices)
+        edited = initial_devices[0]
+
+        reply = svc.handle_cmd({
+            'id': 1,
+            'cmd': 'edit_device',
+            'target_device_uid': 'sim-1',
+            'device_uid': 'sim-1',
+            'strip_id': 'strip_a',
+            'length': 8,
+        })
+
+        assert reply['ok'] is True
+        assert reply['result']['message'] == 'updated device sim-1'
+        assert len(created) == 3
+        assert svc._devices[0] is not edited
+        assert svc._devices[1] is initial_devices[1]
+        assert edited.close_calls == 1
+        assert svc._device_configs[0].length == 8
+
+        saved = load_config(str(path))
+        assert [(dc.device_uid, dc.strip_id, dc.length) for dc in saved.devices] == [
+            ('sim-1', 'strip_a', 8),
+            ('sim-2', 'strip_b', 5),
+        ]
+
+        json_msgs, _ = svc.tick_once()
+        events = _decode_json_msgs(json_msgs)
+        snapshots = [e for e in events if e.get('event') == 'snapshot']
+        assert snapshots
+        assert snapshots[0]['devices'][0]['length'] == 8
+
+    def test_edit_device_can_rename_uid(self, tmp_path):
+        config = _make_config(n_devices=2)
+        svc, path = _make_service_with_path(
+            tmp_path,
+            config,
+            device_factory=lambda *args, **kwargs: _FakeDevice(),
+        )
+
+        reply = svc.handle_cmd({
+            'id': 1,
+            'cmd': 'edit_device',
+            'target_device_uid': 'sim-1',
+            'device_uid': 'sim-1-fixed',
+            'strip_id': 'strip_a',
+            'length': 5,
+        })
+
+        assert reply['ok'] is True
+        assert reply['result']['message'] == 'updated device sim-1 -> sim-1-fixed'
+        saved = load_config(str(path))
+        assert [dc.device_uid for dc in saved.devices] == ['sim-1-fixed', 'sim-2']
+
+    def test_edit_device_can_change_strip_id(self, tmp_path):
+        config = _make_config(n_devices=2)
+        svc, path = _make_service_with_path(
+            tmp_path,
+            config,
+            device_factory=lambda *args, **kwargs: _FakeDevice(),
+        )
+
+        reply = svc.handle_cmd({
+            'id': 1,
+            'cmd': 'edit_device',
+            'target_device_uid': 'sim-1',
+            'device_uid': 'sim-1',
+            'strip_id': 'main_left',
+            'length': 5,
+        })
+
+        assert reply['ok'] is True
+        saved = load_config(str(path))
+        assert [dc.strip_id for dc in saved.devices] == ['main_left', 'strip_b']
+
+    def test_edit_device_missing_target_rejected(self, tmp_path):
+        config = _make_config(n_devices=2)
+        svc, _path = _make_service_with_path(
+            tmp_path,
+            config,
+            device_factory=lambda *args, **kwargs: _FakeDevice(),
+        )
+
+        reply = svc.handle_cmd({
+            'id': 1,
+            'cmd': 'edit_device',
+            'target_device_uid': 'missing',
+            'device_uid': 'missing',
+            'strip_id': 'strip_x',
+            'length': 5,
+        })
+
+        assert reply['ok'] is False
+        assert reply['error'] == 'device not found: missing'
+
+    def test_edit_device_duplicate_uid_rejected(self, tmp_path):
+        config = _make_config(n_devices=2)
+        svc, _path = _make_service_with_path(
+            tmp_path,
+            config,
+            device_factory=lambda *args, **kwargs: _FakeDevice(),
+        )
+
+        reply = svc.handle_cmd({
+            'id': 1,
+            'cmd': 'edit_device',
+            'target_device_uid': 'sim-1',
+            'device_uid': 'sim-2',
+            'strip_id': 'strip_a',
+            'length': 5,
+        })
+
+        assert reply['ok'] is False
+        assert reply['error'] == 'device uid already exists: sim-2'
+
+    def test_edit_device_duplicate_strip_id_rejected(self, tmp_path):
+        config = _make_config(n_devices=2)
+        svc, _path = _make_service_with_path(
+            tmp_path,
+            config,
+            device_factory=lambda *args, **kwargs: _FakeDevice(),
+        )
+
+        reply = svc.handle_cmd({
+            'id': 1,
+            'cmd': 'edit_device',
+            'target_device_uid': 'sim-1',
+            'device_uid': 'sim-1',
+            'strip_id': 'strip_b',
+            'length': 5,
+        })
+
+        assert reply['ok'] is False
+        assert reply['error'] == 'strip id already exists: strip_b'
+
     def test_mutations_reject_when_controller_loaded(self, tmp_path):
         config = _make_config()
         svc, _path = _make_service_with_path(
@@ -887,6 +1032,18 @@ class TestConfigMutations:
 
         assert reply['ok'] is False
         assert 'idle or stopped' in reply['error']
+
+        reply2 = svc.handle_cmd({
+            'id': 3,
+            'cmd': 'edit_device',
+            'target_device_uid': 'sim-1',
+            'device_uid': 'sim-1',
+            'strip_id': 'test',
+            'length': 8,
+        })
+
+        assert reply2['ok'] is False
+        assert 'idle or stopped' in reply2['error']
 
     def test_save_failure_leaves_runtime_state_unchanged(self, monkeypatch, tmp_path):
         config = _make_config()
@@ -919,6 +1076,40 @@ class TestConfigMutations:
         assert svc._raw_doc == initial_doc
         saved = load_config(str(path))
         assert [dc.device_uid for dc in saved.devices] == ['sim-1']
+
+    def test_edit_save_failure_leaves_runtime_state_unchanged(self, monkeypatch, tmp_path):
+        config = _make_config(n_devices=2)
+        svc, path = _make_service_with_path(
+            tmp_path,
+            config,
+            device_factory=lambda *args, **kwargs: _FakeDevice(),
+        )
+        initial_devices = list(svc._devices)
+        initial_doc = copy.deepcopy(svc._raw_doc)
+
+        monkeypatch.setattr(
+            'elemctl.service.save_config_doc',
+            lambda *args, **kwargs: (_ for _ in ()).throw(OSError('disk full')),
+        )
+
+        reply = svc.handle_cmd({
+            'id': 2,
+            'cmd': 'edit_device',
+            'target_device_uid': 'sim-1',
+            'device_uid': 'sim-1',
+            'strip_id': 'strip_a',
+            'length': 9,
+        })
+
+        assert reply['ok'] is False
+        assert 'cannot save config' in reply['error']
+        assert svc._devices == initial_devices
+        assert svc._raw_doc == initial_doc
+        saved = load_config(str(path))
+        assert [(dc.device_uid, dc.strip_id, dc.length) for dc in saved.devices] == [
+            ('sim-1', 'strip_a', 5),
+            ('sim-2', 'strip_b', 5),
+        ]
 
     def test_add_device_applies_cached_discovery_address(self, tmp_path):
         config = Config(
@@ -985,6 +1176,29 @@ class TestConfigMutations:
 
         assert reply['ok'] is False
         assert 'last configured device' in reply['error']
+
+    def test_edit_last_device_allowed(self, tmp_path):
+        config = _make_config()
+        svc, path = _make_service_with_path(
+            tmp_path,
+            config,
+            device_factory=lambda *args, **kwargs: _FakeDevice(),
+        )
+
+        reply = svc.handle_cmd({
+            'id': 1,
+            'cmd': 'edit_device',
+            'target_device_uid': 'sim-1',
+            'device_uid': 'sim-1',
+            'strip_id': 'main',
+            'length': 42,
+        })
+
+        assert reply['ok'] is True
+        saved = load_config(str(path))
+        assert [(dc.device_uid, dc.strip_id, dc.length) for dc in saved.devices] == [
+            ('sim-1', 'main', 42),
+        ]
 
 
 class TestTickProbesDisconnected:

@@ -8,8 +8,14 @@ from pathlib import Path
 import pytest
 
 from elemctl.tui import (
+    CommandReplyUpdate,
     ControllerConnectionUpdate,
+    DeviceCatalogEntry,
+    DeviceCatalogSnapshotUpdate,
+    DeviceEditDialogState,
+    DeviceManagerDialogState,
     DevicePanelEntry,
+    DeviceRemoveDialogState,
     PanelDeviceInfo,
     PanelDeviceStatusUpdate,
     PanelSnapshotUpdate,
@@ -669,8 +675,22 @@ class TestDevicePanel:
             'event': 'snapshot',
             'session': None,
             'devices': [
-                {'device_uid': 'sim-1', 'strip': 'main', 'length': 10, 'connected': True},
-                {'device_uid': 'sim-2', 'strip': 'aux', 'length': 20, 'connected': False},
+                {
+                    'device_id': 1,
+                    'device_uid': 'sim-1',
+                    'device_type': 'sim',
+                    'strip': 'main',
+                    'length': 10,
+                    'connected': True,
+                },
+                {
+                    'device_id': 2,
+                    'device_uid': 'sim-2',
+                    'device_type': 'esp32',
+                    'strip': 'aux',
+                    'length': 20,
+                    'connected': False,
+                },
             ],
         }
         lines, updates = _decode_tui_message(KIND_JSON, _json_payload(msg))
@@ -681,8 +701,12 @@ class TestDevicePanel:
         ]
         assert updates == [
             PanelSnapshotUpdate([
-                PanelDeviceInfo('sim-1', 'main', 10, True),
-                PanelDeviceInfo('sim-2', 'aux', 20, False),
+                PanelDeviceInfo('sim-1', 'main', 10, True, 1, 'sim'),
+                PanelDeviceInfo('sim-2', 'aux', 20, False, 2, 'esp32'),
+            ]),
+            DeviceCatalogSnapshotUpdate([
+                DeviceCatalogEntry(1, 'sim-1', 'sim', 'main', 10, True),
+                DeviceCatalogEntry(2, 'sim-2', 'esp32', 'aux', 20, False),
             ]),
             ProgramCatalogUpdate([]),
         ]
@@ -705,6 +729,7 @@ class TestDevicePanel:
         ]
         assert updates == [
             PanelSnapshotUpdate([]),
+            DeviceCatalogSnapshotUpdate([]),
             ProgramCatalogUpdate([
                 ProgramCatalogEntry('ambient', 1.0, 8.0, None),
                 ProgramCatalogEntry('broken', None, None, 'missing DURATION'),
@@ -738,6 +763,25 @@ class TestDevicePanel:
             ]))
             assert app._device_panel['sim-1'].status == 'connected'
             assert app._device_panel['sim-2'].status == 'configured'
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+    def test_device_catalog_snapshot_replaces_catalog(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        try:
+            app._apply_panel_update(DeviceCatalogSnapshotUpdate([
+                DeviceCatalogEntry(1, 'sim-1', 'sim', 'main', 60, True),
+                DeviceCatalogEntry(2, 'sim-2', 'esp32', 'aux', 30, False),
+            ]))
+            assert app._device_catalog == [
+                DeviceCatalogEntry(1, 'sim-1', 'sim', 'main', 60, True),
+                DeviceCatalogEntry(2, 'sim-2', 'esp32', 'aux', 30, False),
+            ]
         finally:
             if app._log_fp is not None:
                 app._log_fp.close()
@@ -1011,7 +1055,7 @@ class TestNewDeviceDialog:
             'id': 1,
         }]
 
-    def test_devices_connected_uses_live_panel(self, tmp_path):
+    def test_devices_opens_manager_dialog_from_catalog(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
             str(tmp_path / 'config.json'),
@@ -1019,20 +1063,10 @@ class TestNewDeviceDialog:
         )
         client = self._FakeClient()
         app._set_client(client)
-        app._device_panel = {
-            'sim-2': DevicePanelEntry(
-                device_uid='sim-2',
-                strip_id='aux',
-                length=30,
-                status='configured',
-            ),
-            'sim-1': DevicePanelEntry(
-                device_uid='sim-1',
-                strip_id='main',
-                length=60,
-                status='connected',
-            ),
-        }
+        app._device_catalog = [
+            DeviceCatalogEntry(1, 'sim-1', 'sim', 'main', 60, True),
+            DeviceCatalogEntry(2, 'sim-2', 'esp32', 'aux', 30, False),
+        ]
 
         try:
             app._do_devices()
@@ -1041,9 +1075,190 @@ class TestNewDeviceDialog:
                 app._log_fp.close()
 
         assert client.commands == []
-        assert app._log_lines[0].endswith('devices:')
-        assert app._log_lines[1].endswith('  sim-2: strip "aux", 30 LEDs [configured]')
-        assert app._log_lines[2].endswith('  sim-1: strip "main", 60 LEDs [connected]')
+        assert isinstance(app._active_modal, DeviceManagerDialogState)
+        assert app._active_modal.device_list.current_value == 'sim-1'
+        assert len(app._root_container.floats) == 1
+
+    def test_devices_requires_connected_controller(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+
+        try:
+            app._do_devices()
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        assert any(line.endswith('controller not connected') for line in app._log_lines)
+
+    def test_devices_without_catalog_logs_waiting_message(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        app._set_client(self._FakeClient())
+
+        try:
+            app._do_devices()
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        assert any(line.endswith('device list not available yet') for line in app._log_lines)
+
+    def test_device_manager_edit_opens_prefilled_dialog(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        app._set_client(self._FakeClient())
+        app._device_catalog = [DeviceCatalogEntry(1, 'sim-1', 'sim', 'main', 60, True)]
+
+        try:
+            app._do_devices()
+            app._start_device_edit()
+            state = app._active_modal
+            assert isinstance(state, DeviceEditDialogState)
+            assert state.target_device_uid == 'sim-1'
+            assert state.device_uid.text == 'sim-1'
+            assert state.strip_id.text == 'main'
+            assert state.length.text == '60'
+            assert state.device_type == 'sim'
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+    def test_device_edit_sends_edit_device_command(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        client = self._FakeClient()
+        app._set_client(client)
+        app._device_catalog = [DeviceCatalogEntry(1, 'sim-1', 'sim', 'main', 60, True)]
+
+        try:
+            app._do_devices()
+            app._start_device_edit()
+            state = app._active_modal
+            assert isinstance(state, DeviceEditDialogState)
+            state.device_uid.text = 'sim-1-fixed'
+            state.strip_id.text = 'main_left'
+            state.length.text = '100'
+            app._submit_device_edit_dialog()
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        assert client.commands == [{
+            'cmd': 'edit_device',
+            'target_device_uid': 'sim-1',
+            'device_uid': 'sim-1-fixed',
+            'strip_id': 'main_left',
+            'length': 100,
+            'id': 1,
+        }]
+
+    def test_device_edit_error_reply_keeps_dialog_open(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        client = self._FakeClient()
+        app._set_client(client)
+        app._device_catalog = [DeviceCatalogEntry(1, 'sim-1', 'sim', 'main', 60, True)]
+
+        try:
+            app._do_devices()
+            app._start_device_edit()
+            app._submit_device_edit_dialog()
+            app._apply_panel_update(CommandReplyUpdate(reply_id=1, ok=False, error='duplicate uid'))
+            state = app._active_modal
+            assert isinstance(state, DeviceEditDialogState)
+            assert state.error_text == 'duplicate uid'
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+    def test_device_edit_success_reply_closes_dialog(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        client = self._FakeClient()
+        app._set_client(client)
+        app._device_catalog = [DeviceCatalogEntry(1, 'sim-1', 'sim', 'main', 60, True)]
+
+        try:
+            app._do_devices()
+            app._start_device_edit()
+            app._submit_device_edit_dialog()
+            app._apply_panel_update(CommandReplyUpdate(reply_id=1, ok=True, error=None))
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        assert app._active_modal is None
+
+    def test_device_remove_sends_remove_device_command(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        client = self._FakeClient()
+        app._set_client(client)
+        app._device_catalog = [DeviceCatalogEntry(1, 'sim-1', 'sim', 'main', 60, True)]
+
+        try:
+            app._do_devices()
+            app._start_device_remove()
+            state = app._active_modal
+            assert isinstance(state, DeviceRemoveDialogState)
+            app._submit_device_remove_dialog()
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        assert client.commands == [{
+            'cmd': 'remove_device',
+            'device_uid': 'sim-1',
+            'id': 1,
+        }]
+
+    def test_device_remove_error_reply_keeps_dialog_open(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        client = self._FakeClient()
+        app._set_client(client)
+        app._device_catalog = [DeviceCatalogEntry(1, 'sim-1', 'sim', 'main', 60, True)]
+
+        try:
+            app._do_devices()
+            app._start_device_remove()
+            app._submit_device_remove_dialog()
+            app._apply_panel_update(CommandReplyUpdate(
+                reply_id=1,
+                ok=False,
+                error='cannot remove the last configured device',
+            ))
+            state = app._active_modal
+            assert isinstance(state, DeviceRemoveDialogState)
+            assert state.error_text == 'cannot remove the last configured device'
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
 
     def test_newdevice_requires_connected_controller(self, tmp_path):
         app = TuiApp(

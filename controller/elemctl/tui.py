@@ -90,11 +90,16 @@ class NewDeviceDialogState:
 
 
 @dataclass(frozen=True)
-class PanelDeviceInfo:
+class DeviceSnapshotInfo:
     device_uid: str
     strip_id: str
     length: int | None
     connected: bool
+    device_id: int | None = None
+    device_type: str | None = None
+
+
+PanelDeviceInfo = DeviceSnapshotInfo
 
 
 @dataclass
@@ -108,12 +113,32 @@ class DevicePanelEntry:
 
 @dataclass(frozen=True)
 class PanelSnapshotUpdate:
-    devices: list[PanelDeviceInfo]
+    devices: list[DeviceSnapshotInfo]
 
 
 @dataclass(frozen=True)
 class PanelDeviceStatusUpdate:
-    device: PanelDeviceInfo
+    device: DeviceSnapshotInfo
+
+
+@dataclass(frozen=True)
+class DeviceCatalogEntry:
+    device_id: int | None
+    device_uid: str
+    device_type: str | None
+    strip_id: str
+    length: int | None
+    connected: bool
+
+
+@dataclass(frozen=True)
+class DeviceCatalogSnapshotUpdate:
+    devices: list[DeviceCatalogEntry]
+
+
+@dataclass(frozen=True)
+class DeviceCatalogStatusUpdate:
+    device: DeviceCatalogEntry
 
 
 @dataclass(frozen=True)
@@ -130,8 +155,48 @@ class ProgramCatalogUpdate:
 
 
 @dataclass(frozen=True)
+class CommandReplyUpdate:
+    reply_id: int | None
+    ok: bool
+    error: str | None
+
+
+@dataclass(frozen=True)
 class ControllerConnectionUpdate:
     connected: bool
+
+
+@dataclass
+class DeviceManagerDialogState:
+    device_list: RadioList
+    edit_button: Button
+    remove_button: Button
+    close_button: Button
+    dialog: Dialog
+
+
+@dataclass
+class DeviceEditDialogState:
+    target_device_uid: str
+    device_type: str | None
+    device_uid: TextArea
+    strip_id: TextArea
+    length: TextArea
+    submit_button: Button
+    cancel_button: Button
+    dialog: Dialog
+    error_text: str = ''
+    pending_request_id: int | None = None
+
+
+@dataclass
+class DeviceRemoveDialogState:
+    device_uid: str
+    confirm_button: Button
+    cancel_button: Button
+    dialog: Dialog
+    error_text: str = ''
+    pending_request_id: int | None = None
 
 
 class DialogButton(Button):
@@ -350,6 +415,12 @@ def _normalize_length(value) -> int | None:
     return None
 
 
+def _normalize_device_id(value) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    return None
+
+
 def _normalize_strip_id(data: dict) -> str:
     strip = data.get('strip')
     if isinstance(strip, str) and strip:
@@ -360,15 +431,52 @@ def _normalize_strip_id(data: dict) -> str:
     return '?'
 
 
-def _panel_device_info_from_dict(data: dict) -> PanelDeviceInfo | None:
+def _normalize_device_type(data: dict) -> str | None:
+    device_type = data.get('device_type')
+    if isinstance(device_type, str) and device_type:
+        return device_type
+    return None
+
+
+def _device_snapshot_info_from_dict(data: dict) -> DeviceSnapshotInfo | None:
     uid = data.get('device_uid')
     if not isinstance(uid, str) or not uid:
         return None
-    return PanelDeviceInfo(
+    return DeviceSnapshotInfo(
+        device_id=_normalize_device_id(data.get('device_id')),
         device_uid=uid,
+        device_type=_normalize_device_type(data),
         strip_id=_normalize_strip_id(data),
         length=_normalize_length(data.get('length')),
         connected=bool(data.get('connected')),
+    )
+
+
+def _device_catalog_entry_from_dict(data: dict) -> DeviceCatalogEntry | None:
+    snapshot = _device_snapshot_info_from_dict(data)
+    if snapshot is None:
+        return None
+    return DeviceCatalogEntry(
+        device_id=snapshot.device_id,
+        device_uid=snapshot.device_uid,
+        device_type=snapshot.device_type,
+        strip_id=snapshot.strip_id,
+        length=snapshot.length,
+        connected=snapshot.connected,
+    )
+
+
+def _panel_device_info_from_dict(data: dict) -> PanelDeviceInfo | None:
+    snapshot = _device_snapshot_info_from_dict(data)
+    if snapshot is None:
+        return None
+    return PanelDeviceInfo(
+        device_id=snapshot.device_id,
+        device_uid=snapshot.device_uid,
+        device_type=snapshot.device_type,
+        strip_id=snapshot.strip_id,
+        length=snapshot.length,
+        connected=snapshot.connected,
     )
 
 
@@ -406,6 +514,19 @@ def _program_catalog_from_message(msg: dict) -> list[ProgramCatalogEntry]:
     ]
 
 
+def _device_catalog_from_message(msg: dict) -> list[DeviceCatalogEntry]:
+    devices = msg.get('devices')
+    if not isinstance(devices, list):
+        return []
+    return [
+        entry
+        for item in devices
+        if isinstance(item, dict)
+        for entry in [_device_catalog_entry_from_dict(item)]
+        if entry is not None
+    ]
+
+
 def _format_program_catalog(programs: list[dict]) -> list[str]:
     if not programs:
         return ['no programs in library']
@@ -436,6 +557,20 @@ def _format_published_program(program: dict) -> list[str]:
     ]
 
 
+def _reply_update_from_message(msg: dict) -> CommandReplyUpdate | None:
+    if msg.get('type') != 'reply':
+        return None
+    reply_id = msg.get('id')
+    if not isinstance(reply_id, int):
+        reply_id = None
+    if msg.get('ok'):
+        return CommandReplyUpdate(reply_id=reply_id, ok=True, error=None)
+    error = msg.get('error', '?')
+    if not isinstance(error, str):
+        error = str(error)
+    return CommandReplyUpdate(reply_id=reply_id, ok=False, error=error)
+
+
 def _panel_updates_from_message(msg: dict) -> list[object]:
     msg_type = msg.get('type')
     if msg_type == 'reply' and msg.get('ok'):
@@ -448,8 +583,13 @@ def _panel_updates_from_message(msg: dict) -> list[object]:
                 for info in [_panel_device_info_from_dict(dev)]
                 if info is not None
             ]
+            catalog = _device_catalog_from_message(result)
             programs = _program_catalog_from_message(result)
-            return [PanelSnapshotUpdate(devices), ProgramCatalogUpdate(programs)]
+            return [
+                PanelSnapshotUpdate(devices),
+                DeviceCatalogSnapshotUpdate(catalog),
+                ProgramCatalogUpdate(programs),
+            ]
         return []
 
     if msg_type != 'event':
@@ -464,12 +604,20 @@ def _panel_updates_from_message(msg: dict) -> list[object]:
             for info in [_panel_device_info_from_dict(dev)]
             if info is not None
         ]
+        catalog = _device_catalog_from_message(msg)
         programs = _program_catalog_from_message(msg)
-        return [PanelSnapshotUpdate(devices), ProgramCatalogUpdate(programs)]
+        return [
+            PanelSnapshotUpdate(devices),
+            DeviceCatalogSnapshotUpdate(catalog),
+            ProgramCatalogUpdate(programs),
+        ]
 
     if event == 'device_status':
         info = _panel_device_info_from_dict(msg)
         if info is not None:
+            catalog_entry = _device_catalog_entry_from_dict(msg)
+            if catalog_entry is not None:
+                return [PanelDeviceStatusUpdate(info), DeviceCatalogStatusUpdate(catalog_entry)]
             return [PanelDeviceStatusUpdate(info)]
 
     if event == 'programs_updated':
@@ -490,7 +638,11 @@ def _decode_tui_message(kind: int, payload: bytes) -> tuple[list[str] | None, li
     except (json.JSONDecodeError, UnicodeDecodeError):
         return [f'bad json message len={len(payload)}'], []
 
-    return _format_message(msg), _panel_updates_from_message(msg)
+    updates = _panel_updates_from_message(msg)
+    reply_update = _reply_update_from_message(msg)
+    if reply_update is not None:
+        updates = [*updates, reply_update]
+    return _format_message(msg), updates
 
 
 def format_event(kind: int, payload: bytes) -> list[str] | None:
@@ -612,6 +764,7 @@ class TuiApp:
         self._socket_path = socket_path
         self._config_path = config_path
         self._newdevice_dialog: NewDeviceDialogState | None = None
+        self._active_modal: object | None = None
         self._client: UdsClient | None = None
         self._client_lock = threading.Lock()
         self._shutdown = threading.Event()
@@ -620,6 +773,7 @@ class TuiApp:
         self._pending_logs: queue.Queue[str] = queue.Queue()
         self._pending_panel_updates: queue.Queue[object] = queue.Queue()
         self._device_panel: dict[str, DevicePanelEntry] = {}
+        self._device_catalog: list[DeviceCatalogEntry] = []
         self._program_catalog: list[ProgramCatalogEntry] = []
         self._controller_connected = False
         self._controller_disconnected_at_ns = time.monotonic_ns()
@@ -648,14 +802,14 @@ class TuiApp:
         def _(event):
             self._exit()
 
-        @kb.add('escape', filter=Condition(lambda: self._newdevice_dialog is not None))
+        @kb.add('escape', filter=Condition(lambda: self._active_modal is not None))
         def _(event):
-            self._cancel_newdevice_dialog()
+            self._cancel_active_modal()
 
         @kb.add(
             'enter',
             filter=Condition(
-                lambda: self._newdevice_dialog is not None
+                lambda: isinstance(self._active_modal, NewDeviceDialogState)
                 and get_app().layout.has_focus(self._newdevice_dialog.device_type)
             ),
             eager=True,
@@ -663,7 +817,7 @@ class TuiApp:
         @kb.add(
             'tab',
             filter=Condition(
-                lambda: self._newdevice_dialog is not None
+                lambda: isinstance(self._active_modal, NewDeviceDialogState)
                 and get_app().layout.has_focus(self._newdevice_dialog.device_type)
             ),
             eager=True,
@@ -671,6 +825,17 @@ class TuiApp:
         def _(event):
             self._commit_newdevice_type_selection()
             event.app.layout.focus(self._newdevice_dialog.device_uid)
+
+        @kb.add(
+            'enter',
+            filter=Condition(
+                lambda: isinstance(self._active_modal, DeviceManagerDialogState)
+                and get_app().layout.has_focus(self._active_modal.device_list)
+            ),
+            eager=True,
+        )
+        def _(event):
+            self._start_device_edit()
 
         log_window = Window(
             content=BufferControl(buffer=self._log_buffer),
@@ -808,8 +973,17 @@ class TuiApp:
         if isinstance(update, PanelDeviceStatusUpdate):
             self._apply_device_status_update(update.device)
             return
+        if isinstance(update, DeviceCatalogSnapshotUpdate):
+            self._apply_device_catalog_snapshot(update.devices)
+            return
+        if isinstance(update, DeviceCatalogStatusUpdate):
+            self._apply_device_catalog_status(update.device)
+            return
         if isinstance(update, ProgramCatalogUpdate):
             self._program_catalog = list(update.programs)
+            return
+        if isinstance(update, CommandReplyUpdate):
+            self._apply_command_reply_update(update)
 
     def _resolve_panel_device_state(
         self,
@@ -860,6 +1034,72 @@ class TuiApp:
             status=status,
             disconnected_at_ns=disconnected_at_ns,
         )
+
+    def _apply_device_catalog_snapshot(self, devices: list[DeviceCatalogEntry]) -> None:
+        self._device_catalog = list(devices)
+        self._refresh_device_manager_dialog()
+
+    def _apply_device_catalog_status(self, info: DeviceCatalogEntry) -> None:
+        updated: list[DeviceCatalogEntry] = []
+        found = False
+        for entry in self._device_catalog:
+            if entry.device_uid != info.device_uid:
+                updated.append(entry)
+                continue
+            found = True
+            updated.append(DeviceCatalogEntry(
+                device_id=info.device_id if info.device_id is not None else entry.device_id,
+                device_uid=info.device_uid,
+                device_type=info.device_type if info.device_type is not None else entry.device_type,
+                strip_id=info.strip_id,
+                length=info.length,
+                connected=info.connected,
+            ))
+        if not found:
+            updated.append(info)
+        self._device_catalog = updated
+        self._refresh_device_manager_dialog()
+
+    def _apply_command_reply_update(self, update: CommandReplyUpdate) -> None:
+        modal = self._active_modal
+        if isinstance(modal, DeviceEditDialogState):
+            if modal.pending_request_id != update.reply_id:
+                return
+            modal.pending_request_id = None
+            if update.ok:
+                self._close_modal()
+            else:
+                modal.error_text = update.error or 'unknown error'
+                self._app.invalidate()
+            return
+        if isinstance(modal, DeviceRemoveDialogState):
+            if modal.pending_request_id != update.reply_id:
+                return
+            modal.pending_request_id = None
+            if update.ok:
+                self._close_modal()
+            else:
+                modal.error_text = update.error or 'unknown error'
+                self._app.invalidate()
+
+    def _set_modal(self, state: object, focus=None) -> None:
+        self._active_modal = state
+        self._newdevice_dialog = state if isinstance(state, NewDeviceDialogState) else None
+        dialog = getattr(state, 'dialog')
+        self._root_container.floats[:] = [Float(content=dialog)]
+        if focus is not None:
+            self._app.layout.focus(focus)
+        self._app.invalidate()
+
+    def _close_modal(self) -> None:
+        self._active_modal = None
+        self._newdevice_dialog = None
+        self._root_container.floats.clear()
+        self._app.layout.focus(self._input_control)
+        self._app.invalidate()
+
+    def _cancel_active_modal(self) -> None:
+        self._close_modal()
 
     def _panel_truncate(self, text: str, width: int) -> str:
         if width <= 0:
@@ -1020,7 +1260,7 @@ class TuiApp:
 
     def _on_input(self, buff: Buffer) -> None:
         text = buff.text
-        if self._newdevice_dialog is not None:
+        if self._active_modal is not None:
             return
 
         cmd, error = parse_command(text, self._next_id)
@@ -1082,7 +1322,7 @@ class TuiApp:
     def _show_help(self) -> None:
         self._local_log("commands:")
         self._local_log("  /help               show this help")
-        self._local_log("  /devices            list configured devices")
+        self._local_log("  /devices            manage configured devices")
         self._local_log("  /newdevice          open new device dialog")
         self._local_log("  /rmdevice UID       remove a configured device")
         self._local_log("  /status             show controller status")
@@ -1105,35 +1345,15 @@ class TuiApp:
 
     def _do_devices(self) -> None:
         client = self._get_client()
-        if client is not None:
-            if not self._device_panel:
-                self._local_log("no configured devices")
-                return
-            self._local_log("devices:")
-            for entry in self._device_panel.values():
-                length_text = '?' if entry.length is None else str(entry.length)
-                self._local_log(
-                    f'  {entry.device_uid}: strip "{entry.strip_id}", {length_text} LEDs [{entry.status}]'
-                )
+        if client is None:
+            self._local_log("controller not connected")
             return
-
-        doc = self._load_config_doc()
-        if doc is None:
+        if self._active_modal is not None:
             return
-        devices = doc.get('devices', [])
-        if not devices:
-            self._local_log(f"no configured devices in {self._config_path}")
+        if not self._device_catalog:
+            self._local_log("device list not available yet")
             return
-        self._local_log(f"configured devices in {self._config_path}:")
-        for dev in devices:
-            uid = dev.get('device_uid', '?')
-            dev_type = dev.get('device_type', '?')
-            strip = dev.get('strip_id', '?')
-            length = dev.get('length', '?')
-            device_id = dev.get('device_id', '?')
-            self._local_log(
-                f'  {uid}: {dev_type}, strip "{strip}", {length} LEDs (id {device_id})'
-            )
+        self._open_device_manager()
 
     def _do_rmdevice(self, device_uid: str) -> None:
         client = self._get_client()
@@ -1152,15 +1372,13 @@ class TuiApp:
             self._local_log(f"send failed: {e}")
 
     def _start_newdevice(self) -> None:
-        if self._newdevice_dialog is not None:
+        if self._active_modal is not None:
             return
         if self._get_client() is None:
             self._local_log("controller not connected")
             return
-        self._newdevice_dialog = self._build_newdevice_dialog()
-        self._root_container.floats[:] = [Float(content=self._newdevice_dialog.dialog)]
-        self._app.layout.focus(self._newdevice_dialog.device_type)
-        self._app.invalidate()
+        state = self._build_newdevice_dialog()
+        self._set_modal(state, focus=state.device_type)
 
     def _build_newdevice_dialog(self) -> NewDeviceDialogState:
         device_type = RadioList(
@@ -1239,10 +1457,7 @@ class TuiApp:
     def _cancel_newdevice_dialog(self) -> None:
         if self._newdevice_dialog is None:
             return
-        self._newdevice_dialog = None
-        self._root_container.floats.clear()
-        self._app.layout.focus(self._input_control)
-        self._app.invalidate()
+        self._close_modal()
 
     def _submit_newdevice_dialog(self) -> None:
         state = self._newdevice_dialog
@@ -1307,7 +1522,249 @@ class TuiApp:
             self._set_dialog_error(f'send failed: {e}', state.device_uid)
             return
 
-        self._cancel_newdevice_dialog()
+        self._close_modal()
+
+    def _device_manager_options(self) -> list[tuple[str, str]]:
+        options = []
+        for entry in self._device_catalog:
+            status = 'online' if entry.connected else 'offline'
+            device_type = entry.device_type or '?'
+            length_text = '?' if entry.length is None else str(entry.length)
+            label = (
+                f'{entry.device_uid:<16s} '
+                f'{device_type:<5s} '
+                f'{entry.strip_id:<12s} '
+                f'{length_text:>4s} LEDs '
+                f'[{status}]'
+            )
+            options.append((entry.device_uid, label))
+        return options
+
+    def _selected_device_from_manager(self) -> DeviceCatalogEntry | None:
+        if not isinstance(self._active_modal, DeviceManagerDialogState):
+            return None
+        selected_uid = self._active_modal.device_list.current_value
+        for entry in self._device_catalog:
+            if entry.device_uid == selected_uid:
+                return entry
+        return self._device_catalog[0] if self._device_catalog else None
+
+    def _refresh_device_manager_dialog(self) -> None:
+        if not isinstance(self._active_modal, DeviceManagerDialogState):
+            return
+        options = self._device_manager_options()
+        if not options:
+            return
+        selected_uid = self._active_modal.device_list.current_value
+        self._active_modal.device_list.values = options
+        if not any(uid == selected_uid for uid, _ in options):
+            selected_uid = options[0][0]
+        self._active_modal.device_list.current_value = selected_uid
+        self._app.invalidate()
+
+    def _open_device_manager(self) -> None:
+        options = self._device_manager_options()
+        if not options:
+            self._local_log("no configured devices")
+            return
+        device_list = RadioList(values=options, default=options[0][0], select_on_focus=True)
+        edit_button = DialogButton('Edit', handler=self._start_device_edit)
+        remove_button = DialogButton('Remove', handler=self._start_device_remove)
+        close_button = DialogButton('Close', handler=self._close_modal)
+        dialog = Dialog(
+            title='Devices',
+            body=HSplit([
+                Label(text='Configured devices', style='class:newdevice.label'),
+                device_list,
+                Label(
+                    text='Enter: edit   Tab: move   Esc: close',
+                    style='class:newdevice.help',
+                ),
+            ]),
+            buttons=[edit_button, remove_button, close_button],
+            with_background=True,
+        )
+        state = DeviceManagerDialogState(
+            device_list=device_list,
+            edit_button=edit_button,
+            remove_button=remove_button,
+            close_button=close_button,
+            dialog=dialog,
+        )
+        self._set_modal(state, focus=device_list)
+
+    def _start_device_edit(self) -> None:
+        entry = self._selected_device_from_manager()
+        if entry is None:
+            return
+        device_uid = TextArea(text=entry.device_uid, multiline=False, wrap_lines=False)
+        strip_id = TextArea(text=entry.strip_id, multiline=False, wrap_lines=False)
+        length = TextArea(
+            text='' if entry.length is None else str(entry.length),
+            multiline=False,
+            wrap_lines=False,
+        )
+        submit_button = DialogButton('OK', handler=self._submit_device_edit_dialog)
+        cancel_button = DialogButton('Cancel', handler=self._close_modal)
+        device_uid.buffer.accept_handler = (
+            lambda buff: self._focus_dialog_widget(strip_id)
+        )
+        strip_id.buffer.accept_handler = (
+            lambda buff: self._focus_dialog_widget(length)
+        )
+        length.buffer.accept_handler = (
+            lambda buff: self._focus_dialog_widget(submit_button)
+        )
+        error_control = FormattedTextControl(
+            text=lambda: (
+                self._active_modal.error_text
+                if isinstance(self._active_modal, DeviceEditDialogState)
+                else ' '
+            )
+        )
+        device_type = entry.device_type or '?'
+        dialog = Dialog(
+            title=f'Edit device {entry.device_uid}',
+            body=HSplit([
+                Label(text=f'Device type: {device_type}', style='class:newdevice.label'),
+                Label(text='Device uid', style='class:newdevice.label'),
+                device_uid,
+                Label(text='Strip id', style='class:newdevice.label'),
+                strip_id,
+                Label(text='Length', style='class:newdevice.label'),
+                length,
+                Window(height=1, content=error_control, style='class:newdevice.error'),
+                Label(
+                    text='Enter: next   Tab: move   Esc: cancel',
+                    style='class:newdevice.help',
+                ),
+            ]),
+            buttons=[submit_button, cancel_button],
+            with_background=True,
+        )
+        state = DeviceEditDialogState(
+            target_device_uid=entry.device_uid,
+            device_type=entry.device_type,
+            device_uid=device_uid,
+            strip_id=strip_id,
+            length=length,
+            submit_button=submit_button,
+            cancel_button=cancel_button,
+            dialog=dialog,
+        )
+        self._set_modal(state, focus=device_uid)
+
+    def _submit_device_edit_dialog(self) -> None:
+        state = self._active_modal
+        if not isinstance(state, DeviceEditDialogState):
+            return
+        if state.pending_request_id is not None:
+            return
+
+        device_uid = state.device_uid.text.strip()
+        strip_id = state.strip_id.text.strip()
+        length_text = state.length.text.strip()
+
+        error = validate_device_uid(device_uid)
+        if error is not None:
+            state.error_text = error
+            self._app.layout.focus(state.device_uid)
+            self._app.invalidate()
+            return
+        error = validate_strip_id(strip_id)
+        if error is not None:
+            state.error_text = error
+            self._app.layout.focus(state.strip_id)
+            self._app.invalidate()
+            return
+        length, error = parse_length(length_text)
+        if error is not None:
+            state.error_text = error
+            self._app.layout.focus(state.length)
+            self._app.invalidate()
+            return
+
+        client = self._get_client()
+        if client is None:
+            state.error_text = 'controller not connected'
+            self._app.invalidate()
+            return
+
+        cmd_id = self._next_id
+        state.pending_request_id = cmd_id
+        state.error_text = ''
+        self._next_id += 1
+        try:
+            client.send_cmd({
+                'cmd': 'edit_device',
+                'target_device_uid': state.target_device_uid,
+                'device_uid': device_uid,
+                'strip_id': strip_id,
+                'length': length,
+                'id': cmd_id,
+            })
+        except OSError as e:
+            state.pending_request_id = None
+            state.error_text = f'send failed: {e}'
+            self._app.invalidate()
+
+    def _start_device_remove(self) -> None:
+        entry = self._selected_device_from_manager()
+        if entry is None:
+            return
+        confirm_button = DialogButton('OK', handler=self._submit_device_remove_dialog)
+        cancel_button = DialogButton('Cancel', handler=self._close_modal)
+        error_control = FormattedTextControl(
+            text=lambda: (
+                self._active_modal.error_text
+                if isinstance(self._active_modal, DeviceRemoveDialogState)
+                else ' '
+            )
+        )
+        dialog = Dialog(
+            title='Remove device',
+            body=HSplit([
+                Label(text=f'Remove device {entry.device_uid}?'),
+                Window(height=1, content=error_control, style='class:newdevice.error'),
+            ]),
+            buttons=[confirm_button, cancel_button],
+            with_background=True,
+        )
+        state = DeviceRemoveDialogState(
+            device_uid=entry.device_uid,
+            confirm_button=confirm_button,
+            cancel_button=cancel_button,
+            dialog=dialog,
+        )
+        self._set_modal(state, focus=confirm_button)
+
+    def _submit_device_remove_dialog(self) -> None:
+        state = self._active_modal
+        if not isinstance(state, DeviceRemoveDialogState):
+            return
+        if state.pending_request_id is not None:
+            return
+
+        client = self._get_client()
+        if client is None:
+            state.error_text = 'controller not connected'
+            self._app.invalidate()
+            return
+
+        cmd_id = self._next_id
+        state.pending_request_id = cmd_id
+        state.error_text = ''
+        self._next_id += 1
+        try:
+            client.send_cmd({
+                'cmd': 'remove_device',
+                'device_uid': state.device_uid,
+                'id': cmd_id,
+            })
+        except OSError as e:
+            state.pending_request_id = None
+            state.error_text = f'send failed: {e}'
+            self._app.invalidate()
 
     def _do_rescan(self) -> None:
         client = self._get_client()

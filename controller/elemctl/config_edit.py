@@ -103,6 +103,25 @@ def remove_device(doc: dict, device_uid: str) -> None:
     raise ConfigError(f"device not found: {device_uid}")
 
 
+def edit_device(
+    doc: dict,
+    target_device_uid: str,
+    *,
+    device_uid: str,
+    strip_id: str,
+    length: int,
+) -> None:
+    """Edit a device in place. Raises ConfigError if target is missing."""
+    devices = ensure_editor_shape(doc)["devices"]
+    for device in devices:
+        if isinstance(device, dict) and device.get("device_uid") == target_device_uid:
+            device["device_uid"] = device_uid
+            device["strip_id"] = strip_id
+            device["length"] = length
+            return
+    raise ConfigError(f"device not found: {target_device_uid}")
+
+
 def save_config_doc(path: str, doc: dict) -> None:
     """Validate and atomically save the config doc."""
     load_config_obj(doc)
