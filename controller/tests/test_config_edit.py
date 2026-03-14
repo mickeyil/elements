@@ -121,12 +121,14 @@ def test_save_config_doc_writes_valid_json_and_preserves_unknown_fields(tmp_path
     assert cfg.devices[0].device_uid == "sim-1"
 
 
-def test_save_config_doc_rejects_invalid_doc(tmp_path):
+def test_save_config_doc_allows_empty_devices(tmp_path):
     path = tmp_path / "config.json"
     doc = {
         "controller": {"frame_port": DEFAULT_FRAME_PORT},
         "devices": [],
     }
-    with pytest.raises(ConfigError, match="non-empty"):
-        save_config_doc(str(path), doc)
-    assert not path.exists()
+    save_config_doc(str(path), doc)
+    assert path.exists()
+
+    cfg = load_config(str(path))
+    assert cfg.devices == []

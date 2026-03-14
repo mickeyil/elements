@@ -150,6 +150,7 @@ class ControllerService:
         return self.build_snapshot()
 
     def _cmd_load(self, cmd: dict) -> dict:
+        self._require_configured_devices_for_load()
         source = cmd.get('source')
         beat = cmd.get('beat')
         duration = cmd.get('duration')
@@ -172,6 +173,7 @@ class ControllerService:
         return {'session_id': self._controller.session_id}
 
     def _cmd_load_program(self, cmd: dict) -> dict:
+        self._require_configured_devices_for_load()
         program_id = cmd.get('program_id')
         loop = cmd.get('loop', False)
         if not isinstance(program_id, str) or not program_id:
@@ -325,8 +327,6 @@ class ControllerService:
         device_uid = cmd.get('device_uid')
         if not isinstance(device_uid, str) or not device_uid:
             raise ValueError("missing 'device_uid' field")
-        if len(self._device_configs) <= 1:
-            raise ValueError('cannot remove the last configured device')
 
         candidate = copy.deepcopy(self._raw_doc)
         remove_device_doc(candidate, device_uid)
@@ -713,6 +713,10 @@ class ControllerService:
             )
         if self._config_path is None:
             raise ValueError('config path unavailable')
+
+    def _require_configured_devices_for_load(self) -> None:
+        if not self._device_configs:
+            raise ValueError('no configured devices')
 
     def _save_and_validate_candidate(self, candidate: dict) -> Config:
         try:

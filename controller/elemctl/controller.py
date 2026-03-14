@@ -62,9 +62,6 @@ class Controller:
         strips: list[StripConfig],
         clock: Callable[[], int] = time.monotonic_ns,
     ):
-        if not strips:
-            raise ValueError("Controller requires at least one strip")
-
         self._strips = list(strips)
         self._strip_id_to_index: dict[str, int] = {}
         for i, s in enumerate(self._strips):
@@ -127,7 +124,7 @@ class Controller:
             return self._paused_t_rel
         if self._state == ControllerState.PLAYING:
             now = self._clock()
-            return max(s.device.current_t_rel(now) for s in self._strips)
+            return self._max_current_t_rel(now)
         if self._state == ControllerState.ENDED:
             return self._duration
         return 0.0
@@ -141,6 +138,10 @@ class Controller:
     # ------------------------------------------------------------------
 
     def load(self, manifest: CompiledManifest, loop: bool = False) -> bool:
+        if not self._strips:
+            self._queue_event(ControllerEvent.Kind.ERROR, "no configured strips")
+            return False
+
         # Validate strip count
         if len(manifest.strips) != len(self._strips):
             self._queue_event(ControllerEvent.Kind.ERROR, "strip count mismatch")
@@ -241,9 +242,7 @@ class Controller:
         for s in self._strips:
             s.device.pause(now)
 
-        self._paused_t_rel = max(
-            s.device.current_t_rel(now) for s in self._strips
-        )
+        self._paused_t_rel = self._max_current_t_rel(now)
         self._state = ControllerState.PAUSED
         self._queue_event(ControllerEvent.Kind.STATE_CHANGED)
 
@@ -270,9 +269,7 @@ class Controller:
         self._buckets.clear()
 
         if not was_playing:
-            self._paused_t_rel = max(
-                s.device.current_t_rel(now) for s in self._strips
-            )
+            self._paused_t_rel = self._max_current_t_rel(now)
             self._state = ControllerState.PAUSED
         self._queue_event(ControllerEvent.Kind.STATE_CHANGED)
 
@@ -297,9 +294,7 @@ class Controller:
         if self._state == ControllerState.PLAYING:
             pass  # stay PLAYING
         else:
-            self._paused_t_rel = max(
-                s.device.current_t_rel(now) for s in self._strips
-            )
+            self._paused_t_rel = self._max_current_t_rel(now)
             self._state = ControllerState.PAUSED
         self._queue_event(ControllerEvent.Kind.STATE_CHANGED)
 
@@ -363,7 +358,7 @@ class Controller:
 
         # 4. End-of-program detection (controller-inferred, not device-reported)
         if self._state == ControllerState.PLAYING:
-            all_past_end = all(
+            all_past_end = bool(self._strips) and all(
                 s.device.current_t_rel(now) >= self._duration
                 for s in self._strips
             )
@@ -414,7 +409,14 @@ class Controller:
             )
         )
 
+    def _max_current_t_rel(self, now: int) -> float:
+        if not self._strips:
+            return 0.0
+        return max(s.device.current_t_rel(now) for s in self._strips)
+
     def _snap_to_safe(self, t_rel: float) -> float:
+        if not self._safe_intervals:
+            return 0.0
         for lo, hi in reversed(self._safe_intervals):
             if lo <= t_rel < hi:
                 return t_rel

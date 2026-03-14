@@ -41,6 +41,10 @@ def run_controller(
     stall_timeout: seconds with no frames received before aborting.
     receiver_factory / device_factory: for testing injection.
     """
+    if not config.devices:
+        log.error("no configured devices")
+        return ControllerState.IDLE
+
     receiver = receiver_factory(config.frame_port)
     devices = []
 

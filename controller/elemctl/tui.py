@@ -169,9 +169,10 @@ class ControllerConnectionUpdate:
 
 @dataclass
 class DeviceManagerDialogState:
-    device_list: RadioList
-    edit_button: Button
-    remove_button: Button
+    device_list: RadioList | None
+    edit_button: Button | None
+    remove_button: Button | None
+    add_button: Button | None
     close_button: Button
     dialog: Dialog
 
@@ -804,6 +805,7 @@ class TuiApp:
         self._pending_panel_updates: queue.Queue[object] = queue.Queue()
         self._device_panel: dict[str, DevicePanelEntry] = {}
         self._device_catalog: list[DeviceCatalogEntry] = []
+        self._device_catalog_ready = False
         self._program_catalog: list[ProgramCatalogEntry] = []
         self._program_catalog_ready = False
         self._controller_connected = False
@@ -861,6 +863,7 @@ class TuiApp:
             'enter',
             filter=Condition(
                 lambda: isinstance(self._active_modal, DeviceManagerDialogState)
+                and self._active_modal.device_list is not None
                 and get_app().layout.has_focus(self._active_modal.device_list)
             ),
             eager=True,
@@ -1008,6 +1011,7 @@ class TuiApp:
                 self._controller_disconnected_at_ns = None
             elif self._controller_connected:
                 self._controller_disconnected_at_ns = time.monotonic_ns()
+                self._device_catalog_ready = False
                 self._program_catalog_ready = False
             self._controller_connected = update.connected
             return
@@ -1081,6 +1085,7 @@ class TuiApp:
 
     def _apply_device_catalog_snapshot(self, devices: list[DeviceCatalogEntry]) -> None:
         self._device_catalog = list(devices)
+        self._device_catalog_ready = True
         self._refresh_device_manager_dialog()
 
     def _apply_device_catalog_status(self, info: DeviceCatalogEntry) -> None:
@@ -1435,7 +1440,7 @@ class TuiApp:
             return
         if self._active_modal is not None:
             return
-        if not self._device_catalog:
+        if not self._device_catalog_ready:
             self._local_log("device list not available yet")
             return
         self._open_device_manager()
@@ -1474,6 +1479,9 @@ class TuiApp:
         if self._get_client() is None:
             self._local_log("controller not connected")
             return
+        self._open_newdevice_dialog()
+
+    def _open_newdevice_dialog(self) -> None:
         state = self._build_newdevice_dialog()
         self._set_modal(state, focus=state.device_type)
 
@@ -1906,6 +1914,8 @@ class TuiApp:
     def _selected_device_from_manager(self) -> DeviceCatalogEntry | None:
         if not isinstance(self._active_modal, DeviceManagerDialogState):
             return None
+        if self._active_modal.device_list is None:
+            return None
         selected_uid = self._active_modal.device_list.current_value
         for entry in self._device_catalog:
             if entry.device_uid == selected_uid:
@@ -1915,20 +1925,50 @@ class TuiApp:
     def _refresh_device_manager_dialog(self) -> None:
         if not isinstance(self._active_modal, DeviceManagerDialogState):
             return
+        modal = self._active_modal
         options = self._device_manager_options()
-        if not options:
+        if modal.device_list is None:
+            if options:
+                self._open_device_manager()
+            else:
+                self._app.invalidate()
             return
-        selected_uid = self._active_modal.device_list.current_value
-        self._active_modal.device_list.values = options
+        if not options:
+            self._open_device_manager()
+            return
+        selected_uid = modal.device_list.current_value
+        modal.device_list.values = options
         if not any(uid == selected_uid for uid, _ in options):
             selected_uid = options[0][0]
-        self._active_modal.device_list.current_value = selected_uid
+        modal.device_list.current_value = selected_uid
         self._app.invalidate()
 
     def _open_device_manager(self) -> None:
         options = self._device_manager_options()
         if not options:
-            self._local_log("no configured devices")
+            add_button = DialogButton('Add', handler=self._start_newdevice_from_devices)
+            close_button = DialogButton('Close', handler=self._close_modal)
+            dialog = Dialog(
+                title='Devices',
+                body=HSplit([
+                    Label(text='No configured devices.', style='class:newdevice.label'),
+                    Label(
+                        text='Add a device to begin.',
+                        style='class:newdevice.help',
+                    ),
+                ]),
+                buttons=[add_button, close_button],
+                with_background=True,
+            )
+            state = DeviceManagerDialogState(
+                device_list=None,
+                edit_button=None,
+                remove_button=None,
+                add_button=add_button,
+                close_button=close_button,
+                dialog=dialog,
+            )
+            self._set_modal(state, focus=add_button)
             return
         device_list = RadioList(values=options, default=options[0][0], select_on_focus=True)
         edit_button = DialogButton('Edit', handler=self._start_device_edit)
@@ -1951,10 +1991,19 @@ class TuiApp:
             device_list=device_list,
             edit_button=edit_button,
             remove_button=remove_button,
+            add_button=None,
             close_button=close_button,
             dialog=dialog,
         )
         self._set_modal(state, focus=device_list)
+
+    def _start_newdevice_from_devices(self) -> None:
+        if not isinstance(self._active_modal, DeviceManagerDialogState):
+            return
+        if self._get_client() is None:
+            self._local_log("controller not connected")
+            return
+        self._open_newdevice_dialog()
 
     def _start_device_edit(self) -> None:
         entry = self._selected_device_from_manager()

@@ -1160,9 +1160,9 @@ class TestConfigMutations:
         assert added._host == '127.0.0.1'
         assert added._tcp_port == 9010
 
-    def test_remove_last_device_rejected(self, tmp_path):
+    def test_remove_last_device_allowed(self, tmp_path):
         config = _make_config()
-        svc, _path = _make_service_with_path(
+        svc, path = _make_service_with_path(
             tmp_path,
             config,
             device_factory=lambda *args, **kwargs: _FakeDevice(),
@@ -1174,8 +1174,11 @@ class TestConfigMutations:
             'device_uid': 'sim-1',
         })
 
-        assert reply['ok'] is False
-        assert 'last configured device' in reply['error']
+        assert reply['ok'] is True
+        saved = load_config(str(path))
+        assert saved.devices == []
+        assert svc._devices == []
+        assert svc.build_snapshot()['expected_count'] == 0
 
     def test_edit_last_device_allowed(self, tmp_path):
         config = _make_config()
@@ -1199,6 +1202,63 @@ class TestConfigMutations:
         assert [(dc.device_uid, dc.strip_id, dc.length) for dc in saved.devices] == [
             ('sim-1', 'main', 42),
         ]
+
+    def test_service_allows_zero_device_config(self):
+        svc, _fakes = _make_service(n_devices=0)
+
+        snap = svc.build_snapshot()
+        assert svc._devices == []
+        assert snap['devices'] == []
+        assert snap['expected_count'] == 0
+        assert snap['online_count'] == 0
+
+    def test_load_rejected_when_no_devices_configured(self):
+        svc, _fakes = _make_service(n_devices=0)
+
+        reply = svc.handle_cmd({
+            'id': 1,
+            'cmd': 'load',
+            'source': _SIMPLE_DSL,
+            'beat': 1.0,
+            'duration': 0.5,
+        })
+
+        assert reply['ok'] is False
+        assert reply['error'] == 'no configured devices'
+
+    def test_load_program_rejected_when_no_devices_configured(self):
+        entries = [_make_program_entry('main_show')]
+        fake_library = _FakeLibrary('/tmp/programs', entries)
+        svc, _fakes = _make_service(
+            n_devices=0,
+            library_factory=lambda animations_dir: fake_library,
+        )
+
+        reply = svc.handle_cmd({
+            'id': 1,
+            'cmd': 'load_program',
+            'program_id': 'main_show',
+        })
+
+        assert reply['ok'] is False
+        assert reply['error'] == 'no configured devices'
+
+    def test_publish_program_still_works_with_no_devices(self):
+        fake_library = _FakeLibrary('/tmp/programs')
+        svc, _fakes = _make_service(
+            n_devices=0,
+            library_factory=lambda animations_dir: fake_library,
+        )
+
+        reply = svc.handle_cmd({
+            'id': 1,
+            'cmd': 'publish_program',
+            'program_id': 'ambient',
+            'source': _SIMPLE_DSL,
+        })
+
+        assert reply['ok'] is True
+        assert reply['result']['program']['program_id'] == 'ambient'
 
 
 class TestTickProbesDisconnected:

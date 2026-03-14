@@ -125,8 +125,8 @@ def load_config_obj(raw: dict) -> Config:
     devices_raw = raw.get("devices")
     if devices_raw is None:
         raise ConfigError("missing 'devices' section")
-    if not isinstance(devices_raw, list) or len(devices_raw) == 0:
-        raise ConfigError("'devices' must be a non-empty list")
+    if not isinstance(devices_raw, list):
+        raise ConfigError("'devices' must be a list")
 
     _DEVICE_FIELDS = {
         "device_id": int,

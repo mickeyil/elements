@@ -1,6 +1,6 @@
 # Controller
 
-> **Status: Partially implemented.** The Python controller service, Unix-socket control API, discovery receiver, and `network_sim` transport are implemented. The web app described in earlier design drafts is not part of this repo. Artifact caching is not implemented — each `load` recompiles from source.
+> **Status: Partially implemented.** The Python controller service, Unix-socket control API, discovery receiver, simulator transport, controller-owned program library, and artifact cache are implemented. The repo also includes a minimal browser viewer (`elemctl web`) that connects as an observer relay. Full web-side control parity and hardware parity are still future work.
 
 ## Base-station config
 
@@ -11,6 +11,8 @@ A static config file on the base station is the single source of truth for the p
 - the mapping from logical `strip_id` values used by the DSL to concrete devices
 
 When the server is running, it owns this config as live state. TUI mutations such as `/newdevice` and `/rmdevice` are sent to the server, which validates the change, atomically rewrites the config file, and updates runtime state immediately.
+
+`devices` may be empty. An empty install is valid for config management, discovery status, and program-library operations. Playback loads still require at least one configured device.
 
 ### Example config
 
@@ -99,9 +101,9 @@ dict[str, bytes]   # strip_name -> blob
 
 The blob format and decoder are unchanged. The manifest is controller-level metadata — devices never see it. They receive bare blobs via LOAD as before.
 
-### Compilation (no caching)
+### Compilation and caching
 
-Each `load` command recompiles from source. There is no artifact cache — the controller calls the compiler on every load request. Caching compiled manifests is a potential future optimization but is not implemented.
+Raw `load` recompiles from source on every request. `load_program` resolves a controller-owned library entry and uses an in-memory artifact cache keyed by source hash and strip topology. Changing the strip inventory invalidates cache hits automatically because the topology fingerprint changes.
 
 ### Identity model
 
@@ -429,6 +431,8 @@ Commands carry an `id` (client-assigned, incrementing counter) that the controll
 
 `edit_device` only allows changing `device_uid`, `strip_id`, and `length`. `device_type` is immutable; changing a device from `sim` to `esp32` is treated as remove + add, not edit.
 
+`load` and `load_program` require at least one configured device. With an empty inventory they fail cleanly with `no configured devices`.
+
 **Controller → Client (replies):**
 
 Replies are **controller-complete** — the reply is sent after the controller has finished all work for the command (compilation, device ACKs, state updates). The client does not need to track intermediate states or correlate follow-up events.
@@ -476,8 +480,8 @@ The `strips` array in `session_start` defines the **canonical strip order and le
 
 | Command | Controller-complete means | Reply result |
 |---------|--------------------------|-------------|
-| `load` | Compiled from source, all devices ACKed LOAD, session created | `{"session_id": N}` |
-| `load_program` | Known program resolved from the controller-owned library, compiled or cache-hit, all devices ACKed LOAD, session created | `{"session_id": N}` |
+| `load` | Compiled from source, all configured devices ACKed LOAD, session created. Rejected with `no configured devices` when inventory is empty. | `{"session_id": N}` |
+| `load_program` | Known program resolved from the controller-owned library, compiled or cache-hit, all configured devices ACKed LOAD, session created. Rejected with `no configured devices` when inventory is empty. | `{"session_id": N}` |
 | `publish_program` | Program source stored under `program_id`, library entry updated, `programs_updated` broadcast queued. Does not load or play the program. Broken source is still stored, with `error` set in the returned entry. | `{"program": {...}}` |
 | `play` | State updated; sends START (from LOADED/ENDED) or RESUME (from PAUSED) to all devices + audio | `{}` |
 | `pause` | CMD_PAUSE sent to all devices, audio paused, state updated | `{}` |
@@ -487,7 +491,7 @@ The `strips` array in `session_start` defines the **canonical strip order and le
 | `rescan_programs` | Program library rescanned from `animations_dir`, catalog updated, `programs_updated` broadcast queued | `{"programs": [...]}` |
 | `add_device` | Candidate config validated, saved atomically, inventory reconciled, controller rebuilt (idle/stopped/ended only) | `{"message": "added device ..."}` |
 | `edit_device` | Existing device located by `target_device_uid`, editable fields (`device_uid`, `strip_id`, `length`) validated and saved atomically, inventory reconciled, controller rebuilt (idle/stopped/ended only) | `{"message": "updated device ..."}` |
-| `remove_device` | Candidate config validated, saved atomically, inventory reconciled, controller rebuilt (idle/stopped/ended only) | `{"message": "removed device ..."}` |
+| `remove_device` | Candidate config validated, saved atomically, inventory reconciled, controller rebuilt (idle/stopped/ended only). Removing the last device is allowed. | `{"message": "removed device ..."}` |
 
 #### kind=0x02 — Program frame
 
@@ -551,6 +555,8 @@ If no active session (controller just started, no program loaded yet):
   "devices": [ ... ]
 }
 ```
+
+With an empty install, the same snapshot shape is used with `expected_count: 0`, `online_count: 0`, and `devices: []`.
 
 **What the snapshot contains:**
 

@@ -973,9 +973,13 @@ class TestSafeIntervals:
 
 
 class TestConstructor:
-    def test_rejects_empty_strips(self):
-        with pytest.raises(ValueError):
-            Controller([], clock=lambda: 0)
+    def test_allows_empty_strips(self):
+        ctrl = Controller([], clock=lambda: 0)
+        assert ctrl.state == ControllerState.IDLE
+        assert ctrl.current_t_rel == 0.0
+        ctrl.tick_once()
+        assert ctrl.drain_events() == []
+        assert ctrl.drain_program_frames() == []
 
     def test_rejects_duplicate_strip_ids(self):
         a = MockDevice()

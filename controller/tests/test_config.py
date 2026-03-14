@@ -80,8 +80,8 @@ class TestLoadConfig:
 
     def test_empty_devices(self, tmp_path):
         data = _valid_config(devices=[])
-        with pytest.raises(ConfigError, match="non-empty"):
-            load_config(_write_config(tmp_path, data))
+        cfg = load_config(_write_config(tmp_path, data))
+        assert cfg.devices == []
 
     def test_missing_frame_port(self, tmp_path):
         data = _valid_config()

@@ -323,3 +323,15 @@ class TestStallDetection:
         )
         elapsed = time.monotonic() - t0
         assert elapsed < 1.0, f"took {elapsed:.1f}s, should abort in ~0.2s"
+
+
+class TestZeroDeviceConfig:
+    def test_run_controller_rejects_empty_device_list(self):
+        from elements.types import CompiledManifest
+
+        config = Config(frame_port=1, devices=[])
+        manifest = CompiledManifest(duration=1.0, strips=[], safe_intervals=[])
+
+        state = run_controller(config, manifest, loop=False)
+
+        assert state == ControllerState.IDLE
