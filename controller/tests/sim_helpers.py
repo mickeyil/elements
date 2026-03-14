@@ -72,6 +72,11 @@ def start_sim(tcp_port: int, frame_port: int, strip_length: int,
     if not NETWORK_SIM_BIN.exists():
         pytest.skip(f'network_sim not built at {NETWORK_SIM_BIN}')
 
+    if discovery_port is None:
+        # Always isolate test sims from the binary default discovery port.
+        # Tests that need a shared discovery domain pass an explicit port.
+        discovery_port = find_free_udp_port()
+
     cmd = [
         str(NETWORK_SIM_BIN),
         '--tcp-port', str(tcp_port),
@@ -79,8 +84,7 @@ def start_sim(tcp_port: int, frame_port: int, strip_length: int,
     if device_uid is None:
         device_uid = f'sim-{device_id}'
     cmd += ['--device-uid', device_uid]
-    if discovery_port is not None:
-        cmd += ['--discovery-port', str(discovery_port)]
+    cmd += ['--discovery-port', str(discovery_port)]
     if discovery_host is not None:
         cmd += ['--discovery-host', discovery_host]
 

@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.runtime_integration
+
 # Ensure compiler package is importable
 _repo = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_repo / 'compiler'))
