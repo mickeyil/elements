@@ -51,55 +51,9 @@ from .config import (
 from .config_edit import (
     load_config_doc,
 )
-from .program_metadata import extract_metadata as _extract_metadata
 from .uds_client import UdsClient
 from .uds_wire import KIND_FRAME, KIND_JSON, parse_json_payload
 from .version import get_runtime_version
-
-
-# ------------------------------------------------------------------
-# Animation metadata
-# ------------------------------------------------------------------
-
-@dataclass
-class AnimationEntry:
-    name: str           # stem, e.g. "spark_demo"
-    path: str           # absolute path
-    beat: float | None
-    duration: float | None
-    error: str | None   # set if metadata extraction failed
-
-
-def extract_metadata(path: str) -> tuple[float, float]:
-    """Extract BEAT and DURATION from a DSL animation file."""
-    try:
-        source = Path(path).read_text()
-    except OSError as e:
-        raise ValueError(f"cannot read file: {e}") from e
-    return _extract_metadata(source, path)
-
-
-def scan_animations(directory: str) -> list[AnimationEntry]:
-    """Scan a directory for .py animation files. Returns sorted entries."""
-    expanded = os.path.expanduser(directory)
-    if not os.path.isdir(expanded):
-        return []
-
-    entries: list[AnimationEntry] = []
-    for p in sorted(Path(expanded).glob('*.py')):
-        try:
-            beat, duration = extract_metadata(str(p))
-            entries.append(AnimationEntry(
-                name=p.stem, path=str(p),
-                beat=beat, duration=duration, error=None,
-            ))
-        except ValueError as e:
-            entries.append(AnimationEntry(
-                name=p.stem, path=str(p),
-                beat=None, duration=None, error=str(e),
-            ))
-
-    return entries
 
 
 # ------------------------------------------------------------------
@@ -160,6 +114,19 @@ class PanelSnapshotUpdate:
 @dataclass(frozen=True)
 class PanelDeviceStatusUpdate:
     device: PanelDeviceInfo
+
+
+@dataclass(frozen=True)
+class ProgramCatalogEntry:
+    program_id: str
+    beat: float | None
+    duration: float | None
+    error: str | None
+
+
+@dataclass(frozen=True)
+class ProgramCatalogUpdate:
+    programs: list[ProgramCatalogEntry]
 
 
 @dataclass(frozen=True)
@@ -377,6 +344,59 @@ def _panel_device_info_from_dict(data: dict) -> PanelDeviceInfo | None:
     )
 
 
+def _normalize_optional_float(value) -> float | None:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    return None
+
+
+def _program_catalog_entry_from_dict(data: dict) -> ProgramCatalogEntry | None:
+    program_id = data.get('program_id')
+    if not isinstance(program_id, str) or not program_id:
+        return None
+    error = data.get('error')
+    if error is not None and not isinstance(error, str):
+        error = str(error)
+    return ProgramCatalogEntry(
+        program_id=program_id,
+        beat=_normalize_optional_float(data.get('beat')),
+        duration=_normalize_optional_float(data.get('duration')),
+        error=error,
+    )
+
+
+def _program_catalog_from_message(msg: dict) -> list[ProgramCatalogEntry]:
+    programs = msg.get('programs')
+    if not isinstance(programs, list):
+        return []
+    return [
+        entry
+        for item in programs
+        if isinstance(item, dict)
+        for entry in [_program_catalog_entry_from_dict(item)]
+        if entry is not None
+    ]
+
+
+def _format_program_catalog(programs: list[dict]) -> list[str]:
+    if not programs:
+        return ['no programs in library']
+
+    lines = [f'{len(programs)} program(s) in library:']
+    for i, program in enumerate(programs, 1):
+        program_id = program.get('program_id', '?')
+        error = program.get('error')
+        if error:
+            lines.append(f'  #{i}  {program_id:<16s} ERROR: {error}')
+            continue
+        lines.append(
+            '  '
+            + f'#{i}  {program_id:<16s} '
+            + f'beat={program.get("beat")} duration={program.get("duration")}'
+        )
+    return lines
+
+
 def _panel_updates_from_message(msg: dict) -> list[object]:
     msg_type = msg.get('type')
     if msg_type == 'reply' and msg.get('ok'):
@@ -389,7 +409,8 @@ def _panel_updates_from_message(msg: dict) -> list[object]:
                 for info in [_panel_device_info_from_dict(dev)]
                 if info is not None
             ]
-            return [PanelSnapshotUpdate(devices)]
+            programs = _program_catalog_from_message(result)
+            return [PanelSnapshotUpdate(devices), ProgramCatalogUpdate(programs)]
         return []
 
     if msg_type != 'event':
@@ -404,12 +425,16 @@ def _panel_updates_from_message(msg: dict) -> list[object]:
             for info in [_panel_device_info_from_dict(dev)]
             if info is not None
         ]
-        return [PanelSnapshotUpdate(devices)]
+        programs = _program_catalog_from_message(msg)
+        return [PanelSnapshotUpdate(devices), ProgramCatalogUpdate(programs)]
 
     if event == 'device_status':
         info = _panel_device_info_from_dict(msg)
         if info is not None:
             return [PanelDeviceStatusUpdate(info)]
+
+    if event == 'programs_updated':
+        return [ProgramCatalogUpdate(_program_catalog_from_message(msg))]
 
     return []
 
@@ -443,6 +468,8 @@ def _format_message(msg: dict) -> list[str]:
             result = msg.get('result', {})
             if isinstance(result, dict) and result.get('event') == 'snapshot':
                 return _format_controller_event(result)
+            if isinstance(result, dict) and isinstance(result.get('programs'), list):
+                return _format_program_catalog(result['programs'])
             if (
                 isinstance(result, dict)
                 and set(result.keys()) == {'message'}
@@ -543,8 +570,6 @@ class TuiApp:
     ):
         self._socket_path = socket_path
         self._config_path = config_path
-        self._animations_dir = animations_dir
-        self._animation_list: list[AnimationEntry] = []
         self._newdevice_dialog: NewDeviceDialogState | None = None
         self._client: UdsClient | None = None
         self._client_lock = threading.Lock()
@@ -554,6 +579,7 @@ class TuiApp:
         self._pending_logs: queue.Queue[str] = queue.Queue()
         self._pending_panel_updates: queue.Queue[object] = queue.Queue()
         self._device_panel: dict[str, DevicePanelEntry] = {}
+        self._program_catalog: list[ProgramCatalogEntry] = []
         self._controller_connected = False
         self._controller_disconnected_at_ns = time.monotonic_ns()
         self._reader_thread: threading.Thread | None = None
@@ -740,6 +766,9 @@ class TuiApp:
             return
         if isinstance(update, PanelDeviceStatusUpdate):
             self._apply_device_status_update(update.device)
+            return
+        if isinstance(update, ProgramCatalogUpdate):
+            self._program_catalog = list(update.programs)
 
     def _resolve_panel_device_state(
         self,
@@ -1016,9 +1045,9 @@ class TuiApp:
         self._local_log("  /pause              pause playback")
         self._local_log("  /stop               stop playback")
         self._local_log("  /shutdown           stop the controller service")
-        self._local_log("  /rescan             rescan the animations directory")
-        self._local_log("  /load NAME [loop]   load an animation by name")
-        self._local_log("  /load #N [loop]     load an animation by list index")
+        self._local_log("  /rescan             rescan the controller program library")
+        self._local_log("  /load NAME [loop]   load a program by name")
+        self._local_log("  /load #N [loop]     load a program by list index")
         self._local_log("  /quit, /exit        quit the TUI")
 
     def _load_config_doc(self) -> dict | None:
@@ -1235,72 +1264,65 @@ class TuiApp:
         self._cancel_newdevice_dialog()
 
     def _do_rescan(self) -> None:
-        self._animation_list = scan_animations(self._animations_dir)
-        entries = self._animation_list
-        if not entries:
-            self._local_log(f"no animations in {self._animations_dir}")
+        client = self._get_client()
+        if client is None:
+            self._local_log("not connected")
             return
-        self._local_log(
-            f"{len(entries)} animation(s) in {self._animations_dir}:"
-        )
-        for i, e in enumerate(entries, 1):
-            if e.error:
-                self._local_log(f"  #{i}  {e.name:<16s} ERROR: {e.error}")
-            else:
-                self._local_log(
-                    f"  #{i}  {e.name:<16s} beat={e.beat} duration={e.duration}"
-                )
+        try:
+            client.send_cmd({
+                'cmd': 'rescan_programs',
+                'id': self._next_id,
+            })
+        except OSError as e:
+            self._local_log(f"send failed: {e}")
+            return
+        self._next_id += 1
 
-    def _do_load(self, cmd: dict) -> None:
-        # Auto-rescan if list is empty
-        if not self._animation_list:
-            self._animation_list = scan_animations(self._animations_dir)
-
+    def _resolve_program_entry(self, cmd: dict) -> ProgramCatalogEntry | None:
         index = cmd.get('index')
         target = cmd.get('target')
-        loop = cmd.get('loop', False)
 
         if index is not None:
-            if index < 1 or index > len(self._animation_list):
+            if index < 1 or index > len(self._program_catalog):
                 self._local_log(
                     f"index #{index} out of range "
-                    f"(have {len(self._animation_list)} animations)"
+                    f"(have {len(self._program_catalog)} programs)"
                 )
-                return
-            entry = self._animation_list[index - 1]
-        else:
-            matches = [e for e in self._animation_list if e.name == target]
-            if not matches:
-                self._local_log(f"animation not found: {target}")
-                return
-            entry = matches[0]
+                return None
+            return self._program_catalog[index - 1]
 
+        for entry in self._program_catalog:
+            if entry.program_id == target:
+                return entry
+        self._local_log(f"program not found: {target}")
+        return None
+
+    def _do_load(self, cmd: dict) -> None:
+        if not self._program_catalog:
+            self._local_log("no known programs, try /rescan")
+            return
+
+        loop = cmd.get('loop', False)
+        entry = self._resolve_program_entry(cmd)
+        if entry is None:
+            return
         if entry.error:
-            self._local_log(f"cannot load {entry.name}: {entry.error}")
+            self._local_log(f"cannot load {entry.program_id}: {entry.error}")
             return
-
-        try:
-            source = Path(entry.path).read_text()
-        except OSError as e:
-            self._local_log(f"cannot read {entry.path}: {e}")
-            return
-
-        wire_cmd = {
-            'cmd': 'load',
-            'source': source,
-            'beat': entry.beat,
-            'duration': entry.duration,
-            'loop': loop,
-            'id': self._next_id,
-        }
-        loop_str = ' loop' if loop else ''
-        self._local_log(f"> /load {entry.name}{loop_str}")
-        self._next_id += 1
 
         client = self._get_client()
         if client is None:
             self._local_log("not connected")
             return
+        wire_cmd = {
+            'cmd': 'load_program',
+            'program_id': entry.program_id,
+            'loop': loop,
+            'id': self._next_id,
+        }
+        loop_str = ' loop' if loop else ''
+        self._local_log(f"> /load {entry.program_id}{loop_str}")
+        self._next_id += 1
 
         try:
             client.send_cmd(wire_cmd)

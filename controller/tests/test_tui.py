@@ -1,4 +1,4 @@
-"""Tests for TUI non-UI logic: format_event, parse_command, metadata, scan."""
+"""Tests for TUI non-UI logic."""
 
 import datetime
 import json
@@ -13,12 +13,12 @@ from elemctl.tui import (
     PanelDeviceInfo,
     PanelDeviceStatusUpdate,
     PanelSnapshotUpdate,
+    ProgramCatalogEntry,
+    ProgramCatalogUpdate,
     TuiApp,
     _decode_tui_message,
     format_event,
     parse_command,
-    extract_metadata,
-    scan_animations,
     format_transcript_line,
     parse_length,
     validate_device_uid,
@@ -176,6 +176,24 @@ class TestFormatEvent:
         }
         result = format_event(KIND_JSON, _json_payload(msg))
         assert result == []
+
+    def test_reply_programs_formats_catalog(self):
+        msg = {
+            'type': 'reply',
+            'id': 9,
+            'ok': True,
+            'result': {
+                'programs': [
+                    {'program_id': 'ambient', 'beat': 1.0, 'duration': 12.0, 'error': None},
+                    {'program_id': 'broken', 'beat': None, 'duration': None, 'error': 'missing BEAT'},
+                ],
+            },
+        }
+        assert format_event(KIND_JSON, _json_payload(msg)) == [
+            '2 program(s) in library:',
+            '  #1  ambient          beat=1.0 duration=12.0',
+            '  #2  broken           ERROR: missing BEAT',
+        ]
 
     def test_reply_ok(self):
         msg = {'type': 'reply', 'id': 7, 'ok': True, 'result': {'x': 1}}
@@ -612,10 +630,51 @@ class TestDevicePanel:
             'devices online:',
             '  sim-1: strip "main" with 10 LEDs',
         ]
-        assert updates == [PanelSnapshotUpdate([
-            PanelDeviceInfo('sim-1', 'main', 10, True),
-            PanelDeviceInfo('sim-2', 'aux', 20, False),
-        ])]
+        assert updates == [
+            PanelSnapshotUpdate([
+                PanelDeviceInfo('sim-1', 'main', 10, True),
+                PanelDeviceInfo('sim-2', 'aux', 20, False),
+            ]),
+            ProgramCatalogUpdate([]),
+        ]
+
+    def test_decode_snapshot_updates_program_catalog(self):
+        msg = {
+            'type': 'event',
+            'event': 'snapshot',
+            'session': None,
+            'devices': [],
+            'programs': [
+                {'program_id': 'ambient', 'beat': 1.0, 'duration': 8.0, 'error': None},
+                {'program_id': 'broken', 'beat': None, 'duration': None, 'error': 'missing DURATION'},
+            ],
+        }
+        lines, updates = _decode_tui_message(KIND_JSON, _json_payload(msg))
+        assert lines == [
+            'controller is idle',
+            'devices online: none',
+        ]
+        assert updates == [
+            PanelSnapshotUpdate([]),
+            ProgramCatalogUpdate([
+                ProgramCatalogEntry('ambient', 1.0, 8.0, None),
+                ProgramCatalogEntry('broken', None, None, 'missing DURATION'),
+            ]),
+        ]
+
+    def test_programs_updated_produces_catalog_update_without_transcript(self):
+        msg = {
+            'type': 'event',
+            'event': 'programs_updated',
+            'programs': [
+                {'program_id': 'ambient', 'beat': 1.0, 'duration': 8.0, 'error': None},
+            ],
+        }
+        lines, updates = _decode_tui_message(KIND_JSON, _json_payload(msg))
+        assert lines == []
+        assert updates == [
+            ProgramCatalogUpdate([ProgramCatalogEntry('ambient', 1.0, 8.0, None)])
+        ]
 
     def test_connected_snapshot_bootstraps_panel(self, tmp_path):
         app = TuiApp(
@@ -630,6 +689,25 @@ class TestDevicePanel:
             ]))
             assert app._device_panel['sim-1'].status == 'connected'
             assert app._device_panel['sim-2'].status == 'configured'
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+    def test_program_catalog_update_replaces_catalog(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        try:
+            app._apply_panel_update(ProgramCatalogUpdate([
+                ProgramCatalogEntry('ambient', 1.0, 8.0, None),
+                ProgramCatalogEntry('broken', None, None, 'missing DURATION'),
+            ]))
+            assert app._program_catalog == [
+                ProgramCatalogEntry('ambient', 1.0, 8.0, None),
+                ProgramCatalogEntry('broken', None, None, 'missing DURATION'),
+            ]
         finally:
             if app._log_fp is not None:
                 app._log_fp.close()
@@ -953,6 +1031,171 @@ class TestNewDeviceDialog:
         assert app._newdevice_dialog is not None
 
 
+class TestProgramCatalogCommands:
+    class _FakeClient:
+        def __init__(self):
+            self.commands: list[dict] = []
+
+        def send_cmd(self, cmd: dict) -> None:
+            self.commands.append(cmd)
+
+        def close(self) -> None:
+            pass
+
+    def test_rescan_sends_controller_command(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        client = self._FakeClient()
+        app._set_client(client)
+
+        try:
+            app._do_rescan()
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        assert client.commands == [{'cmd': 'rescan_programs', 'id': 1}]
+
+    def test_rescan_requires_connection(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+
+        try:
+            app._do_rescan()
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        assert any(line.endswith('not connected') for line in app._log_lines)
+
+    def test_load_by_name_sends_load_program(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        client = self._FakeClient()
+        app._set_client(client)
+        app._program_catalog = [
+            ProgramCatalogEntry('ambient', 1.0, 8.0, None),
+            ProgramCatalogEntry('broken', None, None, 'missing DURATION'),
+        ]
+
+        try:
+            app._do_load({'cmd': 'load', 'target': 'ambient', 'index': None, 'loop': True, 'id': 1})
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        assert client.commands == [{
+            'cmd': 'load_program',
+            'program_id': 'ambient',
+            'loop': True,
+            'id': 1,
+        }]
+        assert any(line.endswith('> /load ambient loop') for line in app._log_lines)
+
+    def test_load_by_index_sends_load_program(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        client = self._FakeClient()
+        app._set_client(client)
+        app._program_catalog = [
+            ProgramCatalogEntry('ambient', 1.0, 8.0, None),
+            ProgramCatalogEntry('spark_demo', 0.5, 16.0, None),
+        ]
+
+        try:
+            app._do_load({'cmd': 'load', 'target': None, 'index': 2, 'loop': False, 'id': 1})
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        assert client.commands == [{
+            'cmd': 'load_program',
+            'program_id': 'spark_demo',
+            'loop': False,
+            'id': 1,
+        }]
+        assert any(line.endswith('> /load spark_demo') for line in app._log_lines)
+
+    def test_load_rejects_broken_program_locally(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        client = self._FakeClient()
+        app._set_client(client)
+        app._program_catalog = [
+            ProgramCatalogEntry('broken', None, None, 'missing DURATION'),
+        ]
+
+        try:
+            app._do_load({'cmd': 'load', 'target': 'broken', 'index': None, 'loop': False, 'id': 1})
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        assert client.commands == []
+        assert any(
+            line.endswith('cannot load broken: missing DURATION')
+            for line in app._log_lines
+        )
+
+    def test_load_without_catalog_suggests_rescan(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        client = self._FakeClient()
+        app._set_client(client)
+
+        try:
+            app._do_load({'cmd': 'load', 'target': 'ambient', 'index': None, 'loop': False, 'id': 1})
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        assert client.commands == []
+        assert any(
+            line.endswith('no known programs, try /rescan')
+            for line in app._log_lines
+        )
+
+    def test_load_index_out_of_range_uses_catalog_size(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        client = self._FakeClient()
+        app._set_client(client)
+        app._program_catalog = [ProgramCatalogEntry('ambient', 1.0, 8.0, None)]
+
+        try:
+            app._do_load({'cmd': 'load', 'target': None, 'index': 2, 'loop': False, 'id': 1})
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        assert client.commands == []
+        assert any(
+            line.endswith('index #2 out of range (have 1 programs)')
+            for line in app._log_lines
+        )
+
+
 class TestTuiMain:
     def test_missing_config_path_is_allowed(self, monkeypatch, tmp_path):
         called = {}
@@ -1023,138 +1266,3 @@ class TestRecvOnce:
                 client.recv_once()
         finally:
             b.close()
-
-
-# ---------------------------------------------------------------------------
-# extract_metadata tests
-# ---------------------------------------------------------------------------
-
-class TestExtractMetadata:
-    def test_valid_float(self, tmp_path):
-        f = tmp_path / "prog.py"
-        f.write_text("BEAT = 0.5\nDURATION = 8.0\n")
-        beat, dur = extract_metadata(str(f))
-        assert beat == 0.5
-        assert dur == 8.0
-
-    def test_valid_int(self, tmp_path):
-        f = tmp_path / "prog.py"
-        f.write_text("BEAT = 1\nDURATION = 8\n")
-        beat, dur = extract_metadata(str(f))
-        assert beat == 1
-        assert dur == 8
-
-    def test_missing_beat(self, tmp_path):
-        f = tmp_path / "prog.py"
-        f.write_text("DURATION = 8.0\n")
-        with pytest.raises(ValueError, match="missing BEAT"):
-            extract_metadata(str(f))
-
-    def test_missing_duration(self, tmp_path):
-        f = tmp_path / "prog.py"
-        f.write_text("BEAT = 0.5\n")
-        with pytest.raises(ValueError, match="missing DURATION"):
-            extract_metadata(str(f))
-
-    def test_string_value(self, tmp_path):
-        f = tmp_path / "prog.py"
-        f.write_text('BEAT = "fast"\nDURATION = 8.0\n')
-        with pytest.raises(ValueError, match="numeric literal"):
-            extract_metadata(str(f))
-
-    def test_expression_rejected(self, tmp_path):
-        f = tmp_path / "prog.py"
-        f.write_text("BEAT = 60 / 120\nDURATION = 8.0\n")
-        with pytest.raises(ValueError, match="numeric literal"):
-            extract_metadata(str(f))
-
-    def test_syntax_error(self, tmp_path):
-        f = tmp_path / "prog.py"
-        f.write_text("BEAT = (\n")
-        with pytest.raises(ValueError, match="syntax error"):
-            extract_metadata(str(f))
-
-    def test_non_positive_value(self, tmp_path):
-        f = tmp_path / "prog.py"
-        f.write_text("BEAT = 0\nDURATION = 8.0\n")
-        with pytest.raises(ValueError, match="must be positive"):
-            extract_metadata(str(f))
-
-    def test_negative_value(self, tmp_path):
-        """BEAT = -1 is ast.UnaryOp, not ast.Constant."""
-        f = tmp_path / "prog.py"
-        f.write_text("BEAT = -1\nDURATION = 8.0\n")
-        with pytest.raises(ValueError, match="numeric literal"):
-            extract_metadata(str(f))
-
-    def test_nonexistent_file(self):
-        with pytest.raises(ValueError, match="cannot read"):
-            extract_metadata("/no/such/file.py")
-
-    def test_extra_code_ignored(self, tmp_path):
-        f = tmp_path / "prog.py"
-        f.write_text("BEAT = 0.5\nDURATION = 4.0\nx = 42\nimport os\n")
-        beat, dur = extract_metadata(str(f))
-        assert beat == 0.5
-        assert dur == 4.0
-
-    def test_duplicate_beat_rejected(self, tmp_path):
-        f = tmp_path / "prog.py"
-        f.write_text("BEAT = 0.5\nBEAT = 1.0\nDURATION = 2.0\n")
-        with pytest.raises(ValueError, match="duplicate BEAT"):
-            extract_metadata(str(f))
-
-    def test_duplicate_duration_rejected(self, tmp_path):
-        f = tmp_path / "prog.py"
-        f.write_text("BEAT = 0.5\nDURATION = 2.0\nDURATION = 4.0\n")
-        with pytest.raises(ValueError, match="duplicate DURATION"):
-            extract_metadata(str(f))
-
-
-# ---------------------------------------------------------------------------
-# scan_animations tests
-# ---------------------------------------------------------------------------
-
-class TestScanAnimations:
-    def test_empty_directory(self, tmp_path):
-        assert scan_animations(str(tmp_path)) == []
-
-    def test_nonexistent_directory(self):
-        assert scan_animations("/no/such/dir") == []
-
-    def test_valid_files(self, tmp_path):
-        (tmp_path / "alpha.py").write_text("BEAT = 1\nDURATION = 4\n")
-        (tmp_path / "beta.py").write_text("BEAT = 0.5\nDURATION = 8.0\n")
-        entries = scan_animations(str(tmp_path))
-        assert len(entries) == 2
-        assert entries[0].name == "alpha"
-        assert entries[0].beat == 1
-        assert entries[0].duration == 4
-        assert entries[0].error is None
-        assert entries[1].name == "beta"
-        assert entries[1].beat == 0.5
-        assert entries[1].duration == 8.0
-
-    def test_invalid_file(self, tmp_path):
-        (tmp_path / "broken.py").write_text("x = 1\n")
-        entries = scan_animations(str(tmp_path))
-        assert len(entries) == 1
-        assert entries[0].name == "broken"
-        assert entries[0].beat is None
-        assert entries[0].duration is None
-        assert entries[0].error is not None
-
-    def test_non_py_excluded(self, tmp_path):
-        (tmp_path / "notes.txt").write_text("hello\n")
-        (tmp_path / "prog.py").write_text("BEAT = 1\nDURATION = 2\n")
-        entries = scan_animations(str(tmp_path))
-        assert len(entries) == 1
-        assert entries[0].name == "prog"
-
-    def test_sorted_alphabetically(self, tmp_path):
-        (tmp_path / "zebra.py").write_text("BEAT = 1\nDURATION = 2\n")
-        (tmp_path / "apple.py").write_text("BEAT = 1\nDURATION = 2\n")
-        (tmp_path / "mango.py").write_text("BEAT = 1\nDURATION = 2\n")
-        entries = scan_animations(str(tmp_path))
-        names = [e.name for e in entries]
-        assert names == ["apple", "mango", "zebra"]
