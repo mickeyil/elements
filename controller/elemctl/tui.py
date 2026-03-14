@@ -13,7 +13,6 @@ import os
 import queue
 import re
 import select
-import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -41,15 +40,8 @@ from prompt_toolkit.utils import get_cwidth
 from prompt_toolkit.widgets import Button, Dialog, Frame, Label, RadioList, TextArea
 
 from .config import (
-    DEFAULT_CONFIG_PATH,
     DEFAULT_LOGS_PATH,
     DEFAULT_SOCKET_PATH,
-    ConfigError,
-    load_config,
-    resolve_runtime_path,
-)
-from .config_edit import (
-    load_config_doc,
 )
 from .uds_client import UdsClient
 from .uds_wire import KIND_FRAME, KIND_JSON, parse_json_payload
@@ -998,11 +990,9 @@ class TuiApp:
     def __init__(
         self,
         socket_path: str,
-        config_path: str,
         log_file: str | None = None,
     ):
         self._socket_path = socket_path
-        self._config_path = config_path
         self._newdevice_dialog: NewDeviceDialogState | None = None
         self._active_modal: object | None = None
         self._client: UdsClient | None = None
@@ -1026,7 +1016,6 @@ class TuiApp:
             if log_file is not None
             else None
         )
-        self._seed_panel_from_config()
 
         # prompt_toolkit widgets
         self._log_buffer = Buffer(read_only=True)
@@ -1175,27 +1164,6 @@ class TuiApp:
                 'panel.controller.offline': 'bold #f85149',
             }),
         )
-
-    def _seed_panel_from_config(self) -> None:
-        try:
-            doc = load_config_doc(self._config_path)
-        except (ConfigError, json.JSONDecodeError, OSError):
-            return
-
-        panel: dict[str, DevicePanelEntry] = {}
-        for dev in doc.get('devices', []):
-            if not isinstance(dev, dict):
-                continue
-            uid = dev.get('device_uid')
-            if not isinstance(uid, str) or not uid:
-                continue
-            panel[uid] = DevicePanelEntry(
-                device_uid=uid,
-                strip_id=_normalize_strip_id(dev),
-                length=_normalize_length(dev.get('length')),
-                status='configured',
-            )
-        self._device_panel = panel
 
     def _select_body_container(self):
         if self._should_show_panel():
@@ -3023,33 +2991,16 @@ def main() -> None:
         help='UDS socket path (default: %(default)s)',
     )
     parser.add_argument(
-        '--config', default=None,
-        help=f'Config file path to read and edit (default: {DEFAULT_CONFIG_PATH})',
-    )
-    parser.add_argument(
         '--log-dir', default=None,
-        help='logs directory (default: controller.logs_dir or <repo>/logs)',
+        help='logs directory (default: <repo>/logs)',
     )
     args = parser.parse_args()
 
-    config_path = os.path.expanduser(args.config or DEFAULT_CONFIG_PATH)
-    cfg = None
-    if os.path.isfile(config_path):
-        try:
-            cfg = load_config(config_path)
-        except (ConfigError, json.JSONDecodeError, OSError) as e:
-            print(f"elemctl.tui: config error: {e}", file=sys.stderr)
-            raise SystemExit(1)
-    log_dir = resolve_runtime_path(
-        args.log_dir,
-        cfg.logs_dir if cfg is not None else None,
-        DEFAULT_LOGS_PATH,
-    )
+    log_dir = os.path.expanduser(args.log_dir or DEFAULT_LOGS_PATH)
     Path(log_dir).mkdir(parents=True, exist_ok=True)
 
     TuiApp(
         args.socket,
-        config_path=config_path,
         log_file=str(Path(log_dir) / 'tui.log'),
     ).run()
 

@@ -583,7 +583,6 @@ class TestTuiReconnect:
 
         app = TuiApp(
             '/tmp/elemctl.sock',
-            '/tmp/config.json',
             log_file=str(Path(tmp_path) / 'tui.log'),
         )
 
@@ -651,7 +650,6 @@ class TestBufferedConnectSnapshot:
 
         app = TuiApp(
             '/tmp/elemctl.sock',
-            '/tmp/config.json',
             log_file=str(Path(tmp_path) / 'tui.log'),
         )
 
@@ -681,40 +679,13 @@ class TestBufferedConnectSnapshot:
 
 
 class TestDevicePanel:
-    def test_panel_seeds_from_config(self, tmp_path):
-        config_path = tmp_path / 'config.json'
-        config_path.write_text(json.dumps({
-            'controller': {'frame_port': 9002},
-            'devices': [
-                {
-                    'device_id': 1,
-                    'device_uid': 'sim-1',
-                    'device_type': 'sim',
-                    'host': '',
-                    'tcp_port': 0,
-                    'strip_id': 'main',
-                    'length': 60,
-                },
-                {
-                    'device_id': 2,
-                    'device_uid': 'sim-2',
-                    'device_type': 'sim',
-                    'host': '',
-                    'tcp_port': 0,
-                    'strip_id': 'aux',
-                    'length': 30,
-                },
-            ],
-        }))
+    def test_panel_starts_empty_without_snapshot(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(config_path),
             log_file=str(tmp_path / 'tui.log'),
         )
         try:
-            assert list(app._device_panel) == ['sim-1', 'sim-2']
-            assert app._device_panel['sim-1'].status == 'configured'
-            assert app._device_panel['sim-2'].strip_id == 'aux'
+            assert app._device_panel == {}
         finally:
             if app._log_fp is not None:
                 app._log_fp.close()
@@ -856,7 +827,6 @@ class TestDevicePanel:
     def test_connected_snapshot_bootstraps_panel(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         try:
@@ -873,7 +843,6 @@ class TestDevicePanel:
     def test_device_catalog_snapshot_replaces_catalog(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         try:
@@ -893,7 +862,6 @@ class TestDevicePanel:
     def test_program_catalog_update_replaces_catalog(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         try:
@@ -913,7 +881,6 @@ class TestDevicePanel:
     def test_session_state_update_replaces_session(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         try:
@@ -945,7 +912,6 @@ class TestDevicePanel:
     def test_controller_disconnect_clears_session(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         try:
@@ -963,7 +929,6 @@ class TestDevicePanel:
     def test_controller_disconnect_clears_program_catalog_ready(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         try:
@@ -980,7 +945,6 @@ class TestDevicePanel:
     def test_controller_disconnect_clears_device_catalog_ready(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         try:
@@ -997,7 +961,6 @@ class TestDevicePanel:
     def test_device_disconnect_sets_offline_timestamp(self, monkeypatch, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         try:
@@ -1017,7 +980,6 @@ class TestDevicePanel:
     def test_controller_disconnect_is_separate_from_device_state(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         try:
@@ -1034,7 +996,6 @@ class TestDevicePanel:
     def test_panel_summary_renders_connected_controller_and_device_count(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         try:
@@ -1067,7 +1028,6 @@ class TestDevicePanel:
     def test_panel_summary_renders_controller_offline_age(self, monkeypatch, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         try:
@@ -1084,7 +1044,6 @@ class TestDevicePanel:
     def test_panel_rows_render_offline_badge(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         try:
@@ -1121,7 +1080,6 @@ class TestNewDeviceDialog:
     def test_newdevice_dialog_opens_and_closes(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         app._set_client(self._FakeClient())
@@ -1139,19 +1097,14 @@ class TestNewDeviceDialog:
         assert app._root_container.floats == []
 
     def test_newdevice_dialog_sends_add_device_command_without_local_config_read(
-        self, tmp_path, monkeypatch
+        self, tmp_path
     ):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         client = self._FakeClient()
         app._set_client(client)
-        monkeypatch.setattr(
-            'elemctl.tui.load_config_doc',
-            lambda path: (_ for _ in ()).throw(AssertionError('unexpected config read')),
-        )
 
         try:
             app._start_newdevice()
@@ -1180,7 +1133,6 @@ class TestNewDeviceDialog:
     def test_newdevice_dialog_success_reply_closes(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         client = self._FakeClient()
@@ -1205,7 +1157,6 @@ class TestNewDeviceDialog:
     def test_newdevice_dialog_error_reply_stays_open(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         client = self._FakeClient()
@@ -1236,7 +1187,6 @@ class TestNewDeviceDialog:
     def test_newdevice_dialog_ignores_double_submit_while_pending(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         client = self._FakeClient()
@@ -1261,7 +1211,6 @@ class TestNewDeviceDialog:
     def test_newdevice_dialog_validation_error_stays_open(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         app._set_client(self._FakeClient())
@@ -1286,7 +1235,6 @@ class TestNewDeviceDialog:
     def test_newdevice_dialog_send_failure_stays_open(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
 
@@ -1315,7 +1263,6 @@ class TestNewDeviceDialog:
     def test_rmdevice_sends_remove_device_command(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         client = self._FakeClient()
@@ -1336,7 +1283,6 @@ class TestNewDeviceDialog:
     def test_devices_opens_manager_dialog_from_catalog(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         client = self._FakeClient()
@@ -1361,7 +1307,6 @@ class TestNewDeviceDialog:
     def test_devices_requires_connected_controller(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
 
@@ -1376,7 +1321,6 @@ class TestNewDeviceDialog:
     def test_devices_without_catalog_logs_waiting_message(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         app._set_client(self._FakeClient())
@@ -1392,7 +1336,6 @@ class TestNewDeviceDialog:
     def test_devices_empty_catalog_opens_empty_manager(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         app._set_client(self._FakeClient())
@@ -1411,7 +1354,6 @@ class TestNewDeviceDialog:
     def test_empty_device_manager_add_opens_newdevice_dialog(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         app._set_client(self._FakeClient())
@@ -1431,7 +1373,6 @@ class TestNewDeviceDialog:
     def test_device_manager_edit_opens_prefilled_dialog(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         app._set_client(self._FakeClient())
@@ -1455,7 +1396,6 @@ class TestNewDeviceDialog:
     def test_device_edit_sends_edit_device_command(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         client = self._FakeClient()
@@ -1488,7 +1428,6 @@ class TestNewDeviceDialog:
     def test_device_edit_error_reply_keeps_dialog_open(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         client = self._FakeClient()
@@ -1511,7 +1450,6 @@ class TestNewDeviceDialog:
     def test_device_edit_success_reply_closes_dialog(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         client = self._FakeClient()
@@ -1533,7 +1471,6 @@ class TestNewDeviceDialog:
     def test_device_remove_sends_remove_device_command(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         client = self._FakeClient()
@@ -1560,7 +1497,6 @@ class TestNewDeviceDialog:
     def test_device_remove_success_reply_closes_dialog(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         client = self._FakeClient()
@@ -1582,7 +1518,6 @@ class TestNewDeviceDialog:
     def test_newdevice_requires_connected_controller(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
 
@@ -1598,7 +1533,6 @@ class TestNewDeviceDialog:
     def test_on_input_ignored_while_dialog_open(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         app._set_client(self._FakeClient())
@@ -1628,7 +1562,6 @@ class TestProgramCatalogCommands:
     def test_rescan_sends_controller_command(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         client = self._FakeClient()
@@ -1645,7 +1578,6 @@ class TestProgramCatalogCommands:
     def test_rescan_requires_connection(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
 
@@ -1660,7 +1592,6 @@ class TestProgramCatalogCommands:
     def test_programs_requires_connected_controller(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
 
@@ -1675,7 +1606,6 @@ class TestProgramCatalogCommands:
     def test_programs_without_catalog_ready_logs_waiting_message(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         app._set_client(self._FakeClient())
@@ -1691,7 +1621,6 @@ class TestProgramCatalogCommands:
     def test_programs_empty_catalog_opens_empty_manager(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         app._set_client(self._FakeClient())
@@ -1709,7 +1638,6 @@ class TestProgramCatalogCommands:
     def test_programs_nonempty_catalog_opens_manager(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         app._set_client(self._FakeClient())
@@ -1734,7 +1662,6 @@ class TestProgramCatalogCommands:
         path.write_text("BEAT = 1.0\nDURATION = 8.0\n")
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         client = self._FakeClient()
@@ -1764,7 +1691,6 @@ class TestProgramCatalogCommands:
         path.write_text("BEAT = 1.0\nDURATION = 8.0\n")
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         client = self._FakeClient()
@@ -1792,7 +1718,6 @@ class TestProgramCatalogCommands:
     def test_publish_missing_file_is_local_error(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         client = self._FakeClient()
@@ -1819,7 +1744,6 @@ class TestProgramCatalogCommands:
     def test_program_manager_load_sends_load_program(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         client = self._FakeClient()
@@ -1847,7 +1771,6 @@ class TestProgramCatalogCommands:
     def test_program_manager_load_loop_sends_loop_flag(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         client = self._FakeClient()
@@ -1872,7 +1795,6 @@ class TestProgramCatalogCommands:
     def test_program_manager_rejects_broken_entry_locally(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         client = self._FakeClient()
@@ -1895,7 +1817,6 @@ class TestProgramCatalogCommands:
     def test_program_manager_rescan_sends_controller_command(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         client = self._FakeClient()
@@ -1917,7 +1838,6 @@ class TestProgramCatalogCommands:
     def test_program_manager_reply_error_stays_inline(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         client = self._FakeClient()
@@ -1946,7 +1866,6 @@ class TestProgramCatalogCommands:
         path.write_text("BEAT = 1.0\nDURATION = 8.0\n")
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         client = self._FakeClient()
@@ -1977,7 +1896,6 @@ class TestProgramCatalogCommands:
     def test_program_publish_dialog_file_error_stays_inline(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         app._set_client(self._FakeClient())
@@ -2001,7 +1919,6 @@ class TestProgramCatalogCommands:
         path.write_text("BEAT = 1.0\nDURATION = 8.0\n")
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         client = self._FakeClient()
@@ -2025,7 +1942,6 @@ class TestProgramCatalogCommands:
     def test_programs_updated_refreshes_manager_list_while_open(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         app._set_client(self._FakeClient())
@@ -2052,7 +1968,6 @@ class TestProgramCatalogCommands:
     def test_load_by_name_sends_load_program(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         client = self._FakeClient()
@@ -2080,7 +1995,6 @@ class TestProgramCatalogCommands:
     def test_load_by_index_sends_load_program(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         client = self._FakeClient()
@@ -2108,7 +2022,6 @@ class TestProgramCatalogCommands:
     def test_load_rejects_broken_program_locally(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         client = self._FakeClient()
@@ -2133,7 +2046,6 @@ class TestProgramCatalogCommands:
     def test_load_without_catalog_before_snapshot_waits_for_catalog(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         client = self._FakeClient()
@@ -2154,7 +2066,6 @@ class TestProgramCatalogCommands:
     def test_load_without_catalog_after_snapshot_suggests_rescan(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         client = self._FakeClient()
@@ -2176,7 +2087,6 @@ class TestProgramCatalogCommands:
     def test_load_index_out_of_range_uses_catalog_size(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         client = self._FakeClient()
@@ -2211,7 +2121,6 @@ class TestSessionCommands:
     def test_session_requires_connected_controller(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
 
@@ -2226,7 +2135,6 @@ class TestSessionCommands:
     def test_session_without_snapshot_logs_waiting_message(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         app._set_client(self._FakeClient())
@@ -2242,7 +2150,6 @@ class TestSessionCommands:
     def test_session_empty_opens_manager(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         app._set_client(self._FakeClient())
@@ -2262,7 +2169,6 @@ class TestSessionCommands:
     def test_session_active_opens_manager(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         app._set_client(self._FakeClient())
@@ -2291,7 +2197,6 @@ class TestSessionCommands:
     def test_session_play_sends_play_command(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         client = self._FakeClient()
@@ -2314,7 +2219,6 @@ class TestSessionCommands:
     def test_session_pause_sends_pause_command(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         client = self._FakeClient()
@@ -2334,7 +2238,6 @@ class TestSessionCommands:
     def test_session_stop_sends_stop_command(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         client = self._FakeClient()
@@ -2354,7 +2257,6 @@ class TestSessionCommands:
     def test_session_seek_dialog_sends_seek_command(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         client = self._FakeClient()
@@ -2379,7 +2281,6 @@ class TestSessionCommands:
     def test_session_seek_invalid_input_stays_inline(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         app._set_client(self._FakeClient())
@@ -2401,7 +2302,6 @@ class TestSessionCommands:
     def test_session_reply_error_stays_inline(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         client = self._FakeClient()
@@ -2428,7 +2328,6 @@ class TestSessionCommands:
     def test_session_seek_success_returns_to_manager(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         client = self._FakeClient()
@@ -2452,7 +2351,6 @@ class TestSessionCommands:
     def test_state_updates_refresh_session_manager(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         app._set_client(self._FakeClient())
@@ -2477,7 +2375,6 @@ class TestSessionCommands:
     def test_session_command_routes_seek_from_input(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
-            str(tmp_path / 'config.json'),
             log_file=str(tmp_path / 'tui.log'),
         )
         client = self._FakeClient()
@@ -2494,13 +2391,12 @@ class TestSessionCommands:
 
 
 class TestTuiMain:
-    def test_missing_config_path_is_allowed(self, monkeypatch, tmp_path):
+    def test_starts_without_config_file(self, monkeypatch, tmp_path):
         called = {}
 
         class FakeApp:
-            def __init__(self, socket_path, config_path, log_file):
+            def __init__(self, socket_path, log_file):
                 called["socket_path"] = socket_path
-                called["config_path"] = config_path
                 called["log_file"] = log_file
 
             def run(self):
@@ -2511,7 +2407,6 @@ class TestTuiMain:
             'sys.argv',
             [
                 'elemctl.tui',
-                '--config', str(tmp_path / 'missing.json'),
                 '--log-dir', str(tmp_path / 'logs'),
             ],
         )
@@ -2519,7 +2414,8 @@ class TestTuiMain:
         from elemctl.tui import main as tui_main
         tui_main()
 
-        assert called["config_path"] == str(tmp_path / 'missing.json')
+        assert called["socket_path"] == '/tmp/elemctl.sock'
+        assert called["log_file"] == str(tmp_path / 'logs' / 'tui.log')
         assert called["ran"] is True
 
 
