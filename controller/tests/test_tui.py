@@ -949,7 +949,46 @@ class TestNewDeviceDialog:
         assert app._newdevice_dialog is None
         assert app._root_container.floats == []
 
-    def test_newdevice_dialog_sends_add_device_command(self, tmp_path):
+    def test_newdevice_dialog_sends_add_device_command_without_local_config_read(
+        self, tmp_path, monkeypatch
+    ):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        client = self._FakeClient()
+        app._set_client(client)
+        monkeypatch.setattr(
+            'elemctl.tui.load_config_doc',
+            lambda path: (_ for _ in ()).throw(AssertionError('unexpected config read')),
+        )
+
+        try:
+            app._start_newdevice()
+            state = app._newdevice_dialog
+            assert state is not None
+            state.device_type.current_value = 'sim'
+            state.device_uid.text = 'sim-1'
+            state.strip_id.text = 'main'
+            state.length.text = '60'
+            app._submit_newdevice_dialog()
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        assert app._newdevice_dialog is not None
+        assert app._newdevice_dialog.pending_request_id == 1
+        assert client.commands == [{
+            'cmd': 'add_device',
+            'device_uid': 'sim-1',
+            'device_type': 'sim',
+            'strip_id': 'main',
+            'length': 60,
+            'id': 1,
+        }]
+
+    def test_newdevice_dialog_success_reply_closes(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
             str(tmp_path / 'config.json'),
@@ -967,19 +1006,68 @@ class TestNewDeviceDialog:
             state.strip_id.text = 'main'
             state.length.text = '60'
             app._submit_newdevice_dialog()
+            app._apply_panel_update(CommandReplyUpdate(reply_id=1, ok=True, error=None))
         finally:
             if app._log_fp is not None:
                 app._log_fp.close()
 
         assert app._newdevice_dialog is None
-        assert client.commands == [{
-            'cmd': 'add_device',
-            'device_uid': 'sim-1',
-            'device_type': 'sim',
-            'strip_id': 'main',
-            'length': 60,
-            'id': 1,
-        }]
+
+    def test_newdevice_dialog_error_reply_stays_open(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        client = self._FakeClient()
+        app._set_client(client)
+
+        try:
+            app._start_newdevice()
+            state = app._newdevice_dialog
+            assert state is not None
+            state.device_type.current_value = 'sim'
+            state.device_uid.text = 'sim-1'
+            state.strip_id.text = 'main'
+            state.length.text = '60'
+            app._submit_newdevice_dialog()
+            app._apply_panel_update(CommandReplyUpdate(
+                reply_id=1,
+                ok=False,
+                error='device uid already exists: sim-1',
+            ))
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        assert app._newdevice_dialog is not None
+        assert app._newdevice_dialog.pending_request_id is None
+        assert app._newdevice_dialog.error_text == 'device uid already exists: sim-1'
+
+    def test_newdevice_dialog_ignores_double_submit_while_pending(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        client = self._FakeClient()
+        app._set_client(client)
+
+        try:
+            app._start_newdevice()
+            state = app._newdevice_dialog
+            assert state is not None
+            state.device_type.current_value = 'sim'
+            state.device_uid.text = 'sim-1'
+            state.strip_id.text = 'main'
+            state.length.text = '60'
+            app._submit_newdevice_dialog()
+            app._submit_newdevice_dialog()
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        assert len(client.commands) == 1
 
     def test_newdevice_dialog_validation_error_stays_open(self, tmp_path):
         app = TuiApp(
@@ -1033,6 +1121,7 @@ class TestNewDeviceDialog:
 
         assert app._newdevice_dialog is not None
         assert app._newdevice_dialog.error_text == 'send failed: broken pipe'
+        assert app._newdevice_dialog.pending_request_id is None
 
     def test_rmdevice_sends_remove_device_command(self, tmp_path):
         app = TuiApp(
@@ -1552,10 +1641,9 @@ class TestTuiMain:
         called = {}
 
         class FakeApp:
-            def __init__(self, socket_path, config_path, animations_dir, log_file):
+            def __init__(self, socket_path, config_path, log_file):
                 called["socket_path"] = socket_path
                 called["config_path"] = config_path
-                called["animations_dir"] = animations_dir
                 called["log_file"] = log_file
 
             def run(self):

@@ -40,7 +40,6 @@ from prompt_toolkit.utils import get_cwidth
 from prompt_toolkit.widgets import Button, Dialog, Frame, Label, RadioList, TextArea
 
 from .config import (
-    DEFAULT_ANIMATIONS_PATH,
     DEFAULT_CONFIG_PATH,
     DEFAULT_LOGS_PATH,
     DEFAULT_SOCKET_PATH,
@@ -87,6 +86,7 @@ class NewDeviceDialogState:
     cancel_button: Button
     dialog: Dialog
     error_text: str = ''
+    pending_request_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -758,7 +758,6 @@ class TuiApp:
         self,
         socket_path: str,
         config_path: str,
-        animations_dir: str = DEFAULT_ANIMATIONS_PATH,
         log_file: str | None = None,
     ):
         self._socket_path = socket_path
@@ -1062,6 +1061,16 @@ class TuiApp:
 
     def _apply_command_reply_update(self, update: CommandReplyUpdate) -> None:
         modal = self._active_modal
+        if isinstance(modal, NewDeviceDialogState):
+            if modal.pending_request_id != update.reply_id:
+                return
+            modal.pending_request_id = None
+            if update.ok:
+                self._close_modal()
+            else:
+                modal.error_text = update.error or 'unknown error'
+                self._app.invalidate()
+            return
         if isinstance(modal, DeviceEditDialogState):
             if modal.pending_request_id != update.reply_id:
                 return
@@ -1336,13 +1345,6 @@ class TuiApp:
         self._local_log("  /load #N [loop]     load a program by list index")
         self._local_log("  /quit, /exit        quit the TUI")
 
-    def _load_config_doc(self) -> dict | None:
-        try:
-            return load_config_doc(self._config_path)
-        except (ConfigError, json.JSONDecodeError, OSError) as e:
-            self._local_log(f"config error: {e}")
-            return None
-
     def _do_devices(self) -> None:
         client = self._get_client()
         if client is None:
@@ -1463,12 +1465,8 @@ class TuiApp:
         state = self._newdevice_dialog
         if state is None:
             return
-
-        doc = self._load_config_doc()
-        if doc is None:
-            self._set_dialog_error('config error', state.device_uid)
+        if state.pending_request_id is not None:
             return
-        devices = doc.get('devices', [])
 
         device_type = state.device_type.current_value
         device_uid = state.device_uid.text.strip()
@@ -1479,22 +1477,10 @@ class TuiApp:
         if error is not None:
             self._set_dialog_error(error, state.device_uid)
             return
-        if any(d.get('device_uid') == device_uid for d in devices if isinstance(d, dict)):
-            self._set_dialog_error(
-                f'device uid already exists: {device_uid}',
-                state.device_uid,
-            )
-            return
 
         error = validate_strip_id(strip_id)
         if error is not None:
             self._set_dialog_error(error, state.strip_id)
-            return
-        if any(d.get('strip_id') == strip_id for d in devices if isinstance(d, dict)):
-            self._set_dialog_error(
-                f'strip id already exists: {strip_id}',
-                state.strip_id,
-            )
             return
 
         length, error = parse_length(length_text)
@@ -1507,22 +1493,24 @@ class TuiApp:
             self._set_dialog_error('controller not connected', state.device_uid)
             return
 
+        cmd_id = self._next_id
+        state.pending_request_id = cmd_id
+        state.error_text = ''
         cmd = {
             'cmd': 'add_device',
             'device_uid': device_uid,
             'device_type': device_type,
             'strip_id': strip_id,
             'length': length,
-            'id': self._next_id,
+            'id': cmd_id,
         }
         self._next_id += 1
         try:
             client.send_cmd(cmd)
         except OSError as e:
+            state.pending_request_id = None
             self._set_dialog_error(f'send failed: {e}', state.device_uid)
             return
-
-        self._close_modal()
 
     def _device_manager_options(self) -> list[tuple[str, str]]:
         options = []
@@ -2039,10 +2027,6 @@ def main() -> None:
         help='UDS socket path (default: %(default)s)',
     )
     parser.add_argument(
-        '--animations', default=None,
-        help='Animations directory (default: <repo>/animations/)',
-    )
-    parser.add_argument(
         '--config', default=None,
         help=f'Config file path to read and edit (default: {DEFAULT_CONFIG_PATH})',
     )
@@ -2060,11 +2044,6 @@ def main() -> None:
         except (ConfigError, json.JSONDecodeError, OSError) as e:
             print(f"elemctl.tui: config error: {e}", file=sys.stderr)
             raise SystemExit(1)
-    animations_dir = resolve_runtime_path(
-        args.animations,
-        cfg.animations_dir if cfg is not None else None,
-        DEFAULT_ANIMATIONS_PATH,
-    )
     log_dir = resolve_runtime_path(
         args.log_dir,
         cfg.logs_dir if cfg is not None else None,
@@ -2075,7 +2054,6 @@ def main() -> None:
     TuiApp(
         args.socket,
         config_path=config_path,
-        animations_dir=animations_dir,
         log_file=str(Path(log_dir) / 'tui.log'),
     ).run()
 
