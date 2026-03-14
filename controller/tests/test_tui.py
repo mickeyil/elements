@@ -1700,6 +1700,46 @@ class TestProgramCatalogCommands:
             assert isinstance(state, ProgramManagerDialogState)
             assert state.program_list is not None
             assert state.program_list.current_value == 'ambient'
+            assert state.loop_enabled is False
+            assert state.loop_toggle_button is not None
+            assert state.loop_toggle_button.text == 'Loop: Off'
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+    def test_program_manager_rows_show_duration_first(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        app._program_catalog = [ProgramCatalogEntry('ambient', 1.0, 8.0, None)]
+
+        try:
+            options = app._program_manager_options()
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        assert options == [('ambient', 'ambient            8s      beat 1      [ok]')]
+
+    def test_program_manager_detail_text_shows_selected_program_and_loop(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        app._set_client(self._FakeClient())
+        app._program_catalog_ready = True
+        app._program_catalog = [ProgramCatalogEntry('ambient', 1.0, 8.0, None)]
+
+        try:
+            app._do_programs()
+            assert app._program_manager_detail_text() == (
+                'Selected: ambient   duration: 8s   beat: 1   loop: Off'
+            )
+            app._toggle_program_loop()
+            assert app._program_manager_detail_text() == (
+                'Selected: ambient   duration: 8s   beat: 1   loop: On'
+            )
         finally:
             if app._log_fp is not None:
                 app._log_fp.close()
@@ -1815,7 +1855,7 @@ class TestProgramCatalogCommands:
             'id': 1,
         }]
 
-    def test_program_manager_load_loop_sends_loop_flag(self, tmp_path):
+    def test_program_manager_loop_toggle_changes_load_flag(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
             log_file=str(tmp_path / 'tui.log'),
@@ -1827,7 +1867,13 @@ class TestProgramCatalogCommands:
 
         try:
             app._do_programs()
-            app._submit_program_load(loop=True)
+            app._toggle_program_loop()
+            state = app._active_modal
+            assert isinstance(state, ProgramManagerDialogState)
+            assert state.loop_enabled is True
+            assert state.loop_toggle_button is not None
+            assert state.loop_toggle_button.text == 'Loop: On'
+            app._submit_program_load()
         finally:
             if app._log_fp is not None:
                 app._log_fp.close()
@@ -1997,6 +2043,7 @@ class TestProgramCatalogCommands:
 
         try:
             app._do_programs()
+            app._toggle_program_loop()
             app._apply_panel_update(ProgramCatalogUpdate([
                 ProgramCatalogEntry('ambient', 1.0, 8.0, None),
                 ProgramCatalogEntry('spark_demo', 0.5, 16.0, None),
@@ -2008,6 +2055,9 @@ class TestProgramCatalogCommands:
                 'ambient',
                 'spark_demo',
             ]
+            assert state.loop_enabled is True
+            assert state.loop_toggle_button is not None
+            assert state.loop_toggle_button.text == 'Loop: On'
         finally:
             if app._log_fp is not None:
                 app._log_fp.close()

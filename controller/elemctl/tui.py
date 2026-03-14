@@ -222,13 +222,14 @@ class DeviceRemoveDialogState:
 class ProgramManagerDialogState:
     program_list: RadioList | None
     load_button: Button | None
-    load_loop_button: Button | None
+    loop_toggle_button: Button | None
     publish_button: Button
     rescan_button: Button
     close_button: Button
     dialog: Dialog
     error_text: str = ''
     pending_request_id: int | None = None
+    loop_enabled: bool = False
 
 
 @dataclass
@@ -1918,11 +1919,11 @@ class TuiApp:
                 label = f'{entry.program_id:<18s} ERROR  {entry.error}'
             else:
                 beat_text = '?' if entry.beat is None else f'{entry.beat:g}'
-                duration_text = '?' if entry.duration is None else f'{entry.duration:g}'
+                duration_text = '?' if entry.duration is None else f'{entry.duration:g}s'
                 label = (
                     f'{entry.program_id:<18s} '
-                    f'beat={beat_text:<6s} '
-                    f'dur={duration_text:<6s} '
+                    f'{duration_text:<7s} '
+                    f'beat {beat_text:<6s} '
                     '[ok]'
                 )
             options.append((entry.program_id, label))
@@ -1949,6 +1950,7 @@ class TuiApp:
                 self._open_program_manager(
                     error_text=modal.error_text,
                     pending_request_id=modal.pending_request_id,
+                    loop_enabled=modal.loop_enabled,
                 )
             else:
                 self._app.invalidate()
@@ -1957,6 +1959,7 @@ class TuiApp:
             self._open_program_manager(
                 error_text=modal.error_text,
                 pending_request_id=modal.pending_request_id,
+                loop_enabled=modal.loop_enabled,
             )
             return
         selected_program_id = modal.program_list.current_value
@@ -1966,12 +1969,43 @@ class TuiApp:
         modal.program_list.current_value = selected_program_id
         self._app.invalidate()
 
+    def _program_manager_detail_text(self) -> str:
+        state = self._active_modal
+        if not isinstance(state, ProgramManagerDialogState):
+            return ' '
+        entry = self._selected_program_from_manager()
+        if entry is None:
+            return 'No programs in library.'
+        if entry.error:
+            return f'{entry.program_id}: ERROR: {entry.error}'
+        duration_text = '?' if entry.duration is None else f'{entry.duration:g}s'
+        beat_text = '?' if entry.beat is None else f'{entry.beat:g}'
+        loop_text = 'On' if state.loop_enabled else 'Off'
+        return (
+            f'Selected: {entry.program_id}   duration: {duration_text}   '
+            f'beat: {beat_text}   loop: {loop_text}'
+        )
+
+    def _toggle_program_loop(self) -> None:
+        state = self._active_modal
+        if not isinstance(state, ProgramManagerDialogState):
+            return
+        if state.pending_request_id is not None:
+            return
+        state.loop_enabled = not state.loop_enabled
+        if state.loop_toggle_button is not None:
+            state.loop_toggle_button.text = (
+                'Loop: On' if state.loop_enabled else 'Loop: Off'
+            )
+        self._app.invalidate()
+
     def _open_program_manager(
         self,
         *,
         selected_program_id: str | None = None,
         error_text: str = '',
         pending_request_id: int | None = None,
+        loop_enabled: bool = False,
     ) -> None:
         options = self._program_manager_options()
         error_control = FormattedTextControl(
@@ -1981,6 +2015,7 @@ class TuiApp:
                 else ' '
             )
         )
+        detail_control = FormattedTextControl(text=self._program_manager_detail_text)
         if options:
             if selected_program_id is None or not any(
                 program_id == selected_program_id for program_id, _ in options
@@ -1992,9 +2027,9 @@ class TuiApp:
                 select_on_focus=True,
             )
             load_button = DialogButton('Load', handler=self._submit_program_load)
-            load_loop_button = DialogButton(
-                'Load Loop',
-                handler=lambda: self._submit_program_load(loop=True),
+            loop_toggle_button = DialogButton(
+                'Loop: On' if loop_enabled else 'Loop: Off',
+                handler=self._toggle_program_loop,
             )
             publish_button = DialogButton('Publish', handler=self._start_program_publish)
             rescan_button = DialogButton('Rescan', handler=self._submit_program_rescan)
@@ -2004,25 +2039,27 @@ class TuiApp:
                 body=HSplit([
                     Label(text='Controller program library', style='class:newdevice.label'),
                     program_list,
+                    Window(height=1, content=detail_control),
                     Window(height=1, content=error_control, style='class:newdevice.error'),
                     Label(
                         text='Enter: load   Tab: move   Esc: close',
                         style='class:newdevice.help',
                     ),
                 ]),
-                buttons=[load_button, load_loop_button, publish_button, rescan_button, close_button],
+                buttons=[load_button, loop_toggle_button, publish_button, rescan_button, close_button],
                 with_background=True,
             )
             state = ProgramManagerDialogState(
                 program_list=program_list,
                 load_button=load_button,
-                load_loop_button=load_loop_button,
+                loop_toggle_button=loop_toggle_button,
                 publish_button=publish_button,
                 rescan_button=rescan_button,
                 close_button=close_button,
                 dialog=dialog,
                 error_text=error_text,
                 pending_request_id=pending_request_id,
+                loop_enabled=loop_enabled,
             )
             self._set_modal(state, focus=program_list)
             return
@@ -2046,13 +2083,14 @@ class TuiApp:
         state = ProgramManagerDialogState(
             program_list=None,
             load_button=None,
-            load_loop_button=None,
+            loop_toggle_button=None,
             publish_button=publish_button,
             rescan_button=rescan_button,
             close_button=close_button,
             dialog=dialog,
             error_text=error_text,
             pending_request_id=pending_request_id,
+            loop_enabled=False,
         )
         self._set_modal(state, focus=publish_button)
 
@@ -2151,7 +2189,7 @@ class TuiApp:
         state.pending_request_id = cmd_id
         state.error_text = ''
 
-    def _submit_program_load(self, *, loop: bool = False) -> None:
+    def _submit_program_load(self) -> None:
         state = self._active_modal
         if not isinstance(state, ProgramManagerDialogState):
             return
@@ -2168,7 +2206,10 @@ class TuiApp:
             self._app.invalidate()
             return
 
-        cmd_id, error = self._send_program_load_request(entry, loop=loop)
+        cmd_id, error = self._send_program_load_request(
+            entry,
+            loop=state.loop_enabled,
+        )
         if error is not None:
             state.error_text = error
             self._app.invalidate()
