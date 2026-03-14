@@ -1700,6 +1700,7 @@ class TestProgramCatalogCommands:
             assert isinstance(state, ProgramManagerDialogState)
             assert state.program_list is not None
             assert state.program_list.current_value == 'ambient'
+            assert [value for value, _label in state.program_list.values] == ['ambient']
             assert state.loop_enabled is False
             assert state.loop_toggle_button is not None
             assert state.loop_toggle_button.text == 'Loop: Off'
@@ -1740,6 +1741,47 @@ class TestProgramCatalogCommands:
             assert app._program_manager_detail_text() == (
                 'Selected: ambient   duration: 8s   beat: 1   loop: On'
             )
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+    def test_program_manager_detail_text_reports_hidden_broken_count(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        app._set_client(self._FakeClient())
+        app._program_catalog_ready = True
+        app._program_catalog = [
+            ProgramCatalogEntry('ambient', 1.0, 8.0, None),
+            ProgramCatalogEntry('broken', None, None, 'missing DURATION'),
+        ]
+
+        try:
+            app._do_programs()
+            assert app._program_manager_detail_text() == (
+                'Selected: ambient   duration: 8s   beat: 1   loop: Off   '
+                '1 broken program hidden'
+            )
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+    def test_programs_only_broken_catalog_opens_empty_manager(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        app._set_client(self._FakeClient())
+        app._program_catalog_ready = True
+        app._program_catalog = [ProgramCatalogEntry('broken', None, None, 'missing DURATION')]
+
+        try:
+            app._do_programs()
+            state = app._active_modal
+            assert isinstance(state, ProgramManagerDialogState)
+            assert state.program_list is None
+            assert app._program_manager_detail_text() == 'No loadable programs. 1 broken program hidden.'
         finally:
             if app._log_fp is not None:
                 app._log_fp.close()
@@ -1885,7 +1927,7 @@ class TestProgramCatalogCommands:
             'id': 1,
         }]
 
-    def test_program_manager_rejects_broken_entry_locally(self, tmp_path):
+    def test_program_manager_only_broken_catalog_does_not_offer_load(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
             log_file=str(tmp_path / 'tui.log'),
@@ -1897,10 +1939,9 @@ class TestProgramCatalogCommands:
 
         try:
             app._do_programs()
-            app._submit_program_load()
             state = app._active_modal
             assert isinstance(state, ProgramManagerDialogState)
-            assert state.error_text == 'cannot load broken: missing DURATION'
+            assert state.program_list is None
         finally:
             if app._log_fp is not None:
                 app._log_fp.close()

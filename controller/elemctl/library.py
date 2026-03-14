@@ -87,12 +87,17 @@ class ProgramLibrary:
         root = Path(self._animations_dir)
         if root.exists() and not root.is_dir():
             raise ValueError(f'program library path is not a directory: {root}')
+
+        path = root / f'{program_id}.py'
+        entry = self._entry_from_source(program_id, path, source)
+        if entry.error is not None:
+            raise ValueError(entry.error)
+
         try:
             root.mkdir(parents=True, exist_ok=True)
         except OSError as e:
             raise ValueError(f'cannot create program library directory: {e}') from e
 
-        path = root / f'{program_id}.py'
         tmp_path: Path | None = None
         try:
             with tempfile.NamedTemporaryFile(
@@ -114,7 +119,6 @@ class ProgramLibrary:
                     pass
             raise ValueError(f'cannot write program {program_id}: {e}') from e
 
-        entry = self._entry_from_source(program_id, path, source)
         self._programs[program_id] = entry
         return entry
 

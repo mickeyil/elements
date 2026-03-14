@@ -125,15 +125,28 @@ def test_program_library_publish_replaces_existing_program(tmp_path):
     assert library.list_programs() == [updated]
 
 
-def test_program_library_publish_broken_source_keeps_entry(tmp_path):
+def test_program_library_publish_broken_source_rejected(tmp_path):
     library = ProgramLibrary(str(tmp_path))
 
-    entry = library.publish('ambient', "BEAT = 1.0\n")
+    with pytest.raises(ValueError, match='missing DURATION'):
+        library.publish('ambient', "BEAT = 1.0\n")
 
-    assert (tmp_path / 'ambient.py').read_text() == "BEAT = 1.0\n"
-    assert entry.error == 'missing DURATION'
-    assert entry.source == "BEAT = 1.0\n"
-    assert library.get('ambient') == entry
+    assert not (tmp_path / 'ambient.py').exists()
+    assert library.get('ambient') is None
+
+
+def test_program_library_publish_broken_source_does_not_clobber_existing(tmp_path):
+    library = ProgramLibrary(str(tmp_path))
+    library.publish('ambient', "BEAT = 1.0\nDURATION = 4.0\n")
+
+    with pytest.raises(ValueError, match='missing DURATION'):
+        library.publish('ambient', "BEAT = 1.0\n")
+
+    entry = library.get('ambient')
+    assert entry is not None
+    assert entry.error is None
+    assert entry.duration == 4.0
+    assert (tmp_path / 'ambient.py').read_text() == "BEAT = 1.0\nDURATION = 4.0\n"
 
 
 def test_program_library_publish_invalid_program_id_rejected(tmp_path):

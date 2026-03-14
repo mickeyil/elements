@@ -219,25 +219,18 @@ class _FakeLibrary:
         source_hash = hashlib.sha256(source.encode('utf-8')).hexdigest()
         try:
             beat, duration = extract_metadata(source, f'/tmp/{program_id}.py')
-            entry = ProgramEntry(
-                program_id=program_id,
-                path=f'/tmp/{program_id}.py',
-                source=source,
-                source_hash=source_hash,
-                beat=beat,
-                duration=duration,
-                error=None,
-            )
         except ValueError as e:
-            entry = ProgramEntry(
-                program_id=program_id,
-                path=f'/tmp/{program_id}.py',
-                source=source,
-                source_hash=source_hash,
-                beat=None,
-                duration=None,
-                error=str(e),
-            )
+            raise ValueError(str(e)) from e
+
+        entry = ProgramEntry(
+            program_id=program_id,
+            path=f'/tmp/{program_id}.py',
+            source=source,
+            source_hash=source_hash,
+            beat=beat,
+            duration=duration,
+            error=None,
+        )
 
         self._entries = [
             existing for existing in self._entries
@@ -592,7 +585,7 @@ class TestProgramLibraryCommands:
             ],
         } in events
 
-    def test_publish_program_broken_source_is_stored_with_error(self):
+    def test_publish_program_broken_source_is_rejected(self):
         fake_library = _FakeLibrary('/tmp/programs')
         svc, _ = _make_service(
             library_factory=lambda animations_dir: fake_library,
@@ -605,23 +598,13 @@ class TestProgramLibraryCommands:
             'source': "BEAT = 1.0\n",
         })
 
-        assert reply['ok'] is True
-        assert reply['result'] == {
-            'program': {
-                'program_id': 'broken',
-                'beat': None,
-                'duration': None,
-                'error': 'missing DURATION',
-            }
-        }
+        assert reply['ok'] is False
+        assert reply['error'] == 'missing DURATION'
+        assert fake_library.list_programs() == []
 
-        load_reply = svc.handle_cmd({
-            'id': 2,
-            'cmd': 'load_program',
-            'program_id': 'broken',
-        })
-        assert load_reply['ok'] is False
-        assert load_reply['error'] == 'program broken is not loadable: missing DURATION'
+        json_msgs, _ = svc.tick_once()
+        events = _decode_json_msgs(json_msgs)
+        assert not any(event.get('event') == 'programs_updated' for event in events)
 
     def test_publish_program_does_not_change_current_session(self):
         fake_library = _FakeLibrary('/tmp/programs', [_make_program_entry('main_show')])
@@ -1325,7 +1308,7 @@ class TestConfigMutations:
             'id': 1,
             'cmd': 'publish_program',
             'program_id': 'ambient',
-            'source': _SIMPLE_DSL,
+            'source': "BEAT = 1.0\nDURATION = 0.5\n" + _SIMPLE_DSL,
         })
 
         assert reply['ok'] is True

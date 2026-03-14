@@ -1914,20 +1914,23 @@ class TuiApp:
 
     def _program_manager_options(self) -> list[tuple[str, str]]:
         options = []
-        for entry in self._program_catalog:
-            if entry.error:
-                label = f'{entry.program_id:<18s} ERROR  {entry.error}'
-            else:
-                beat_text = '?' if entry.beat is None else f'{entry.beat:g}'
-                duration_text = '?' if entry.duration is None else f'{entry.duration:g}s'
-                label = (
-                    f'{entry.program_id:<18s} '
-                    f'{duration_text:<7s} '
-                    f'beat {beat_text:<6s} '
-                    '[ok]'
-                )
+        for entry in self._loadable_program_catalog():
+            beat_text = '?' if entry.beat is None else f'{entry.beat:g}'
+            duration_text = '?' if entry.duration is None else f'{entry.duration:g}s'
+            label = (
+                f'{entry.program_id:<18s} '
+                f'{duration_text:<7s} '
+                f'beat {beat_text:<6s} '
+                '[ok]'
+            )
             options.append((entry.program_id, label))
         return options
+
+    def _loadable_program_catalog(self) -> list[ProgramCatalogEntry]:
+        return [entry for entry in self._program_catalog if entry.error is None]
+
+    def _hidden_program_count(self) -> int:
+        return sum(1 for entry in self._program_catalog if entry.error is not None)
 
     def _selected_program_from_manager(self) -> ProgramCatalogEntry | None:
         if not isinstance(self._active_modal, ProgramManagerDialogState):
@@ -1935,10 +1938,11 @@ class TuiApp:
         if self._active_modal.program_list is None:
             return None
         selected_program_id = self._active_modal.program_list.current_value
-        for entry in self._program_catalog:
+        loadable = self._loadable_program_catalog()
+        for entry in loadable:
             if entry.program_id == selected_program_id:
                 return entry
-        return self._program_catalog[0] if self._program_catalog else None
+        return loadable[0] if loadable else None
 
     def _refresh_program_manager_dialog(self) -> None:
         if not isinstance(self._active_modal, ProgramManagerDialogState):
@@ -1975,16 +1979,23 @@ class TuiApp:
             return ' '
         entry = self._selected_program_from_manager()
         if entry is None:
+            hidden = self._hidden_program_count()
+            if hidden:
+                noun = 'program' if hidden == 1 else 'programs'
+                return f'No loadable programs. {hidden} broken {noun} hidden.'
             return 'No programs in library.'
-        if entry.error:
-            return f'{entry.program_id}: ERROR: {entry.error}'
         duration_text = '?' if entry.duration is None else f'{entry.duration:g}s'
         beat_text = '?' if entry.beat is None else f'{entry.beat:g}'
         loop_text = 'On' if state.loop_enabled else 'Off'
-        return (
+        detail = (
             f'Selected: {entry.program_id}   duration: {duration_text}   '
             f'beat: {beat_text}   loop: {loop_text}'
         )
+        hidden = self._hidden_program_count()
+        if hidden:
+            noun = 'program' if hidden == 1 else 'programs'
+            detail += f'   {hidden} broken {noun} hidden'
+        return detail
 
     def _toggle_program_loop(self) -> None:
         state = self._active_modal
@@ -2067,10 +2078,12 @@ class TuiApp:
         publish_button = DialogButton('Publish', handler=self._start_program_publish)
         rescan_button = DialogButton('Rescan', handler=self._submit_program_rescan)
         close_button = DialogButton('Close', handler=self._close_modal)
+        hidden_control = FormattedTextControl(text=self._program_manager_detail_text)
         dialog = Dialog(
             title='Programs',
             body=HSplit([
-                Label(text='No programs in library.', style='class:newdevice.label'),
+                Label(text='No loadable programs.', style='class:newdevice.label'),
+                Window(height=1, content=hidden_control),
                 Window(height=1, content=error_control, style='class:newdevice.error'),
                 Label(
                     text='Publish a local file or rescan the controller library.',
@@ -2199,10 +2212,6 @@ class TuiApp:
         entry = self._selected_program_from_manager()
         if entry is None:
             state.error_text = 'no programs in library'
-            self._app.invalidate()
-            return
-        if entry.error:
-            state.error_text = f'cannot load {entry.program_id}: {entry.error}'
             self._app.invalidate()
             return
 
