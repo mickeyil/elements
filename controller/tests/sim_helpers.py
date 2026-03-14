@@ -1,5 +1,6 @@
 """Shared helpers for integration tests that use network_sim subprocesses."""
 
+import re
 import signal
 import socket
 import subprocess
@@ -46,6 +47,9 @@ class SimProcess:
 
     def _read_stdout(self) -> None:
         for line in self.proc.stdout:
+            match = re.search(rb'network_sim: listening on tcp=(\d+)', line)
+            if match is not None:
+                self.tcp_port = int(match.group(1))
             if b'Waiting for controller' in line:
                 self._ready_event.set()
 
@@ -72,6 +76,7 @@ def start_sim(tcp_port: int, frame_port: int, strip_length: int,
     if not NETWORK_SIM_BIN.exists():
         pytest.skip(f'network_sim not built at {NETWORK_SIM_BIN}')
 
+    requested_tcp_port = tcp_port
     if discovery_port is None:
         # Always isolate test sims from the binary default discovery port.
         # Tests that need a shared discovery domain pass an explicit port.
@@ -94,11 +99,15 @@ def start_sim(tcp_port: int, frame_port: int, strip_length: int,
         stderr=subprocess.PIPE,
     )
 
-    sim = SimProcess(proc, tcp_port, frame_port)
+    sim = SimProcess(proc, requested_tcp_port, frame_port)
     if not sim.wait_ready():
         proc.kill()
         proc.wait()
         pytest.fail('network_sim did not start listening in time')
+    if requested_tcp_port == 0 and sim.tcp_port == 0:
+        proc.kill()
+        proc.wait()
+        pytest.fail('network_sim did not report assigned tcp port in time')
 
     return sim
 

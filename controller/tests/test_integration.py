@@ -20,7 +20,7 @@ from elemctl.device import DeviceFrame, DeviceState
 from elemctl.network_device import NetworkDevice
 from elemctl.udp_receiver import UdpFrameReceiver
 
-from .sim_helpers import find_free_tcp_port, find_free_udp_port, start_sim, stop_sim
+from .sim_helpers import find_free_udp_port, start_sim, stop_sim
 
 STRIP_LENGTH = 5
 
@@ -41,10 +41,9 @@ def _make_blob() -> bytes:
 @pytest.fixture()
 def sim_process(request):
     """Start network_sim as a subprocess, yield SimProcess."""
-    tcp_port = find_free_tcp_port()
     frame_port = find_free_udp_port()
 
-    sim = start_sim(tcp_port, frame_port, STRIP_LENGTH, device_id=42)
+    sim = start_sim(0, frame_port, STRIP_LENGTH, device_id=42)
     yield sim
     stop_sim(sim)
 

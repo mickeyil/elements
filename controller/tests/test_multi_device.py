@@ -25,7 +25,7 @@ from elemctl.controller import (
 from elemctl.network_device import NetworkDevice
 from elemctl.udp_receiver import UdpFrameReceiver
 
-from .sim_helpers import find_free_tcp_port, find_free_udp_port, start_sim, stop_sim
+from .sim_helpers import find_free_udp_port, start_sim, stop_sim
 
 STRIP_LENGTH = 10
 FADE = 1.0
@@ -84,13 +84,11 @@ def _strip_is_uniform(rgb_bytes: bytes) -> bool:
 @pytest.fixture()
 def two_sims(request):
     """Start 2 network_sim subprocesses, yield (sim1, sim2, frame_port)."""
-    tcp_port_1 = find_free_tcp_port()
-    tcp_port_2 = find_free_tcp_port()
     frame_port = find_free_udp_port()
 
-    sim1 = start_sim(tcp_port_1, frame_port, STRIP_LENGTH, device_id=1)
+    sim1 = start_sim(0, frame_port, STRIP_LENGTH, device_id=1)
     try:
-        sim2 = start_sim(tcp_port_2, frame_port, STRIP_LENGTH, device_id=2)
+        sim2 = start_sim(0, frame_port, STRIP_LENGTH, device_id=2)
     except Exception:
         stop_sim(sim1)
         raise

@@ -24,7 +24,6 @@ from elemctl.service import ControllerService
 from elemctl.uds_wire import KIND_FRAME, KIND_JSON, parse_json_payload
 
 from .sim_helpers import (
-    find_free_tcp_port,
     find_free_udp_port,
     start_sim,
     stop_sim,
@@ -174,8 +173,6 @@ def discovered(tmp_path):
     Teardown stops everything."""
     socket_path = str(tmp_path / 'ctrl.sock')
 
-    tcp_port_1 = find_free_tcp_port()
-    tcp_port_2 = find_free_tcp_port()
     frame_port = find_free_udp_port()
     discovery_port = find_free_udp_port()
 
@@ -206,13 +203,13 @@ def discovered(tmp_path):
     client = None
     try:
         sim1 = start_sim(
-            tcp_port_1, frame_port, STRIP_LENGTH, device_id=1,
+            0, frame_port, STRIP_LENGTH, device_id=1,
             discovery_port=discovery_port, discovery_host='127.0.0.1',
             device_uid='sim-1',
         )
         sims.append(sim1)
         sim2 = start_sim(
-            tcp_port_2, frame_port, STRIP_LENGTH, device_id=2,
+            0, frame_port, STRIP_LENGTH, device_id=2,
             discovery_port=discovery_port, discovery_host='127.0.0.1',
             device_uid='sim-2',
         )

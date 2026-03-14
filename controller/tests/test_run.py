@@ -1,14 +1,13 @@
 """Smoke test: config → compile → NetworkDevice → Controller → ENDED."""
 
-import signal
-import socket
-import subprocess
 import sys
 import threading
 import time
 from pathlib import Path
 
 import pytest
+
+pytestmark = pytest.mark.runtime_integration
 
 _repo = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_repo / 'compiler'))
@@ -17,8 +16,8 @@ from elemctl.config import Config, DeviceConfig
 from elemctl.controller import Controller, ControllerState, StripConfig
 from elemctl.device import DeviceState
 from elemctl.run import run_controller
+from .sim_helpers import find_free_udp_port, start_sim, stop_sim
 
-NETWORK_SIM_BIN = _repo / 'build' / 'network_sim'
 STRIP_LENGTH = 5
 
 
@@ -29,85 +28,14 @@ def pytest_runtest_makereport(item, call):
     setattr(item, f'rep_{rep.when}', rep)
 
 
-def _find_free_tcp_port() -> int:
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.bind(('', 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
-
-
-def _find_free_udp_port() -> int:
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.bind(('', 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
-
-
-class SimProcess:
-    def __init__(self, proc, tcp_port, frame_port):
-        import threading
-        self.proc = proc
-        self.tcp_port = tcp_port
-        self.frame_port = frame_port
-        self._stderr_lines: list[bytes] = []
-        self._ready_event = threading.Event()
-        self._stdout_reader = threading.Thread(target=self._read_stdout, daemon=True)
-        self._stderr_reader = threading.Thread(target=self._read_stderr, daemon=True)
-        self._stdout_reader.start()
-        self._stderr_reader.start()
-
-    def _read_stdout(self):
-        for line in self.proc.stdout:
-            if b'Waiting for controller' in line:
-                self._ready_event.set()
-
-    def _read_stderr(self):
-        for line in self.proc.stderr:
-            self._stderr_lines.append(line)
-
-    def wait_ready(self, timeout=5.0):
-        result = self._ready_event.wait(timeout=timeout)
-        self._ready_event.clear()
-        return result
-
-    def dump_stderr(self):
-        return b''.join(self._stderr_lines).decode(errors='replace')
-
-
 @pytest.fixture()
 def sim_process(request):
-    if not NETWORK_SIM_BIN.exists():
-        pytest.skip(f'network_sim not built at {NETWORK_SIM_BIN}')
-
-    tcp_port = _find_free_tcp_port()
-    frame_port = _find_free_udp_port()
-
-    proc = subprocess.Popen(
-        [
-            str(NETWORK_SIM_BIN),
-            '--tcp-port', str(tcp_port),
-            '--device-uid', 'sim-test',
-        ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-
-    sim = SimProcess(proc, tcp_port, frame_port)
-    if not sim.wait_ready():
-        proc.kill()
-        proc.wait()
-        pytest.fail('network_sim did not start listening in time')
+    frame_port = find_free_udp_port()
+    sim = start_sim(0, frame_port, STRIP_LENGTH, device_id=1, device_uid='sim-test')
 
     yield sim
 
-    proc.send_signal(signal.SIGTERM)
-    try:
-        proc.wait(timeout=3.0)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.wait()
+    stop_sim(sim)
 
     rep = getattr(request.node, 'rep_call', None)
     if rep and rep.failed:
