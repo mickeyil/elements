@@ -690,6 +690,17 @@ class TestDevicePanel:
             if app._log_fp is not None:
                 app._log_fp.close()
 
+    def test_input_prompt_includes_arrow_prefix(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        try:
+            assert app._input_prompt.text == '> '
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
     def test_decode_snapshot_produces_panel_update(self):
         msg = {
             'type': 'event',
@@ -1041,12 +1052,39 @@ class TestDevicePanel:
             if app._log_fp is not None:
                 app._log_fp.close()
 
-    def test_panel_rows_render_offline_badge(self, tmp_path):
+    def test_panel_age_uses_now_for_first_minute(self, monkeypatch, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
             log_file=str(tmp_path / 'tui.log'),
         )
         try:
+            monkeypatch.setattr('elemctl.tui.time.monotonic_ns', lambda: 59_000_000_000)
+            assert app._format_panel_age(0) == 'now'
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+    def test_panel_age_uses_hours_and_days(self, monkeypatch, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        try:
+            monkeypatch.setattr('elemctl.tui.time.monotonic_ns', lambda: 3_600_000_000_000)
+            assert app._format_panel_age(0) == '1h'
+            monkeypatch.setattr('elemctl.tui.time.monotonic_ns', lambda: 86_400_000_000_000)
+            assert app._format_panel_age(0) == '1d'
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+    def test_panel_rows_render_offline_badge(self, monkeypatch, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        try:
+            monkeypatch.setattr('elemctl.tui.time.monotonic_ns', lambda: 59_000_000_000)
             app._device_panel = {
                 'sim-1': DevicePanelEntry(
                     device_uid='sim-1',
@@ -1056,10 +1094,19 @@ class TestDevicePanel:
                     disconnected_at_ns=0,
                 )
             }
-            text = ''.join(fragment[1] for fragment in app._render_panel_rows())
+            fragments = app._render_panel_rows()
+            text = ''.join(fragment[1] for fragment in fragments)
             assert 'sim-1' in text
             assert 'main' in text
             assert '60' in text
+            assert any(
+                style == 'class:panel.badge.offline' and text.strip() == 'now'
+                for style, text in fragments
+            )
+            assert any(
+                style == 'class:panel.length' and text == '60 '
+                for style, text in fragments
+            )
         finally:
             if app._log_fp is not None:
                 app._log_fp.close()

@@ -1026,6 +1026,7 @@ class TuiApp:
         ))
         self._input_buffer = input_control.buffer
         self._input_control = input_control
+        self._input_prompt = FormattedTextControl('> ')
 
         kb = KeyBindings()
 
@@ -1114,11 +1115,21 @@ class TuiApp:
             [self._transcript_body, right_panel],
             padding=1,
         )
+        input_row = VSplit(
+            [
+                Window(
+                    width=2,
+                    dont_extend_width=True,
+                    content=self._input_prompt,
+                ),
+                Window(height=1, content=input_control),
+            ],
+        )
         main_body = HSplit(
             [
                 DynamicContainer(self._select_body_container),
                 Window(height=1, char='─', style='class:separator'),
-                Window(height=1, content=input_control),
+                input_row,
             ],
         )
         self._root_container = FloatContainer(
@@ -1505,14 +1516,18 @@ class TuiApp:
             return ''
         elapsed_s = max(0, int((time.monotonic_ns() - disconnected_at_ns) / 1_000_000_000))
         if elapsed_s < 60:
-            return f'{elapsed_s}s'
-        elapsed_m = elapsed_s // 60
-        if elapsed_m < 60:
-            return f'{elapsed_m}m'
-        elapsed_h = elapsed_m // 60
-        if elapsed_h < 24:
-            return f'{elapsed_h}h'
-        return f'{elapsed_h // 24}d'
+            return 'now'
+        if elapsed_s < 3600:
+            return f'{elapsed_s // 60}m'
+        if elapsed_s < 86400:
+            return f'{elapsed_s // 3600}h'
+        return f'{elapsed_s // 86400}d'
+
+    def _format_panel_age_badge(self, disconnected_at_ns: int | None) -> str:
+        age = self._format_panel_age(disconnected_at_ns)
+        if not age:
+            return ''
+        return f' {age} '
 
     def _render_panel_rows(self):
         fragments: list[tuple[str, str]] = []
@@ -1540,7 +1555,7 @@ class TuiApp:
                 uid_style = 'class:panel.uid.connected'
             else:
                 uid_style = 'class:panel.uid.offline'
-                badge = self._format_panel_age(entry.disconnected_at_ns)
+                badge = self._format_panel_age_badge(entry.disconnected_at_ns)
             fragments.extend(
                 self._panel_two_column_fragments(
                     entry.device_uid,
@@ -1555,7 +1570,7 @@ class TuiApp:
                 self._panel_two_column_fragments(
                     entry.strip_id,
                     left_style='class:panel.meta',
-                    right_text=length_text,
+                    right_text=f'{length_text} ',
                     right_style='class:panel.length',
                 )
             )
@@ -1577,7 +1592,7 @@ class TuiApp:
             self._panel_two_column_fragments(
                 'controller',
                 left_style=controller_style,
-                right_text='' if self._controller_connected else self._format_panel_age(
+                right_text='' if self._controller_connected else self._format_panel_age_badge(
                     self._controller_disconnected_at_ns
                 ),
                 right_style='class:panel.badge.offline',
