@@ -166,10 +166,11 @@ class Controller:
                 )
                 return False
             seen[ci] = True
-            if ms.length != self._strips[ci].length:
+            if ms.length > self._strips[ci].length:
                 self._queue_event(
                     ControllerEvent.Kind.ERROR,
-                    f"strip length mismatch for {self._strips[ci].strip_id}",
+                    f"strip length exceeds configured length for "
+                    f"{self._strips[ci].strip_id}",
                 )
                 return False
             prog_to_canon[pi] = ci

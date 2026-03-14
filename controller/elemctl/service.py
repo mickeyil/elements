@@ -521,6 +521,9 @@ class ControllerService:
     def _compile(self, source: str, beat: float, duration: float):
         from elements.dsl import _builder, build_manifest
         _builder.reset()
+        _builder.configured_strip_lengths = {
+            sc.strip_id: sc.length for sc in self._strips
+        }
         try:
             exec(source, {'__builtins__': __builtins__})
             return build_manifest(beat=beat, duration=duration)

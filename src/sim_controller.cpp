@@ -55,9 +55,9 @@ bool SimController::load(const CompiledManifest& manifest, bool loop)
             return false;
         }
         seen[ci] = true;
-        if (manifest.strips[pi].length != _strips[ci].length) {
+        if (manifest.strips[pi].length > _strips[ci].length) {
             queue_event(ControllerEvent::ERROR,
-                "strip length mismatch for " + _strips[ci].strip_id);
+                "strip length exceeds configured length for " + _strips[ci].strip_id);
             return false;
         }
         prog_to_canon[pi] = ci;
@@ -373,4 +373,3 @@ std::vector<ControllerEvent> SimController::drain_events()
     out.swap(_events);
     return out;
 }
-

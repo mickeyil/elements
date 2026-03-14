@@ -1,5 +1,10 @@
 from elemctl.uds_wire import PROTOCOL_VERSION
-from elemctl.web import WebRelay, _encode_ws_frame, _make_disconnected_snapshot
+from elemctl.web import (
+    WebRelay,
+    _build_parser,
+    _encode_ws_frame,
+    _make_disconnected_snapshot,
+)
 
 
 def test_encode_ws_frame_small_payload():
@@ -71,3 +76,11 @@ def test_programs_updated_refreshes_cached_snapshot_programs():
     assert relay._snapshot['programs'] == [
         {'program_id': 'new', 'beat': 0.5, 'duration': 4.0, 'error': None},
     ]
+
+
+def test_web_parser_defaults_bind_all_interfaces():
+    parser = _build_parser()
+    args = parser.parse_args([])
+
+    assert args.host == '0.0.0.0'
+    assert args.port == 8080

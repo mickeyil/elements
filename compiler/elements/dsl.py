@@ -36,6 +36,7 @@ class _ProgramBuilder:
         self.strips: list[StripDef] = []
         self.animations: list[AnimDef] = []
         self.events: list[dict] = []
+        self.configured_strip_lengths: dict[str, int] | None = None
 
     def add_strip(self, s: StripDef):
         self.strips.append(s)
@@ -60,7 +61,25 @@ _builder = _ProgramBuilder()
 # DSL public functions
 # ---------------------------------------------------------------------------
 
-def strip(name: str, length: int, type: str = "RGB") -> StripDef:
+def strip(name: str, length: int | None = None, type: str = "RGB") -> StripDef:
+    if length is None:
+        configured = _builder.configured_strip_lengths
+        if configured is None:
+            raise ValueError(
+                f"length required for strip {name!r} outside config-backed compile"
+            )
+        resolved = configured.get(name)
+        if resolved is None:
+            raise ValueError(f"unknown configured strip {name!r}")
+        length = resolved
+    else:
+        configured = _builder.configured_strip_lengths
+        if configured is not None and name in configured and length > configured[name]:
+            raise ValueError(
+                f"strip {name!r} length {length} exceeds configured length "
+                f"{configured[name]}"
+            )
+
     s = StripDef(name, length, type)
     _builder.add_strip(s)
     return s

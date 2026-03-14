@@ -501,7 +501,7 @@ class WebRelay:
                 pass
 
 
-def main() -> None:
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog='elemctl web',
         description='Elements web relay and realtime viewer',
@@ -515,7 +515,7 @@ def main() -> None:
         help='config JSON path (default: %(default)s)',
     )
     parser.add_argument(
-        '--host', default='127.0.0.1',
+        '--host', default='0.0.0.0',
         help='HTTP bind host (default: %(default)s)',
     )
     parser.add_argument(
@@ -526,6 +526,11 @@ def main() -> None:
         '--log-dir', default=None,
         help='logs directory (default: controller.logs_dir or <repo>/logs)',
     )
+    return parser
+
+
+def main() -> None:
+    parser = _build_parser()
     args = parser.parse_args()
 
     configure_logger(level='INFO')

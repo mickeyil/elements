@@ -281,7 +281,7 @@ class TestLoad:
         assert ctrl.state == ControllerState.IDLE
         assert has_event(ctrl.drain_events(), ControllerEvent.Kind.ERROR)
 
-    def test_strip_length_mismatch_fails(self):
+    def test_program_longer_than_configured_strip_fails(self):
         f = DualFixture()
         ctrl = Controller(f.strips(), clock=f.clock)
 
@@ -289,6 +289,15 @@ class TestLoad:
         m.strips[0] = CompiledStripArtifact("left", 10, b'\x00')
         assert not ctrl.load(m)
         assert has_event(ctrl.drain_events(), ControllerEvent.Kind.ERROR)
+
+    def test_program_shorter_than_configured_strip_is_allowed(self):
+        f = DualFixture()
+        ctrl = Controller(f.strips(), clock=f.clock)
+
+        m = f.manifest()
+        m.strips[0] = CompiledStripArtifact("left", 3, b'\x00')
+        assert ctrl.load(m)
+        assert ctrl.state == ControllerState.LOADED
 
     def test_duplicate_strip_id_fails(self):
         f = DualFixture()

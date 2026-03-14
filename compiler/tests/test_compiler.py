@@ -9,6 +9,7 @@ import pytest
 import struct
 
 from elements.dsl import *
+from elements.dsl import _builder
 from elements.blob import decode_blob, ANIM_WAVE, ANIM_SHIFT, ANIM_SPARK, ANIM_PAINT
 from elements.compiler import CompileError
 from pathlib import Path
@@ -258,6 +259,33 @@ class TestValidation:
         w.schedule(px, at=-1, duration=1)
         with pytest.raises(CompileError, match="event start time must be"):
             build(beat=0.5, duration=2.0)
+
+
+class TestConfiguredStripLengths:
+    def teardown_method(self):
+        _builder.reset()
+
+    def test_strip_without_length_requires_context(self):
+        with pytest.raises(ValueError, match="length required for strip 'main'"):
+            strip("main")
+
+    def test_strip_without_length_uses_configured_context(self):
+        _builder.reset()
+        _builder.configured_strip_lengths = {"main": 144}
+        s = strip("main")
+        assert s.length == 144
+
+    def test_explicit_shorter_length_is_allowed_with_context(self):
+        _builder.reset()
+        _builder.configured_strip_lengths = {"main": 144}
+        s = strip("main", length=60)
+        assert s.length == 60
+
+    def test_explicit_longer_length_is_rejected_with_context(self):
+        _builder.reset()
+        _builder.configured_strip_lengths = {"main": 144}
+        with pytest.raises(ValueError, match="exceeds configured length 144"):
+            strip("main", length=145)
 
     def test_zero_event_duration_rejected(self):
         strip1 = strip("test_zero_dur", length=10, type="RGB")

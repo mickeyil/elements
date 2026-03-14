@@ -175,9 +175,15 @@ def main() -> None:
         from elements.dsl import _builder, build_manifest
 
         _builder.reset()
-        source = Path(args.program).read_text()
-        exec(source, {"__builtins__": __builtins__})
-        manifest = build_manifest(beat=args.beat, duration=args.duration)
+        _builder.configured_strip_lengths = {
+            dc.strip_id: dc.length for dc in config.devices
+        }
+        try:
+            source = Path(args.program).read_text()
+            exec(source, {"__builtins__": __builtins__})
+            manifest = build_manifest(beat=args.beat, duration=args.duration)
+        finally:
+            _builder.reset()
     except FileNotFoundError as e:
         log.error("program file not found: %s", e)
         sys.exit(1)

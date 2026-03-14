@@ -432,6 +432,60 @@ class TestHandleLoad:
         assert snap['session'] is not None
         assert snap['session']['session_id'] == 1
 
+    def test_load_resolves_implicit_strip_length_from_topology(self):
+        svc, _ = _make_service()
+        source = """\
+from elements.dsl import strip, spark, sec
+s = strip('test')
+sp = spark(color='white', fade=1.0)
+sp.schedule(s.pixels(f'0-{s.length - 1}'), at=0, duration=sec(0.5))
+"""
+        reply = svc.handle_cmd({
+            'id': 11,
+            'cmd': 'load',
+            'source': source,
+            'beat': 1.0,
+            'duration': 0.5,
+        })
+        assert reply['ok'] is True
+        assert reply['result']['session_id'] == 1
+
+    def test_load_allows_program_shorter_than_configured_strip(self):
+        svc, _ = _make_service()
+        source = """\
+from elements.dsl import strip, spark, sec
+s = strip('test', length=3)
+sp = spark(color='white', fade=1.0)
+sp.schedule(s.pixels('0-2'), at=0, duration=sec(0.5))
+"""
+        reply = svc.handle_cmd({
+            'id': 12,
+            'cmd': 'load',
+            'source': source,
+            'beat': 1.0,
+            'duration': 0.5,
+        })
+        assert reply['ok'] is True
+        assert reply['result']['session_id'] == 1
+
+    def test_load_rejects_program_longer_than_configured_strip(self):
+        svc, _ = _make_service()
+        source = """\
+from elements.dsl import strip, spark, sec
+s = strip('test', length=6)
+sp = spark(color='white', fade=1.0)
+sp.schedule(s.pixels('0-5'), at=0, duration=sec(0.5))
+"""
+        reply = svc.handle_cmd({
+            'id': 13,
+            'cmd': 'load',
+            'source': source,
+            'beat': 1.0,
+            'duration': 0.5,
+        })
+        assert reply['ok'] is False
+        assert 'exceeds configured length' in reply['error']
+
     def test_load_compile_error(self):
         svc, _ = _make_service()
         reply = svc.handle_cmd({
@@ -602,6 +656,23 @@ class TestProgramLibraryCommands:
         assert reply['ok'] is True
         assert reply['result']['session_id'] == 1
 
+    def test_load_program_resolves_implicit_strip_length_from_topology(self):
+        source = """\
+from elements.dsl import strip, spark, sec
+s = strip('test')
+sp = spark(color='white', fade=1.0)
+sp.schedule(s.pixels(f'0-{s.length - 1}'), at=0, duration=sec(0.5))
+"""
+        entry = _make_program_entry('main_show', source=source)
+        svc, _ = _make_service(
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir, [entry]),
+        )
+
+        reply = svc.handle_cmd({'id': 11, 'cmd': 'load_program', 'program_id': 'main_show'})
+
+        assert reply['ok'] is True
+        assert reply['result']['session_id'] == 1
+
     def test_load_program_unknown(self):
         svc, _ = _make_service()
 
@@ -739,7 +810,7 @@ class TestProgramLibraryCommands:
 
         reply2 = svc.handle_cmd({'id': 2, 'cmd': 'load_program', 'program_id': 'main_show'})
 
-        assert reply2['ok'] is False
+        assert reply2['ok'] is True
         assert len(calls) == 2
 
 
