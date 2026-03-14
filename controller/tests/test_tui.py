@@ -19,6 +19,11 @@ from elemctl.tui import (
     PanelDeviceInfo,
     PanelDeviceStatusUpdate,
     PanelSnapshotUpdate,
+    SessionInfo,
+    SessionManagerDialogState,
+    SessionSeekDialogState,
+    SessionStateUpdate,
+    SessionStripEntry,
     ProgramManagerDialogState,
     ProgramPublishDialogState,
     ProgramCatalogEntry,
@@ -29,6 +34,7 @@ from elemctl.tui import (
     parse_command,
     format_transcript_line,
     parse_length,
+    parse_t_rel,
     validate_device_uid,
     validate_strip_id,
     _DEVICES_SENTINEL,
@@ -37,6 +43,7 @@ from elemctl.tui import (
     _PROGRAMS_SENTINEL,
     _QUIT_SENTINEL,
     _RESCAN_SENTINEL,
+    _SESSION_SENTINEL,
 )
 from elemctl.uds_wire import KIND_JSON, KIND_FRAME, UdsReader, encode_json
 from elemctl.uds_client import UdsClient
@@ -306,6 +313,11 @@ class TestParseCommand:
         assert cmd is _PROGRAMS_SENTINEL
         assert err is None
 
+    def test_session(self):
+        cmd, err = parse_command('/session', 1)
+        assert cmd is _SESSION_SENTINEL
+        assert err is None
+
     def test_newdevice(self):
         cmd, err = parse_command('/newdevice', 1)
         assert cmd is _NEWDEVICE_SENTINEL
@@ -482,6 +494,26 @@ class TestParseCommand:
         assert cmd is None
         assert 'invalid index' in err
 
+    def test_seek(self):
+        cmd, err = parse_command('/seek 12.5', 9)
+        assert err is None
+        assert cmd == {'cmd': 'seek', 't_rel': 12.5, 'id': 9}
+
+    def test_seek_requires_value(self):
+        cmd, err = parse_command('/seek', 1)
+        assert cmd is None
+        assert 'requires a time' in err
+
+    def test_seek_rejects_bad_value(self):
+        cmd, err = parse_command('/seek nope', 1)
+        assert cmd is None
+        assert 'invalid time' in err
+
+    def test_seek_rejects_negative_value(self):
+        cmd, err = parse_command('/seek -1', 1)
+        assert cmd is None
+        assert '>= 0' in err
+
     def test_rmdevice_requires_uid(self):
         cmd, err = parse_command('/rmdevice', 1)
         assert cmd is None
@@ -503,6 +535,11 @@ class TestNewDeviceValidation:
         assert parse_length('60') == (60, None)
         assert parse_length('0')[1] is not None
         assert parse_length('abc')[1] is not None
+
+    def test_parse_t_rel(self):
+        assert parse_t_rel('1.5') == (1.5, None)
+        assert parse_t_rel('-1')[1] is not None
+        assert parse_t_rel('abc')[1] is not None
 
 
 # ---------------------------------------------------------------------------
@@ -722,6 +759,7 @@ class TestDevicePanel:
                 DeviceCatalogEntry(2, 'sim-2', 'esp32', 'aux', 20, False),
             ]),
             ProgramCatalogUpdate([]),
+            SessionStateUpdate(mode='clear', session=None),
         ]
 
     def test_decode_snapshot_updates_program_catalog(self):
@@ -747,6 +785,58 @@ class TestDevicePanel:
                 ProgramCatalogEntry('ambient', 1.0, 8.0, None),
                 ProgramCatalogEntry('broken', None, None, 'missing DURATION'),
             ]),
+            SessionStateUpdate(mode='clear', session=None),
+        ]
+
+    def test_decode_snapshot_updates_session_state(self):
+        msg = {
+            'type': 'event',
+            'event': 'snapshot',
+            'session': {
+                'session_id': 5,
+                'epoch': 2,
+                'playback_state': 'playing',
+                'current_t_rel': 1.25,
+                'duration': 8.0,
+                'safe_intervals': [[0.0, 0.5]],
+                'strips': [{'name': 'main', 'length': 10}],
+            },
+            'devices': [],
+            'programs': [],
+        }
+        _lines, updates = _decode_tui_message(KIND_JSON, _json_payload(msg))
+        assert updates[-1] == SessionStateUpdate(
+            mode='replace',
+            session=SessionInfo(
+                session_id=5,
+                playback_state='playing',
+                epoch=2,
+                current_t_rel=1.25,
+                duration=8.0,
+                safe_intervals=[(0.0, 0.5)],
+                strips=[SessionStripEntry('main', 10)],
+            ),
+        )
+
+    def test_decode_state_event_updates_session_state(self):
+        msg = {
+            'type': 'event',
+            'event': 'state',
+            'state': 'paused',
+            'epoch': 3,
+            'session_id': 5,
+        }
+        lines, updates = _decode_tui_message(KIND_JSON, _json_payload(msg))
+        assert lines == ['state paused epoch=3 session=5']
+        assert updates == [
+            SessionStateUpdate(
+                mode='merge',
+                session=SessionInfo(
+                    session_id=5,
+                    playback_state='paused',
+                    epoch=3,
+                ),
+            ),
         ]
 
     def test_programs_updated_produces_catalog_update_without_transcript(self):
@@ -816,6 +906,56 @@ class TestDevicePanel:
                 ProgramCatalogEntry('broken', None, None, 'missing DURATION'),
             ]
             assert app._program_catalog_ready is True
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+    def test_session_state_update_replaces_session(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        try:
+            app._apply_panel_update(SessionStateUpdate(
+                mode='replace',
+                session=SessionInfo(
+                    session_id=7,
+                    playback_state='loaded',
+                    epoch=0,
+                    current_t_rel=0.0,
+                    duration=12.0,
+                    safe_intervals=[(0.0, 0.0)],
+                    strips=[SessionStripEntry('main', 60)],
+                ),
+            ))
+            assert app._session == SessionInfo(
+                session_id=7,
+                playback_state='loaded',
+                epoch=0,
+                current_t_rel=0.0,
+                duration=12.0,
+                safe_intervals=[(0.0, 0.0)],
+                strips=[SessionStripEntry('main', 60)],
+            )
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+    def test_controller_disconnect_clears_session(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        try:
+            app._apply_panel_update(SessionStateUpdate(
+                mode='replace',
+                session=SessionInfo(session_id=7, playback_state='playing'),
+            ))
+            app._apply_panel_update(ControllerConnectionUpdate(True))
+            app._apply_panel_update(ControllerConnectionUpdate(False))
+            assert app._session is None
         finally:
             if app._log_fp is not None:
                 app._log_fp.close()
@@ -2055,6 +2195,302 @@ class TestProgramCatalogCommands:
             line.endswith('index #2 out of range (have 1 programs)')
             for line in app._log_lines
         )
+
+
+class TestSessionCommands:
+    class _FakeClient:
+        def __init__(self):
+            self.commands: list[dict] = []
+
+        def send_cmd(self, cmd: dict) -> None:
+            self.commands.append(cmd)
+
+        def close(self) -> None:
+            pass
+
+    def test_session_requires_connected_controller(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+
+        try:
+            app._do_session()
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        assert any(line.endswith('controller not connected') for line in app._log_lines)
+
+    def test_session_without_snapshot_logs_waiting_message(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        app._set_client(self._FakeClient())
+
+        try:
+            app._do_session()
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        assert any(line.endswith('session status not available yet') for line in app._log_lines)
+
+    def test_session_empty_opens_manager(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        app._set_client(self._FakeClient())
+        app._device_catalog_ready = True
+
+        try:
+            app._do_session()
+            state = app._active_modal
+            assert isinstance(state, SessionManagerDialogState)
+            assert state.mode == 'empty'
+            assert state.play_button is None
+            assert state.programs_button is not None
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+    def test_session_active_opens_manager(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        app._set_client(self._FakeClient())
+        app._device_catalog_ready = True
+        app._session = SessionInfo(
+            session_id=5,
+            playback_state='loaded',
+            epoch=0,
+            current_t_rel=0.0,
+            duration=8.0,
+            safe_intervals=[(0.0, 0.0)],
+            strips=[SessionStripEntry('main', 60)],
+        )
+
+        try:
+            app._do_session()
+            state = app._active_modal
+            assert isinstance(state, SessionManagerDialogState)
+            assert state.mode == 'active'
+            assert state.play_button is not None
+            assert state.seek_button is not None
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+    def test_session_play_sends_play_command(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        client = self._FakeClient()
+        app._set_client(client)
+        app._device_catalog_ready = True
+        app._session = SessionInfo(session_id=5, playback_state='loaded')
+
+        try:
+            app._do_session()
+            app._submit_session_command('play')
+            state = app._active_modal
+            assert isinstance(state, SessionManagerDialogState)
+            assert state.pending_request_id == 1
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        assert client.commands == [{'cmd': 'play', 'id': 1}]
+
+    def test_session_pause_sends_pause_command(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        client = self._FakeClient()
+        app._set_client(client)
+        app._device_catalog_ready = True
+        app._session = SessionInfo(session_id=5, playback_state='playing')
+
+        try:
+            app._do_session()
+            app._submit_session_command('pause')
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        assert client.commands == [{'cmd': 'pause', 'id': 1}]
+
+    def test_session_stop_sends_stop_command(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        client = self._FakeClient()
+        app._set_client(client)
+        app._device_catalog_ready = True
+        app._session = SessionInfo(session_id=5, playback_state='paused')
+
+        try:
+            app._do_session()
+            app._submit_session_command('stop')
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        assert client.commands == [{'cmd': 'stop', 'id': 1}]
+
+    def test_session_seek_dialog_sends_seek_command(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        client = self._FakeClient()
+        app._set_client(client)
+        app._device_catalog_ready = True
+        app._session = SessionInfo(session_id=5, playback_state='playing', current_t_rel=1.5)
+
+        try:
+            app._do_session()
+            app._start_session_seek()
+            state = app._active_modal
+            assert isinstance(state, SessionSeekDialogState)
+            state.t_rel.text = '3.25'
+            app._submit_session_seek_dialog()
+            assert state.pending_request_id == 1
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        assert client.commands == [{'cmd': 'seek', 't_rel': 3.25, 'id': 1}]
+
+    def test_session_seek_invalid_input_stays_inline(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        app._set_client(self._FakeClient())
+        app._device_catalog_ready = True
+        app._session = SessionInfo(session_id=5, playback_state='playing')
+
+        try:
+            app._do_session()
+            app._start_session_seek()
+            state = app._active_modal
+            assert isinstance(state, SessionSeekDialogState)
+            state.t_rel.text = 'nope'
+            app._submit_session_seek_dialog()
+            assert 'number' in state.error_text
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+    def test_session_reply_error_stays_inline(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        client = self._FakeClient()
+        app._set_client(client)
+        app._device_catalog_ready = True
+        app._session = SessionInfo(session_id=5, playback_state='loaded')
+
+        try:
+            app._do_session()
+            app._submit_session_command('play')
+            app._apply_panel_update(CommandReplyUpdate(
+                reply_id=1,
+                ok=False,
+                error='cannot play while disconnected',
+            ))
+            state = app._active_modal
+            assert isinstance(state, SessionManagerDialogState)
+            assert state.error_text == 'cannot play while disconnected'
+            assert state.pending_request_id is None
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+    def test_session_seek_success_returns_to_manager(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        client = self._FakeClient()
+        app._set_client(client)
+        app._device_catalog_ready = True
+        app._session = SessionInfo(session_id=5, playback_state='playing')
+
+        try:
+            app._do_session()
+            app._start_session_seek()
+            state = app._active_modal
+            assert isinstance(state, SessionSeekDialogState)
+            state.t_rel.text = '2.0'
+            app._submit_session_seek_dialog()
+            app._apply_panel_update(CommandReplyUpdate(reply_id=1, ok=True, error=None))
+            assert isinstance(app._active_modal, SessionManagerDialogState)
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+    def test_state_updates_refresh_session_manager(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        app._set_client(self._FakeClient())
+        app._device_catalog_ready = True
+        app._session = SessionInfo(session_id=5, playback_state='loaded', epoch=0)
+
+        try:
+            app._do_session()
+            app._apply_panel_update(SessionStateUpdate(
+                mode='merge',
+                session=SessionInfo(session_id=5, playback_state='playing', epoch=1),
+            ))
+            state = app._active_modal
+            assert isinstance(state, SessionManagerDialogState)
+            assert app._session is not None
+            assert app._session.playback_state == 'playing'
+            assert app._session.epoch == 1
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+    def test_session_command_routes_seek_from_input(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        client = self._FakeClient()
+        app._set_client(client)
+
+        try:
+            app._input_buffer.text = '/seek 4.5'
+            app._on_input(app._input_buffer)
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        assert client.commands == [{'cmd': 'seek', 't_rel': 4.5, 'id': 1}]
 
 
 class TestTuiMain:

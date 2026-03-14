@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import datetime
 import json
+import math
 import os
 import queue
 import re
@@ -64,6 +65,7 @@ _RESCAN_SENTINEL = object()
 _HELP_SENTINEL = object()
 _DEVICES_SENTINEL = object()
 _PROGRAMS_SENTINEL = object()
+_SESSION_SENTINEL = object()
 _NEWDEVICE_SENTINEL = object()
 
 _COMMANDS = {
@@ -156,6 +158,29 @@ class ProgramCatalogUpdate:
 
 
 @dataclass(frozen=True)
+class SessionStripEntry:
+    name: str
+    length: int | None
+
+
+@dataclass(frozen=True)
+class SessionInfo:
+    session_id: int | None = None
+    playback_state: str | None = None
+    epoch: int | None = None
+    current_t_rel: float | None = None
+    duration: float | None = None
+    safe_intervals: list[tuple[float, float]] | None = None
+    strips: list[SessionStripEntry] | None = None
+
+
+@dataclass(frozen=True)
+class SessionStateUpdate:
+    mode: str
+    session: SessionInfo | None = None
+
+
+@dataclass(frozen=True)
 class CommandReplyUpdate:
     reply_id: int | None
     ok: bool
@@ -222,6 +247,30 @@ class ProgramPublishDialogState:
     cancel_button: Button
     dialog: Dialog
     return_selected_program_id: str | None = None
+    error_text: str = ''
+    pending_request_id: int | None = None
+
+
+@dataclass
+class SessionManagerDialogState:
+    mode: str
+    play_button: Button | None
+    pause_button: Button | None
+    stop_button: Button | None
+    seek_button: Button | None
+    programs_button: Button | None
+    close_button: Button
+    dialog: Dialog
+    error_text: str = ''
+    pending_request_id: int | None = None
+
+
+@dataclass
+class SessionSeekDialogState:
+    t_rel: TextArea
+    submit_button: Button
+    cancel_button: Button
+    dialog: Dialog
     error_text: str = ''
     pending_request_id: int | None = None
 
@@ -300,6 +349,11 @@ def parse_command(text: str, next_id: int) -> tuple[dict | None | object, str | 
             return None, "/programs does not take arguments"
         return _PROGRAMS_SENTINEL, None
 
+    if name == 'session':
+        if len(parts) > 1:
+            return None, "/session does not take arguments"
+        return _SESSION_SENTINEL, None
+
     if name == 'newdevice':
         if len(parts) > 1:
             return None, "/newdevice does not take arguments"
@@ -313,6 +367,9 @@ def parse_command(text: str, next_id: int) -> tuple[dict | None | object, str | 
 
     if name == 'load':
         return _parse_load(parts, next_id)
+
+    if name == 'seek':
+        return _parse_seek(parts, next_id)
 
     if name not in _COMMANDS:
         return None, f"unknown command: /{name}"
@@ -387,6 +444,23 @@ def _parse_rmdevice(parts: list[str]) -> tuple[dict | None, str | None]:
     return {'cmd': 'rmdevice', 'device_uid': args[0]}, None
 
 
+def _parse_seek(parts: list[str], next_id: int) -> tuple[dict | None, str | None]:
+    if len(parts) < 2:
+        return None, "/seek requires a time in seconds"
+    args = parts[1].split()
+    if len(args) != 1:
+        return None, "/seek takes exactly one time value"
+    try:
+        t_rel = float(args[0])
+    except ValueError:
+        return None, f"/seek: invalid time: {args[0]}"
+    if not math.isfinite(t_rel):
+        return None, "/seek: time must be finite"
+    if t_rel < 0:
+        return None, f"/seek: time must be >= 0, got {t_rel}"
+    return {'cmd': 'seek', 't_rel': t_rel, 'id': next_id}, None
+
+
 def validate_device_uid(device_uid: str) -> str | None:
     if not device_uid:
         return "device uid is required"
@@ -413,6 +487,20 @@ def parse_length(text: str) -> tuple[int | None, str | None]:
     if length < 1:
         return None, f"length must be >= 1, got {length}"
     return length, None
+
+
+def parse_t_rel(text: str) -> tuple[float | None, str | None]:
+    if not text:
+        return None, "time is required"
+    try:
+        t_rel = float(text)
+    except ValueError:
+        return None, f"time must be a number, got {text!r}"
+    if not math.isfinite(t_rel):
+        return None, "time must be finite"
+    if t_rel < 0:
+        return None, f"time must be >= 0, got {t_rel}"
+    return t_rel, None
 
 
 # ------------------------------------------------------------------
@@ -559,6 +647,121 @@ def _device_catalog_from_message(msg: dict) -> list[DeviceCatalogEntry]:
     ]
 
 
+def _session_strip_from_dict(data: dict) -> SessionStripEntry | None:
+    name = data.get('name')
+    if not isinstance(name, str) or not name:
+        return None
+    return SessionStripEntry(
+        name=name,
+        length=_normalize_length(data.get('length')),
+    )
+
+
+def _safe_intervals_from_message(msg: dict) -> list[tuple[float, float]] | None:
+    raw = msg.get('safe_intervals')
+    if not isinstance(raw, list):
+        return None
+    intervals: list[tuple[float, float]] = []
+    for item in raw:
+        if not isinstance(item, (list, tuple)) or len(item) != 2:
+            continue
+        lo = _normalize_optional_float(item[0])
+        hi = _normalize_optional_float(item[1])
+        if lo is None or hi is None:
+            continue
+        intervals.append((lo, hi))
+    return intervals
+
+
+def _session_strips_from_message(msg: dict) -> list[SessionStripEntry] | None:
+    strips = msg.get('strips')
+    if not isinstance(strips, list):
+        return None
+    return [
+        entry
+        for item in strips
+        if isinstance(item, dict)
+        for entry in [_session_strip_from_dict(item)]
+        if entry is not None
+    ]
+
+
+def _session_info_from_dict(data: dict) -> SessionInfo:
+    return SessionInfo(
+        session_id=_normalize_length(data.get('session_id')),
+        playback_state=data.get('playback_state')
+        if isinstance(data.get('playback_state'), str)
+        else None,
+        epoch=_normalize_length(data.get('epoch')),
+        current_t_rel=_normalize_optional_float(data.get('current_t_rel')),
+        duration=_normalize_optional_float(data.get('duration')),
+        safe_intervals=_safe_intervals_from_message(data),
+        strips=_session_strips_from_message(data),
+    )
+
+
+def _session_update_from_message(msg: dict) -> SessionStateUpdate | None:
+    msg_type = msg.get('type')
+    if msg_type == 'reply' and msg.get('ok'):
+        result = msg.get('result')
+        if isinstance(result, dict) and result.get('event') == 'snapshot':
+            session = result.get('session')
+            if session is None:
+                return SessionStateUpdate(mode='clear')
+            if isinstance(session, dict):
+                return SessionStateUpdate(mode='replace', session=_session_info_from_dict(session))
+        return None
+
+    if msg_type != 'event':
+        return None
+
+    event = msg.get('event')
+    if event == 'snapshot':
+        session = msg.get('session')
+        if session is None:
+            return SessionStateUpdate(mode='clear')
+        if isinstance(session, dict):
+            return SessionStateUpdate(mode='replace', session=_session_info_from_dict(session))
+        return SessionStateUpdate(mode='clear')
+
+    if event == 'session_start':
+        return SessionStateUpdate(
+            mode='replace',
+            session=SessionInfo(
+                session_id=_normalize_length(msg.get('session_id')),
+                playback_state='loaded',
+                epoch=_normalize_length(msg.get('epoch')),
+                current_t_rel=0.0,
+                duration=_normalize_optional_float(msg.get('duration')),
+                safe_intervals=_safe_intervals_from_message(msg),
+                strips=_session_strips_from_message(msg),
+            ),
+        )
+
+    if event == 'state':
+        return SessionStateUpdate(
+            mode='merge',
+            session=SessionInfo(
+                session_id=_normalize_length(msg.get('session_id')),
+                playback_state=msg.get('state') if isinstance(msg.get('state'), str) else None,
+                epoch=_normalize_length(msg.get('epoch')),
+            ),
+        )
+
+    if event == 'loop':
+        return SessionStateUpdate(
+            mode='merge',
+            session=SessionInfo(
+                session_id=_normalize_length(msg.get('session_id')),
+                playback_state='playing',
+                epoch=_normalize_length(msg.get('epoch')),
+                current_t_rel=0.0,
+            ),
+        )
+
+    return None
+
+
 def _format_program_catalog(programs: list[dict]) -> list[str]:
     if not programs:
         return ['no programs in library']
@@ -604,6 +807,7 @@ def _reply_update_from_message(msg: dict) -> CommandReplyUpdate | None:
 
 
 def _panel_updates_from_message(msg: dict) -> list[object]:
+    session_update = _session_update_from_message(msg)
     msg_type = msg.get('type')
     if msg_type == 'reply' and msg.get('ok'):
         result = msg.get('result')
@@ -621,8 +825,9 @@ def _panel_updates_from_message(msg: dict) -> list[object]:
                 PanelSnapshotUpdate(devices),
                 DeviceCatalogSnapshotUpdate(catalog),
                 ProgramCatalogUpdate(programs),
+                *([session_update] if session_update is not None else []),
             ]
-        return []
+        return [session_update] if session_update is not None else []
 
     if msg_type != 'event':
         return []
@@ -642,6 +847,7 @@ def _panel_updates_from_message(msg: dict) -> list[object]:
             PanelSnapshotUpdate(devices),
             DeviceCatalogSnapshotUpdate(catalog),
             ProgramCatalogUpdate(programs),
+            *([session_update] if session_update is not None else []),
         ]
 
     if event == 'device_status':
@@ -654,6 +860,9 @@ def _panel_updates_from_message(msg: dict) -> list[object]:
 
     if event == 'programs_updated':
         return [ProgramCatalogUpdate(_program_catalog_from_message(msg))]
+
+    if session_update is not None:
+        return [session_update]
 
     return []
 
@@ -808,6 +1017,7 @@ class TuiApp:
         self._device_catalog_ready = False
         self._program_catalog: list[ProgramCatalogEntry] = []
         self._program_catalog_ready = False
+        self._session: SessionInfo | None = None
         self._controller_connected = False
         self._controller_disconnected_at_ns = time.monotonic_ns()
         self._reader_thread: threading.Thread | None = None
@@ -1013,6 +1223,8 @@ class TuiApp:
                 self._controller_disconnected_at_ns = time.monotonic_ns()
                 self._device_catalog_ready = False
                 self._program_catalog_ready = False
+                self._session = None
+                self._refresh_session_dialog()
             self._controller_connected = update.connected
             return
         if isinstance(update, PanelSnapshotUpdate):
@@ -1029,6 +1241,9 @@ class TuiApp:
             return
         if isinstance(update, ProgramCatalogUpdate):
             self._apply_program_catalog_update(update.programs)
+            return
+        if isinstance(update, SessionStateUpdate):
+            self._apply_session_update(update)
             return
         if isinstance(update, CommandReplyUpdate):
             self._apply_command_reply_update(update)
@@ -1114,6 +1329,62 @@ class TuiApp:
         self._program_catalog_ready = True
         self._refresh_program_manager_dialog()
 
+    @staticmethod
+    def _merge_session_info(
+        existing: SessionInfo | None,
+        incoming: SessionInfo,
+    ) -> SessionInfo:
+        base = existing or SessionInfo()
+        if (
+            existing is not None
+            and incoming.session_id is not None
+            and existing.session_id is not None
+            and existing.session_id != incoming.session_id
+        ):
+            base = SessionInfo()
+        return SessionInfo(
+            session_id=(
+                incoming.session_id
+                if incoming.session_id is not None
+                else base.session_id
+            ),
+            playback_state=(
+                incoming.playback_state
+                if incoming.playback_state is not None
+                else base.playback_state
+            ),
+            epoch=incoming.epoch if incoming.epoch is not None else base.epoch,
+            current_t_rel=(
+                incoming.current_t_rel
+                if incoming.current_t_rel is not None
+                else base.current_t_rel
+            ),
+            duration=(
+                incoming.duration
+                if incoming.duration is not None
+                else base.duration
+            ),
+            safe_intervals=(
+                incoming.safe_intervals
+                if incoming.safe_intervals is not None
+                else base.safe_intervals
+            ),
+            strips=incoming.strips if incoming.strips is not None else base.strips,
+        )
+
+    def _apply_session_update(self, update: SessionStateUpdate) -> None:
+        if update.mode == 'clear':
+            self._session = None
+            self._refresh_session_dialog()
+            return
+        if update.session is None:
+            return
+        if update.mode == 'replace':
+            self._session = update.session
+        else:
+            self._session = self._merge_session_info(self._session, update.session)
+        self._refresh_session_dialog()
+
     def _apply_command_reply_update(self, update: CommandReplyUpdate) -> None:
         modal = self._active_modal
         if isinstance(modal, NewDeviceDialogState):
@@ -1147,6 +1418,27 @@ class TuiApp:
                     modal.program_id.text.strip(),
                 )
                 self._open_program_manager(selected_program_id=selected_program_id)
+            else:
+                modal.error_text = update.error or 'unknown error'
+                self._app.invalidate()
+            return
+        if isinstance(modal, SessionManagerDialogState):
+            if modal.pending_request_id != update.reply_id:
+                return
+            modal.pending_request_id = None
+            if update.ok:
+                modal.error_text = ''
+                self._app.invalidate()
+            else:
+                modal.error_text = update.error or 'unknown error'
+                self._app.invalidate()
+            return
+        if isinstance(modal, SessionSeekDialogState):
+            if modal.pending_request_id != update.reply_id:
+                return
+            modal.pending_request_id = None
+            if update.ok:
+                self._open_session_manager()
             else:
                 modal.error_text = update.error or 'unknown error'
                 self._app.invalidate()
@@ -1190,6 +1482,9 @@ class TuiApp:
     def _cancel_active_modal(self) -> None:
         if isinstance(self._active_modal, ProgramPublishDialogState):
             self._cancel_program_publish_dialog()
+            return
+        if isinstance(self._active_modal, SessionSeekDialogState):
+            self._cancel_session_seek_dialog()
             return
         self._close_modal()
 
@@ -1382,6 +1677,10 @@ class TuiApp:
             self._do_programs()
             return
 
+        if cmd is _SESSION_SENTINEL:
+            self._do_session()
+            return
+
         if cmd is _NEWDEVICE_SENTINEL:
             self._start_newdevice()
             return
@@ -1420,12 +1719,14 @@ class TuiApp:
         self._local_log("  /help               show this help")
         self._local_log("  /devices            manage configured devices")
         self._local_log("  /programs           manage programs in the controller library")
+        self._local_log("  /session            manage live playback session")
         self._local_log("  /newdevice          open new device dialog")
         self._local_log("  /rmdevice UID       remove a configured device")
         self._local_log("  /status             show controller status")
         self._local_log("  /play               start playback")
         self._local_log("  /pause              pause playback")
         self._local_log("  /stop               stop playback")
+        self._local_log("  /seek SECONDS       seek playback time")
         self._local_log("  /shutdown           stop the controller service")
         self._local_log("  /rescan             rescan the controller program library")
         self._local_log("  /publish FILE [as NAME]  publish a local file to the controller library")
@@ -1456,6 +1757,18 @@ class TuiApp:
             self._local_log("program list not available yet")
             return
         self._open_program_manager()
+
+    def _do_session(self) -> None:
+        client = self._get_client()
+        if client is None:
+            self._local_log("controller not connected")
+            return
+        if self._active_modal is not None:
+            return
+        if not self._device_catalog_ready:
+            self._local_log("session status not available yet")
+            return
+        self._open_session_manager()
 
     def _do_rmdevice(self, device_uid: str) -> None:
         client = self._get_client()
@@ -1895,6 +2208,239 @@ class TuiApp:
         state.pending_request_id = cmd_id
         state.error_text = ''
 
+    def _session_manager_mode(self) -> str:
+        if self._get_client() is None and not self._controller_connected:
+            return 'disconnected'
+        if self._session is None:
+            return 'empty'
+        return 'active'
+
+    def _refresh_session_dialog(self) -> None:
+        if not isinstance(self._active_modal, SessionManagerDialogState):
+            return
+        modal = self._active_modal
+        mode = self._session_manager_mode()
+        if modal.mode != mode:
+            self._open_session_manager(
+                error_text=modal.error_text,
+                pending_request_id=modal.pending_request_id,
+            )
+            return
+        self._app.invalidate()
+
+    def _session_summary_text(self) -> str:
+        session = self._session
+        if session is None:
+            if self._get_client() is None and not self._controller_connected:
+                return 'Controller not connected.'
+            return 'No program loaded.\nUse /programs to publish or load one.'
+
+        lines: list[str] = []
+        sid = '?' if session.session_id is None else str(session.session_id)
+        state = session.playback_state or '?'
+        lines.append(f'State: {state}')
+        lines.append(f'Session: {sid}')
+        if session.epoch is not None:
+            lines.append(f'Epoch: {session.epoch}')
+        if session.current_t_rel is not None and session.duration is not None:
+            lines.append(f'Time: {session.current_t_rel:.2f}/{session.duration:.2f}s')
+        elif session.duration is not None:
+            lines.append(f'Duration: {session.duration:.2f}s')
+        strips = session.strips or []
+        if strips:
+            strip_summary = ', '.join(
+                f'{strip.name} ({strip.length if strip.length is not None else "?"})'
+                for strip in strips
+            )
+            lines.append(f'Strips: {strip_summary}')
+        safe_intervals = session.safe_intervals or []
+        lines.append(f'Safe intervals: {len(safe_intervals)}')
+        return '\n'.join(lines)
+
+    def _open_session_manager(
+        self,
+        *,
+        error_text: str = '',
+        pending_request_id: int | None = None,
+    ) -> None:
+        mode = self._session_manager_mode()
+        error_control = FormattedTextControl(
+            text=lambda: (
+                self._active_modal.error_text
+                if isinstance(self._active_modal, SessionManagerDialogState)
+                else ' '
+            )
+        )
+        summary_control = FormattedTextControl(text=lambda: self._session_summary_text())
+
+        if mode == 'active':
+            play_button = DialogButton('Play', handler=lambda: self._submit_session_command('play'))
+            pause_button = DialogButton('Pause', handler=lambda: self._submit_session_command('pause'))
+            stop_button = DialogButton('Stop', handler=lambda: self._submit_session_command('stop'))
+            seek_button = DialogButton('Seek', handler=self._start_session_seek)
+            close_button = DialogButton('Close', handler=self._close_modal)
+            dialog = Dialog(
+                title='Session',
+                body=HSplit([
+                    Window(content=summary_control),
+                    Window(height=1, content=error_control, style='class:newdevice.error'),
+                    Label(
+                        text='Use buttons to control the live session.',
+                        style='class:newdevice.help',
+                    ),
+                ]),
+                buttons=[play_button, pause_button, stop_button, seek_button, close_button],
+                with_background=True,
+            )
+            state = SessionManagerDialogState(
+                mode=mode,
+                play_button=play_button,
+                pause_button=pause_button,
+                stop_button=stop_button,
+                seek_button=seek_button,
+                programs_button=None,
+                close_button=close_button,
+                dialog=dialog,
+                error_text=error_text,
+                pending_request_id=pending_request_id,
+            )
+            self._set_modal(state, focus=play_button)
+            return
+
+        close_button = DialogButton('Close', handler=self._close_modal)
+        buttons: list[Button] = []
+        programs_button: Button | None = None
+        if mode == 'empty':
+            programs_button = DialogButton('Programs', handler=self._open_programs_from_session)
+            buttons.append(programs_button)
+        buttons.append(close_button)
+        dialog = Dialog(
+            title='Session',
+            body=HSplit([
+                Window(content=summary_control),
+                Window(height=1, content=error_control, style='class:newdevice.error'),
+            ]),
+            buttons=buttons,
+            with_background=True,
+        )
+        state = SessionManagerDialogState(
+            mode=mode,
+            play_button=None,
+            pause_button=None,
+            stop_button=None,
+            seek_button=None,
+            programs_button=programs_button,
+            close_button=close_button,
+            dialog=dialog,
+            error_text=error_text,
+            pending_request_id=pending_request_id,
+        )
+        self._set_modal(state, focus=programs_button or close_button)
+
+    def _open_programs_from_session(self) -> None:
+        if not isinstance(self._active_modal, SessionManagerDialogState):
+            return
+        if not self._program_catalog_ready:
+            self._active_modal.error_text = 'program list not available yet'
+            self._app.invalidate()
+            return
+        self._open_program_manager()
+
+    def _submit_session_command(self, command: str) -> None:
+        state = self._active_modal
+        if not isinstance(state, SessionManagerDialogState):
+            return
+        if state.pending_request_id is not None:
+            return
+        if self._session is None:
+            state.error_text = 'no program loaded'
+            self._app.invalidate()
+            return
+        cmd_id, error = self._send_controller_cmd({'cmd': command})
+        if error is not None:
+            state.error_text = error
+            self._app.invalidate()
+            return
+        state.pending_request_id = cmd_id
+        state.error_text = ''
+
+    def _start_session_seek(self) -> None:
+        state = self._active_modal
+        if not isinstance(state, SessionManagerDialogState):
+            return
+        if state.pending_request_id is not None:
+            return
+        if self._session is None:
+            state.error_text = 'no program loaded'
+            self._app.invalidate()
+            return
+        current_t_rel = self._session.current_t_rel
+        t_rel = TextArea(
+            text='' if current_t_rel is None else f'{current_t_rel:g}',
+            multiline=False,
+            wrap_lines=False,
+        )
+        submit_button = DialogButton('OK', handler=self._submit_session_seek_dialog)
+        cancel_button = DialogButton('Cancel', handler=self._cancel_session_seek_dialog)
+        t_rel.buffer.accept_handler = lambda buff: self._focus_dialog_widget(submit_button)
+        error_control = FormattedTextControl(
+            text=lambda: (
+                self._active_modal.error_text
+                if isinstance(self._active_modal, SessionSeekDialogState)
+                else ' '
+            )
+        )
+        dialog = Dialog(
+            title='Seek session',
+            body=HSplit([
+                Label(text='Target time (seconds)', style='class:newdevice.label'),
+                t_rel,
+                Window(height=1, content=error_control, style='class:newdevice.error'),
+                Label(
+                    text='Enter: seek   Tab: move   Esc: cancel',
+                    style='class:newdevice.help',
+                ),
+            ]),
+            buttons=[submit_button, cancel_button],
+            with_background=True,
+        )
+        self._set_modal(
+            SessionSeekDialogState(
+                t_rel=t_rel,
+                submit_button=submit_button,
+                cancel_button=cancel_button,
+                dialog=dialog,
+            ),
+            focus=t_rel,
+        )
+
+    def _cancel_session_seek_dialog(self) -> None:
+        if not isinstance(self._active_modal, SessionSeekDialogState):
+            return
+        self._open_session_manager()
+
+    def _submit_session_seek_dialog(self) -> None:
+        state = self._active_modal
+        if not isinstance(state, SessionSeekDialogState):
+            return
+        if state.pending_request_id is not None:
+            return
+
+        t_rel, error = parse_t_rel(state.t_rel.text.strip())
+        if error is not None:
+            state.error_text = error
+            self._app.layout.focus(state.t_rel)
+            self._app.invalidate()
+            return
+
+        cmd_id, error = self._send_seek_request(t_rel)
+        if error is not None:
+            state.error_text = error
+            self._app.invalidate()
+            return
+        state.pending_request_id = cmd_id
+        state.error_text = ''
+
     def _device_manager_options(self) -> list[tuple[str, str]]:
         options = []
         for entry in self._device_catalog:
@@ -2189,6 +2735,9 @@ class TuiApp:
         except OSError as e:
             return None, f'send failed: {e}'
         return cmd_id, None
+
+    def _send_seek_request(self, t_rel: float) -> tuple[int | None, str | None]:
+        return self._send_controller_cmd({'cmd': 'seek', 't_rel': t_rel})
 
     @staticmethod
     def _program_id_from_publish_fields(path: str, program_id: str) -> str | None:
