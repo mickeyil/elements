@@ -15,7 +15,8 @@ import pytest
 _repo = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_repo / 'compiler'))
 
-from elemctl.config import Config, DeviceConfig, load_config
+from elemctl.config import Config, DeviceConfig, load_config, load_config_obj
+from elemctl.library import ProgramEntry
 from elemctl.controller import ControllerState
 from elemctl.device import DeviceState
 from elemctl.service import ControllerService
@@ -191,6 +192,26 @@ class _AddressableFakeDevice(_FakeDevice):
         super().close()
 
 
+class _FakeLibrary:
+    def __init__(self, animations_dir: str, entries: list[ProgramEntry] | None = None):
+        self.animations_dir = animations_dir
+        self._entries = list(entries or [])
+        self.rescan_calls = 0
+
+    def list_programs(self) -> list[ProgramEntry]:
+        return sorted(self._entries, key=lambda entry: entry.program_id)
+
+    def get(self, program_id: str) -> ProgramEntry | None:
+        for entry in self._entries:
+            if entry.program_id == program_id:
+                return entry
+        return None
+
+    def rescan(self) -> list[ProgramEntry]:
+        self.rescan_calls += 1
+        return self.list_programs()
+
+
 def _make_fake_factory(fake_devices: list[_FakeDevice]):
     """Return a factory that yields pre-created _FakeDevice instances in order."""
     idx = iter(range(len(fake_devices)))
@@ -229,6 +250,26 @@ def _make_config(n_devices=1):
     return Config(frame_port=1, devices=devices)
 
 
+def _make_program_entry(
+    program_id: str,
+    *,
+    source: str = _SIMPLE_DSL,
+    beat: float = 1.0,
+    duration: float = 0.5,
+    error: str | None = None,
+) -> ProgramEntry:
+    source_hash = None if source is None else f'hash:{program_id}'
+    return ProgramEntry(
+        program_id=program_id,
+        path=f'/tmp/{program_id}.py',
+        source=source,
+        source_hash=source_hash,
+        beat=None if error is not None else beat,
+        duration=None if error is not None else duration,
+        error=error,
+    )
+
+
 class _FakeClock:
     def __init__(self):
         self.now = 0
@@ -237,13 +278,16 @@ class _FakeClock:
         return self.now
 
 
-def _make_service(n_devices=1, fake_devices=None, clock=None):
+def _make_service(n_devices=1, fake_devices=None, clock=None, library_factory=None):
     config = _make_config(n_devices)
     if fake_devices is None:
         fake_devices = [_FakeDevice() for _ in range(n_devices)]
+    if library_factory is None:
+        library_factory = lambda animations_dir: _FakeLibrary(animations_dir)
     kwargs = dict(
         receiver_factory=_NoopReceiver,
         device_factory=_make_fake_factory(fake_devices),
+        library_factory=library_factory,
     )
     if clock is not None:
         kwargs['clock'] = clock
@@ -255,6 +299,10 @@ def _config_to_doc(config: Config) -> dict:
         'frame_port': config.frame_port,
         'discovery_port': config.discovery_port,
     }
+    if config.animations_dir is not None:
+        controller['animations_dir'] = config.animations_dir
+    if config.logs_dir is not None:
+        controller['logs_dir'] = config.logs_dir
     return {
         'controller': controller,
         'devices': [
@@ -272,14 +320,24 @@ def _config_to_doc(config: Config) -> dict:
     }
 
 
-def _make_service_with_path(tmp_path, config: Config, *, device_factory, discovery_factory=None):
+def _make_service_with_path(
+    tmp_path,
+    config: Config,
+    *,
+    device_factory,
+    discovery_factory=None,
+    library_factory=None,
+):
     path = tmp_path / 'config.json'
     path.write_text(json.dumps(_config_to_doc(config)))
     resolved_config = load_config(str(path))
+    if library_factory is None:
+        library_factory = lambda animations_dir: _FakeLibrary(animations_dir)
     kwargs = {
         'config_path': str(path),
         'receiver_factory': _NoopReceiver,
         'device_factory': device_factory,
+        'library_factory': library_factory,
     }
     if discovery_factory is not None:
         kwargs['discovery_factory'] = discovery_factory
@@ -366,6 +424,135 @@ class TestHandleLoad:
         reply = svc.handle_cmd({'id': 4, 'cmd': 'load', 'source': _SIMPLE_DSL})
         assert reply['ok'] is False
         assert 'beat' in reply['error'] or 'missing' in reply['error']
+
+
+class TestProgramLibraryCommands:
+    def test_snapshot_includes_programs(self):
+        entries = [
+            _make_program_entry('zeta'),
+            _make_program_entry('alpha'),
+        ]
+        svc, _ = _make_service(
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir, entries),
+        )
+
+        snap = svc.build_snapshot()
+
+        assert snap['programs'] == [
+            {'program_id': 'alpha', 'beat': 1.0, 'duration': 0.5, 'error': None},
+            {'program_id': 'zeta', 'beat': 1.0, 'duration': 0.5, 'error': None},
+        ]
+
+    def test_rescan_programs_returns_catalog_and_broadcasts_event(self):
+        entries = [_make_program_entry('alpha')]
+        fake_library = _FakeLibrary('/tmp/programs', entries)
+        svc, _ = _make_service(
+            library_factory=lambda animations_dir: fake_library,
+        )
+
+        reply = svc.handle_cmd({'id': 1, 'cmd': 'rescan_programs'})
+
+        assert reply['ok'] is True
+        assert reply['result']['programs'] == [
+            {'program_id': 'alpha', 'beat': 1.0, 'duration': 0.5, 'error': None},
+        ]
+        assert fake_library.rescan_calls == 1
+
+        json_msgs, _ = svc.tick_once()
+        events = _decode_json_msgs(json_msgs)
+        assert {
+            'type': 'event',
+            'event': 'programs_updated',
+            'programs': [
+                {'program_id': 'alpha', 'beat': 1.0, 'duration': 0.5, 'error': None},
+            ],
+        } in events
+
+    def test_load_program_valid(self):
+        entry = _make_program_entry('main_show')
+        svc, _ = _make_service(
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir, [entry]),
+        )
+
+        reply = svc.handle_cmd({'id': 1, 'cmd': 'load_program', 'program_id': 'main_show'})
+
+        assert reply['ok'] is True
+        assert reply['result']['session_id'] == 1
+
+    def test_load_program_unknown(self):
+        svc, _ = _make_service()
+
+        reply = svc.handle_cmd({'id': 1, 'cmd': 'load_program', 'program_id': 'missing'})
+
+        assert reply['ok'] is False
+        assert reply['error'] == 'program not found: missing'
+
+    def test_load_program_errored_entry(self):
+        entry = _make_program_entry('broken', error='missing BEAT')
+        svc, _ = _make_service(
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir, [entry]),
+        )
+
+        reply = svc.handle_cmd({'id': 1, 'cmd': 'load_program', 'program_id': 'broken'})
+
+        assert reply['ok'] is False
+        assert reply['error'] == 'program broken is not loadable: missing BEAT'
+
+    def test_load_program_uses_cache_on_second_load(self, monkeypatch):
+        entry = _make_program_entry('main_show')
+        svc, _ = _make_service(
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir, [entry]),
+        )
+        calls = []
+        original = svc._compile
+
+        def wrapped_compile(source, beat, duration):
+            calls.append((source, beat, duration))
+            return original(source, beat, duration)
+
+        monkeypatch.setattr(svc, '_compile', wrapped_compile)
+
+        reply1 = svc.handle_cmd({'id': 1, 'cmd': 'load_program', 'program_id': 'main_show'})
+        reply2 = svc.handle_cmd({'id': 2, 'cmd': 'load_program', 'program_id': 'main_show'})
+
+        assert reply1['ok'] is True
+        assert reply2['ok'] is True
+        assert len(calls) == 1
+
+    def test_load_program_recompiles_after_topology_change(self, monkeypatch, tmp_path):
+        entry = _make_program_entry('main_show')
+        config = _make_config()
+        config.animations_dir = str(tmp_path)
+        fake_library = _FakeLibrary(str(tmp_path), [entry])
+        svc, _path = _make_service_with_path(
+            tmp_path,
+            config,
+            device_factory=lambda *args, **kwargs: _FakeDevice(),
+            library_factory=lambda animations_dir: fake_library,
+        )
+        calls = []
+        original = svc._compile
+
+        def wrapped_compile(source, beat, duration):
+            calls.append((source, beat, duration))
+            return original(source, beat, duration)
+
+        monkeypatch.setattr(svc, '_compile', wrapped_compile)
+
+        reply1 = svc.handle_cmd({'id': 1, 'cmd': 'load_program', 'program_id': 'main_show'})
+        assert reply1['ok'] is True
+
+        candidate = copy.deepcopy(svc._raw_doc)
+        candidate['devices'][0]['length'] = 8
+        new_config = load_config_obj(candidate)
+        svc._raw_doc = candidate
+        svc._reconcile_devices(new_config)
+        svc._rebuild_controller()
+
+        reply2 = svc.handle_cmd({'id': 2, 'cmd': 'load_program', 'program_id': 'main_show'})
+
+        assert reply2['ok'] is False
+        assert len(calls) == 2
 
 
 class TestHandlePlay:

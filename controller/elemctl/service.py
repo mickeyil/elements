@@ -7,12 +7,21 @@ conversion. The UDS server (server.py) delegates all logic here.
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 import logging
 import math
 import re
 import time
 
-from .config import Config, ConfigError, DeviceConfig, load_config_obj
+from .config import (
+    DEFAULT_ANIMATIONS_PATH,
+    Config,
+    ConfigError,
+    DeviceConfig,
+    load_config_obj,
+    resolve_runtime_path,
+)
 from .config_edit import (
     add_device as add_device_doc,
     load_config_doc,
@@ -29,6 +38,7 @@ from .controller import (
     StripConfig,
 )
 from .discovery import DISCOVERY_REASON_DUPLICATE_UID, DiscoveryReceiver
+from .library import ArtifactCache, ProgramEntry, ProgramLibrary
 from .network_device import NetworkDevice
 from .udp_receiver import UdpFrameReceiver
 from .uds_wire import PROTOCOL_VERSION, encode_frame, encode_json
@@ -50,6 +60,7 @@ class ControllerService:
         receiver_factory=UdpFrameReceiver,
         device_factory=NetworkDevice,
         discovery_factory=DiscoveryReceiver,
+        library_factory=ProgramLibrary,
         clock=time.monotonic_ns,
     ):
         self._config = config
@@ -85,6 +96,14 @@ class ControllerService:
         # Baseline connectivity for transition detection
         self._prev_connected: dict[int, bool] = {}
 
+        animations_dir = resolve_runtime_path(
+            None,
+            self._config.animations_dir,
+            DEFAULT_ANIMATIONS_PATH,
+        )
+        self._library = library_factory(animations_dir)
+        self._artifact_cache = ArtifactCache()
+
         self._reconcile_devices(self._config)
         self._rebuild_controller()
 
@@ -103,8 +122,10 @@ class ControllerService:
         handler = {
             'status': self._cmd_status,
             'load': self._cmd_load,
+            'load_program': self._cmd_load_program,
             'play': self._cmd_play,
             'pause': self._cmd_pause,
+            'rescan_programs': self._cmd_rescan_programs,
             'seek': self._cmd_seek,
             'debug_seek': self._cmd_debug_seek,
             'stop': self._cmd_stop,
@@ -147,6 +168,35 @@ class ControllerService:
 
         return {'session_id': self._controller.session_id}
 
+    def _cmd_load_program(self, cmd: dict) -> dict:
+        program_id = cmd.get('program_id')
+        loop = cmd.get('loop', False)
+        if not isinstance(program_id, str) or not program_id:
+            raise ValueError("missing 'program_id' field")
+
+        entry = self._library.get(program_id)
+        if entry is None:
+            raise ValueError(f'program not found: {program_id}')
+        if entry.error is not None:
+            raise ValueError(f'program {program_id} is not loadable: {entry.error}')
+        if entry.source is None or entry.source_hash is None:
+            raise ValueError(f'program {program_id} is missing source')
+        if entry.beat is None or entry.duration is None:
+            raise ValueError(f'program {program_id} is missing metadata')
+
+        topology = self._topology_fingerprint()
+        manifest = self._artifact_cache.get(entry.source_hash, topology)
+        if manifest is None:
+            manifest = self._compile(entry.source, entry.beat, entry.duration)
+            self._artifact_cache.put(entry.source_hash, topology, manifest)
+
+        if not self._controller.load(manifest, loop=loop):
+            errors = self._controller.drain_events()
+            msg = '; '.join(e.message for e in errors if e.message)
+            raise ValueError(f"load failed: {msg}" if msg else "load failed")
+
+        return {'session_id': self._controller.session_id}
+
     def _cmd_play(self, cmd: dict) -> dict:
         self._controller.play()
         return {}
@@ -170,6 +220,16 @@ class ControllerService:
     def _cmd_shutdown(self, cmd: dict) -> dict:
         self._shutdown = True
         return {}
+
+    def _cmd_rescan_programs(self, cmd: dict) -> dict:
+        self._library.rescan()
+        programs = self._programs_to_wire()
+        self._service_events.append({
+            'type': 'event',
+            'event': 'programs_updated',
+            'programs': programs,
+        })
+        return {'programs': programs}
 
     def _cmd_add_device(self, cmd: dict) -> dict:
         self._require_mutation_quiescent()
@@ -307,6 +367,7 @@ class ControllerService:
             'expected_count': len(self._devices),
             'session': session,
             'devices': devices,
+            'programs': self._programs_to_wire(),
         }
 
     def probe_all(self) -> None:
@@ -559,6 +620,24 @@ class ControllerService:
 
     def _queue_snapshot_event(self) -> None:
         self._service_events.append(self.build_snapshot())
+
+    @staticmethod
+    def _program_to_dict(entry: ProgramEntry) -> dict:
+        return {
+            'program_id': entry.program_id,
+            'beat': entry.beat,
+            'duration': entry.duration,
+            'error': entry.error,
+        }
+
+    def _programs_to_wire(self) -> list[dict]:
+        return [self._program_to_dict(entry) for entry in self._library.list_programs()]
+
+    def _topology_fingerprint(self) -> str:
+        parts = sorted((dc.strip_id, dc.length) for dc in self._device_configs)
+        return hashlib.sha256(
+            json.dumps(parts, separators=(',', ':')).encode('utf-8')
+        ).hexdigest()
 
     def _require_mutation_quiescent(self) -> None:
         allowed = {

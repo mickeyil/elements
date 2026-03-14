@@ -168,6 +168,15 @@ class TestFormatEvent:
         result = format_event(KIND_JSON, _json_payload(msg))
         assert result == ['error: something broke']
 
+    def test_programs_updated_is_silent(self):
+        msg = {
+            'type': 'event',
+            'event': 'programs_updated',
+            'programs': [{'program_id': 'demo', 'beat': 1.0, 'duration': 2.0, 'error': None}],
+        }
+        result = format_event(KIND_JSON, _json_payload(msg))
+        assert result == []
+
     def test_reply_ok(self):
         msg = {'type': 'reply', 'id': 7, 'ok': True, 'result': {'x': 1}}
         result = format_event(KIND_JSON, _json_payload(msg))

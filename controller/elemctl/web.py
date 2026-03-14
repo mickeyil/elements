@@ -58,6 +58,7 @@ def _empty_snapshot() -> dict:
         'expected_count': 0,
         'session': None,
         'devices': [],
+        'programs': [],
     }
 
 
@@ -75,6 +76,8 @@ def _make_disconnected_snapshot(snapshot: dict | None) -> dict:
     out['event'] = 'snapshot'
     out['protocol_version'] = PROTOCOL_VERSION
     out['session'] = None
+    if not isinstance(out.get('programs'), list):
+        out['programs'] = []
     devices = out.get('devices')
     if isinstance(devices, list):
         for dev in devices:
@@ -296,6 +299,12 @@ class WebRelay:
                 self._snapshot['online_count'] = sum(
                     1 for dev in devices if isinstance(dev, dict) and dev.get('connected')
                 )
+            return
+
+        if event == 'programs_updated':
+            programs = msg.get('programs')
+            if isinstance(programs, list):
+                self._snapshot['programs'] = copy.deepcopy(programs)
 
     def _apply_frame(self, payload: bytes) -> None:
         session = self._snapshot.get('session')

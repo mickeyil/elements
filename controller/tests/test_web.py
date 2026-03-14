@@ -1,5 +1,5 @@
 from elemctl.uds_wire import PROTOCOL_VERSION
-from elemctl.web import _encode_ws_frame, _make_disconnected_snapshot
+from elemctl.web import WebRelay, _encode_ws_frame, _make_disconnected_snapshot
 
 
 def test_encode_ws_frame_small_payload():
@@ -41,3 +41,33 @@ def test_make_disconnected_snapshot_clears_session_and_devices():
     assert out['online_count'] == 0
     assert out['expected_count'] == 2
     assert [dev['connected'] for dev in out['devices']] == [False, False]
+
+
+def test_empty_snapshot_includes_programs_after_disconnect():
+    out = _make_disconnected_snapshot(None)
+
+    assert out['programs'] == []
+
+
+def test_programs_updated_refreshes_cached_snapshot_programs():
+    relay = WebRelay('/tmp/elemctl.sock', '127.0.0.1', 8080)
+    relay._snapshot = {
+        'type': 'event',
+        'event': 'snapshot',
+        'protocol_version': PROTOCOL_VERSION,
+        'online_count': 0,
+        'expected_count': 0,
+        'session': None,
+        'devices': [],
+        'programs': [{'program_id': 'old', 'beat': 1.0, 'duration': 2.0, 'error': None}],
+    }
+
+    relay._apply_json_message({
+        'type': 'event',
+        'event': 'programs_updated',
+        'programs': [{'program_id': 'new', 'beat': 0.5, 'duration': 4.0, 'error': None}],
+    })
+
+    assert relay._snapshot['programs'] == [
+        {'program_id': 'new', 'beat': 0.5, 'duration': 4.0, 'error': None},
+    ]

@@ -6,10 +6,8 @@ Usage: python -m elemctl.tui [--socket PATH]
 from __future__ import annotations
 
 import argparse
-import ast
 import datetime
 import json
-import math
 import os
 import queue
 import re
@@ -53,6 +51,7 @@ from .config import (
 from .config_edit import (
     load_config_doc,
 )
+from .program_metadata import extract_metadata as _extract_metadata
 from .uds_client import UdsClient
 from .uds_wire import KIND_FRAME, KIND_JSON, parse_json_payload
 from .version import get_runtime_version
@@ -72,61 +71,12 @@ class AnimationEntry:
 
 
 def extract_metadata(path: str) -> tuple[float, float]:
-    """Extract BEAT and DURATION from a DSL animation file using ast.
-
-    Returns (beat, duration). Raises ValueError on any problem.
-    """
+    """Extract BEAT and DURATION from a DSL animation file."""
     try:
         source = Path(path).read_text()
     except OSError as e:
-        raise ValueError(f"cannot read file: {e}")
-
-    try:
-        tree = ast.parse(source, filename=path)
-    except SyntaxError as e:
-        raise ValueError(f"syntax error: {e}")
-
-    beat = None
-    duration = None
-
-    for node in ast.iter_child_nodes(tree):
-        if not isinstance(node, ast.Assign):
-            continue
-        if len(node.targets) != 1:
-            continue
-        target = node.targets[0]
-        if not isinstance(target, ast.Name):
-            continue
-        if target.id not in ('BEAT', 'DURATION'):
-            continue
-        if not isinstance(node.value, ast.Constant):
-            raise ValueError(
-                f"{target.id} must be a numeric literal"
-            )
-        val = node.value.value
-        if not isinstance(val, (int, float)) or isinstance(val, bool):
-            raise ValueError(
-                f"{target.id} must be a numeric literal, got {type(val).__name__}"
-            )
-        if isinstance(val, float) and (math.isinf(val) or math.isnan(val)):
-            raise ValueError(f"{target.id} must be finite")
-        if val <= 0:
-            raise ValueError(f"{target.id} must be positive, got {val}")
-        if target.id == 'BEAT':
-            if beat is not None:
-                raise ValueError("duplicate BEAT assignment")
-            beat = val
-        else:
-            if duration is not None:
-                raise ValueError("duplicate DURATION assignment")
-            duration = val
-
-    if beat is None:
-        raise ValueError("missing BEAT")
-    if duration is None:
-        raise ValueError("missing DURATION")
-
-    return beat, duration
+        raise ValueError(f"cannot read file: {e}") from e
+    return _extract_metadata(source, path)
 
 
 def scan_animations(directory: str) -> list[AnimationEntry]:
@@ -570,6 +520,9 @@ def _format_controller_event(msg: dict) -> list[str]:
 
     if event == 'error':
         return [f'error: {msg.get("message", "?")}']
+
+    if event == 'programs_updated':
+        return []
 
     return [f'unknown event {json.dumps(msg, separators=(",", ":"))}']
 

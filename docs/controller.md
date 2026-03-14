@@ -310,31 +310,35 @@ The controller is the long-running authority on the base station.
 
 1. **Loads config and owns it as live state** — reads the base-station config file at startup, keeps the raw config document in memory, and treats it as the authoritative inventory while running.
 
-2. **Compiles programs** — receives DSL source (from a client such as the TUI), compiles it using the Python compiler, validates strip lengths against config, and produces a manifest with per-strip blobs, duration, and global safe intervals. No artifact cache yet — each `load` recompiles from source.
+2. **Owns the program library** — scans `controller.animations_dir`, extracts `BEAT` / `DURATION` metadata from known `.py` programs, and exposes the catalog to clients via snapshots and `rescan_programs`.
 
-3. **Discovers known devices** — listens for UDP HELLO packets, matches them by `device_uid`, caches live `(host, tcp_port)` addresses, and updates known devices in place.
+3. **Compiles programs** — either receives raw DSL source (`load`) or resolves a known library entry (`load_program`), compiles it using the Python compiler, validates strip lengths against config, and produces a manifest with per-strip blobs, duration, and global safe intervals. Library-backed loads use an in-memory artifact cache keyed by source hash and strip topology.
 
-4. **Maintains TCP device connections** — reconnects disconnected devices, sends `CMD_CONFIGURE` after connect, and preserves existing device objects across config changes when possible.
+4. **Discovers known devices** — listens for UDP HELLO packets, matches them by `device_uid`, caches live `(host, tcp_port)` addresses, and updates known devices in place.
 
-5. **Routes blobs and playback commands** — maps manifest strips by `strip_id` to devices, sends LOAD/START/JUMP/PAUSE/RESUME/STOP over TCP, and waits for ACK where required.
+5. **Maintains TCP device connections** — reconnects disconnected devices, sends `CMD_CONFIGURE` after connect, and preserves existing device objects across config changes when possible.
 
-6. **Manages sessions** — assigns `session_id` on each load, tracks `epoch` (incremented on seek/jump/restart), and exposes current playback state to clients.
+6. **Routes blobs and playback commands** — maps manifest strips by `strip_id` to devices, sends LOAD/START/JUMP/PAUSE/RESUME/STOP over TCP, and waits for ACK where required.
 
-7. **Assembles program frames** — receives per-strip RGB frames from simulators, filters by `gen` (drops stale), groups by `frame_index`, and emits complete multi-strip program frames over UDS.
+7. **Manages sessions** — assigns `session_id` on each load, tracks `epoch` (incremented on seek/jump/restart), and exposes current playback state to clients.
 
-8. **Owns config mutations** — handles `add_device` / `remove_device` requests from the TUI, validates them transactionally, atomically rewrites the config file, incrementally reconciles device objects, and rebuilds the controller while idle.
+8. **Assembles program frames** — receives per-strip RGB frames from simulators, filters by `gen` (drops stale), groups by `frame_index`, and emits complete multi-strip program frames over UDS.
 
-9. **Exposes a control/event API over UDS** — a client (currently the TUI) connects to a Unix Domain Socket to send commands and receive replies, events, snapshots, and program frames. See "Controller ↔ Client protocol" below.
+9. **Owns config mutations** — handles `add_device` / `remove_device` requests from the TUI, validates them transactionally, atomically rewrites the config file, incrementally reconciles device objects, and rebuilds the controller while idle.
 
-10. **May sync clocks later** — the custom clock sync protocol (SYNC_REQ/SYNC_RESP/SYNC_RESULT) is documented in `transport.md` but not yet implemented.
+10. **Exposes a control/event API over UDS** — a client (currently the TUI) connects to a Unix Domain Socket to send commands and receive replies, events, snapshots, and program frames. See "Controller ↔ Client protocol" below.
+
+11. **May sync clocks later** — the custom clock sync protocol (SYNC_REQ/SYNC_RESP/SYNC_RESULT) is documented in `transport.md` but not yet implemented.
 
 ### Compilation flow
 
 ```python
-# Controller receives DSL source from client
-def load_program(self, dsl_source: str, beat: float, duration: float):
-    # 1. Compile to a manifest: ordered per-strip blobs + metadata
-    manifest = compile_manifest_from_dsl(dsl_source, beat=beat, duration=duration)
+# Controller resolves a known program id from its library
+def load_program(self, program_id: str):
+    source, beat, duration = self.program_library.lookup(program_id)
+
+    # 1. Compile (or cache-hit) to a manifest: ordered per-strip blobs + metadata
+    manifest = self.compile_or_get_cached(source, beat=beat, duration=duration)
 
     # 2. Validate every strip in the manifest against configured inventory
     for strip_artifact in manifest.strips:
@@ -411,11 +415,15 @@ Commands carry an `id` (client-assigned, incrementing counter) that the controll
 {"id": 4, "cmd": "seek", "t_rel": 30.0}
 {"id": 5, "cmd": "stop"}
 {"id": 6, "cmd": "status"}
-{"id": 7, "cmd": "add_device", "device_type": "sim", "device_uid": "sim-3", "strip_id": "aux", "length": 30}
-{"id": 8, "cmd": "remove_device", "device_uid": "sim-3"}
+{"id": 7, "cmd": "rescan_programs"}
+{"id": 8, "cmd": "load_program", "program_id": "demo_main", "loop": true}
+{"id": 9, "cmd": "add_device", "device_type": "sim", "device_uid": "sim-3", "strip_id": "aux", "length": 30}
+{"id": 10, "cmd": "remove_device", "device_uid": "sim-3"}
 ```
 
 `play` means both fresh start and resume — the controller decides which device command to send based on current state (CMD_START from LOADED/ENDED, CMD_RESUME from PAUSED). The client does not need to distinguish between them.
+
+`status` and the connect-time snapshot are the read path for the current program catalog. `rescan_programs` refreshes the controller-owned library from disk and broadcasts the new catalog to all clients. It does **not** hot-swap the currently loaded session; the new source only takes effect on the next `load_program`.
 
 **Controller → Client (replies):**
 
@@ -425,7 +433,8 @@ Replies are **controller-complete** — the reply is sent after the controller h
 {"type": "reply", "id": 1, "ok": true, "result": {"session_id": 42}}
 {"type": "reply", "id": 4, "ok": true, "result": {}}
 {"type": "reply", "id": 6, "ok": true, "result": {"event": "snapshot", "...": "..."}}
-{"type": "reply", "id": 7, "ok": true, "result": {"message": "added device sim-3"}}
+{"type": "reply", "id": 7, "ok": true, "result": {"programs": [{"program_id": "demo_main", "beat": 0.5, "duration": 64.0, "error": null}]}}
+{"type": "reply", "id": 8, "ok": true, "result": {"session_id": 42}}
 {"type": "reply", "id": 1, "ok": false, "error": "device sim-1 rejected blob"}
 ```
 
@@ -444,6 +453,8 @@ Asynchronous state changes and broadcasts — not tied to a specific command.
  "device_id": 1, "device_uid": "sim-1", "strip": "main_left", "length": 150, "connected": true}
 {"type": "event", "event": "device_status",
  "device_id": 1, "device_uid": "sim-1", "strip": "main_left", "length": 150, "connected": false}
+{"type": "event", "event": "programs_updated",
+ "programs": [{"program_id": "demo_main", "beat": 0.5, "duration": 64.0, "error": null}]}
 {"type": "event", "event": "error", "message": "load failed: device sim-1 rejected blob"}
 ```
 
@@ -451,6 +462,7 @@ Asynchronous state changes and broadcasts — not tied to a specific command.
 - **`state`** — playback state change (playing, paused, ended), includes current epoch
 - **`loop`** — program looped back to t=0, includes new epoch
 - **`device_status`** — device lifecycle change (connected/disconnected). State-oriented — UI updates indicators
+- **`programs_updated`** — program library rescanned. Carries the full current catalog so writer and observer clients can refresh without polling
 - **`error`** — async failure. Human-oriented — UI shows notification/log. Current implementation emits a single human-readable `message` field.
 
 The `strips` array in `session_start` defines the **canonical strip order and lengths** for the session. Program frames pack RGB blobs in this exact order with no per-entry headers — the client uses the strip list to slice the payload.
@@ -460,11 +472,13 @@ The `strips` array in `session_start` defines the **canonical strip order and le
 | Command | Controller-complete means | Reply result |
 |---------|--------------------------|-------------|
 | `load` | Compiled from source, all devices ACKed LOAD, session created | `{"session_id": N}` |
+| `load_program` | Known program resolved from the controller-owned library, compiled or cache-hit, all devices ACKed LOAD, session created | `{"session_id": N}` |
 | `play` | State updated; sends START (from LOADED/ENDED) or RESUME (from PAUSED) to all devices + audio | `{}` |
 | `pause` | CMD_PAUSE sent to all devices, audio paused, state updated | `{}` |
 | `seek` | Time resolved/snapped, JUMP or DEBUG_SEEK sent, epoch updated | `{}` |
 | `stop` | CMD_STOP sent to all devices, output cleared to black, state updated | `{}` |
 | `status` | Snapshot built immediately from current runtime state | snapshot object in `result` |
+| `rescan_programs` | Program library rescanned from `animations_dir`, catalog updated, `programs_updated` broadcast queued | `{"programs": [...]}` |
 | `add_device` | Candidate config validated, saved atomically, inventory reconciled, controller rebuilt (idle/stopped/ended only) | `{"message": "added device ..."}` |
 | `remove_device` | Candidate config validated, saved atomically, inventory reconciled, controller rebuilt (idle/stopped/ended only) | `{"message": "removed device ..."}` |
 
@@ -494,6 +508,9 @@ The snapshot schema matches `build_snapshot()` in `service.py`:
   "protocol_version": 2,
   "online_count": 2,
   "expected_count": 2,
+  "programs": [
+    {"program_id": "demo_main", "beat": 0.5, "duration": 64.0, "error": null}
+  ],
   "session": {
     "session_id": 42,
     "epoch": 2,
@@ -522,6 +539,7 @@ If no active session (controller just started, no program loaded yet):
   "protocol_version": 2,
   "online_count": 0,
   "expected_count": 2,
+  "programs": [ ... ],
   "session": null,
   "devices": [ ... ]
 }
@@ -533,6 +551,7 @@ If no active session (controller just started, no program loaded yet):
 |-------|---------|
 | `protocol_version` | Allows the client to detect incompatible controller versions |
 | `online_count` / `expected_count` | Quick device health summary. `expected_count` is currently the configured inventory size. |
+| `programs` | Current controller-owned program catalog. Each entry includes `program_id`, extracted `beat`, extracted `duration`, and `error` if the file is present but not loadable |
 | `session` | Active session if any — includes all metadata needed to render the seek bar and receive frames. `null` if no program is loaded |
 | `session.strips` | Canonical strip order and lengths — defines how program frame payloads are sliced |
 | `devices` | Per-device status: `device_id` (numeric), `device_uid` (stable identity), `strip`, `length`, `device_type` (`"sim"` or `"esp32"`), `connected` (boolean) |
