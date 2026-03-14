@@ -211,6 +211,9 @@ def parse_command(text: str, next_id: int) -> tuple[dict | None | object, str | 
     if name == 'rmdevice':
         return _parse_rmdevice(parts)
 
+    if name == 'publish':
+        return _parse_publish(parts, next_id)
+
     if name == 'load':
         return _parse_load(parts, next_id)
 
@@ -251,6 +254,31 @@ def _parse_load(parts: list[str], next_id: int) -> tuple[dict | None, str | None
         return {'cmd': 'load', 'target': None, 'index': idx, 'loop': loop, 'id': next_id}, None
 
     return {'cmd': 'load', 'target': target_str, 'index': None, 'loop': loop, 'id': next_id}, None
+
+
+def _parse_publish(parts: list[str], next_id: int) -> tuple[dict | None, str | None]:
+    if len(parts) < 2:
+        return None, "/publish requires a file path"
+
+    args = parts[1].split()
+    if len(args) == 1:
+        path = args[0]
+        program_id = Path(path).stem
+    elif len(args) == 3 and args[1].lower() == 'as':
+        path = args[0]
+        program_id = args[2]
+    else:
+        return None, "/publish usage: /publish PATH [as NAME]"
+
+    if not program_id:
+        return None, f"/publish: could not derive program id from {path!r}"
+
+    return {
+        'cmd': 'publish',
+        'path': path,
+        'program_id': program_id,
+        'id': next_id,
+    }, None
 
 
 def _parse_rmdevice(parts: list[str]) -> tuple[dict | None, str | None]:
@@ -397,6 +425,17 @@ def _format_program_catalog(programs: list[dict]) -> list[str]:
     return lines
 
 
+def _format_published_program(program: dict) -> list[str]:
+    program_id = program.get('program_id', '?')
+    error = program.get('error')
+    if error:
+        return [f'published program {program_id} ERROR: {error}']
+    return [
+        'published program '
+        + f'{program_id} beat={program.get("beat")} duration={program.get("duration")}'
+    ]
+
+
 def _panel_updates_from_message(msg: dict) -> list[object]:
     msg_type = msg.get('type')
     if msg_type == 'reply' and msg.get('ok'):
@@ -470,6 +509,8 @@ def _format_message(msg: dict) -> list[str]:
                 return _format_controller_event(result)
             if isinstance(result, dict) and isinstance(result.get('programs'), list):
                 return _format_program_catalog(result['programs'])
+            if isinstance(result, dict) and isinstance(result.get('program'), dict):
+                return _format_published_program(result['program'])
             if (
                 isinstance(result, dict)
                 and set(result.keys()) == {'message'}
@@ -1009,6 +1050,10 @@ class TuiApp:
             self._start_newdevice()
             return
 
+        if isinstance(cmd, dict) and cmd.get('cmd') == 'publish':
+            self._do_publish(cmd)
+            return
+
         if isinstance(cmd, dict) and cmd.get('cmd') == 'load':
             self._do_load(cmd)
             return
@@ -1046,6 +1091,7 @@ class TuiApp:
         self._local_log("  /stop               stop playback")
         self._local_log("  /shutdown           stop the controller service")
         self._local_log("  /rescan             rescan the controller program library")
+        self._local_log("  /publish FILE [as NAME]  publish a local file to the controller library")
         self._local_log("  /load NAME [loop]   load a program by name")
         self._local_log("  /load #N [loop]     load a program by list index")
         self._local_log("  /quit, /exit        quit the TUI")
@@ -1296,6 +1342,45 @@ class TuiApp:
                 return entry
         self._local_log(f"program not found: {target}")
         return None
+
+    def _do_publish(self, cmd: dict) -> None:
+        path = cmd.get('path')
+        program_id = cmd.get('program_id')
+        if not isinstance(path, str) or not path:
+            self._local_log("publish path is required")
+            return
+        if not isinstance(program_id, str) or not program_id:
+            self._local_log("publish program id is required")
+            return
+
+        expanded_path = os.path.expanduser(path)
+        try:
+            source = Path(expanded_path).read_text()
+        except OSError as e:
+            self._local_log(f"cannot read {path}: {e}")
+            return
+
+        client = self._get_client()
+        if client is None:
+            self._local_log("not connected")
+            return
+
+        wire_cmd = {
+            'cmd': 'publish_program',
+            'program_id': program_id,
+            'source': source,
+            'id': self._next_id,
+        }
+        if program_id == Path(path).stem:
+            self._local_log(f"> /publish {path}")
+        else:
+            self._local_log(f"> /publish {path} as {program_id}")
+        self._next_id += 1
+
+        try:
+            client.send_cmd(wire_cmd)
+        except OSError as e:
+            self._local_log(f"send failed: {e}")
 
     def _do_load(self, cmd: dict) -> None:
         if not self._program_catalog:

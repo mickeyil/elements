@@ -1,6 +1,7 @@
 """Tests for ControllerService and UdsServer."""
 
 import copy
+import hashlib
 import json
 import logging
 import socket
@@ -16,9 +17,10 @@ _repo = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_repo / 'compiler'))
 
 from elemctl.config import Config, DeviceConfig, load_config, load_config_obj
-from elemctl.library import ProgramEntry
 from elemctl.controller import ControllerState
 from elemctl.device import DeviceState
+from elemctl.library import ProgramEntry
+from elemctl.program_metadata import extract_metadata
 from elemctl.service import ControllerService
 from elemctl.server import UdsServer
 from elemctl.uds_wire import (
@@ -197,6 +199,7 @@ class _FakeLibrary:
         self.animations_dir = animations_dir
         self._entries = list(entries or [])
         self.rescan_calls = 0
+        self.publish_calls: list[tuple[str, str]] = []
 
     def list_programs(self) -> list[ProgramEntry]:
         return sorted(self._entries, key=lambda entry: entry.program_id)
@@ -210,6 +213,38 @@ class _FakeLibrary:
     def rescan(self) -> list[ProgramEntry]:
         self.rescan_calls += 1
         return self.list_programs()
+
+    def publish(self, program_id: str, source: str) -> ProgramEntry:
+        self.publish_calls.append((program_id, source))
+        source_hash = hashlib.sha256(source.encode('utf-8')).hexdigest()
+        try:
+            beat, duration = extract_metadata(source, f'/tmp/{program_id}.py')
+            entry = ProgramEntry(
+                program_id=program_id,
+                path=f'/tmp/{program_id}.py',
+                source=source,
+                source_hash=source_hash,
+                beat=beat,
+                duration=duration,
+                error=None,
+            )
+        except ValueError as e:
+            entry = ProgramEntry(
+                program_id=program_id,
+                path=f'/tmp/{program_id}.py',
+                source=source,
+                source_hash=source_hash,
+                beat=None,
+                duration=None,
+                error=str(e),
+            )
+
+        self._entries = [
+            existing for existing in self._entries
+            if existing.program_id != program_id
+        ]
+        self._entries.append(entry)
+        return entry
 
 
 def _make_fake_factory(fake_devices: list[_FakeDevice]):
@@ -258,7 +293,7 @@ def _make_program_entry(
     duration: float = 0.5,
     error: str | None = None,
 ) -> ProgramEntry:
-    source_hash = None if source is None else f'hash:{program_id}'
+    source_hash = None if source is None else hashlib.sha256(source.encode('utf-8')).hexdigest()
     return ProgramEntry(
         program_id=program_id,
         path=f'/tmp/{program_id}.py',
@@ -468,6 +503,94 @@ class TestProgramLibraryCommands:
             ],
         } in events
 
+    def test_publish_program_returns_entry_and_broadcasts_event(self):
+        fake_library = _FakeLibrary('/tmp/programs')
+        svc, _ = _make_service(
+            library_factory=lambda animations_dir: fake_library,
+        )
+        source = "BEAT = 1.0\nDURATION = 8.0\n"
+
+        reply = svc.handle_cmd({
+            'id': 1,
+            'cmd': 'publish_program',
+            'program_id': 'ambient',
+            'source': source,
+        })
+
+        assert reply['ok'] is True
+        assert reply['result'] == {
+            'program': {
+                'program_id': 'ambient',
+                'beat': 1.0,
+                'duration': 8.0,
+                'error': None,
+            }
+        }
+        assert fake_library.publish_calls == [('ambient', source)]
+
+        json_msgs, _ = svc.tick_once()
+        events = _decode_json_msgs(json_msgs)
+        assert {
+            'type': 'event',
+            'event': 'programs_updated',
+            'programs': [
+                {'program_id': 'ambient', 'beat': 1.0, 'duration': 8.0, 'error': None},
+            ],
+        } in events
+
+    def test_publish_program_broken_source_is_stored_with_error(self):
+        fake_library = _FakeLibrary('/tmp/programs')
+        svc, _ = _make_service(
+            library_factory=lambda animations_dir: fake_library,
+        )
+
+        reply = svc.handle_cmd({
+            'id': 1,
+            'cmd': 'publish_program',
+            'program_id': 'broken',
+            'source': "BEAT = 1.0\n",
+        })
+
+        assert reply['ok'] is True
+        assert reply['result'] == {
+            'program': {
+                'program_id': 'broken',
+                'beat': None,
+                'duration': None,
+                'error': 'missing DURATION',
+            }
+        }
+
+        load_reply = svc.handle_cmd({
+            'id': 2,
+            'cmd': 'load_program',
+            'program_id': 'broken',
+        })
+        assert load_reply['ok'] is False
+        assert load_reply['error'] == 'program broken is not loadable: missing DURATION'
+
+    def test_publish_program_does_not_change_current_session(self):
+        fake_library = _FakeLibrary('/tmp/programs', [_make_program_entry('main_show')])
+        svc, _ = _make_service(
+            library_factory=lambda animations_dir: fake_library,
+        )
+
+        load_reply = svc.handle_cmd({'id': 1, 'cmd': 'load_program', 'program_id': 'main_show'})
+        assert load_reply['ok'] is True
+        before = svc.build_snapshot()['session']
+        assert before is not None
+
+        publish_reply = svc.handle_cmd({
+            'id': 2,
+            'cmd': 'publish_program',
+            'program_id': 'main_show',
+            'source': "BEAT = 1.0\nDURATION = 1.0\n",
+        })
+        assert publish_reply['ok'] is True
+
+        after = svc.build_snapshot()['session']
+        assert after == before
+
     def test_load_program_valid(self):
         entry = _make_program_entry('main_show')
         svc, _ = _make_service(
@@ -497,6 +620,71 @@ class TestProgramLibraryCommands:
 
         assert reply['ok'] is False
         assert reply['error'] == 'program broken is not loadable: missing BEAT'
+
+    def test_publish_program_same_source_keeps_cache_hit(self, monkeypatch):
+        fake_library = _FakeLibrary('/tmp/programs')
+        svc, _ = _make_service(
+            library_factory=lambda animations_dir: fake_library,
+        )
+        source = "BEAT = 1.0\nDURATION = 0.5\n" + _SIMPLE_DSL
+        calls = []
+        original = svc._compile
+
+        def wrapped_compile(source, beat, duration):
+            calls.append((source, beat, duration))
+            return original(source, beat, duration)
+
+        monkeypatch.setattr(svc, '_compile', wrapped_compile)
+
+        assert svc.handle_cmd({
+            'id': 1,
+            'cmd': 'publish_program',
+            'program_id': 'main_show',
+            'source': source,
+        })['ok'] is True
+        assert svc.handle_cmd({'id': 2, 'cmd': 'load_program', 'program_id': 'main_show'})['ok'] is True
+        assert svc.handle_cmd({
+            'id': 3,
+            'cmd': 'publish_program',
+            'program_id': 'main_show',
+            'source': source,
+        })['ok'] is True
+        assert svc.handle_cmd({'id': 4, 'cmd': 'load_program', 'program_id': 'main_show'})['ok'] is True
+
+        assert len(calls) == 1
+
+    def test_publish_program_changed_source_recompiles(self, monkeypatch):
+        fake_library = _FakeLibrary('/tmp/programs')
+        svc, _ = _make_service(
+            library_factory=lambda animations_dir: fake_library,
+        )
+        source1 = "BEAT = 1.0\nDURATION = 0.5\n" + _SIMPLE_DSL
+        source2 = "BEAT = 1.0\nDURATION = 1.0\n" + _SIMPLE_DSL
+        calls = []
+        original = svc._compile
+
+        def wrapped_compile(source, beat, duration):
+            calls.append((source, beat, duration))
+            return original(source, beat, duration)
+
+        monkeypatch.setattr(svc, '_compile', wrapped_compile)
+
+        assert svc.handle_cmd({
+            'id': 1,
+            'cmd': 'publish_program',
+            'program_id': 'main_show',
+            'source': source1,
+        })['ok'] is True
+        assert svc.handle_cmd({'id': 2, 'cmd': 'load_program', 'program_id': 'main_show'})['ok'] is True
+        assert svc.handle_cmd({
+            'id': 3,
+            'cmd': 'publish_program',
+            'program_id': 'main_show',
+            'source': source2,
+        })['ok'] is True
+        assert svc.handle_cmd({'id': 4, 'cmd': 'load_program', 'program_id': 'main_show'})['ok'] is True
+
+        assert len(calls) == 2
 
     def test_load_program_uses_cache_on_second_load(self, monkeypatch):
         entry = _make_program_entry('main_show')

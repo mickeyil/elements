@@ -98,6 +98,53 @@ def test_program_library_rescan_picks_up_new_and_changed_files(tmp_path):
     assert library.get('alpha').source_hash != first.source_hash
 
 
+def test_program_library_publish_creates_program_in_missing_dir(tmp_path):
+    root = tmp_path / 'missing'
+    library = ProgramLibrary(str(root))
+
+    entry = library.publish('ambient', "BEAT = 1.0\nDURATION = 4.0\n")
+
+    assert (root / 'ambient.py').read_text() == "BEAT = 1.0\nDURATION = 4.0\n"
+    assert entry.program_id == 'ambient'
+    assert entry.error is None
+    assert library.get('ambient') == entry
+
+
+def test_program_library_publish_replaces_existing_program(tmp_path):
+    path = tmp_path / 'ambient.py'
+    path.write_text("BEAT = 1.0\nDURATION = 4.0\n")
+    library = ProgramLibrary(str(tmp_path))
+    first = library.get('ambient')
+    assert first is not None
+
+    updated = library.publish('ambient', "BEAT = 1.0\nDURATION = 8.0\n")
+
+    assert path.read_text() == "BEAT = 1.0\nDURATION = 8.0\n"
+    assert updated.duration == 8.0
+    assert updated.source_hash != first.source_hash
+    assert library.list_programs() == [updated]
+
+
+def test_program_library_publish_broken_source_keeps_entry(tmp_path):
+    library = ProgramLibrary(str(tmp_path))
+
+    entry = library.publish('ambient', "BEAT = 1.0\n")
+
+    assert (tmp_path / 'ambient.py').read_text() == "BEAT = 1.0\n"
+    assert entry.error == 'missing DURATION'
+    assert entry.source == "BEAT = 1.0\n"
+    assert library.get('ambient') == entry
+
+
+def test_program_library_publish_invalid_program_id_rejected(tmp_path):
+    library = ProgramLibrary(str(tmp_path))
+
+    with pytest.raises(ValueError, match='program_id may only contain'):
+        library.publish('../escape', "BEAT = 1.0\nDURATION = 2.0\n")
+
+    assert library.list_programs() == []
+
+
 def test_program_library_get_unknown_returns_none(tmp_path):
     library = ProgramLibrary(str(tmp_path))
 

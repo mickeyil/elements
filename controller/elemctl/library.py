@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -17,6 +19,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 _CACHE_VERSION = 1
+_PROGRAM_ID_RE = re.compile(r'^[A-Za-z0-9._-]+$')
 
 
 @dataclass(frozen=True)
@@ -59,45 +62,13 @@ class ProgramLibrary:
 
         for path in paths:
             program_id = path.stem
-            resolved = str(path.resolve())
             try:
                 source = path.read_text()
             except OSError as e:
-                programs[program_id] = ProgramEntry(
-                    program_id=program_id,
-                    path=resolved,
-                    source=None,
-                    source_hash=None,
-                    beat=None,
-                    duration=None,
-                    error=f'cannot read file: {e}',
-                )
+                programs[program_id] = self._entry_from_read_error(path, e)
                 continue
 
-            source_hash = hashlib.sha256(source.encode('utf-8')).hexdigest()
-            try:
-                beat, duration = extract_metadata(source, resolved)
-            except ValueError as e:
-                programs[program_id] = ProgramEntry(
-                    program_id=program_id,
-                    path=resolved,
-                    source=source,
-                    source_hash=source_hash,
-                    beat=None,
-                    duration=None,
-                    error=str(e),
-                )
-                continue
-
-            programs[program_id] = ProgramEntry(
-                program_id=program_id,
-                path=resolved,
-                source=source,
-                source_hash=source_hash,
-                beat=beat,
-                duration=duration,
-                error=None,
-            )
+            programs[program_id] = self._entry_from_source(program_id, path, source)
 
         self._programs = programs
         return self.list_programs()
@@ -107,6 +78,93 @@ class ProgramLibrary:
 
     def get(self, program_id: str) -> ProgramEntry | None:
         return self._programs.get(program_id)
+
+    def publish(self, program_id: str, source: str) -> ProgramEntry:
+        self._validate_program_id(program_id)
+        if not isinstance(source, str):
+            raise ValueError("'source' must be a string")
+
+        root = Path(self._animations_dir)
+        if root.exists() and not root.is_dir():
+            raise ValueError(f'program library path is not a directory: {root}')
+        try:
+            root.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            raise ValueError(f'cannot create program library directory: {e}') from e
+
+        path = root / f'{program_id}.py'
+        tmp_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode='w',
+                encoding='utf-8',
+                dir=root,
+                prefix=f'.{program_id}.',
+                suffix='.tmp',
+                delete=False,
+            ) as tmp_fp:
+                tmp_fp.write(source)
+                tmp_path = Path(tmp_fp.name)
+            os.replace(tmp_path, path)
+        except OSError as e:
+            if tmp_path is not None:
+                try:
+                    tmp_path.unlink()
+                except OSError:
+                    pass
+            raise ValueError(f'cannot write program {program_id}: {e}') from e
+
+        entry = self._entry_from_source(program_id, path, source)
+        self._programs[program_id] = entry
+        return entry
+
+    @staticmethod
+    def _validate_program_id(program_id: str) -> None:
+        if not isinstance(program_id, str) or not program_id:
+            raise ValueError("'program_id' is required")
+        if not _PROGRAM_ID_RE.fullmatch(program_id):
+            raise ValueError(
+                "program_id may only contain letters, numbers, ., _, and -"
+            )
+
+    @staticmethod
+    def _entry_from_read_error(path: Path, error: OSError) -> ProgramEntry:
+        return ProgramEntry(
+            program_id=path.stem,
+            path=str(path.resolve()),
+            source=None,
+            source_hash=None,
+            beat=None,
+            duration=None,
+            error=f'cannot read file: {error}',
+        )
+
+    @staticmethod
+    def _entry_from_source(program_id: str, path: Path, source: str) -> ProgramEntry:
+        resolved = str(path.resolve())
+        source_hash = hashlib.sha256(source.encode('utf-8')).hexdigest()
+        try:
+            beat, duration = extract_metadata(source, resolved)
+        except ValueError as e:
+            return ProgramEntry(
+                program_id=program_id,
+                path=resolved,
+                source=source,
+                source_hash=source_hash,
+                beat=None,
+                duration=None,
+                error=str(e),
+            )
+
+        return ProgramEntry(
+            program_id=program_id,
+            path=resolved,
+            source=source,
+            source_hash=source_hash,
+            beat=beat,
+            duration=duration,
+            error=None,
+        )
 
 
 class ArtifactCache:

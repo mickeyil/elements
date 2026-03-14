@@ -125,6 +125,7 @@ class ControllerService:
             'load_program': self._cmd_load_program,
             'play': self._cmd_play,
             'pause': self._cmd_pause,
+            'publish_program': self._cmd_publish_program,
             'rescan_programs': self._cmd_rescan_programs,
             'seek': self._cmd_seek,
             'debug_seek': self._cmd_debug_seek,
@@ -196,6 +197,25 @@ class ControllerService:
             raise ValueError(f"load failed: {msg}" if msg else "load failed")
 
         return {'session_id': self._controller.session_id}
+
+    def _cmd_publish_program(self, cmd: dict) -> dict:
+        program_id = cmd.get('program_id')
+        source = cmd.get('source')
+        if not isinstance(program_id, str) or not program_id:
+            raise ValueError("missing 'program_id' field")
+        if source is None:
+            raise ValueError("missing 'source' field")
+        if not isinstance(source, str):
+            raise ValueError("'source' must be a string")
+
+        entry = self._library.publish(program_id, source)
+        programs = self._programs_to_wire()
+        self._service_events.append({
+            'type': 'event',
+            'event': 'programs_updated',
+            'programs': programs,
+        })
+        return {'program': self._program_to_dict(entry)}
 
     def _cmd_play(self, cmd: dict) -> dict:
         self._controller.play()

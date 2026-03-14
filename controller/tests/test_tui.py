@@ -195,6 +195,24 @@ class TestFormatEvent:
             '  #2  broken           ERROR: missing BEAT',
         ]
 
+    def test_reply_program_formats_publish_result(self):
+        msg = {
+            'type': 'reply',
+            'id': 10,
+            'ok': True,
+            'result': {
+                'program': {
+                    'program_id': 'ambient',
+                    'beat': 1.0,
+                    'duration': 12.0,
+                    'error': None,
+                },
+            },
+        }
+        assert format_event(KIND_JSON, _json_payload(msg)) == [
+            'published program ambient beat=1.0 duration=12.0'
+        ]
+
     def test_reply_ok(self):
         msg = {'type': 'reply', 'id': 7, 'ok': True, 'result': {'x': 1}}
         result = format_event(KIND_JSON, _json_payload(msg))
@@ -358,6 +376,37 @@ class TestParseCommand:
         cmd, err = parse_command('/rescan foo', 1)
         assert cmd is None
         assert 'does not take arguments' in err
+
+    # /publish
+    def test_publish_by_path(self):
+        cmd, err = parse_command('/publish animations/ambient.py', 4)
+        assert err is None
+        assert cmd == {
+            'cmd': 'publish',
+            'path': 'animations/ambient.py',
+            'program_id': 'ambient',
+            'id': 4,
+        }
+
+    def test_publish_with_explicit_name(self):
+        cmd, err = parse_command('/publish /tmp/draft.py as ambient_bg', 7)
+        assert err is None
+        assert cmd == {
+            'cmd': 'publish',
+            'path': '/tmp/draft.py',
+            'program_id': 'ambient_bg',
+            'id': 7,
+        }
+
+    def test_publish_requires_path(self):
+        cmd, err = parse_command('/publish', 1)
+        assert cmd is None
+        assert 'requires a file path' in err
+
+    def test_publish_invalid_syntax(self):
+        cmd, err = parse_command('/publish demo.py ambient', 1)
+        assert cmd is None
+        assert 'usage' in err
 
     # /load
     def test_load_by_name(self):
@@ -1073,6 +1122,93 @@ class TestProgramCatalogCommands:
                 app._log_fp.close()
 
         assert any(line.endswith('not connected') for line in app._log_lines)
+
+    def test_publish_reads_file_and_sends_publish_program(self, tmp_path):
+        path = tmp_path / 'ambient.py'
+        path.write_text("BEAT = 1.0\nDURATION = 8.0\n")
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        client = self._FakeClient()
+        app._set_client(client)
+
+        try:
+            app._do_publish({
+                'cmd': 'publish',
+                'path': str(path),
+                'program_id': 'ambient',
+                'id': 1,
+            })
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        assert client.commands == [{
+            'cmd': 'publish_program',
+            'program_id': 'ambient',
+            'source': "BEAT = 1.0\nDURATION = 8.0\n",
+            'id': 1,
+        }]
+        assert any(line.endswith(f'> /publish {path}') for line in app._log_lines)
+
+    def test_publish_with_explicit_name_uses_name(self, tmp_path):
+        path = tmp_path / 'draft.py'
+        path.write_text("BEAT = 1.0\nDURATION = 8.0\n")
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        client = self._FakeClient()
+        app._set_client(client)
+
+        try:
+            app._do_publish({
+                'cmd': 'publish',
+                'path': str(path),
+                'program_id': 'ambient_bg',
+                'id': 1,
+            })
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        assert client.commands == [{
+            'cmd': 'publish_program',
+            'program_id': 'ambient_bg',
+            'source': "BEAT = 1.0\nDURATION = 8.0\n",
+            'id': 1,
+        }]
+        assert any(line.endswith(f'> /publish {path} as ambient_bg') for line in app._log_lines)
+
+    def test_publish_missing_file_is_local_error(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            str(tmp_path / 'config.json'),
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        client = self._FakeClient()
+        app._set_client(client)
+        missing = tmp_path / 'missing.py'
+
+        try:
+            app._do_publish({
+                'cmd': 'publish',
+                'path': str(missing),
+                'program_id': 'missing',
+                'id': 1,
+            })
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        assert client.commands == []
+        assert any(
+            line.endswith(f'cannot read {missing}: [Errno 2] No such file or directory: \'{missing}\'')
+            for line in app._log_lines
+        )
 
     def test_load_by_name_sends_load_program(self, tmp_path):
         app = TuiApp(

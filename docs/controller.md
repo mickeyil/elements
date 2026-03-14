@@ -310,7 +310,7 @@ The controller is the long-running authority on the base station.
 
 1. **Loads config and owns it as live state** — reads the base-station config file at startup, keeps the raw config document in memory, and treats it as the authoritative inventory while running.
 
-2. **Owns the program library** — scans `controller.animations_dir`, extracts `BEAT` / `DURATION` metadata from known `.py` programs, and exposes the catalog to clients via snapshots and `rescan_programs`.
+2. **Owns the program library** — scans `controller.animations_dir`, accepts `publish_program` updates, extracts `BEAT` / `DURATION` metadata from known `.py` programs, and exposes the catalog to clients via snapshots and `programs_updated`.
 
 3. **Compiles programs** — either receives raw DSL source (`load`) or resolves a known library entry (`load_program`), compiles it using the Python compiler, validates strip lengths against config, and produces a manifest with per-strip blobs, duration, and global safe intervals. Library-backed loads use an in-memory artifact cache keyed by source hash and strip topology.
 
@@ -417,13 +417,14 @@ Commands carry an `id` (client-assigned, incrementing counter) that the controll
 {"id": 6, "cmd": "status"}
 {"id": 7, "cmd": "rescan_programs"}
 {"id": 8, "cmd": "load_program", "program_id": "demo_main", "loop": true}
-{"id": 9, "cmd": "add_device", "device_type": "sim", "device_uid": "sim-3", "strip_id": "aux", "length": 30}
-{"id": 10, "cmd": "remove_device", "device_uid": "sim-3"}
+{"id": 9, "cmd": "publish_program", "program_id": "demo_main", "source": "...python source..."}
+{"id": 10, "cmd": "add_device", "device_type": "sim", "device_uid": "sim-3", "strip_id": "aux", "length": 30}
+{"id": 11, "cmd": "remove_device", "device_uid": "sim-3"}
 ```
 
 `play` means both fresh start and resume — the controller decides which device command to send based on current state (CMD_START from LOADED/ENDED, CMD_RESUME from PAUSED). The client does not need to distinguish between them.
 
-`status` and the connect-time snapshot are the read path for the current program catalog. `rescan_programs` refreshes the controller-owned library from disk and broadcasts the new catalog to all clients. It does **not** hot-swap the currently loaded session; the new source only takes effect on the next `load_program`.
+`status` and the connect-time snapshot are the read path for the current program catalog. `rescan_programs` refreshes the controller-owned library from disk and broadcasts the new catalog to all clients. `publish_program` stores or replaces one known program in that library and broadcasts the updated catalog. Neither command hot-swaps the currently loaded session; new source only takes effect on the next `load_program`.
 
 **Controller → Client (replies):**
 
@@ -435,6 +436,7 @@ Replies are **controller-complete** — the reply is sent after the controller h
 {"type": "reply", "id": 6, "ok": true, "result": {"event": "snapshot", "...": "..."}}
 {"type": "reply", "id": 7, "ok": true, "result": {"programs": [{"program_id": "demo_main", "beat": 0.5, "duration": 64.0, "error": null}]}}
 {"type": "reply", "id": 8, "ok": true, "result": {"session_id": 42}}
+{"type": "reply", "id": 9, "ok": true, "result": {"program": {"program_id": "demo_main", "beat": 0.5, "duration": 64.0, "error": null}}}
 {"type": "reply", "id": 1, "ok": false, "error": "device sim-1 rejected blob"}
 ```
 
@@ -462,7 +464,7 @@ Asynchronous state changes and broadcasts — not tied to a specific command.
 - **`state`** — playback state change (playing, paused, ended), includes current epoch
 - **`loop`** — program looped back to t=0, includes new epoch
 - **`device_status`** — device lifecycle change (connected/disconnected). State-oriented — UI updates indicators
-- **`programs_updated`** — program library rescanned. Carries the full current catalog so writer and observer clients can refresh without polling
+- **`programs_updated`** — program library changed by `rescan_programs` or `publish_program`. Carries the full current catalog so writer and observer clients can refresh without polling
 - **`error`** — async failure. Human-oriented — UI shows notification/log. Current implementation emits a single human-readable `message` field.
 
 The `strips` array in `session_start` defines the **canonical strip order and lengths** for the session. Program frames pack RGB blobs in this exact order with no per-entry headers — the client uses the strip list to slice the payload.
@@ -473,6 +475,7 @@ The `strips` array in `session_start` defines the **canonical strip order and le
 |---------|--------------------------|-------------|
 | `load` | Compiled from source, all devices ACKed LOAD, session created | `{"session_id": N}` |
 | `load_program` | Known program resolved from the controller-owned library, compiled or cache-hit, all devices ACKed LOAD, session created | `{"session_id": N}` |
+| `publish_program` | Program source stored under `program_id`, library entry updated, `programs_updated` broadcast queued. Does not load or play the program. Broken source is still stored, with `error` set in the returned entry. | `{"program": {...}}` |
 | `play` | State updated; sends START (from LOADED/ENDED) or RESUME (from PAUSED) to all devices + audio | `{}` |
 | `pause` | CMD_PAUSE sent to all devices, audio paused, state updated | `{}` |
 | `seek` | Time resolved/snapped, JUMP or DEBUG_SEEK sent, epoch updated | `{}` |
