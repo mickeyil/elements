@@ -521,9 +521,7 @@ class ControllerService:
     def _compile(self, source: str, beat: float, duration: float):
         from elements.dsl import _builder, build_manifest
         _builder.reset()
-        _builder.configured_strip_lengths = {
-            sc.strip_id: sc.length for sc in self._strips
-        }
+        _builder.configured_strip_lengths = self._logical_strip_lengths()
         try:
             exec(source, {'__builtins__': __builtins__})
             return build_manifest(beat=beat, duration=duration)
@@ -697,8 +695,20 @@ class ControllerService:
     def _programs_to_wire(self) -> list[dict]:
         return [self._program_to_dict(entry) for entry in self._library.list_programs()]
 
+    def _logical_strip_lengths(self) -> dict[str, int]:
+        lengths: dict[str, int] = {}
+        for dc in self._device_configs:
+            existing = lengths.get(dc.strip_id)
+            if existing is None:
+                lengths[dc.strip_id] = dc.length
+            elif existing != dc.length:
+                raise RuntimeError(
+                    'strip_id length conflict should have been caught by config validation'
+                )
+        return lengths
+
     def _topology_fingerprint(self) -> str:
-        parts = sorted((dc.strip_id, dc.length) for dc in self._device_configs)
+        parts = sorted(self._logical_strip_lengths().items())
         return hashlib.sha256(
             json.dumps(parts, separators=(',', ':')).encode('utf-8')
         ).hexdigest()

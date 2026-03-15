@@ -278,6 +278,29 @@ def _make_config(n_devices=1):
     return Config(frame_port=1, devices=devices)
 
 
+def _make_mirrored_main_config() -> Config:
+    return Config(frame_port=1, devices=[
+        DeviceConfig(
+            device_id=1,
+            device_uid='sim-144',
+            device_type='sim',
+            host='127.0.0.1',
+            tcp_port=9001,
+            strip_id='main',
+            length=144,
+        ),
+        DeviceConfig(
+            device_id=2,
+            device_uid='esp-144',
+            device_type='esp32',
+            host='127.0.0.1',
+            tcp_port=9002,
+            strip_id='main',
+            length=144,
+        ),
+    ])
+
+
 def _make_program_entry(
     program_id: str,
     *,
@@ -613,6 +636,84 @@ class TestProgramLibraryCommands:
                 {'program_id': 'alpha', 'beat': 1.0, 'duration': 0.5, 'error': None},
             ],
         } in events
+
+
+class TestLogicalTopologyNormalization:
+    def test_logical_strip_lengths_collapse_mirrored_group(self):
+        svc = ControllerService(
+            _make_mirrored_main_config(),
+            receiver_factory=_NoopReceiver,
+            device_factory=_make_fake_factory([_FakeDevice(), _FakeDevice()]),
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir),
+        )
+
+        assert svc._logical_strip_lengths() == {'main': 144}
+
+    def test_compile_resolves_implicit_strip_length_from_mirrored_topology(self):
+        svc = ControllerService(
+            _make_mirrored_main_config(),
+            receiver_factory=_NoopReceiver,
+            device_factory=_make_fake_factory([_FakeDevice(), _FakeDevice()]),
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir),
+        )
+
+        manifest = svc._compile("""\
+from elements.dsl import strip, spark, sec
+s = strip('main')
+sp = spark(color='white', fade=1.0)
+sp.schedule(s.pixels(f'0-{s.length - 1}'), at=0, duration=sec(0.5))
+""", 1.0, 0.5)
+
+        assert len(manifest.strips) == 1
+        assert manifest.strips[0].strip_id == 'main'
+        assert manifest.strips[0].length == 144
+
+    def test_topology_fingerprint_ignores_mirrored_duplicate_group(self):
+        single = ControllerService(
+            Config(frame_port=1, devices=[
+                DeviceConfig(1, 'sim-144', 'sim', '127.0.0.1', 9001, 'main', 144),
+            ]),
+            receiver_factory=_NoopReceiver,
+            device_factory=_make_fake_factory([_FakeDevice()]),
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir),
+        )
+        mirrored = ControllerService(
+            _make_mirrored_main_config(),
+            receiver_factory=_NoopReceiver,
+            device_factory=_make_fake_factory([_FakeDevice(), _FakeDevice()]),
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir),
+        )
+
+        assert single._topology_fingerprint() == mirrored._topology_fingerprint()
+
+    def test_topology_fingerprint_changes_when_logical_topology_changes(self):
+        base = ControllerService(
+            Config(frame_port=1, devices=[
+                DeviceConfig(1, 'sim-144', 'sim', '127.0.0.1', 9001, 'main', 144),
+            ]),
+            receiver_factory=_NoopReceiver,
+            device_factory=_make_fake_factory([_FakeDevice()]),
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir),
+        )
+        changed_length = ControllerService(
+            Config(frame_port=1, devices=[
+                DeviceConfig(1, 'sim-100', 'sim', '127.0.0.1', 9001, 'main', 100),
+            ]),
+            receiver_factory=_NoopReceiver,
+            device_factory=_make_fake_factory([_FakeDevice()]),
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir),
+        )
+        changed_name = ControllerService(
+            Config(frame_port=1, devices=[
+                DeviceConfig(1, 'sim-left', 'sim', '127.0.0.1', 9001, 'left', 144),
+            ]),
+            receiver_factory=_NoopReceiver,
+            device_factory=_make_fake_factory([_FakeDevice()]),
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir),
+        )
+
+        assert base._topology_fingerprint() != changed_length._topology_fingerprint()
+        assert base._topology_fingerprint() != changed_name._topology_fingerprint()
 
     def test_publish_program_returns_entry_and_broadcasts_event(self):
         fake_library = _FakeLibrary('/tmp/programs')
