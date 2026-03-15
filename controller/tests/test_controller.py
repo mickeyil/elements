@@ -30,8 +30,16 @@ class MockDevice:
         self._last_t_rel = 0.0
         self._frames: list[DeviceFrame] = []
         self.load_should_fail = False
+        self.load_calls = 0
+        self.start_calls = 0
+        self.jump_calls = 0
+        self.pause_calls = 0
+        self.resume_calls = 0
+        self.stop_calls = 0
+        self.tick_calls = 0
 
     def load(self, blob: bytes, gen: int) -> bool:
+        self.load_calls += 1
         if self.load_should_fail:
             self._state = DeviceState.IDLE
             return False
@@ -42,12 +50,14 @@ class MockDevice:
         return True
 
     def start(self, t0_ns: int) -> None:
+        self.start_calls += 1
         self._t0_ns = t0_ns
         self._frame_index = 0
         self._frames.clear()
         self._state = DeviceState.PLAYING
 
     def jump(self, t0_ns: int, t_rel: float, gen: int) -> None:
+        self.jump_calls += 1
         self._t0_ns = t0_ns
         self._gen = gen
         self._frame_index = 0
@@ -67,20 +77,24 @@ class MockDevice:
             self._state = DeviceState.PAUSED
 
     def pause(self, now_ns: int) -> None:
+        self.pause_calls += 1
         if self._state == DeviceState.PLAYING:
             self._last_t_rel = (now_ns - self._t0_ns) / 1e9
             self._state = DeviceState.PAUSED
 
     def resume(self, t0_ns: int) -> None:
+        self.resume_calls += 1
         self._t0_ns = t0_ns
         self._state = DeviceState.PLAYING
 
     def stop(self) -> None:
+        self.stop_calls += 1
         if self._state != DeviceState.IDLE:
             self._state = DeviceState.LOADED
             self._last_t_rel = 0.0
 
     def tick_once(self, now_ns: int) -> None:
+        self.tick_calls += 1
         if self._state != DeviceState.PLAYING:
             return
         t_rel = (now_ns - self._t0_ns) / 1e9
@@ -225,6 +239,67 @@ class DualFixture:
         return [
             StripConfig("left", 5, self.left),
             StripConfig("right", 5, self.right),
+        ]
+
+    def manifest(self) -> CompiledManifest:
+        return CompiledManifest(
+            duration=5.0,
+            strips=[
+                CompiledStripArtifact("left", 5, b'\x00'),
+                CompiledStripArtifact("right", 5, b'\x00'),
+            ],
+            safe_intervals=[],
+        )
+
+
+class MirrorFixture:
+    def __init__(self):
+        self.sim = MockDevice(duration=5.0)
+        self.esp = MockDevice(duration=5.0)
+        self.bench = MockDevice(duration=5.0)
+        self._now_ns = 0
+
+    def clock(self) -> int:
+        return self._now_ns
+
+    def set_time(self, seconds: float):
+        self._now_ns = _sec(seconds)
+
+    def strips(self) -> list[StripConfig]:
+        return [
+            StripConfig("main", 5, self.sim),
+            StripConfig("main", 5, self.esp),
+            StripConfig("bench", 5, self.bench),
+        ]
+
+    def manifest(self) -> CompiledManifest:
+        return CompiledManifest(
+            duration=5.0,
+            strips=[CompiledStripArtifact("main", 5, b'\x00')],
+            safe_intervals=[],
+        )
+
+
+class MirroredDualFixture:
+    def __init__(self):
+        self.left_sim = MockDevice(duration=5.0)
+        self.left_esp = MockDevice(duration=5.0)
+        self.right_sim = MockDevice(duration=5.0)
+        self.right_esp = MockDevice(duration=5.0)
+        self._now_ns = 0
+
+    def clock(self) -> int:
+        return self._now_ns
+
+    def set_time(self, seconds: float):
+        self._now_ns = _sec(seconds)
+
+    def strips(self) -> list[StripConfig]:
+        return [
+            StripConfig("left", 5, self.left_sim),
+            StripConfig("left", 5, self.left_esp),
+            StripConfig("right", 5, self.right_sim),
+            StripConfig("right", 5, self.right_esp),
         ]
 
     def manifest(self) -> CompiledManifest:
@@ -412,6 +487,81 @@ class TestLoad:
         )
         assert ctrl.load(m)
         assert ctrl.state == ControllerState.LOADED
+
+    def test_targeted_load_fans_out_single_strip(self):
+        f = MirrorFixture()
+        ctrl = Controller(f.strips(), clock=f.clock)
+
+        assert ctrl.load(f.manifest(), target_groups=[[0, 1]])
+        assert ctrl.state == ControllerState.LOADED
+        assert f.sim.load_calls == 1
+        assert f.esp.load_calls == 1
+        assert f.bench.load_calls == 0
+        assert ctrl.session_strips == [('main', 5)]
+
+    def test_targeted_load_operates_only_on_active_targets(self):
+        f = MirrorFixture()
+        ctrl = Controller(f.strips(), clock=f.clock)
+
+        assert ctrl.load(f.manifest(), target_groups=[[0, 1]])
+        ctrl.drain_events()
+
+        f.set_time(0.0)
+        ctrl.play()
+        assert f.sim.start_calls == 1
+        assert f.esp.start_calls == 1
+        assert f.bench.start_calls == 0
+
+        f.set_time(0.25)
+        ctrl.tick_once()
+        assert f.sim.tick_calls > 0
+        assert f.esp.tick_calls > 0
+        assert f.bench.tick_calls > 0
+
+        ctrl.pause()
+        assert f.sim.pause_calls == 1
+        assert f.esp.pause_calls == 1
+        assert f.bench.pause_calls == 0
+
+        ctrl.stop()
+        assert f.sim.stop_calls >= 1
+        assert f.esp.stop_calls >= 1
+        assert f.bench.stop_calls == 0
+
+    def test_targeted_load_stops_stale_previous_targets_after_success(self):
+        f = MirrorFixture()
+        ctrl = Controller(f.strips(), clock=f.clock)
+
+        assert ctrl.load(f.manifest(), target_groups=[[0]])
+        f.set_time(0.0)
+        ctrl.play()
+        ctrl.drain_events()
+        assert f.sim.start_calls == 1
+        assert f.esp.start_calls == 0
+
+        assert ctrl.load(f.manifest(), target_groups=[[1]])
+        assert ctrl.state == ControllerState.LOADED
+        assert f.sim.stop_calls >= 1
+        assert f.esp.load_calls == 1
+
+    def test_targeted_load_emits_logical_frames_for_mirrored_dual_program(self):
+        f = MirroredDualFixture()
+        ctrl = Controller(f.strips(), clock=f.clock)
+
+        assert ctrl.load(f.manifest(), target_groups=[[0, 1], [2, 3]])
+        ctrl.drain_events()
+
+        f.set_time(0.0)
+        ctrl.play()
+        ctrl.drain_events()
+
+        f.set_time(0.25)
+        ctrl.tick_once()
+        frames = ctrl.drain_program_frames()
+        assert len(frames) == 1
+        assert isinstance(frames[0], ProgramFrame)
+        assert len(frames[0].strips) == 2
+        assert ctrl.session_strips == [('left', 5), ('right', 5)]
 
 
 # =========================================================================
@@ -609,6 +759,33 @@ class TestDebugSeek:
         evts = ctrl.drain_events()
         assert len(evts) == 1
         assert evts[0].kind == ControllerEvent.Kind.ERROR
+
+    def test_targeted_debug_seek_ignores_inactive_non_debug_device(self):
+        now_ns = [0]
+        ctrl = Controller(
+            [
+                StripConfig("main", 5, MockDevice(duration=5.0)),
+                StripConfig("main", 5, MockDevice(duration=5.0)),
+                StripConfig("bench", 5, FakeDevice()),
+            ],
+            clock=lambda: now_ns[0],
+        )
+        manifest = CompiledManifest(
+            duration=5.0,
+            strips=[CompiledStripArtifact("main", 5, b'\x00')],
+            safe_intervals=[],
+        )
+        assert ctrl.load(manifest, target_groups=[[0, 1]])
+        ctrl.drain_events()
+
+        ctrl.debug_seek(2.0)
+        assert ctrl.state == ControllerState.PAUSED
+        assert has_state_event(ctrl.drain_events(), ControllerState.PAUSED)
+
+        ctrl.tick_once()
+        pf = ctrl.drain_program_frames()
+        assert len(pf) == 1
+        assert pf[0].t_rel == pytest.approx(2.0)
 
 
 # =========================================================================

@@ -80,7 +80,10 @@ class Controller:
         self._loop = False
         self._safe_intervals: list[tuple[float, float]] = []
 
-        self._expected_gen = [0] * len(self._strips)
+        self._active_strips: list[StripConfig] = []
+        self._slot_for_active: list[int] = []
+        self._session_manifest_strips: list[tuple[str, int]] = []
+        self._expected_gen: list[int] = []
         self._buckets: dict[int, _Bucket] = {}
 
         self._program_frames: list[ProgramFrame] = []
@@ -131,79 +134,147 @@ class Controller:
     def safe_intervals(self) -> list[tuple[float, float]]:
         return list(self._safe_intervals)
 
+    @property
+    def session_strips(self) -> list[tuple[str, int]]:
+        return list(self._session_manifest_strips)
+
     # ------------------------------------------------------------------
     # Commands
     # ------------------------------------------------------------------
 
-    def load(self, manifest: CompiledManifest, loop: bool = False) -> bool:
+    def load(
+        self,
+        manifest: CompiledManifest,
+        loop: bool = False,
+        target_groups: list[list[int]] | None = None,
+    ) -> bool:
         if not self._strips:
             self._queue_event(ControllerEvent.Kind.ERROR, "no configured strips")
             return False
 
-        # Validate strip count
-        if len(manifest.strips) != len(self._strips):
-            self._queue_event(ControllerEvent.Kind.ERROR, "strip count mismatch")
+        if target_groups is None:
+            if len(manifest.strips) != len(self._strips):
+                self._queue_event(ControllerEvent.Kind.ERROR, "strip count mismatch")
+                return False
+
+            target_groups = []
+            seen = [False] * len(self._strips)
+            for ms in manifest.strips:
+                canonical_indices = self._strip_id_to_indices.get(ms.strip_id)
+                if canonical_indices is None:
+                    self._queue_event(
+                        ControllerEvent.Kind.ERROR,
+                        f"unknown strip_id: {ms.strip_id}",
+                    )
+                    return False
+                if len(canonical_indices) != 1:
+                    self._queue_event(
+                        ControllerEvent.Kind.ERROR,
+                        f"duplicate strip_id requires targeted load support: {ms.strip_id}",
+                    )
+                    return False
+                ci = canonical_indices[0]
+                if seen[ci]:
+                    self._queue_event(
+                        ControllerEvent.Kind.ERROR,
+                        f"duplicate strip_id: {ms.strip_id}",
+                    )
+                    return False
+                seen[ci] = True
+                if ms.length > self._strips[ci].length:
+                    self._queue_event(
+                        ControllerEvent.Kind.ERROR,
+                        f"strip length exceeds configured length for "
+                        f"{self._strips[ci].strip_id}",
+                    )
+                    return False
+                target_groups.append([ci])
+        elif len(target_groups) != len(manifest.strips):
+            self._queue_event(
+                ControllerEvent.Kind.ERROR,
+                "target group count mismatch",
+            )
             return False
 
-        # Order-independent matching
-        prog_to_canon: list[int] = [0] * len(manifest.strips)
-        seen = [False] * len(self._strips)
+        seen_targets: set[int] = set()
+        new_active_strips: list[StripConfig] = []
+        new_slot_for_active: list[int] = []
+        new_active_device_ids: set[int] = set()
+        for slot, (ms, group) in enumerate(zip(manifest.strips, target_groups)):
+            if not group:
+                self._queue_event(
+                    ControllerEvent.Kind.ERROR,
+                    f"missing targets for strip: {ms.strip_id}",
+                )
+                return False
+            for ci in group:
+                if not (0 <= ci < len(self._strips)):
+                    self._queue_event(
+                        ControllerEvent.Kind.ERROR,
+                        f"target index out of range: {ci}",
+                    )
+                    return False
+                if ci in seen_targets:
+                    self._queue_event(
+                        ControllerEvent.Kind.ERROR,
+                        f"duplicate target index: {ci}",
+                    )
+                    return False
+                if ms.length > self._strips[ci].length:
+                    self._queue_event(
+                        ControllerEvent.Kind.ERROR,
+                        f"strip length exceeds configured length for "
+                        f"{self._strips[ci].strip_id}",
+                    )
+                    return False
+                seen_targets.add(ci)
+                new_active_strips.append(self._strips[ci])
+                new_slot_for_active.append(slot)
+                new_active_device_ids.add(id(self._strips[ci].device))
 
-        for pi, ms in enumerate(manifest.strips):
-            canonical_indices = self._strip_id_to_indices.get(ms.strip_id)
-            if canonical_indices is None:
-                self._queue_event(
-                    ControllerEvent.Kind.ERROR,
-                    f"unknown strip_id: {ms.strip_id}",
-                )
-                return False
-            if len(canonical_indices) != 1:
-                self._queue_event(
-                    ControllerEvent.Kind.ERROR,
-                    f"duplicate strip_id requires targeted load support: {ms.strip_id}",
-                )
-                return False
-            ci = canonical_indices[0]
-            if seen[ci]:
-                self._queue_event(
-                    ControllerEvent.Kind.ERROR,
-                    f"duplicate strip_id: {ms.strip_id}",
-                )
-                return False
-            seen[ci] = True
-            if ms.length > self._strips[ci].length:
-                self._queue_event(
-                    ControllerEvent.Kind.ERROR,
-                    f"strip length exceeds configured length for "
-                    f"{self._strips[ci].strip_id}",
-                )
-                return False
-            prog_to_canon[pi] = ci
+        new_session_manifest_strips = [
+            (ms.strip_id, ms.length) for ms in manifest.strips
+        ]
+        prev_active_strips = list(self._active_strips)
+        prev_active_device_ids = {id(s.device) for s in prev_active_strips}
+        overlaps_previous_session = bool(prev_active_device_ids & new_active_device_ids)
 
         # Attempt device loads with provisional gen
         new_gen = self._gen + 1
-        loaded: list[int] = []  # canonical indices successfully loaded
+        loaded_active: list[int] = []
 
-        for pi, ms in enumerate(manifest.strips):
-            ci = prog_to_canon[pi]
-            if not self._strips[ci].device.load(ms.blob, new_gen):
-                for li in loaded:
-                    self._strips[li].device.stop()
-                self._state = ControllerState.IDLE
-                self._duration = 0.0
-                self._paused_t_rel = 0.0
-                self._loop = False
-                self._safe_intervals = []
-                self._buckets.clear()
-                self._program_frames = []
+        for ai, active_strip in enumerate(new_active_strips):
+            slot = new_slot_for_active[ai]
+            blob = manifest.strips[slot].blob
+            if not active_strip.device.load(blob, new_gen):
+                for lai in loaded_active:
+                    new_active_strips[lai].device.stop()
+                if overlaps_previous_session:
+                    for strip in prev_active_strips:
+                        strip.device.stop()
+                    self._state = ControllerState.IDLE
+                    self._duration = 0.0
+                    self._paused_t_rel = 0.0
+                    self._loop = False
+                    self._safe_intervals = []
+                    self._buckets.clear()
+                    self._program_frames = []
+                    self._active_strips = []
+                    self._slot_for_active = []
+                    self._session_manifest_strips = []
+                    self._expected_gen = []
                 self._queue_event(
                     ControllerEvent.Kind.ERROR,
-                    f"device load failed for {self._strips[ci].strip_id}",
+                    f"device load failed for {active_strip.strip_id}",
                 )
                 return False
-            loaded.append(ci)
+            loaded_active.append(ai)
 
         # All devices loaded — commit identity
+        stale_previous_strips = [
+            strip for strip in prev_active_strips
+            if id(strip.device) not in new_active_device_ids
+        ]
         self._session_id += 1
         self._epoch = 0
         self._gen = new_gen
@@ -212,9 +283,15 @@ class Controller:
         self._safe_intervals = list(manifest.safe_intervals)
         self._paused_t_rel = 0.0
         self._buckets.clear()
-        self._expected_gen = [self._gen] * len(self._strips)
+        self._program_frames = []
+        self._active_strips = new_active_strips
+        self._slot_for_active = new_slot_for_active
+        self._session_manifest_strips = new_session_manifest_strips
+        self._expected_gen = [self._gen] * len(self._active_strips)
 
         self._state = ControllerState.LOADED
+        for strip in stale_previous_strips:
+            strip.device.stop()
         self._queue_event(ControllerEvent.Kind.SESSION_STARTED)
         self._queue_event(ControllerEvent.Kind.STATE_CHANGED)
         return True
@@ -226,7 +303,7 @@ class Controller:
         if self._state == ControllerState.PAUSED:
             now = self._clock()
             t0 = now - int(self._paused_t_rel * 1e9)
-            for s in self._strips:
+            for s in self._active_strips:
                 s.device.resume(t0)
             self._state = ControllerState.PLAYING
             self._queue_event(ControllerEvent.Kind.STATE_CHANGED)
@@ -234,7 +311,7 @@ class Controller:
 
         # From LOADED, STOPPED, or ENDED
         t0 = self._clock()
-        for s in self._strips:
+        for s in self._active_strips:
             s.device.start(t0)
         self._epoch += 1
         self._state = ControllerState.PLAYING
@@ -245,7 +322,7 @@ class Controller:
             return
 
         now = self._clock()
-        for s in self._strips:
+        for s in self._active_strips:
             s.device.pause(now)
 
         self._paused_t_rel = self._max_current_t_rel(now)
@@ -269,7 +346,7 @@ class Controller:
         self._gen += 1
         now = self._clock()
         t0 = now - int(snapped * 1e9)
-        for i, s in enumerate(self._strips):
+        for i, s in enumerate(self._active_strips):
             s.device.jump(t0, snapped, self._gen)
             self._expected_gen[i] = self._gen
         self._buckets.clear()
@@ -283,7 +360,7 @@ class Controller:
         if self._state in (ControllerState.IDLE, ControllerState.STOPPED):
             return
 
-        for s in self._strips:
+        for s in self._active_strips:
             if not s.device.supports_debug_seek():
                 self._queue_event(
                     ControllerEvent.Kind.ERROR,
@@ -293,7 +370,7 @@ class Controller:
 
         self._epoch += 1
         now = self._clock()
-        for s in self._strips:
+        for s in self._active_strips:
             s.device.debug_seek(t_rel, now)
         self._buckets.clear()
 
@@ -308,7 +385,7 @@ class Controller:
         if self._state == ControllerState.IDLE:
             return
 
-        for s in self._strips:
+        for s in self._active_strips:
             s.device.stop()
         self._buckets.clear()
         self._state = ControllerState.STOPPED
@@ -328,29 +405,30 @@ class Controller:
         for s in self._strips:
             s.device.tick_once(now)
 
-        # 2. Drain frames, filter by gen, assemble into buckets
-        for i, s in enumerate(self._strips):
+        # 2. Drain active frames, filter by gen, assemble into logical buckets
+        for i, s in enumerate(self._active_strips):
             for frame in s.device.drain_frames():
                 if frame.gen != self._expected_gen[i]:
                     continue
 
+                slot = self._slot_for_active[i]
                 bucket = self._buckets.get(frame.frame_index)
                 if bucket is None:
                     bucket = _Bucket(
                         frame_index=frame.frame_index,
                         t_rel=frame.t_rel,
-                        strips=[None] * len(self._strips),
+                        strips=[None] * len(self._session_manifest_strips),
                     )
                     self._buckets[frame.frame_index] = bucket
 
-                if bucket.strips[i] is None:
+                if bucket.strips[slot] is None:
                     bucket.present += 1
-                bucket.strips[i] = frame.rgb
+                    bucket.strips[slot] = frame.rgb
 
         # 3. Emit complete program frames
         complete = []
         for fi, bucket in self._buckets.items():
-            if bucket.present == len(self._strips):
+            if bucket.present == len(self._session_manifest_strips):
                 self._program_frames.append(
                     ProgramFrame(
                         frame_index=bucket.frame_index,
@@ -364,9 +442,9 @@ class Controller:
 
         # 4. End-of-program detection (controller-inferred, not device-reported)
         if self._state == ControllerState.PLAYING:
-            all_past_end = bool(self._strips) and all(
+            all_past_end = bool(self._active_strips) and all(
                 s.device.current_t_rel(now) >= self._duration
-                for s in self._strips
+                for s in self._active_strips
             )
             if all_past_end:
                 if self._loop:
@@ -377,7 +455,7 @@ class Controller:
                     # Devices are ENDED here. jump() transitions ENDED→PAUSED,
                     # so resume() is needed to restart playback. This differs
                     # from seek-while-PLAYING where jump() keeps devices PLAYING.
-                    for i, s in enumerate(self._strips):
+                    for i, s in enumerate(self._active_strips):
                         s.device.jump(now, 0.0, self._gen)
                         s.device.resume(now)
                         self._expected_gen[i] = self._gen
@@ -416,9 +494,9 @@ class Controller:
         )
 
     def _max_current_t_rel(self, now: int) -> float:
-        if not self._strips:
+        if not self._active_strips:
             return 0.0
-        return max(s.device.current_t_rel(now) for s in self._strips)
+        return max(s.device.current_t_rel(now) for s in self._active_strips)
 
     def _snap_to_safe(self, t_rel: float) -> float:
         if not self._safe_intervals:

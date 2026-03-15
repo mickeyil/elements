@@ -103,7 +103,7 @@ These decisions are settled unless a later milestone explicitly revisits them:
   - every target exists
   - no duplicate target ids in the request
   - every program strip is covered by at least one selected device with matching `strip_id`
-  - selected devices whose `strip_id` is unused by the program are ignored for now
+  - selected devices whose `strip_id` is unused by the program are rejected
   - selected target length is `>=` program strip length
 - Make the runtime session operate only on selected targets.
 - Keep unselected devices idle.

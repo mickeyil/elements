@@ -175,8 +175,8 @@ class ControllerService:
 
     def _cmd_load_program(self, cmd: dict) -> dict:
         self._require_configured_devices_for_load()
-        self._require_unique_strip_id_topology_for_legacy_load()
         program_id = cmd.get('program_id')
+        targets = self._require_targets(cmd.get('targets'))
         loop = cmd.get('loop', False)
         if not isinstance(program_id, str) or not program_id:
             raise ValueError("missing 'program_id' field")
@@ -197,7 +197,9 @@ class ControllerService:
             manifest = self._compile(entry.source, entry.beat, entry.duration)
             self._artifact_cache.put(entry.source_hash, topology, manifest)
 
-        if not self._controller.load(manifest, loop=loop):
+        target_groups = self._resolve_manifest_target_groups(manifest, targets)
+
+        if not self._controller.load(manifest, loop=loop, target_groups=target_groups):
             errors = self._controller.drain_events()
             msg = '; '.join(e.message for e in errors if e.message)
             raise ValueError(f"load failed: {msg}" if msg else "load failed")
@@ -403,8 +405,8 @@ class ControllerService:
                 'current_t_rel': ctrl.current_t_rel,
                 'safe_intervals': [list(iv) for iv in ctrl.safe_intervals],
                 'strips': [
-                    {'name': sc.strip_id, 'length': sc.length}
-                    for sc in self._strips
+                    {'name': name, 'length': length}
+                    for name, length in ctrl.session_strips
                 ],
             }
 
@@ -540,8 +542,8 @@ class ControllerService:
                 'duration': ctrl.duration,
                 'safe_intervals': [list(iv) for iv in ctrl.safe_intervals],
                 'strips': [
-                    {'name': sc.strip_id, 'length': sc.length}
-                    for sc in self._strips
+                    {'name': name, 'length': length}
+                    for name, length in ctrl.session_strips
                 ],
             }
         if kind == ControllerEvent.Kind.STATE_CHANGED:
@@ -735,6 +737,71 @@ class ControllerService:
         strip_ids = {dc.strip_id for dc in self._device_configs}
         if len(strip_ids) != len(self._device_configs):
             raise ValueError('duplicate strip_id topology requires targeted load support')
+
+    def _require_targets(self, targets) -> list[str] | None:
+        if targets is None:
+            return None
+        if not isinstance(targets, list):
+            raise ValueError("'targets' must be a list of device_uids")
+        out: list[str] = []
+        seen: set[str] = set()
+        for target in targets:
+            if not isinstance(target, str) or not target:
+                raise ValueError("'targets' must be a list of device_uids")
+            if target in seen:
+                raise ValueError(f'duplicate target: {target}')
+            seen.add(target)
+            out.append(target)
+        return out
+
+    def _resolve_manifest_target_groups(
+        self,
+        manifest,
+        targets: list[str] | None,
+    ) -> list[list[int]]:
+        manifest_strip_ids = [ms.strip_id for ms in manifest.strips]
+        if len(set(manifest_strip_ids)) != len(manifest_strip_ids):
+            raise ValueError('duplicate program strip ids are not supported')
+        manifest_strip_id_set = set(manifest_strip_ids)
+
+        if targets is None:
+            selected_indices = [
+                i for i, dc in enumerate(self._device_configs)
+                if dc.strip_id in manifest_strip_id_set
+            ]
+        else:
+            index_by_uid = {
+                dc.device_uid: i for i, dc in enumerate(self._device_configs)
+            }
+            selected_indices = []
+            for target in targets:
+                index = index_by_uid.get(target)
+                if index is None:
+                    raise ValueError(f'target not found: {target}')
+                selected_indices.append(index)
+
+        selected_by_strip: dict[str, list[int]] = {}
+        for index in selected_indices:
+            dc = self._device_configs[index]
+            if dc.strip_id not in manifest_strip_id_set:
+                raise ValueError(f'unused target: {dc.device_uid}')
+            selected_by_strip.setdefault(dc.strip_id, []).append(index)
+
+        target_groups: list[list[int]] = []
+        for ms in manifest.strips:
+            group = list(selected_by_strip.get(ms.strip_id, []))
+            if not group:
+                raise ValueError(f'missing targets for strip: {ms.strip_id}')
+            for index in group:
+                dc = self._device_configs[index]
+                if ms.length > dc.length:
+                    raise ValueError(
+                        f'strip length exceeds configured length for '
+                        f'{dc.strip_id} ({dc.device_uid})'
+                    )
+            target_groups.append(group)
+
+        return target_groups
 
     def _save_and_validate_candidate(self, candidate: dict) -> Config:
         try:

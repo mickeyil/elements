@@ -66,31 +66,43 @@ class _FakeDevice:
         self._t0_ns = 0
         self.is_connected = True
         self.ensure_connected_calls = 0
+        self.load_calls = 0
+        self.start_calls = 0
+        self.jump_calls = 0
+        self.pause_calls = 0
+        self.resume_calls = 0
+        self.stop_calls = 0
 
     def load(self, blob, gen):
+        self.load_calls += 1
         self._state = DeviceState.LOADED
         return True
 
     def start(self, t0_ns):
+        self.start_calls += 1
         self._t0_ns = t0_ns
         self._state = DeviceState.PLAYING
 
     def jump(self, t0_ns, t_rel, gen):
+        self.jump_calls += 1
         self._t0_ns = t0_ns
         if self._state != DeviceState.PLAYING:
             self._paused_t_rel = t_rel
             self._state = DeviceState.PAUSED
 
     def pause(self, now_ns):
+        self.pause_calls += 1
         if self._state == DeviceState.PLAYING:
             self._paused_t_rel = (now_ns - self._t0_ns) / 1e9
         self._state = DeviceState.PAUSED
 
     def resume(self, t0_ns):
+        self.resume_calls += 1
         self._t0_ns = t0_ns
         self._state = DeviceState.PLAYING
 
     def stop(self):
+        self.stop_calls += 1
         self._state = DeviceState.LOADED
 
     def tick_once(self, now_ns):
@@ -262,6 +274,22 @@ sp = spark(color='white', fade=1.0)
 sp.schedule(s.pixels('0-4'), at=0, duration=sec(0.5))
 """
 
+_MAIN_144_DSL = """\
+from elements.dsl import strip, spark, sec
+s = strip('main', length=144)
+sp = spark(color='white', fade=1.0)
+sp.schedule(s.pixels('0-143'), at=0, duration=sec(0.5))
+"""
+
+_LEFT_RIGHT_DSL = """\
+from elements.dsl import strip, spark, sec
+left = strip('left', length=5)
+right = strip('right', length=5)
+sp = spark(color='white', fade=1.0)
+sp.schedule(left.pixels('0-4'), at=0, duration=sec(0.5))
+sp.schedule(right.pixels('0-4'), at=0, duration=sec(0.5))
+"""
+
 
 def _make_config(n_devices=1):
     devices = []
@@ -298,6 +326,15 @@ def _make_mirrored_main_config() -> Config:
             strip_id='main',
             length=144,
         ),
+    ])
+
+
+def _make_mirrored_lr_config() -> Config:
+    return Config(frame_port=1, devices=[
+        DeviceConfig(1, 'sim-left', 'sim', '127.0.0.1', 9001, 'left', 5),
+        DeviceConfig(2, 'esp-left', 'esp32', '127.0.0.1', 9002, 'left', 5),
+        DeviceConfig(3, 'sim-right', 'sim', '127.0.0.1', 9003, 'right', 5),
+        DeviceConfig(4, 'esp-right', 'esp32', '127.0.0.1', 9004, 'right', 5),
     ])
 
 
@@ -840,31 +877,192 @@ sp.schedule(s.pixels(f'0-{s.length - 1}'), at=0, duration=sec(0.5))
         assert reply['ok'] is False
         assert reply['error'] == 'program broken is not loadable: missing BEAT'
 
-    def test_load_program_rejected_on_duplicate_strip_id_topology(self):
-        config = Config(frame_port=1, devices=[
-            DeviceConfig(1, 'sim-144', 'sim', '127.0.0.1', 9001, 'main', 144),
-            DeviceConfig(2, 'esp-144', 'esp32', '127.0.0.1', 9002, 'main', 144),
-        ])
-        entry = _make_program_entry(
-            'main_show',
-            source="""\
-from elements.dsl import strip, spark, sec
-s = strip('main', length=144)
-sp = spark(color='white', fade=1.0)
-sp.schedule(s.pixels('0-143'), at=0, duration=sec(0.5))
-""",
-        )
+    def test_load_program_mirrored_topology_without_targets_loads_all_matching_devices(self):
+        entry = _make_program_entry('main_show', source=_MAIN_144_DSL)
+        fake_devices = [_FakeDevice(), _FakeDevice()]
         svc = ControllerService(
-            config,
+            _make_mirrored_main_config(),
             receiver_factory=_NoopReceiver,
-            device_factory=_make_fake_factory([_FakeDevice(), _FakeDevice()]),
+            device_factory=_make_fake_factory(fake_devices),
             library_factory=lambda animations_dir: _FakeLibrary(animations_dir, [entry]),
         )
 
-        reply = svc.handle_cmd({'id': 15, 'cmd': 'load_program', 'program_id': 'main_show'})
+        reply = svc.handle_cmd({'id': 16, 'cmd': 'load_program', 'program_id': 'main_show'})
+
+        assert reply['ok'] is True
+        assert fake_devices[0].load_calls == 1
+        assert fake_devices[1].load_calls == 1
+
+        snap = svc.build_snapshot()
+        assert snap['session']['strips'] == [{'name': 'main', 'length': 144}]
+
+        json_msgs, _ = svc.tick_once()
+        events = _decode_json_msgs(json_msgs)
+        session_start = next(e for e in events if e.get('event') == 'session_start')
+        assert session_start['strips'] == [{'name': 'main', 'length': 144}]
+
+    def test_load_program_targets_subset_leaves_unselected_device_idle(self):
+        entry = _make_program_entry('main_show', source=_MAIN_144_DSL)
+        config = Config(frame_port=1, devices=[
+            DeviceConfig(1, 'sim-144', 'sim', '127.0.0.1', 9001, 'main', 144),
+            DeviceConfig(2, 'esp-144', 'esp32', '127.0.0.1', 9002, 'main', 144),
+            DeviceConfig(3, 'sim-bench', 'sim', '127.0.0.1', 9003, 'bench', 144),
+        ])
+        fake_devices = [_FakeDevice(), _FakeDevice(), _FakeDevice()]
+        svc = ControllerService(
+            config,
+            receiver_factory=_NoopReceiver,
+            device_factory=_make_fake_factory(fake_devices),
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir, [entry]),
+        )
+
+        reply = svc.handle_cmd({
+            'id': 17,
+            'cmd': 'load_program',
+            'program_id': 'main_show',
+            'targets': ['sim-144', 'esp-144'],
+        })
+
+        assert reply['ok'] is True
+        assert fake_devices[0].load_calls == 1
+        assert fake_devices[1].load_calls == 1
+        assert fake_devices[2].load_calls == 0
+
+        svc.handle_cmd({'id': 18, 'cmd': 'play'})
+        svc.handle_cmd({'id': 19, 'cmd': 'stop'})
+
+        assert fake_devices[0].start_calls == 1
+        assert fake_devices[1].start_calls == 1
+        assert fake_devices[2].start_calls == 0
+        assert fake_devices[2].stop_calls == 0
+
+    def test_load_program_targets_unknown_target_rejected(self):
+        entry = _make_program_entry('main_show', source=_MAIN_144_DSL)
+        fake_devices = [_FakeDevice(), _FakeDevice()]
+        svc = ControllerService(
+            _make_mirrored_main_config(),
+            receiver_factory=_NoopReceiver,
+            device_factory=_make_fake_factory(fake_devices),
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir, [entry]),
+        )
+
+        reply = svc.handle_cmd({
+            'id': 20,
+            'cmd': 'load_program',
+            'program_id': 'main_show',
+            'targets': ['missing'],
+        })
 
         assert reply['ok'] is False
-        assert reply['error'] == 'duplicate strip_id topology requires targeted load support'
+        assert reply['error'] == 'target not found: missing'
+
+    def test_load_program_targets_duplicate_target_rejected(self):
+        entry = _make_program_entry('main_show', source=_MAIN_144_DSL)
+        fake_devices = [_FakeDevice(), _FakeDevice()]
+        svc = ControllerService(
+            _make_mirrored_main_config(),
+            receiver_factory=_NoopReceiver,
+            device_factory=_make_fake_factory(fake_devices),
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir, [entry]),
+        )
+
+        reply = svc.handle_cmd({
+            'id': 21,
+            'cmd': 'load_program',
+            'program_id': 'main_show',
+            'targets': ['sim-144', 'sim-144'],
+        })
+
+        assert reply['ok'] is False
+        assert reply['error'] == 'duplicate target: sim-144'
+
+    def test_load_program_targets_missing_strip_coverage_rejected(self):
+        entry = _make_program_entry('duo_show', source=_LEFT_RIGHT_DSL)
+        fake_devices = [_FakeDevice(), _FakeDevice(), _FakeDevice(), _FakeDevice()]
+        svc = ControllerService(
+            _make_mirrored_lr_config(),
+            receiver_factory=_NoopReceiver,
+            device_factory=_make_fake_factory(fake_devices),
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir, [entry]),
+        )
+
+        reply = svc.handle_cmd({
+            'id': 22,
+            'cmd': 'load_program',
+            'program_id': 'duo_show',
+            'targets': ['sim-left', 'esp-left'],
+        })
+
+        assert reply['ok'] is False
+        assert reply['error'] == 'missing targets for strip: right'
+
+    def test_load_program_targets_unused_target_rejected(self):
+        entry = _make_program_entry('main_show', source=_MAIN_144_DSL)
+        config = Config(frame_port=1, devices=[
+            DeviceConfig(1, 'sim-144', 'sim', '127.0.0.1', 9001, 'main', 144),
+            DeviceConfig(2, 'sim-bench', 'sim', '127.0.0.1', 9002, 'bench', 144),
+        ])
+        fake_devices = [_FakeDevice(), _FakeDevice()]
+        svc = ControllerService(
+            config,
+            receiver_factory=_NoopReceiver,
+            device_factory=_make_fake_factory(fake_devices),
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir, [entry]),
+        )
+
+        reply = svc.handle_cmd({
+            'id': 23,
+            'cmd': 'load_program',
+            'program_id': 'main_show',
+            'targets': ['sim-144', 'sim-bench'],
+        })
+
+        assert reply['ok'] is False
+        assert reply['error'] == 'unused target: sim-bench'
+
+    def test_load_program_targets_shorter_target_rejected(self):
+        entry = _make_program_entry('main_show', source=_MAIN_144_DSL)
+        config = Config(frame_port=1, devices=[
+            DeviceConfig(1, 'sim-100', 'sim', '127.0.0.1', 9001, 'main', 100),
+        ])
+        fake_devices = [_FakeDevice()]
+        svc = ControllerService(
+            config,
+            receiver_factory=_NoopReceiver,
+            device_factory=_make_fake_factory(fake_devices),
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir, [entry]),
+        )
+
+        reply = svc.handle_cmd({
+            'id': 24,
+            'cmd': 'load_program',
+            'program_id': 'main_show',
+            'targets': ['sim-100'],
+        })
+
+        assert reply['ok'] is False
+        assert 'exceeds configured length' in reply['error']
+
+    def test_load_program_targets_multi_strip_mirror_succeeds(self):
+        entry = _make_program_entry('duo_show', source=_LEFT_RIGHT_DSL)
+        fake_devices = [_FakeDevice(), _FakeDevice(), _FakeDevice(), _FakeDevice()]
+        svc = ControllerService(
+            _make_mirrored_lr_config(),
+            receiver_factory=_NoopReceiver,
+            device_factory=_make_fake_factory(fake_devices),
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir, [entry]),
+        )
+
+        reply = svc.handle_cmd({'id': 25, 'cmd': 'load_program', 'program_id': 'duo_show'})
+
+        assert reply['ok'] is True
+        assert [dev.load_calls for dev in fake_devices] == [1, 1, 1, 1]
+
+        snap = svc.build_snapshot()
+        assert snap['session']['strips'] == [
+            {'name': 'left', 'length': 5},
+            {'name': 'right', 'length': 5},
+        ]
 
     def test_publish_program_same_source_keeps_cache_hit(self, monkeypatch):
         fake_library = _FakeLibrary('/tmp/programs')
