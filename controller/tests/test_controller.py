@@ -328,6 +328,7 @@ class TestLoad:
 
         assert ctrl.state == ControllerState.LOADED
         assert ctrl.session_id == 1
+        assert ctrl.session_target_groups == [[0], [1]]
         assert ctrl.epoch == 0
         assert ctrl.duration == pytest.approx(5.0)
 
@@ -498,6 +499,7 @@ class TestLoad:
         assert f.esp.load_calls == 1
         assert f.bench.load_calls == 0
         assert ctrl.session_strips == [('main', 5)]
+        assert ctrl.session_target_groups == [[0, 1]]
 
     def test_targeted_load_operates_only_on_active_targets(self):
         f = MirrorFixture()

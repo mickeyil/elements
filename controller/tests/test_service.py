@@ -841,6 +841,21 @@ sp.schedule(s.pixels(f'0-{s.length - 1}'), at=0, duration=sec(0.5))
         assert reply['ok'] is True
         assert reply['result']['session_id'] == 1
 
+        snap = svc.build_snapshot()
+        assert snap['session']['strips'] == [
+            {
+                'name': 'test',
+                'length': 5,
+                'targets': [
+                    {
+                        'device_id': 1,
+                        'device_uid': 'sim-1',
+                        'length': 5,
+                    }
+                ],
+            }
+        ]
+
     def test_load_program_resolves_implicit_strip_length_from_topology(self):
         source = """\
 from elements.dsl import strip, spark, sec
@@ -894,12 +909,30 @@ sp.schedule(s.pixels(f'0-{s.length - 1}'), at=0, duration=sec(0.5))
         assert fake_devices[1].load_calls == 1
 
         snap = svc.build_snapshot()
-        assert snap['session']['strips'] == [{'name': 'main', 'length': 144}]
+        assert snap['session']['strips'] == [
+            {
+                'name': 'main',
+                'length': 144,
+                'targets': [
+                    {'device_id': 1, 'device_uid': 'sim-144', 'length': 144},
+                    {'device_id': 2, 'device_uid': 'esp-144', 'length': 144},
+                ],
+            }
+        ]
 
         json_msgs, _ = svc.tick_once()
         events = _decode_json_msgs(json_msgs)
         session_start = next(e for e in events if e.get('event') == 'session_start')
-        assert session_start['strips'] == [{'name': 'main', 'length': 144}]
+        assert session_start['strips'] == [
+            {
+                'name': 'main',
+                'length': 144,
+                'targets': [
+                    {'device_id': 1, 'device_uid': 'sim-144', 'length': 144},
+                    {'device_id': 2, 'device_uid': 'esp-144', 'length': 144},
+                ],
+            }
+        ]
 
     def test_load_program_targets_subset_leaves_unselected_device_idle(self):
         entry = _make_program_entry('main_show', source=_MAIN_144_DSL)
@@ -1060,8 +1093,55 @@ sp.schedule(s.pixels(f'0-{s.length - 1}'), at=0, duration=sec(0.5))
 
         snap = svc.build_snapshot()
         assert snap['session']['strips'] == [
-            {'name': 'left', 'length': 5},
-            {'name': 'right', 'length': 5},
+            {
+                'name': 'left',
+                'length': 5,
+                'targets': [
+                    {'device_id': 1, 'device_uid': 'sim-left', 'length': 5},
+                    {'device_id': 2, 'device_uid': 'esp-left', 'length': 5},
+                ],
+            },
+            {
+                'name': 'right',
+                'length': 5,
+                'targets': [
+                    {'device_id': 3, 'device_uid': 'sim-right', 'length': 5},
+                    {'device_id': 4, 'device_uid': 'esp-right', 'length': 5},
+                ],
+            },
+        ]
+
+    def test_session_strip_metadata_keeps_logical_length_when_target_is_longer(self):
+        config = Config(frame_port=1, devices=[
+            DeviceConfig(1, 'esp-main', 'esp32', '127.0.0.1', 9001, 'main', 10),
+        ])
+        entry = _make_program_entry(
+            'short_show',
+            source="""\
+from elements.dsl import strip, spark, sec
+s = strip('main', length=5)
+sp = spark(color='white', fade=1.0)
+sp.schedule(s.pixels('0-4'), at=0, duration=sec(0.5))
+""",
+        )
+        svc = ControllerService(
+            config,
+            receiver_factory=_NoopReceiver,
+            device_factory=_make_fake_factory([_FakeDevice()]),
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir, [entry]),
+        )
+
+        reply = svc.handle_cmd({'id': 26, 'cmd': 'load_program', 'program_id': 'short_show'})
+
+        assert reply['ok'] is True
+        assert svc.build_snapshot()['session']['strips'] == [
+            {
+                'name': 'main',
+                'length': 5,
+                'targets': [
+                    {'device_id': 1, 'device_uid': 'esp-main', 'length': 10},
+                ],
+            }
         ]
 
     def test_publish_program_same_source_keeps_cache_hit(self, monkeypatch):

@@ -404,10 +404,7 @@ class ControllerService:
                 'duration': ctrl.duration,
                 'current_t_rel': ctrl.current_t_rel,
                 'safe_intervals': [list(iv) for iv in ctrl.safe_intervals],
-                'strips': [
-                    {'name': name, 'length': length}
-                    for name, length in ctrl.session_strips
-                ],
+                'strips': self._session_strips_to_wire(ctrl),
             }
 
         devices = []
@@ -541,10 +538,7 @@ class ControllerService:
                 'epoch': evt.epoch,
                 'duration': ctrl.duration,
                 'safe_intervals': [list(iv) for iv in ctrl.safe_intervals],
-                'strips': [
-                    {'name': name, 'length': length}
-                    for name, length in ctrl.session_strips
-                ],
+                'strips': self._session_strips_to_wire(ctrl),
             }
         if kind == ControllerEvent.Kind.STATE_CHANGED:
             return {
@@ -753,6 +747,33 @@ class ControllerService:
             seen.add(target)
             out.append(target)
         return out
+
+    def _session_strips_to_wire(self, ctrl: Controller) -> list[dict]:
+        strips = ctrl.session_strips
+        target_groups = ctrl.session_target_groups
+        if len(strips) != len(target_groups):
+            raise RuntimeError(
+                'session strip metadata mismatch between logical strips and target groups'
+            )
+
+        wire: list[dict] = []
+        for (name, length), group in zip(strips, target_groups):
+            targets: list[dict] = []
+            for index in group:
+                if not (0 <= index < len(self._device_configs)):
+                    raise RuntimeError(f'session target index out of range: {index}')
+                dc = self._device_configs[index]
+                targets.append({
+                    'device_id': dc.device_id,
+                    'device_uid': dc.device_uid,
+                    'length': dc.length,
+                })
+            wire.append({
+                'name': name,
+                'length': length,
+                'targets': targets,
+            })
+        return wire
 
     def _resolve_manifest_target_groups(
         self,

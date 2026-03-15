@@ -24,6 +24,7 @@ from elemctl.tui import (
     SessionSeekDialogState,
     SessionStateUpdate,
     SessionStripEntry,
+    SessionStripTargetEntry,
     ProgramManagerDialogState,
     ProgramPublishDialogState,
     ProgramCatalogEntry,
@@ -781,7 +782,14 @@ class TestDevicePanel:
                 'current_t_rel': 1.25,
                 'duration': 8.0,
                 'safe_intervals': [[0.0, 0.5]],
-                'strips': [{'name': 'main', 'length': 10}],
+                'strips': [{
+                    'name': 'main',
+                    'length': 10,
+                    'targets': [
+                        {'device_id': 1, 'device_uid': 'sim-144', 'length': 10},
+                        {'device_id': 2, 'device_uid': 'esp-144', 'length': 10},
+                    ],
+                }],
             },
             'devices': [],
             'programs': [],
@@ -796,7 +804,14 @@ class TestDevicePanel:
                 current_t_rel=1.25,
                 duration=8.0,
                 safe_intervals=[(0.0, 0.5)],
-                strips=[SessionStripEntry('main', 10)],
+                strips=[SessionStripEntry(
+                    'main',
+                    10,
+                    targets=[
+                        SessionStripTargetEntry(1, 'sim-144', 10),
+                        SessionStripTargetEntry(2, 'esp-144', 10),
+                    ],
+                )],
             ),
         )
 
@@ -2331,6 +2346,37 @@ class TestSessionCommands:
         finally:
             if app._log_fp is not None:
                 app._log_fp.close()
+
+    def test_session_summary_shows_target_device_uids(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        app._session = SessionInfo(
+            session_id=5,
+            playback_state='loaded',
+            epoch=0,
+            current_t_rel=0.0,
+            duration=8.0,
+            safe_intervals=[(0.0, 0.0)],
+            strips=[SessionStripEntry(
+                'main',
+                60,
+                targets=[
+                    SessionStripTargetEntry(1, 'sim-144', 60),
+                    SessionStripTargetEntry(2, 'esp-144', 60),
+                ],
+            )],
+        )
+
+        try:
+            summary = app._session_summary_text()
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        assert 'sim-144' in summary
+        assert 'esp-144' in summary
 
     def test_session_play_sends_play_command(self, tmp_path):
         app = TuiApp(

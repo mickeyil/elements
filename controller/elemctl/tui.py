@@ -15,7 +15,7 @@ import re
 import select
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from prompt_toolkit import Application
@@ -150,9 +150,17 @@ class ProgramCatalogUpdate:
 
 
 @dataclass(frozen=True)
+class SessionStripTargetEntry:
+    device_id: int | None
+    device_uid: str
+    length: int | None
+
+
+@dataclass(frozen=True)
 class SessionStripEntry:
     name: str
     length: int | None
+    targets: list[SessionStripTargetEntry] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -644,9 +652,24 @@ def _session_strip_from_dict(data: dict) -> SessionStripEntry | None:
     name = data.get('name')
     if not isinstance(name, str) or not name:
         return None
+    raw_targets = data.get('targets')
+    targets: list[SessionStripTargetEntry] = []
+    if isinstance(raw_targets, list):
+        for item in raw_targets:
+            if not isinstance(item, dict):
+                continue
+            device_uid = item.get('device_uid')
+            if not isinstance(device_uid, str) or not device_uid:
+                continue
+            targets.append(SessionStripTargetEntry(
+                device_id=_normalize_length(item.get('device_id')),
+                device_uid=device_uid,
+                length=_normalize_length(item.get('length')),
+            ))
     return SessionStripEntry(
         name=name,
         length=_normalize_length(data.get('length')),
+        targets=targets,
     )
 
 
@@ -2282,7 +2305,12 @@ class TuiApp:
         strips = session.strips or []
         if strips:
             strip_summary = ', '.join(
-                f'{strip.name} ({strip.length if strip.length is not None else "?"})'
+                (
+                    f'{strip.name} ({strip.length if strip.length is not None else "?"})'
+                    if not strip.targets else
+                    f'{strip.name} ({strip.length if strip.length is not None else "?"}) '
+                    f'[{", ".join(target.device_uid for target in strip.targets)}]'
+                )
                 for strip in strips
             )
             lines.append(f'Strips: {strip_summary}')

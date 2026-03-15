@@ -62,7 +62,14 @@ function rebuildStrips() {
 
     const length = document.createElement("span");
     length.className = "strip-length";
-    length.textContent = `${strip.length} px`;
+    const targets = Array.isArray(strip.targets)
+      ? strip.targets
+          .map((target) => target?.device_uid)
+          .filter((deviceUid) => typeof deviceUid === "string" && deviceUid.length)
+      : [];
+    length.textContent = targets.length
+      ? `${strip.length} px • ${targets.join(", ")}`
+      : `${strip.length} px`;
 
     meta.appendChild(name);
     meta.appendChild(length);

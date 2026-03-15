@@ -83,6 +83,7 @@ class Controller:
         self._active_strips: list[StripConfig] = []
         self._slot_for_active: list[int] = []
         self._session_manifest_strips: list[tuple[str, int]] = []
+        self._session_target_groups: list[list[int]] = []
         self._expected_gen: list[int] = []
         self._buckets: dict[int, _Bucket] = {}
 
@@ -137,6 +138,10 @@ class Controller:
     @property
     def session_strips(self) -> list[tuple[str, int]]:
         return list(self._session_manifest_strips)
+
+    @property
+    def session_target_groups(self) -> list[list[int]]:
+        return [list(group) for group in self._session_target_groups]
 
     # ------------------------------------------------------------------
     # Commands
@@ -232,9 +237,8 @@ class Controller:
                 new_slot_for_active.append(slot)
                 new_active_device_ids.add(id(self._strips[ci].device))
 
-        new_session_manifest_strips = [
-            (ms.strip_id, ms.length) for ms in manifest.strips
-        ]
+        new_session_manifest_strips = [(ms.strip_id, ms.length) for ms in manifest.strips]
+        new_session_target_groups = [list(group) for group in target_groups]
         prev_active_strips = list(self._active_strips)
         prev_active_device_ids = {id(s.device) for s in prev_active_strips}
         overlaps_previous_session = bool(prev_active_device_ids & new_active_device_ids)
@@ -262,6 +266,7 @@ class Controller:
                     self._active_strips = []
                     self._slot_for_active = []
                     self._session_manifest_strips = []
+                    self._session_target_groups = []
                     self._expected_gen = []
                 self._queue_event(
                     ControllerEvent.Kind.ERROR,
@@ -287,6 +292,7 @@ class Controller:
         self._active_strips = new_active_strips
         self._slot_for_active = new_slot_for_active
         self._session_manifest_strips = new_session_manifest_strips
+        self._session_target_groups = new_session_target_groups
         self._expected_gen = [self._gen] * len(self._active_strips)
 
         self._state = ControllerState.LOADED
