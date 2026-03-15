@@ -406,6 +406,42 @@ class TestSnapshotIdle:
         svc.tick_once()
         assert fake.tick_calls == 1
 
+    def test_snapshot_allows_duplicate_strip_ids_with_same_length(self):
+        config = Config(frame_port=1, devices=[
+            DeviceConfig(
+                device_id=1,
+                device_uid='sim-144',
+                device_type='sim',
+                host='127.0.0.1',
+                tcp_port=9001,
+                strip_id='main',
+                length=144,
+            ),
+            DeviceConfig(
+                device_id=2,
+                device_uid='esp-144',
+                device_type='esp32',
+                host='127.0.0.1',
+                tcp_port=9002,
+                strip_id='main',
+                length=144,
+            ),
+        ])
+        svc = ControllerService(
+            config,
+            receiver_factory=_NoopReceiver,
+            device_factory=_make_fake_factory([_FakeDevice(), _FakeDevice()]),
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir),
+        )
+
+        snap = svc.build_snapshot()
+
+        assert snap['session'] is None
+        assert snap['expected_count'] == 2
+        assert [d['device_uid'] for d in snap['devices']] == ['sim-144', 'esp-144']
+        assert [d['strip'] for d in snap['devices']] == ['main', 'main']
+        assert [d['length'] for d in snap['devices']] == [144, 144]
+
 
 class TestHandleLoad:
     def test_load_valid(self):
@@ -478,6 +514,34 @@ sp.schedule(s.pixels('0-5'), at=0, duration=sec(0.5))
         })
         assert reply['ok'] is False
         assert 'exceeds configured length' in reply['error']
+
+    def test_load_rejected_on_duplicate_strip_id_topology(self):
+        config = Config(frame_port=1, devices=[
+            DeviceConfig(1, 'sim-144', 'sim', '127.0.0.1', 9001, 'main', 144),
+            DeviceConfig(2, 'esp-144', 'esp32', '127.0.0.1', 9002, 'main', 144),
+        ])
+        svc = ControllerService(
+            config,
+            receiver_factory=_NoopReceiver,
+            device_factory=_make_fake_factory([_FakeDevice(), _FakeDevice()]),
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir),
+        )
+
+        reply = svc.handle_cmd({
+            'id': 14,
+            'cmd': 'load',
+            'source': """\
+from elements.dsl import strip, spark, sec
+s = strip('main', length=144)
+sp = spark(color='white', fade=1.0)
+sp.schedule(s.pixels('0-143'), at=0, duration=sec(0.5))
+""",
+            'beat': 1.0,
+            'duration': 0.5,
+        })
+
+        assert reply['ok'] is False
+        assert reply['error'] == 'duplicate strip_id topology requires targeted load support'
 
     def test_load_compile_error(self):
         svc, _ = _make_service()
@@ -674,6 +738,32 @@ sp.schedule(s.pixels(f'0-{s.length - 1}'), at=0, duration=sec(0.5))
 
         assert reply['ok'] is False
         assert reply['error'] == 'program broken is not loadable: missing BEAT'
+
+    def test_load_program_rejected_on_duplicate_strip_id_topology(self):
+        config = Config(frame_port=1, devices=[
+            DeviceConfig(1, 'sim-144', 'sim', '127.0.0.1', 9001, 'main', 144),
+            DeviceConfig(2, 'esp-144', 'esp32', '127.0.0.1', 9002, 'main', 144),
+        ])
+        entry = _make_program_entry(
+            'main_show',
+            source="""\
+from elements.dsl import strip, spark, sec
+s = strip('main', length=144)
+sp = spark(color='white', fade=1.0)
+sp.schedule(s.pixels('0-143'), at=0, duration=sec(0.5))
+""",
+        )
+        svc = ControllerService(
+            config,
+            receiver_factory=_NoopReceiver,
+            device_factory=_make_fake_factory([_FakeDevice(), _FakeDevice()]),
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir, [entry]),
+        )
+
+        reply = svc.handle_cmd({'id': 15, 'cmd': 'load_program', 'program_id': 'main_show'})
+
+        assert reply['ok'] is False
+        assert reply['error'] == 'duplicate strip_id topology requires targeted load support'
 
     def test_publish_program_same_source_keeps_cache_hit(self, monkeypatch):
         fake_library = _FakeLibrary('/tmp/programs')
@@ -1059,8 +1149,97 @@ class TestConfigMutations:
             'length': 5,
         })
 
+        assert reply['ok'] is True
+
+    def test_add_device_duplicate_strip_id_same_length_allowed(self, tmp_path):
+        config = _make_config(n_devices=1)
+        config.discovery_port = 6040
+        svc, path = _make_service_with_path(
+            tmp_path,
+            config,
+            device_factory=lambda *args, **kwargs: _FakeDevice(),
+        )
+
+        reply = svc.handle_cmd({
+            'id': 20,
+            'cmd': 'add_device',
+            'device_type': 'sim',
+            'device_uid': 'sim-2',
+            'strip_id': 'test',
+            'length': 5,
+        })
+
+        assert reply['ok'] is True
+        saved = load_config(str(path))
+        assert [(dc.device_uid, dc.strip_id, dc.length) for dc in saved.devices] == [
+            ('sim-1', 'test', 5),
+            ('sim-2', 'test', 5),
+        ]
+
+    def test_add_device_duplicate_strip_id_different_length_rejected(self, tmp_path):
+        config = _make_config(n_devices=1)
+        config.discovery_port = 6040
+        svc, _path = _make_service_with_path(
+            tmp_path,
+            config,
+            device_factory=lambda *args, **kwargs: _FakeDevice(),
+        )
+
+        reply = svc.handle_cmd({
+            'id': 21,
+            'cmd': 'add_device',
+            'device_type': 'sim',
+            'device_uid': 'sim-2',
+            'strip_id': 'test',
+            'length': 7,
+        })
+
         assert reply['ok'] is False
-        assert reply['error'] == 'strip id already exists: strip_b'
+        assert reply['error'] == "duplicate strip_id with different length: 'test'"
+
+    def test_edit_device_duplicate_strip_id_same_length_allowed(self, tmp_path):
+        config = _make_config(n_devices=2)
+        svc, path = _make_service_with_path(
+            tmp_path,
+            config,
+            device_factory=lambda *args, **kwargs: _FakeDevice(),
+        )
+
+        reply = svc.handle_cmd({
+            'id': 22,
+            'cmd': 'edit_device',
+            'target_device_uid': 'sim-1',
+            'device_uid': 'sim-1',
+            'strip_id': 'strip_b',
+            'length': 5,
+        })
+
+        assert reply['ok'] is True
+        saved = load_config(str(path))
+        assert [(dc.device_uid, dc.strip_id, dc.length) for dc in saved.devices] == [
+            ('sim-1', 'strip_b', 5),
+            ('sim-2', 'strip_b', 5),
+        ]
+
+    def test_edit_device_duplicate_strip_id_different_length_rejected(self, tmp_path):
+        config = _make_config(n_devices=2)
+        svc, _path = _make_service_with_path(
+            tmp_path,
+            config,
+            device_factory=lambda *args, **kwargs: _FakeDevice(),
+        )
+
+        reply = svc.handle_cmd({
+            'id': 23,
+            'cmd': 'edit_device',
+            'target_device_uid': 'sim-1',
+            'device_uid': 'sim-1',
+            'strip_id': 'strip_b',
+            'length': 7,
+        })
+
+        assert reply['ok'] is False
+        assert reply['error'] == "duplicate strip_id with different length: 'strip_b'"
 
     def test_mutations_reject_when_controller_loaded(self, tmp_path):
         config = _make_config()

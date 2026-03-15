@@ -151,6 +151,7 @@ class ControllerService:
 
     def _cmd_load(self, cmd: dict) -> dict:
         self._require_configured_devices_for_load()
+        self._require_unique_strip_id_topology_for_legacy_load()
         source = cmd.get('source')
         beat = cmd.get('beat')
         duration = cmd.get('duration')
@@ -174,6 +175,7 @@ class ControllerService:
 
     def _cmd_load_program(self, cmd: dict) -> dict:
         self._require_configured_devices_for_load()
+        self._require_unique_strip_id_topology_for_legacy_load()
         program_id = cmd.get('program_id')
         loop = cmd.get('loop', False)
         if not isinstance(program_id, str) or not program_id:
@@ -302,8 +304,6 @@ class ControllerService:
                 continue
             if dc.device_uid == device_uid:
                 raise ValueError(f'device uid already exists: {device_uid}')
-            if dc.strip_id == strip_id:
-                raise ValueError(f'strip id already exists: {strip_id}')
 
         candidate = copy.deepcopy(self._raw_doc)
         edit_device_doc(
@@ -720,6 +720,11 @@ class ControllerService:
     def _require_configured_devices_for_load(self) -> None:
         if not self._device_configs:
             raise ValueError('no configured devices')
+
+    def _require_unique_strip_id_topology_for_legacy_load(self) -> None:
+        strip_ids = {dc.strip_id for dc in self._device_configs}
+        if len(strip_ids) != len(self._device_configs):
+            raise ValueError('duplicate strip_id topology requires targeted load support')
 
     def _save_and_validate_candidate(self, candidate: dict) -> Config:
         try:

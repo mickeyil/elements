@@ -122,14 +122,24 @@ class TestLoadConfig:
         with pytest.raises(ConfigError, match="duplicate device_id"):
             load_config(_write_config(tmp_path, data))
 
-    def test_duplicate_strip_id(self, tmp_path):
+    def test_duplicate_strip_id_same_length_allowed(self, tmp_path):
         data = _valid_config(devices=[
             _valid_device(device_id=1, strip_id="main", tcp_port=9001,
                           device_uid="uid-1"),
             _valid_device(device_id=2, strip_id="main", tcp_port=9002,
                           device_uid="uid-2"),
         ])
-        with pytest.raises(ConfigError, match="duplicate strip_id"):
+        cfg = load_config(_write_config(tmp_path, data))
+        assert [dc.strip_id for dc in cfg.devices] == ["main", "main"]
+
+    def test_duplicate_strip_id_different_length_rejected(self, tmp_path):
+        data = _valid_config(devices=[
+            _valid_device(device_id=1, strip_id="main", tcp_port=9001,
+                          device_uid="uid-1", length=144),
+            _valid_device(device_id=2, strip_id="main", tcp_port=9002,
+                          device_uid="uid-2", length=100),
+        ])
+        with pytest.raises(ConfigError, match="duplicate strip_id with different length"):
             load_config(_write_config(tmp_path, data))
 
     def test_duplicate_endpoint(self, tmp_path):

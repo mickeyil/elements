@@ -990,14 +990,38 @@ class TestConstructor:
         assert ctrl.drain_events() == []
         assert ctrl.drain_program_frames() == []
 
-    def test_rejects_duplicate_strip_ids(self):
+    def test_allows_duplicate_strip_ids_in_idle_state(self):
         a = MockDevice()
         b = MockDevice()
-        with pytest.raises(ValueError):
-            Controller(
-                [StripConfig("same", 5, a), StripConfig("same", 5, b)],
-                clock=lambda: 0,
-            )
+        ctrl = Controller(
+            [StripConfig("same", 5, a), StripConfig("same", 5, b)],
+            clock=lambda: 0,
+        )
+        assert ctrl.state == ControllerState.IDLE
+
+    def test_load_rejects_duplicate_strip_id_topology(self):
+        a = MockDevice()
+        b = MockDevice()
+        ctrl = Controller(
+            [StripConfig("same", 5, a), StripConfig("same", 5, b)],
+            clock=lambda: 0,
+        )
+        manifest = CompiledManifest(
+            duration=1.0,
+            safe_intervals=[],
+            strips=[
+                CompiledStripArtifact("same", 5, b"\x00" * 6),
+                CompiledStripArtifact("same", 5, b"\x00" * 6),
+            ],
+        )
+
+        assert ctrl.load(manifest) is False
+        events = ctrl.drain_events()
+        assert any(
+            e.kind == ControllerEvent.Kind.ERROR
+            and e.message == "duplicate strip_id requires targeted load support: same"
+            for e in events
+        )
 
     def test_rejects_none_device(self):
         with pytest.raises(ValueError, match="no device"):

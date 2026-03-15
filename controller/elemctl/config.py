@@ -141,7 +141,7 @@ def load_config_obj(raw: dict) -> Config:
     devices: list[DeviceConfig] = []
     seen_ids: set[int] = set()
     seen_uids: set[str] = set()
-    seen_strip_ids: set[str] = set()
+    strip_lengths_by_id: dict[str, int] = {}
     seen_endpoints: set[tuple[str, int]] = set()
 
     for i, d in enumerate(devices_raw):
@@ -209,9 +209,13 @@ def load_config_obj(raw: dict) -> Config:
             raise ConfigError(f"duplicate device_uid: {d['device_uid']!r}")
         seen_uids.add(d["device_uid"])
 
-        if d["strip_id"] in seen_strip_ids:
-            raise ConfigError(f"duplicate strip_id: {d['strip_id']!r}")
-        seen_strip_ids.add(d["strip_id"])
+        existing_length = strip_lengths_by_id.get(d["strip_id"])
+        if existing_length is None:
+            strip_lengths_by_id[d["strip_id"]] = d["length"]
+        elif existing_length != d["length"]:
+            raise ConfigError(
+                f"duplicate strip_id with different length: {d['strip_id']!r}"
+            )
 
         endpoint = (d["host"], d["tcp_port"])
         if not _awaiting:

@@ -39,75 +39,83 @@ The following work is already in place:
 
 These decisions are settled unless a later milestone explicitly revisits them:
 
-- Keep `strip_id` unique in config for now.
-- Do **not** remove the current simple 1:1 `strip_id -> device` model yet.
-- Add a new **binding-based load path** for mirrored and selective loads.
-- Separate:
-  - **logical program strips** used by DSL programs
-  - **physical targets** identified by `device_uid`
+- Allow duplicate `strip_id` values in config.
+- Devices sharing a `strip_id` must also share the same configured `length`.
+- Keep routing **named** and config-driven:
+  - program strips are matched to devices by `strip_id`
+  - the load command chooses which devices participate
+- Extend `load_program` with an optional `targets` field rather than adding a second load command.
+- If `targets` is omitted, `load_program` should load to all configured devices whose `strip_id` is used by the program.
+- If `targets` is provided, only that selected subset should participate in the session.
 - Compilation should stay logical-topology-based.
-- Binding fan-out should happen after compile, during load.
-- For bound targets:
+- For selected targets:
   - target length must be `>=` program strip length
-  - longer targets are allowed; the tail stays dark
+  - longer targets are allowed; the tail stays dark naturally
   - shorter targets are rejected immediately
-- Scene loading should come **after** binding-based single-program loads work.
+- Raw source `load` stays unchanged for now.
+- Scene loading should come **after** named-routing single-program loads work.
 - Scene v1 should use one global session/timeline, not multiple independent concurrent playback clocks.
 
 ## Active milestone
 
-### Milestone 1: Binding-based mirrored loads
+### Milestone 1: Named-routing targeted loads backend
 
-**Goal:** Allow one logical strip program to be sent to one or more physical devices simultaneously, for example binding `main` to both `sim-144` and `esp-144` in the same synchronized session.
+**Goal:** Allow one logical strip program to be sent to one or more physical devices simultaneously, for example routing `main` to both `sim-144` and `esp-144` in the same synchronized session.
 
 **Command shape target:**
 
 ```json
 {
-  "cmd": "load_program_bindings",
+  "cmd": "load_program",
   "program_id": "blue_wave",
-  "bindings": {
-    "main": ["sim-144", "esp-144"]
-  },
+  "targets": ["sim-144", "esp-144"],
   "loop": true
 }
 ```
 
-#### Round 1: Service and protocol shape
+#### Round 1: Config/model change
 
-- Add a new controller command:
-  - `load_program_bindings`
-- Define command validation rules:
-  - `program_id` must exist
-  - every logical strip named in `bindings` must exist in the compiled program
-  - every bound `device_uid` must exist in config/runtime inventory
-  - every program strip must be bound at least once
-  - no physical device may appear in two different logical-strip bindings in one load
-  - bound device length must be `>=` program strip length
-- Keep existing `load_program` unchanged for the simple 1:1 case.
-- Add protocol/docs coverage for the new command.
-
-#### Round 2: Session-specific active target set
-
-- Change the load path so a session is built from the **bound target subset**, not implicitly from all configured devices.
-- Prefer a session-specific controller target set over introducing partial-active logic across the entire existing controller.
-- Ensure unbound configured devices remain idle.
-- Make session end detection, pause/play/seek state, and frame assembly operate only on active targets for the current session.
-
-#### Round 3: Mirrored artifact fan-out
-
-- Compile the program once using logical strips.
-- Reuse the same compiled strip artifact for all targets bound to the same logical strip.
-- Preserve artifact-cache behavior:
-  - cache keys remain based on logical source/topology
-  - binding fan-out does not require recompilation
+- Relax config validation to allow duplicate `strip_id` values.
+- Add a new validation rule:
+  - all devices sharing a `strip_id` must have the same configured `length`
+- Remove or adapt runtime assumptions that reject duplicate `strip_id` during config/topology preparation.
 - Add tests for:
-  - one logical strip -> two physical targets
-  - mixed single-target and mirrored-target bindings
-  - longer-target dark-tail behavior
+  - duplicate same-length `strip_id` accepted
+  - duplicate different-length `strip_id` rejected
+
+#### Round 2: Compile/topology handling
+
+- Update topology-backed strip-length resolution so duplicate `strip_id` groups do not collide incorrectly.
+- Derive compile-time logical strip lengths from validated same-length `strip_id` groups.
+- Preserve current artifact-cache behavior.
+- Add tests for:
+  - `strip("main")` resolution with mirrored devices
+  - topology fingerprint behavior with duplicate `strip_id` groups
+
+#### Round 3: Targeted load end to end
+
+- Extend `load_program` with optional `targets`.
+- Define command semantics:
+  - if `targets` is omitted, load to all configured devices whose `strip_id` is used by the program
+  - if `targets` is provided, load only to that subset
+- Validate:
+  - `program_id` exists
+  - every target exists
+  - no duplicate target ids in the request
+  - every program strip is covered by at least one selected device with matching `strip_id`
+  - selected devices whose `strip_id` is unused by the program are ignored for now
+  - selected target length is `>=` program strip length
+- Make the runtime session operate only on selected targets.
+- Keep unselected devices idle.
+- Fan out each compiled strip blob to all selected devices whose `strip_id` matches it.
+- Add tests for:
+  - single-strip mirrored load to sim + esp
+  - multi-strip mirrored load across left/right pairs
+  - missing-coverage rejection
+  - duplicate target rejection
   - shorter-target rejection
 
-#### Round 4: Target-aware session metadata and observer wire shape
+#### Round 4: Target-aware observer metadata
 
 - Update controller/session metadata so observers can distinguish:
   - logical strip name
@@ -120,14 +128,13 @@ These decisions are settled unless a later milestone explicitly revisits them:
   - `session_start`
   - frame consumer assumptions
 
-#### Round 5: Service-level verification and docs
+#### Round 5: Docs and cleanup
 
-- Add service tests for:
-  - mirrored `load_program_bindings`
-  - missing/duplicate/invalid bindings
-  - inactive devices staying idle
-  - looped mirrored loads
-- Update `docs/controller.md` with the binding model and semantics.
+- Update `docs/controller.md` with:
+  - duplicate `strip_id` semantics
+  - mirrored named-routing load semantics
+  - `load_program(..., targets=[...])`
+- Update roadmap/task references if implementation details shifted during the backend work.
 
 ## Next milestone
 
@@ -146,26 +153,25 @@ These decisions are settled unless a later milestone explicitly revisits them:
 
 #### Round 2: Validation and submission
 
-- Submit single-strip target selections via `load_program_bindings`.
+- Submit single-strip target selections via `load_program(..., targets=[...])`.
 - Show inline validation errors for:
   - no selected targets
   - ineligible targets
   - controller-side binding rejection
 - Preserve the existing reply-aware modal behavior.
 
-#### Round 3: Multi-strip program bindings UI
+#### Round 3: Multi-strip program target-selection UI
 
-- Add a follow-up binding view for multi-strip programs:
-  - one logical strip at a time
-  - assign one or more physical devices per logical strip
-- Ensure the UI prevents assigning the same physical device twice within one load.
-- Add TUI tests for mirrored single-strip and multi-strip binding flows.
+- Add a follow-up selection view for multi-strip programs:
+  - devices grouped by `strip_id`
+  - selection remains device-based, routing remains named/config-driven
+- Add TUI tests for mirrored single-strip and multi-strip target-selection flows.
 
 ## Later milestone
 
 ### Milestone 3: Scene loading
 
-**Goal:** Load multiple programs/bindings at once for larger installations.
+**Goal:** Load multiple program/target groups at once for larger installations.
 
 **Recommended scene shape:**
 
@@ -175,16 +181,11 @@ These decisions are settled unless a later milestone explicitly revisits them:
   "entries": [
     {
       "program_id": "blue_wave",
-      "bindings": {
-        "main": ["sim-144", "esp-144"]
-      }
+      "targets": ["sim-144", "esp-144"]
     },
     {
       "program_id": "other_piece",
-      "bindings": {
-        "left": ["esp-left"],
-        "right": ["esp-right"]
-      }
+      "targets": ["esp-left", "esp-right"]
     }
   ]
 }
@@ -197,7 +198,7 @@ These decisions are settled unless a later milestone explicitly revisits them:
 - Define and document the scene schema.
 - Validate:
   - each entry program exists
-  - each entry bindings map is valid
+  - each entry target list is valid
   - no physical target is assigned twice across the whole scene
 
 #### Round 2: Global-session orchestration
@@ -234,4 +235,4 @@ If asked "what's next?" and no newer decision has superseded this file, the answ
 2. then **Milestone 1, Round 2**
 3. then **Milestone 1, Round 3**
 
-Do not jump to scenes before binding-based single-program loads work end to end.
+Do not jump to scenes before named-routing single-program loads work end to end.

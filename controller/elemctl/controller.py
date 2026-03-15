@@ -63,13 +63,11 @@ class Controller:
         clock: Callable[[], int] = time.monotonic_ns,
     ):
         self._strips = list(strips)
-        self._strip_id_to_index: dict[str, int] = {}
+        self._strip_id_to_indices: dict[str, list[int]] = {}
         for i, s in enumerate(self._strips):
             if s.device is None:
                 raise ValueError(f"strip {s.strip_id!r} has no device")
-            if s.strip_id in self._strip_id_to_index:
-                raise ValueError(f"duplicate strip_id: {s.strip_id}")
-            self._strip_id_to_index[s.strip_id] = i
+            self._strip_id_to_indices.setdefault(s.strip_id, []).append(i)
 
         self._clock = clock
 
@@ -152,13 +150,20 @@ class Controller:
         seen = [False] * len(self._strips)
 
         for pi, ms in enumerate(manifest.strips):
-            ci = self._strip_id_to_index.get(ms.strip_id)
-            if ci is None:
+            canonical_indices = self._strip_id_to_indices.get(ms.strip_id)
+            if canonical_indices is None:
                 self._queue_event(
                     ControllerEvent.Kind.ERROR,
                     f"unknown strip_id: {ms.strip_id}",
                 )
                 return False
+            if len(canonical_indices) != 1:
+                self._queue_event(
+                    ControllerEvent.Kind.ERROR,
+                    f"duplicate strip_id requires targeted load support: {ms.strip_id}",
+                )
+                return False
+            ci = canonical_indices[0]
             if seen[ci]:
                 self._queue_event(
                     ControllerEvent.Kind.ERROR,
