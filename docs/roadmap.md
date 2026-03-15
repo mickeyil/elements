@@ -56,7 +56,7 @@ These decisions are settled unless a later milestone explicitly revisits them:
 - Scene loading should come **after** named-routing single-program loads work.
 - Scene v1 should use one global session/timeline, not multiple independent concurrent playback clocks.
 
-## Active milestone
+## Completed milestone
 
 ### Milestone 1: Named-routing targeted loads backend
 
@@ -136,7 +136,9 @@ These decisions are settled unless a later milestone explicitly revisits them:
   - `load_program(..., targets=[...])`
 - Update roadmap/task references if implementation details shifted during the backend work.
 
-## Next milestone
+Milestone 1 is complete.
+
+## Active milestone
 
 ### Milestone 2: TUI target-selection flow
 
@@ -231,8 +233,8 @@ These are valid future items, but they are not the next implementation target:
 
 If asked "what's next?" and no newer decision has superseded this file, the answer is:
 
-1. **Milestone 1, Round 1**
-2. then **Milestone 1, Round 2**
-3. then **Milestone 1, Round 3**
+1. **Milestone 2, Round 1**
+2. then **Milestone 2, Round 2**
+3. then **Milestone 2, Round 3**
 
-Do not jump to scenes before named-routing single-program loads work end to end.
+Do not jump to scenes before the TUI target-selection flow is usable end to end.

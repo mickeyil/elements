@@ -8,7 +8,7 @@ A static config file on the base station is the single source of truth for the p
 
 - controller-level runtime settings (`frame_port`, optional `discovery_port`, optional UI/runtime paths)
 - the inventory of known devices
-- the mapping from logical `strip_id` values used by the DSL to concrete devices
+- the mapping from logical `strip_id` values used by the DSL to one or more concrete devices
 
 When the server is running, it owns this config as live state. TUI mutations such as `/newdevice` and `/rmdevice` are sent to the server, which validates the change, atomically rewrites the config file, and updates runtime state immediately.
 
@@ -55,14 +55,27 @@ When the server is running, it owns this config as live state. TUI mutations suc
 | `device_uid` | Controller, discovery | Runtime | Stable device identity (for example a MAC or `sim-1`) |
 | `device_type` | Controller | Runtime | `"sim"` or `"esp32"` — determines debug capability and topology rules |
 | `host` / `tcp_port` | Controller | Runtime | Static endpoint when discovery is disabled; `host=""` + `tcp_port=0` means "await discovery" |
-| `strip_id` | Controller, compiler | Compile | Logical strip name — matches DSL `strip("main_left", ...)` |
+| `strip_id` | Controller, compiler | Compile | Logical strip name — matches DSL `strip("main_left", ...)`; mirrored devices may share it |
 | `length` | Controller, compiler | Compile | Validated against DSL-declared strip length at compile time |
 
 The compile-time fields are `strip_id` and `length`. Runtime fields control discovery, transport, and device identity.
 
+### Duplicate `strip_id` groups
+
+`device_uid` remains globally unique. `strip_id` does not.
+
+Multiple devices may share the same `strip_id` when they are mirrored counterparts of the same logical strip, for example:
+
+- `sim-144` with `strip_id="main"`
+- `esp-144` with `strip_id="main"`
+
+All devices sharing a `strip_id` must also share the same configured `length`. This is required so the controller can treat them as one logical strip topology for compilation and cache keys.
+
 ### Relationship to the DSL
 
-The DSL declares strip names and lengths: `strip("main_left", length=150)`. The config maps those names to physical devices. The controller validates at compile time that DSL-declared lengths match config-declared lengths. If they disagree, compilation fails with a clear error.
+The DSL declares strip names and lengths: `strip("main_left", length=150)`. Under controller-backed compile paths, it may also omit the length entirely: `strip("main_left")`. The config provides the logical strip length in that case.
+
+The controller validates that a program strip does not exceed the configured logical strip length. Shorter program strips are allowed — the program can intentionally target only the first `N` pixels of a longer configured strip.
 
 ### Relationship to device discovery
 
@@ -103,7 +116,9 @@ The blob format and decoder are unchanged. The manifest is controller-level meta
 
 ### Compilation and caching
 
-Raw `load` recompiles from source on every request. `load_program` resolves a controller-owned library entry and uses an in-memory artifact cache keyed by source hash and strip topology. Changing the strip inventory invalidates cache hits automatically because the topology fingerprint changes.
+Raw `load` recompiles from source on every request. `load_program` resolves a controller-owned library entry and uses an in-memory artifact cache keyed by source hash and logical strip topology.
+
+The topology fingerprint is based on logical `strip_id -> length` groups, not on individual physical devices. Adding a mirrored counterpart with the same `strip_id` and `length` does not invalidate artifact-cache hits.
 
 ### Identity model
 
@@ -314,13 +329,13 @@ The controller is the long-running authority on the base station.
 
 2. **Owns the program library** — scans `controller.animations_dir`, accepts `publish_program` updates, extracts `BEAT` / `DURATION` metadata from known `.py` programs, and exposes the catalog to clients via snapshots and `programs_updated`.
 
-3. **Compiles programs** — either receives raw DSL source (`load`) or resolves a known library entry (`load_program`), compiles it using the Python compiler, validates strip lengths against config, and produces a manifest with per-strip blobs, duration, and global safe intervals. Library-backed loads use an in-memory artifact cache keyed by source hash and strip topology.
+3. **Compiles programs** — either receives raw DSL source (`load`) or resolves a known library entry (`load_program`), compiles it using the Python compiler, validates strip lengths against logical config topology, and produces a manifest with per-strip blobs, duration, and global safe intervals. Library-backed loads use an in-memory artifact cache keyed by source hash and logical strip topology.
 
 4. **Discovers known devices** — listens for UDP HELLO packets, matches them by `device_uid`, caches live `(host, tcp_port)` addresses, and updates known devices in place.
 
 5. **Maintains TCP device connections** — reconnects disconnected devices, sends `CMD_CONFIGURE` after connect, and preserves existing device objects across config changes when possible.
 
-6. **Routes blobs and playback commands** — maps manifest strips by `strip_id` to devices, sends LOAD/START/JUMP/PAUSE/RESUME/STOP over TCP, and waits for ACK where required.
+6. **Routes blobs and playback commands** — maps manifest strips by `strip_id` to selected devices, fans one logical strip blob out to mirrored physical targets when needed, sends LOAD/START/JUMP/PAUSE/RESUME/STOP over TCP, and waits for ACK where required.
 
 7. **Manages sessions** — assigns `session_id` on each load, tracks `epoch` (incremented on seek/jump/restart), and exposes current playback state to clients.
 
@@ -336,26 +351,31 @@ The controller is the long-running authority on the base station.
 
 ```python
 # Controller resolves a known program id from its library
-def load_program(self, program_id: str):
+def load_program(self, program_id: str, targets: list[str] | None = None):
     source, beat, duration = self.program_library.lookup(program_id)
 
     # 1. Compile (or cache-hit) to a manifest: ordered per-strip blobs + metadata
     manifest = self.compile_or_get_cached(source, beat=beat, duration=duration)
 
-    # 2. Validate every strip in the manifest against configured inventory
-    for strip_artifact in manifest.strips:
-        device = self.device_for_strip(strip_artifact.strip_id)  # by strip_id
+    # 2. Resolve the active physical targets for this load
+    #    - if targets is omitted, select all devices whose strip_id is used
+    #    - if targets is provided, only that subset participates
+    target_groups = self.resolve_targets_by_strip_id(manifest, targets)
 
-    # 3. Build a controller session and route blobs to the mapped devices
+    # 3. Validate every strip group in the manifest against selected inventory
+    for strip_artifact in manifest.strips:
+        self.validate_target_group(strip_artifact, target_groups)
+
+    # 4. Build a controller session and route blobs to the mapped devices
     self.session_id += 1
     self.epoch = 0
     self.gen += 1
-    for strip_artifact in manifest.strips:
-        device = self.device_for_strip(strip_artifact.strip_id)
-        self.send_load(device.conn, device.device_id, self.gen, strip_artifact.blob)
+    for strip_artifact, group in zip(manifest.strips, target_groups):
+        for device in group:
+            self.send_load(device.conn, device.device_id, self.gen, strip_artifact.blob)
 
-    # 4. Publish session_start and wait for later play/pause/seek commands
-    self.publish_session_start(manifest)
+    # 5. Publish session_start and wait for later play/pause/seek commands
+    self.publish_session_start(manifest, target_groups)
 ```
 
 ---
@@ -419,10 +439,11 @@ Commands carry an `id` (client-assigned, incrementing counter) that the controll
 {"id": 6, "cmd": "status"}
 {"id": 7, "cmd": "rescan_programs"}
 {"id": 8, "cmd": "load_program", "program_id": "demo_main", "loop": true}
-{"id": 9, "cmd": "publish_program", "program_id": "demo_main", "source": "...python source..."}
-{"id": 10, "cmd": "add_device", "device_type": "sim", "device_uid": "sim-3", "strip_id": "aux", "length": 30}
-{"id": 11, "cmd": "edit_device", "target_device_uid": "sim-3", "device_uid": "sim-3", "strip_id": "aux", "length": 60}
-{"id": 12, "cmd": "remove_device", "device_uid": "sim-3"}
+{"id": 9, "cmd": "load_program", "program_id": "demo_main", "targets": ["sim-144", "esp-144"], "loop": true}
+{"id": 10, "cmd": "publish_program", "program_id": "demo_main", "source": "...python source..."}
+{"id": 11, "cmd": "add_device", "device_type": "sim", "device_uid": "sim-3", "strip_id": "aux", "length": 30}
+{"id": 12, "cmd": "edit_device", "target_device_uid": "sim-3", "device_uid": "sim-3", "strip_id": "aux", "length": 60}
+{"id": 13, "cmd": "remove_device", "device_uid": "sim-3"}
 ```
 
 `play` means both fresh start and resume — the controller decides which device command to send based on current state (CMD_START from LOADED/ENDED, CMD_RESUME from PAUSED). The client does not need to distinguish between them.
@@ -432,6 +453,17 @@ Commands carry an `id` (client-assigned, incrementing counter) that the controll
 `edit_device` only allows changing `device_uid`, `strip_id`, and `length`. `device_type` is immutable; changing a device from `sim` to `esp32` is treated as remove + add, not edit.
 
 `load` and `load_program` require at least one configured device. With an empty inventory they fail cleanly with `no configured devices`.
+
+`load_program` accepts an optional `targets` list of `device_uid` values.
+
+- If `targets` is omitted, the controller selects all configured devices whose `strip_id` appears in the compiled program.
+- If `targets` is provided, only that subset participates in the session.
+- Every program strip must be covered by at least one selected device with matching `strip_id`.
+- Selected devices whose `strip_id` is unused by the program are rejected.
+- Longer selected devices are allowed; the logical program strip still defines the rendered prefix length and the physical tail stays dark naturally.
+- Shorter selected devices are rejected.
+
+Raw `load` remains the legacy unique-topology path. It does not accept `targets`, and it rejects duplicate-`strip_id` topologies with `duplicate strip_id topology requires targeted load support`.
 
 **Controller → Client (replies):**
 
@@ -455,7 +487,12 @@ Asynchronous state changes and broadcasts — not tied to a specific command.
 {"type": "event", "event": "session_start", "session_id": 42,
  "epoch": 1,
  "duration": 612.0, "safe_intervals": [[0.0, 0.0], [12.4, 13.0], ...],
- "strips": [{"name": "main_left", "length": 150}, {"name": "main_right", "length": 150}]}
+ "strips": [
+   {"name": "main_left", "length": 150,
+    "targets": [{"device_id": 1, "device_uid": "sim-left", "length": 150}]},
+   {"name": "main_right", "length": 150,
+    "targets": [{"device_id": 2, "device_uid": "sim-right", "length": 150}]}
+ ]}
 {"type": "event", "event": "state", "state": "playing", "epoch": 2, "session_id": 42}
 {"type": "event", "event": "loop", "epoch": 3, "session_id": 42}
 {"type": "event", "event": "device_status",
@@ -474,15 +511,15 @@ Asynchronous state changes and broadcasts — not tied to a specific command.
 - **`programs_updated`** — program library changed by `rescan_programs` or `publish_program`. Carries the full current catalog so writer and observer clients can refresh without polling
 - **`error`** — async failure. Human-oriented — UI shows notification/log. Current implementation emits a single human-readable `message` field.
 
-The `strips` array in `session_start` defines the **canonical strip order and lengths** for the session. Program frames pack RGB blobs in this exact order with no per-entry headers — the client uses the strip list to slice the payload.
+The `strips` array in `session_start` defines the **canonical logical strip order and lengths** for the session. Program frames pack RGB blobs in this exact order with no per-entry headers — the client uses the strip list to slice the payload. Each strip entry may also include a `targets` array describing the physical devices currently bound to that logical strip.
 
 **Command semantics summary:**
 
 | Command | Controller-complete means | Reply result |
 |---------|--------------------------|-------------|
-| `load` | Compiled from source, all configured devices ACKed LOAD, session created. Rejected with `no configured devices` when inventory is empty. | `{"session_id": N}` |
-| `load_program` | Known program resolved from the controller-owned library, compiled or cache-hit, all configured devices ACKed LOAD, session created. Rejected with `no configured devices` when inventory is empty. | `{"session_id": N}` |
-| `publish_program` | Program source stored under `program_id`, library entry updated, `programs_updated` broadcast queued. Does not load or play the program. Broken source is still stored, with `error` set in the returned entry. | `{"program": {...}}` |
+| `load` | Compiled from source, unique-topology legacy load completed, all configured devices ACKed LOAD, session created. Rejected with `no configured devices` when inventory is empty, and with `duplicate strip_id topology requires targeted load support` on mirrored topologies. | `{"session_id": N}` |
+| `load_program` | Known program resolved from the controller-owned library, compiled or cache-hit, matching selected devices ACKed LOAD, session created. If `targets` is omitted, all matching devices participate. Rejected with `no configured devices` when inventory is empty. | `{"session_id": N}` |
+| `publish_program` | Program source validated, then stored under `program_id`, library entry updated, `programs_updated` broadcast queued. Does not load or play the program. Broken source is rejected and not stored. | `{"program": {...}}` |
 | `play` | State updated; sends START (from LOADED/ENDED) or RESUME (from PAUSED) to all devices + audio | `{}` |
 | `pause` | CMD_PAUSE sent to all devices, audio paused, state updated | `{}` |
 | `seek` | Time resolved/snapped, JUMP or DEBUG_SEEK sent, epoch updated | `{}` |
@@ -530,13 +567,25 @@ The snapshot schema matches `build_snapshot()` in `service.py`:
     "current_t_rel": 30.5,
     "safe_intervals": [[0.0, 0.0], [12.4, 13.0], [28.0, 29.5]],
     "strips": [
-      {"name": "main_left", "length": 150},
-      {"name": "main_right", "length": 150}
+      {
+        "name": "main_left",
+        "length": 150,
+        "targets": [
+          {"device_id": 1, "device_uid": "sim-1", "length": 150}
+        ]
+      },
+      {
+        "name": "main_right",
+        "length": 150,
+        "targets": [
+          {"device_id": 2, "device_uid": "sim-2", "length": 150}
+        ]
+      }
     ]
   },
   "devices": [
-    {"device_id": 0, "device_uid": "sim-1", "strip": "main_left", "length": 150, "device_type": "sim", "connected": true},
-    {"device_id": 1, "device_uid": "sim-2", "strip": "main_right", "length": 150, "device_type": "sim", "connected": true}
+    {"device_id": 1, "device_uid": "sim-1", "strip": "main_left", "length": 150, "device_type": "sim", "connected": true},
+    {"device_id": 2, "device_uid": "sim-2", "strip": "main_right", "length": 150, "device_type": "sim", "connected": true}
   ]
 }
 ```
@@ -566,7 +615,7 @@ With an empty install, the same snapshot shape is used with `expected_count: 0`,
 | `online_count` / `expected_count` | Quick device health summary. `expected_count` is currently the configured inventory size. |
 | `programs` | Current controller-owned program catalog. Each entry includes `program_id`, extracted `beat`, extracted `duration`, and `error` if the file is present but not loadable |
 | `session` | Active session if any — includes all metadata needed to render the seek bar and receive frames. `null` if no program is loaded |
-| `session.strips` | Canonical strip order and lengths — defines how program frame payloads are sliced |
+| `session.strips` | Canonical logical strip order and lengths — defines how program frame payloads are sliced. Each strip may also include `targets`, the currently bound physical devices. |
 | `devices` | Per-device status: `device_id` (numeric), `device_uid` (stable identity), `strip`, `length`, `device_type` (`"sim"` or `"esp32"`), `connected` (boolean) |
 
 After the snapshot, the controller sends incremental events (`state`, `session_start`, etc.) and program frames as they occur. The snapshot is never re-sent mid-connection — it's a connect-time-only message.
