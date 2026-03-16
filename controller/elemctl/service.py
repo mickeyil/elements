@@ -681,12 +681,15 @@ class ControllerService:
 
     @staticmethod
     def _program_to_dict(entry: ProgramEntry) -> dict:
-        return {
+        result = {
             'program_id': entry.program_id,
             'beat': entry.beat,
             'duration': entry.duration,
             'error': entry.error,
         }
+        if entry.strips is not None:
+            result['strips'] = list(entry.strips)
+        return result
 
     def _programs_to_wire(self) -> list[dict]:
         return [self._program_to_dict(entry) for entry in self._library.list_programs()]

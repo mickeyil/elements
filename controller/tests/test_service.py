@@ -20,7 +20,7 @@ from elemctl.config import Config, DeviceConfig, load_config, load_config_obj
 from elemctl.controller import ControllerState
 from elemctl.device import DeviceState
 from elemctl.library import ProgramEntry
-from elemctl.program_metadata import extract_metadata
+from elemctl.program_metadata import extract_metadata, extract_strips
 from elemctl.service import ControllerService
 from elemctl.server import UdsServer
 from elemctl.uds_wire import (
@@ -242,6 +242,7 @@ class _FakeLibrary:
             beat=beat,
             duration=duration,
             error=None,
+            strips=extract_strips(source, f'/tmp/{program_id}.py'),
         )
 
         self._entries = [
@@ -345,6 +346,7 @@ def _make_program_entry(
     beat: float = 1.0,
     duration: float = 0.5,
     error: str | None = None,
+    strips: list[str] | None = None,
 ) -> ProgramEntry:
     source_hash = None if source is None else hashlib.sha256(source.encode('utf-8')).hexdigest()
     return ProgramEntry(
@@ -355,6 +357,7 @@ def _make_program_entry(
         beat=None if error is not None else beat,
         duration=None if error is not None else duration,
         error=error,
+        strips=None if error is not None else strips,
     )
 
 
@@ -649,6 +652,34 @@ class TestProgramLibraryCommands:
             {'program_id': 'zeta', 'beat': 1.0, 'duration': 0.5, 'error': None},
         ]
 
+    def test_snapshot_includes_program_strip_summaries(self):
+        entries = [
+            _make_program_entry('ambient', strips=['main']),
+            _make_program_entry('duo_show', strips=['left', 'right']),
+        ]
+        svc, _ = _make_service(
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir, entries),
+        )
+
+        snap = svc.build_snapshot()
+
+        assert snap['programs'] == [
+            {
+                'program_id': 'ambient',
+                'beat': 1.0,
+                'duration': 0.5,
+                'error': None,
+                'strips': ['main'],
+            },
+            {
+                'program_id': 'duo_show',
+                'beat': 1.0,
+                'duration': 0.5,
+                'error': None,
+                'strips': ['left', 'right'],
+            },
+        ]
+
     def test_rescan_programs_returns_catalog_and_broadcasts_event(self):
         entries = [_make_program_entry('alpha')]
         fake_library = _FakeLibrary('/tmp/programs', entries)
@@ -671,6 +702,42 @@ class TestProgramLibraryCommands:
             'event': 'programs_updated',
             'programs': [
                 {'program_id': 'alpha', 'beat': 1.0, 'duration': 0.5, 'error': None},
+            ],
+        } in events
+
+    def test_rescan_programs_includes_strip_summaries(self):
+        entries = [_make_program_entry('alpha', strips=['main'])]
+        fake_library = _FakeLibrary('/tmp/programs', entries)
+        svc, _ = _make_service(
+            library_factory=lambda animations_dir: fake_library,
+        )
+
+        reply = svc.handle_cmd({'id': 1, 'cmd': 'rescan_programs'})
+
+        assert reply['ok'] is True
+        assert reply['result']['programs'] == [
+            {
+                'program_id': 'alpha',
+                'beat': 1.0,
+                'duration': 0.5,
+                'error': None,
+                'strips': ['main'],
+            },
+        ]
+
+        json_msgs, _ = svc.tick_once()
+        events = _decode_json_msgs(json_msgs)
+        assert {
+            'type': 'event',
+            'event': 'programs_updated',
+            'programs': [
+                {
+                    'program_id': 'alpha',
+                    'beat': 1.0,
+                    'duration': 0.5,
+                    'error': None,
+                    'strips': ['main'],
+                },
             ],
         } in events
 

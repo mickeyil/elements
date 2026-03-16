@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .program_metadata import extract_metadata
+from .program_metadata import extract_metadata, extract_strips
 
 if TYPE_CHECKING:
     from elements.types import CompiledManifest
@@ -31,6 +31,7 @@ class ProgramEntry:
     beat: float | None
     duration: float | None
     error: str | None
+    strips: list[str] | None = None
 
 
 class ProgramLibrary:
@@ -141,6 +142,7 @@ class ProgramLibrary:
             beat=None,
             duration=None,
             error=f'cannot read file: {error}',
+            strips=None,
         )
 
     @staticmethod
@@ -158,7 +160,13 @@ class ProgramLibrary:
                 beat=None,
                 duration=None,
                 error=str(e),
+                strips=None,
             )
+
+        try:
+            strips = extract_strips(source, resolved)
+        except ValueError:
+            strips = None
 
         return ProgramEntry(
             program_id=program_id,
@@ -168,6 +176,7 @@ class ProgramLibrary:
             beat=beat,
             duration=duration,
             error=None,
+            strips=strips,
         )
 
 

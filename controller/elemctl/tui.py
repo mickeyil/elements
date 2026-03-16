@@ -37,7 +37,7 @@ from prompt_toolkit.layout.layout import Layout
 from prompt_toolkit.mouse_events import MouseEventType
 from prompt_toolkit.styles import Style
 from prompt_toolkit.utils import get_cwidth
-from prompt_toolkit.widgets import Button, Dialog, Frame, Label, RadioList, TextArea
+from prompt_toolkit.widgets import Button, CheckboxList, Dialog, Frame, Label, RadioList, TextArea
 
 from .config import (
     DEFAULT_LOGS_PATH,
@@ -142,6 +142,7 @@ class ProgramCatalogEntry:
     beat: float | None
     duration: float | None
     error: str | None
+    strips: list[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -250,6 +251,21 @@ class ProgramPublishDialogState:
     return_selected_program_id: str | None = None
     error_text: str = ''
     pending_request_id: int | None = None
+
+
+@dataclass
+class ProgramTargetDialogState:
+    program_id: str
+    strip_id: str
+    target_list: CheckboxList | None
+    load_button: Button | None
+    loop_toggle_button: Button
+    back_button: Button
+    close_button: Button
+    dialog: Dialog
+    error_text: str = ''
+    pending_request_id: int | None = None
+    loop_enabled: bool = False
 
 
 @dataclass
@@ -614,11 +630,18 @@ def _program_catalog_entry_from_dict(data: dict) -> ProgramCatalogEntry | None:
     error = data.get('error')
     if error is not None and not isinstance(error, str):
         error = str(error)
+    strips = data.get('strips')
+    strip_names: list[str] | None = None
+    if isinstance(strips, list):
+        parsed = [item for item in strips if isinstance(item, str) and item]
+        if len(parsed) == len(strips):
+            strip_names = parsed
     return ProgramCatalogEntry(
         program_id=program_id,
         beat=_normalize_optional_float(data.get('beat')),
         duration=_normalize_optional_float(data.get('duration')),
         error=error,
+        strips=strip_names,
     )
 
 
@@ -1305,6 +1328,7 @@ class TuiApp:
         self._device_catalog = list(devices)
         self._device_catalog_ready = True
         self._refresh_device_manager_dialog()
+        self._refresh_program_target_dialog()
 
     def _apply_device_catalog_status(self, info: DeviceCatalogEntry) -> None:
         updated: list[DeviceCatalogEntry] = []
@@ -1326,6 +1350,7 @@ class TuiApp:
             updated.append(info)
         self._device_catalog = updated
         self._refresh_device_manager_dialog()
+        self._refresh_program_target_dialog()
 
     def _apply_program_catalog_update(self, programs: list[ProgramCatalogEntry]) -> None:
         self._program_catalog = list(programs)
@@ -1407,6 +1432,19 @@ class TuiApp:
             if update.ok:
                 modal.error_text = ''
                 self._app.invalidate()
+            else:
+                modal.error_text = update.error or 'unknown error'
+                self._app.invalidate()
+            return
+        if isinstance(modal, ProgramTargetDialogState):
+            if modal.pending_request_id != update.reply_id:
+                return
+            modal.pending_request_id = None
+            if update.ok:
+                self._open_program_manager(
+                    selected_program_id=modal.program_id,
+                    loop_enabled=modal.loop_enabled,
+                )
             else:
                 modal.error_text = update.error or 'unknown error'
                 self._app.invalidate()
@@ -1967,6 +2005,13 @@ class TuiApp:
                 return entry
         return loadable[0] if loadable else None
 
+    def _eligible_target_devices_for_strip(self, strip_id: str) -> list[DeviceCatalogEntry]:
+        return [
+            entry
+            for entry in self._device_catalog
+            if entry.strip_id == strip_id
+        ]
+
     def _refresh_program_manager_dialog(self) -> None:
         if not isinstance(self._active_modal, ProgramManagerDialogState):
             return
@@ -1996,6 +2041,21 @@ class TuiApp:
         modal.program_list.current_value = selected_program_id
         self._app.invalidate()
 
+    def _refresh_program_target_dialog(self) -> None:
+        modal = self._active_modal
+        if not isinstance(modal, ProgramTargetDialogState):
+            return
+        self._open_program_target_dialog(
+            program_id=modal.program_id,
+            strip_id=modal.strip_id,
+            selected_targets=(
+                None if modal.target_list is None else list(modal.target_list.current_values)
+            ),
+            error_text=modal.error_text,
+            pending_request_id=modal.pending_request_id,
+            loop_enabled=modal.loop_enabled,
+        )
+
     def _program_manager_detail_text(self) -> str:
         state = self._active_modal
         if not isinstance(state, ProgramManagerDialogState):
@@ -2014,11 +2074,28 @@ class TuiApp:
             f'Selected: {entry.program_id}   duration: {duration_text}   '
             f'beat: {beat_text}   loop: {loop_text}'
         )
+        if entry.strips:
+            if len(entry.strips) == 1:
+                eligible = len(self._eligible_target_devices_for_strip(entry.strips[0]))
+                detail += f'   strip: {entry.strips[0]}   eligible targets: {eligible}'
+            else:
+                detail += f'   strips: {", ".join(entry.strips)}   direct load only for now'
         hidden = self._hidden_program_count()
         if hidden:
             noun = 'program' if hidden == 1 else 'programs'
             detail += f'   {hidden} broken {noun} hidden'
         return detail
+
+    def _program_target_detail_text(self) -> str:
+        state = self._active_modal
+        if not isinstance(state, ProgramTargetDialogState):
+            return ' '
+        selected = 0 if state.target_list is None else len(state.target_list.current_values)
+        loop_text = 'On' if state.loop_enabled else 'Off'
+        return (
+            f'Program: {state.program_id}   strip: {state.strip_id}   '
+            f'selected targets: {selected}   loop: {loop_text}'
+        )
 
     def _toggle_program_loop(self) -> None:
         state = self._active_modal
@@ -2031,6 +2108,18 @@ class TuiApp:
             state.loop_toggle_button.text = (
                 'Loop: On' if state.loop_enabled else 'Loop: Off'
             )
+        self._app.invalidate()
+
+    def _toggle_program_target_loop(self) -> None:
+        state = self._active_modal
+        if not isinstance(state, ProgramTargetDialogState):
+            return
+        if state.pending_request_id is not None:
+            return
+        state.loop_enabled = not state.loop_enabled
+        state.loop_toggle_button.text = (
+            'Loop: On' if state.loop_enabled else 'Loop: Off'
+        )
         self._app.invalidate()
 
     def _open_program_manager(
@@ -2130,6 +2219,101 @@ class TuiApp:
         )
         self._set_modal(state, focus=publish_button)
 
+    def _open_program_target_dialog(
+        self,
+        *,
+        program_id: str,
+        strip_id: str,
+        selected_targets: list[str] | None = None,
+        error_text: str = '',
+        pending_request_id: int | None = None,
+        loop_enabled: bool = False,
+    ) -> None:
+        eligible = self._eligible_target_devices_for_strip(strip_id)
+        options = [
+            (
+                entry.device_uid,
+                f'{entry.device_uid:<18s} '
+                f'{str(entry.length if entry.length is not None else "?"):<5s} '
+                f'{"online" if entry.connected else "offline"}',
+            )
+            for entry in eligible
+        ]
+        if selected_targets is None:
+            selected_targets = [device_uid for device_uid, _label in options]
+        else:
+            selected_targets = [
+                device_uid
+                for device_uid in selected_targets
+                if any(device_uid == option_uid for option_uid, _label in options)
+            ]
+        error_control = FormattedTextControl(
+            text=lambda: (
+                self._active_modal.error_text
+                if isinstance(self._active_modal, ProgramTargetDialogState)
+                else ' '
+            )
+        )
+        detail_control = FormattedTextControl(text=self._program_target_detail_text)
+
+        if options:
+            target_list = CheckboxList(values=options, default_values=selected_targets)
+            load_button = DialogButton('Load', handler=self._submit_program_target_load)
+        else:
+            target_list = None
+            load_button = None
+
+        loop_toggle_button = DialogButton(
+            'Loop: On' if loop_enabled else 'Loop: Off',
+            handler=self._toggle_program_target_loop,
+        )
+        back_button = DialogButton('Back', handler=self._cancel_program_target_dialog)
+        close_button = DialogButton('Close', handler=self._close_modal)
+        body_children: list = [
+            Label(text=f'Program: {program_id}', style='class:newdevice.label'),
+            Label(text=f'Strip: {strip_id}', style='class:newdevice.label'),
+        ]
+        if target_list is not None:
+            body_children.extend([
+                target_list,
+                Window(height=1, content=detail_control),
+            ])
+        else:
+            body_children.extend([
+                Label(
+                    text=f'No configured devices match strip "{strip_id}".',
+                    style='class:newdevice.help',
+                ),
+                Window(height=1, content=detail_control),
+            ])
+        body_children.extend([
+            Window(height=1, content=error_control, style='class:newdevice.error'),
+            Label(
+                text='Space: toggle target   Tab: move   Esc: close',
+                style='class:newdevice.help',
+            ),
+        ])
+        dialog = Dialog(
+            title='Load targets',
+            body=HSplit(body_children),
+            buttons=[button for button in [load_button, loop_toggle_button, back_button, close_button] if button is not None],
+            with_background=True,
+        )
+        state = ProgramTargetDialogState(
+            program_id=program_id,
+            strip_id=strip_id,
+            target_list=target_list,
+            load_button=load_button,
+            loop_toggle_button=loop_toggle_button,
+            back_button=back_button,
+            close_button=close_button,
+            dialog=dialog,
+            error_text=error_text,
+            pending_request_id=pending_request_id,
+            loop_enabled=loop_enabled,
+        )
+        self._set_modal(state, focus=target_list if target_list is not None else back_button)
+
     def _start_program_publish(self) -> None:
         if not isinstance(self._active_modal, ProgramManagerDialogState):
             return
@@ -2190,6 +2374,15 @@ class TuiApp:
             return
         self._open_program_manager(selected_program_id=state.return_selected_program_id)
 
+    def _cancel_program_target_dialog(self) -> None:
+        state = self._active_modal
+        if not isinstance(state, ProgramTargetDialogState):
+            return
+        self._open_program_manager(
+            selected_program_id=state.program_id,
+            loop_enabled=state.loop_enabled,
+        )
+
     def _submit_program_publish_dialog(self) -> None:
         state = self._active_modal
         if not isinstance(state, ProgramPublishDialogState):
@@ -2238,9 +2431,52 @@ class TuiApp:
             self._app.invalidate()
             return
 
+        if entry.strips is not None and len(entry.strips) == 1:
+            self._open_program_target_dialog(
+                program_id=entry.program_id,
+                strip_id=entry.strips[0],
+                loop_enabled=state.loop_enabled,
+            )
+            return
+
         cmd_id, error = self._send_program_load_request(
             entry,
             loop=state.loop_enabled,
+        )
+        if error is not None:
+            state.error_text = error
+            self._app.invalidate()
+            return
+        state.pending_request_id = cmd_id
+        state.error_text = ''
+
+    def _submit_program_target_load(self) -> None:
+        state = self._active_modal
+        if not isinstance(state, ProgramTargetDialogState):
+            return
+        if state.pending_request_id is not None:
+            return
+        if state.target_list is None:
+            state.error_text = f'no configured devices match strip "{state.strip_id}"'
+            self._app.invalidate()
+            return
+        selected_targets = list(state.target_list.current_values)
+        if not selected_targets:
+            state.error_text = 'select at least one target device'
+            self._app.invalidate()
+            return
+        entry = next(
+            (item for item in self._program_catalog if item.program_id == state.program_id),
+            None,
+        )
+        if entry is None:
+            state.error_text = f'program not found: {state.program_id}'
+            self._app.invalidate()
+            return
+        cmd_id, error = self._send_program_load_request(
+            entry,
+            loop=state.loop_enabled,
+            targets=selected_targets,
         )
         if error is not None:
             state.error_text = error
@@ -2825,12 +3061,16 @@ class TuiApp:
         entry: ProgramCatalogEntry,
         *,
         loop: bool,
+        targets: list[str] | None = None,
     ) -> tuple[int | None, str | None]:
-        return self._send_controller_cmd({
+        cmd = {
             'cmd': 'load_program',
             'program_id': entry.program_id,
             'loop': loop,
-        })
+        }
+        if targets is not None:
+            cmd['targets'] = list(targets)
+        return self._send_controller_cmd(cmd)
 
     def _send_program_publish_request(
         self,

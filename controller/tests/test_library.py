@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from elemctl.library import ArtifactCache, ProgramLibrary
-from elemctl.program_metadata import extract_metadata
+from elemctl.program_metadata import extract_metadata, extract_strips
 
 
 def test_extract_metadata_valid_source():
@@ -26,6 +26,28 @@ def test_extract_metadata_expression_duration_rejected():
         extract_metadata("BEAT = 1.0\nDURATION = 8 * 32\n", "demo.py")
 
 
+def test_extract_strips_valid_literal_calls():
+    strips = extract_strips(
+        "from elements.dsl import strip as led_strip\n"
+        "left = led_strip('left', length=5)\n"
+        "right = led_strip('right', length=5)\n",
+        "demo.py",
+    )
+
+    assert strips == ['left', 'right']
+
+
+def test_extract_strips_dynamic_name_returns_none():
+    strips = extract_strips(
+        "from elements.dsl import strip\n"
+        "strip_id = 'main'\n"
+        "main = strip(strip_id)\n",
+        "demo.py",
+    )
+
+    assert strips is None
+
+
 def test_program_library_rescan_valid_programs(tmp_path):
     (tmp_path / 'alpha.py').write_text("BEAT = 1.0\nDURATION = 2.0\n")
     (tmp_path / 'beta.py').write_text("BEAT = 0.5\nDURATION = 8\n")
@@ -38,6 +60,40 @@ def test_program_library_rescan_valid_programs(tmp_path):
     assert entries[0].duration == 2.0
     assert entries[0].source_hash is not None
     assert entries[0].error is None
+    assert entries[0].strips is None
+
+
+def test_program_library_rescan_extracts_literal_strip_names(tmp_path):
+    (tmp_path / 'alpha.py').write_text(
+        "from elements.dsl import strip\n"
+        "BEAT = 1.0\n"
+        "DURATION = 2.0\n"
+        "main = strip('main')\n"
+    )
+
+    library = ProgramLibrary(str(tmp_path))
+    entry = library.get('alpha')
+
+    assert entry is not None
+    assert entry.error is None
+    assert entry.strips == ['main']
+
+
+def test_program_library_rescan_dynamic_strip_name_keeps_unknown_summary(tmp_path):
+    (tmp_path / 'alpha.py').write_text(
+        "from elements.dsl import strip\n"
+        "BEAT = 1.0\n"
+        "DURATION = 2.0\n"
+        "strip_id = 'main'\n"
+        "main = strip(strip_id)\n"
+    )
+
+    library = ProgramLibrary(str(tmp_path))
+    entry = library.get('alpha')
+
+    assert entry is not None
+    assert entry.error is None
+    assert entry.strips is None
 
 
 def test_program_library_rescan_unreadable_file(tmp_path, monkeypatch):
@@ -102,11 +158,17 @@ def test_program_library_publish_creates_program_in_missing_dir(tmp_path):
     root = tmp_path / 'missing'
     library = ProgramLibrary(str(root))
 
-    entry = library.publish('ambient', "BEAT = 1.0\nDURATION = 4.0\n")
+    entry = library.publish(
+        'ambient',
+        "from elements.dsl import strip\nBEAT = 1.0\nDURATION = 4.0\nmain = strip('main')\n",
+    )
 
-    assert (root / 'ambient.py').read_text() == "BEAT = 1.0\nDURATION = 4.0\n"
+    assert (root / 'ambient.py').read_text() == (
+        "from elements.dsl import strip\nBEAT = 1.0\nDURATION = 4.0\nmain = strip('main')\n"
+    )
     assert entry.program_id == 'ambient'
     assert entry.error is None
+    assert entry.strips == ['main']
     assert library.get('ambient') == entry
 
 

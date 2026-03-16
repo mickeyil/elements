@@ -27,6 +27,7 @@ from elemctl.tui import (
     SessionStripTargetEntry,
     ProgramManagerDialogState,
     ProgramPublishDialogState,
+    ProgramTargetDialogState,
     ProgramCatalogEntry,
     ProgramCatalogUpdate,
     TuiApp,
@@ -771,6 +772,35 @@ class TestDevicePanel:
             SessionStateUpdate(mode='clear', session=None),
         ]
 
+    def test_decode_snapshot_updates_program_catalog_with_strip_summaries(self):
+        msg = {
+            'type': 'event',
+            'event': 'snapshot',
+            'session': None,
+            'devices': [],
+            'programs': [
+                {
+                    'program_id': 'ambient',
+                    'beat': 1.0,
+                    'duration': 8.0,
+                    'error': None,
+                    'strips': ['main'],
+                },
+                {
+                    'program_id': 'duo_show',
+                    'beat': 1.0,
+                    'duration': 8.0,
+                    'error': None,
+                    'strips': ['left', 'right'],
+                },
+            ],
+        }
+        _lines, updates = _decode_tui_message(KIND_JSON, _json_payload(msg))
+        assert updates[2] == ProgramCatalogUpdate([
+            ProgramCatalogEntry('ambient', 1.0, 8.0, None, ['main']),
+            ProgramCatalogEntry('duo_show', 1.0, 8.0, None, ['left', 'right']),
+        ])
+
     def test_decode_snapshot_updates_session_state(self):
         msg = {
             'type': 'event',
@@ -898,6 +928,23 @@ class TestDevicePanel:
             assert app._program_catalog == [
                 ProgramCatalogEntry('ambient', 1.0, 8.0, None),
                 ProgramCatalogEntry('broken', None, None, 'missing DURATION'),
+            ]
+            assert app._program_catalog_ready is True
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+    def test_program_catalog_update_replaces_catalog_with_strip_summaries(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        try:
+            app._apply_panel_update(ProgramCatalogUpdate([
+                ProgramCatalogEntry('ambient', 1.0, 8.0, None, ['main']),
+            ]))
+            assert app._program_catalog == [
+                ProgramCatalogEntry('ambient', 1.0, 8.0, None, ['main']),
             ]
             assert app._program_catalog_ready is True
         finally:
@@ -1760,6 +1807,30 @@ class TestProgramCatalogCommands:
             if app._log_fp is not None:
                 app._log_fp.close()
 
+    def test_program_manager_detail_text_shows_single_strip_target_hint(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        app._set_client(self._FakeClient())
+        app._program_catalog_ready = True
+        app._program_catalog = [ProgramCatalogEntry('ambient', 1.0, 8.0, None, ['main'])]
+        app._device_catalog = [
+            DeviceCatalogEntry(1, 'sim-144', 'sim', 'main', 144, True),
+            DeviceCatalogEntry(2, 'esp-144', 'esp32', 'main', 144, False),
+            DeviceCatalogEntry(3, 'bench', 'sim', 'bench', 60, True),
+        ]
+
+        try:
+            app._do_programs()
+            assert app._program_manager_detail_text() == (
+                'Selected: ambient   duration: 8s   beat: 1   loop: Off   '
+                'strip: main   eligible targets: 2'
+            )
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
     def test_program_manager_detail_text_reports_hidden_broken_count(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
@@ -1908,6 +1979,190 @@ class TestProgramCatalogCommands:
         assert client.commands == [{
             'cmd': 'load_program',
             'program_id': 'ambient',
+            'loop': False,
+            'id': 1,
+        }]
+
+    def test_program_manager_single_strip_load_opens_target_dialog(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        client = self._FakeClient()
+        app._set_client(client)
+        app._program_catalog_ready = True
+        app._program_catalog = [ProgramCatalogEntry('ambient', 1.0, 8.0, None, ['main'])]
+        app._device_catalog = [
+            DeviceCatalogEntry(1, 'sim-144', 'sim', 'main', 144, True),
+            DeviceCatalogEntry(2, 'esp-144', 'esp32', 'main', 144, False),
+            DeviceCatalogEntry(3, 'bench', 'sim', 'bench', 60, True),
+        ]
+
+        try:
+            app._do_programs()
+            app._submit_program_load()
+            state = app._active_modal
+            assert isinstance(state, ProgramTargetDialogState)
+            assert state.program_id == 'ambient'
+            assert state.strip_id == 'main'
+            assert state.target_list is not None
+            assert [value for value, _label in state.target_list.values] == ['sim-144', 'esp-144']
+            assert state.target_list.current_values == ['sim-144', 'esp-144']
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        assert client.commands == []
+
+    def test_program_target_dialog_carries_loop_and_submits_targets(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        client = self._FakeClient()
+        app._set_client(client)
+        app._program_catalog_ready = True
+        app._program_catalog = [ProgramCatalogEntry('ambient', 1.0, 8.0, None, ['main'])]
+        app._device_catalog = [
+            DeviceCatalogEntry(1, 'sim-144', 'sim', 'main', 144, True),
+            DeviceCatalogEntry(2, 'esp-144', 'esp32', 'main', 144, False),
+        ]
+
+        try:
+            app._do_programs()
+            app._toggle_program_loop()
+            app._submit_program_load()
+            state = app._active_modal
+            assert isinstance(state, ProgramTargetDialogState)
+            assert state.loop_enabled is True
+            assert state.loop_toggle_button.text == 'Loop: On'
+            state.target_list.current_values = ['esp-144']
+            app._submit_program_target_load()
+            assert state.pending_request_id == 1
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        assert client.commands == [{
+            'cmd': 'load_program',
+            'program_id': 'ambient',
+            'loop': True,
+            'targets': ['esp-144'],
+            'id': 1,
+        }]
+
+    def test_program_target_dialog_requires_selected_targets(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        app._set_client(self._FakeClient())
+        app._program_catalog_ready = True
+        app._program_catalog = [ProgramCatalogEntry('ambient', 1.0, 8.0, None, ['main'])]
+        app._device_catalog = [
+            DeviceCatalogEntry(1, 'sim-144', 'sim', 'main', 144, True),
+        ]
+
+        try:
+            app._do_programs()
+            app._submit_program_load()
+            state = app._active_modal
+            assert isinstance(state, ProgramTargetDialogState)
+            assert state.target_list is not None
+            state.target_list.current_values = []
+            app._submit_program_target_load()
+            assert state.error_text == 'select at least one target device'
+            assert state.pending_request_id is None
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+    def test_program_target_dialog_reply_error_stays_inline(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        client = self._FakeClient()
+        app._set_client(client)
+        app._program_catalog_ready = True
+        app._program_catalog = [ProgramCatalogEntry('ambient', 1.0, 8.0, None, ['main'])]
+        app._device_catalog = [
+            DeviceCatalogEntry(1, 'sim-144', 'sim', 'main', 144, True),
+        ]
+
+        try:
+            app._do_programs()
+            app._submit_program_load()
+            app._submit_program_target_load()
+            app._apply_panel_update(CommandReplyUpdate(
+                reply_id=1,
+                ok=False,
+                error='device offline',
+            ))
+            state = app._active_modal
+            assert isinstance(state, ProgramTargetDialogState)
+            assert state.error_text == 'device offline'
+            assert state.pending_request_id is None
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        assert client.commands == [{
+            'cmd': 'load_program',
+            'program_id': 'ambient',
+            'loop': False,
+            'targets': ['sim-144'],
+            'id': 1,
+        }]
+
+    def test_program_target_dialog_success_reopens_program_manager(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        app._set_client(self._FakeClient())
+        app._program_catalog_ready = True
+        app._program_catalog = [ProgramCatalogEntry('ambient', 1.0, 8.0, None, ['main'])]
+        app._device_catalog = [
+            DeviceCatalogEntry(1, 'sim-144', 'sim', 'main', 144, True),
+        ]
+
+        try:
+            app._do_programs()
+            app._submit_program_load()
+            app._submit_program_target_load()
+            app._apply_panel_update(CommandReplyUpdate(reply_id=1, ok=True, error=None))
+            state = app._active_modal
+            assert isinstance(state, ProgramManagerDialogState)
+            assert state.program_list is not None
+            assert state.program_list.current_value == 'ambient'
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+    def test_program_manager_multistrip_program_still_loads_directly(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        client = self._FakeClient()
+        app._set_client(client)
+        app._program_catalog_ready = True
+        app._program_catalog = [ProgramCatalogEntry('duo_show', 1.0, 8.0, None, ['left', 'right'])]
+
+        try:
+            app._do_programs()
+            app._submit_program_load()
+            state = app._active_modal
+            assert isinstance(state, ProgramManagerDialogState)
+            assert state.pending_request_id == 1
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        assert client.commands == [{
+            'cmd': 'load_program',
+            'program_id': 'duo_show',
             'loop': False,
             'id': 1,
         }]

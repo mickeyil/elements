@@ -147,11 +147,13 @@ Milestone 1 is complete.
 #### Round 1: Single-strip target selection UI
 
 - Extend the `/programs` load flow for single-strip programs.
-- After selecting a program, open a target-selection step that lists eligible devices.
+- Enrich the program catalog with source-level strip summaries so the TUI can detect single-strip programs without compiling them.
+- After selecting a single-strip program, open a target-selection step that lists eligible devices by matching `strip_id`.
 - Allow selecting:
   - one target
   - multiple targets for mirrored loads
 - Keep the existing loop toggle in the load flow.
+- If strip summaries are unknown or the program has multiple strips, fall back to direct `load_program`.
 
 #### Round 2: Validation and submission
 
@@ -168,6 +170,8 @@ Milestone 1 is complete.
   - devices grouped by `strip_id`
   - selection remains device-based, routing remains named/config-driven
 - Add TUI tests for mirrored single-strip and multi-strip target-selection flows.
+
+Rounds 1 and 2 are complete.
 
 ## Later milestone
 
@@ -233,8 +237,8 @@ These are valid future items, but they are not the next implementation target:
 
 If asked "what's next?" and no newer decision has superseded this file, the answer is:
 
-1. **Milestone 2, Round 1**
-2. then **Milestone 2, Round 2**
-3. then **Milestone 2, Round 3**
+1. **Milestone 2, Round 3**
+2. then **Milestone 3, Round 1**
+3. then **Milestone 3, Round 2**
 
 Do not jump to scenes before the TUI target-selection flow is usable end to end.
