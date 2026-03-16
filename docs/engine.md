@@ -20,8 +20,12 @@ and every frame:
 class Engine {
 public:
     // Takes ownership of prog (freed on destroy).
-    Engine(Program* prog, Strip& strip);
+    Engine(Program* prog, Strip& strip, bool gamma_enabled);
     ~Engine();
+
+    // Reset engine to initial state (cursors, instances, buffers).
+    // After reset, tick(0) behaves as if the engine were freshly constructed.
+    void reset();
 
     // Advance to time t (seconds since program start).
     // Returns false if program has ended (t >= duration).
@@ -242,5 +246,4 @@ The PlaybackDevice computes `t_rel` from its clock subsystem and passes it in.
 
 ## Program end policy
 
-When `t >= program.duration`, `tick()` returns `false`. The engine stops
-rendering. Loop support is future work, controlled at the PlaybackDevice level.
+When `t >= program.duration`, `tick()` returns `false`. The engine does not loop on its own. Looping is controlled at the controller level — the controller detects program end across all active devices and coordinates a synchronized restart via JUMP + RESUME.

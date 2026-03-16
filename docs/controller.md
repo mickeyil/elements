@@ -440,10 +440,14 @@ Commands carry an `id` (client-assigned, incrementing counter) that the controll
 {"id": 7, "cmd": "rescan_programs"}
 {"id": 8, "cmd": "load_program", "program_id": "demo_main", "loop": true}
 {"id": 9, "cmd": "load_program", "program_id": "demo_main", "targets": ["sim-144", "esp-144"], "loop": true}
-{"id": 10, "cmd": "publish_program", "program_id": "demo_main", "source": "...python source..."}
-{"id": 11, "cmd": "add_device", "device_type": "sim", "device_uid": "sim-3", "strip_id": "aux", "length": 30}
-{"id": 12, "cmd": "edit_device", "target_device_uid": "sim-3", "device_uid": "sim-3", "strip_id": "aux", "length": 60}
-{"id": 13, "cmd": "remove_device", "device_uid": "sim-3"}
+{"id": 10, "cmd": "load_scene", "loop": true, "entries": [
+  {"program_id": "ambient", "targets": ["sim-1"]},
+  {"program_id": "spark", "targets": ["sim-2"]}
+]}
+{"id": 11, "cmd": "publish_program", "program_id": "demo_main", "source": "...python source..."}
+{"id": 12, "cmd": "add_device", "device_type": "sim", "device_uid": "sim-3", "strip_id": "aux", "length": 30}
+{"id": 13, "cmd": "edit_device", "target_device_uid": "sim-3", "device_uid": "sim-3", "strip_id": "aux", "length": 60}
+{"id": 14, "cmd": "remove_device", "device_uid": "sim-3"}
 ```
 
 `play` means both fresh start and resume — the controller decides which device command to send based on current state (CMD_START from LOADED/ENDED, CMD_RESUME from PAUSED). The client does not need to distinguish between them.
@@ -465,6 +469,8 @@ Commands carry an `id` (client-assigned, incrementing counter) that the controll
 
 Raw `load` remains the legacy unique-topology path. It does not accept `targets`, and it rejects duplicate-`strip_id` topologies with `duplicate strip_id topology requires targeted load support`.
 
+`load_scene` is submitted from the TUI via `/scene FILE`, where `FILE` is a JSON file on disk. The TUI reads the file, wraps its contents with `"cmd": "load_scene"`, and forwards the resulting command to the controller. The scene file contains `entries` and an optional `loop` flag — it does not contain a `cmd` field itself.
+
 **Controller → Client (replies):**
 
 Replies are **controller-complete** — the reply is sent after the controller has finished all work for the command (compilation, device ACKs, state updates). The client does not need to track intermediate states or correlate follow-up events.
@@ -473,9 +479,10 @@ Replies are **controller-complete** — the reply is sent after the controller h
 {"type": "reply", "id": 1, "ok": true, "result": {"session_id": 42}}
 {"type": "reply", "id": 4, "ok": true, "result": {}}
 {"type": "reply", "id": 6, "ok": true, "result": {"event": "snapshot", "...": "..."}}
-{"type": "reply", "id": 7, "ok": true, "result": {"programs": [{"program_id": "demo_main", "beat": 0.5, "duration": 64.0, "error": null}]}}
+{"type": "reply", "id": 7, "ok": true, "result": {"programs": [{"program_id": "demo_main", "beat": 0.5, "duration": 64.0, "error": null, "strips": ["main"]}]}}
 {"type": "reply", "id": 8, "ok": true, "result": {"session_id": 42}}
-{"type": "reply", "id": 9, "ok": true, "result": {"program": {"program_id": "demo_main", "beat": 0.5, "duration": 64.0, "error": null}}}
+{"type": "reply", "id": 10, "ok": true, "result": {"session_id": 43}}
+{"type": "reply", "id": 11, "ok": true, "result": {"program": {"program_id": "demo_main", "beat": 0.5, "duration": 64.0, "error": null, "strips": ["main"]}}}
 {"type": "reply", "id": 1, "ok": false, "error": "device sim-1 rejected blob"}
 ```
 
@@ -500,7 +507,7 @@ Asynchronous state changes and broadcasts — not tied to a specific command.
 {"type": "event", "event": "device_status",
  "device_id": 1, "device_uid": "sim-1", "strip": "main_left", "length": 150, "connected": false}
 {"type": "event", "event": "programs_updated",
- "programs": [{"program_id": "demo_main", "beat": 0.5, "duration": 64.0, "error": null}]}
+ "programs": [{"program_id": "demo_main", "beat": 0.5, "duration": 64.0, "error": null, "strips": ["main"]}]}
 {"type": "event", "event": "error", "message": "load failed: device sim-1 rejected blob"}
 ```
 
@@ -519,6 +526,7 @@ The `strips` array in `session_start` defines the **canonical logical strip orde
 |---------|--------------------------|-------------|
 | `load` | Compiled from source, unique-topology legacy load completed, all configured devices ACKed LOAD, session created. Rejected with `no configured devices` when inventory is empty, and with `duplicate strip_id topology requires targeted load support` on mirrored topologies. | `{"session_id": N}` |
 | `load_program` | Known program resolved from the controller-owned library, compiled or cache-hit, matching selected devices ACKed LOAD, session created. If `targets` is omitted, all matching devices participate. Rejected with `no configured devices` when inventory is empty. | `{"session_id": N}` |
+| `load_scene` | Each entry's `program_id` resolved from the library, compiled or cache-hit independently. One global session created spanning all entries. All entries must have matching durations. Each entry requires explicit non-empty `targets` (device_uids); duplicate targets across entries are rejected. Safe intervals are intersected across all entries (empty intersection is allowed — seek is simply unavailable). | `{"session_id": N}` |
 | `publish_program` | Program source validated, then stored under `program_id`, library entry updated, `programs_updated` broadcast queued. Does not load or play the program. Broken source is rejected and not stored. | `{"program": {...}}` |
 | `play` | State updated; sends START (from LOADED/ENDED) or RESUME (from PAUSED) to all devices + audio | `{}` |
 | `pause` | CMD_PAUSE sent to all devices, audio paused, state updated | `{}` |
@@ -557,7 +565,7 @@ The snapshot schema matches `build_snapshot()` in `service.py`:
   "online_count": 2,
   "expected_count": 2,
   "programs": [
-    {"program_id": "demo_main", "beat": 0.5, "duration": 64.0, "error": null}
+    {"program_id": "demo_main", "beat": 0.5, "duration": 64.0, "error": null, "strips": ["main"]}
   ],
   "session": {
     "session_id": 42,
@@ -613,7 +621,7 @@ With an empty install, the same snapshot shape is used with `expected_count: 0`,
 |-------|---------|
 | `protocol_version` | Allows the client to detect incompatible controller versions |
 | `online_count` / `expected_count` | Quick device health summary. `expected_count` is currently the configured inventory size. |
-| `programs` | Current controller-owned program catalog. Each entry includes `program_id`, extracted `beat`, extracted `duration`, and `error` if the file is present but not loadable |
+| `programs` | Current controller-owned program catalog. Each entry includes `program_id`, extracted `beat`, extracted `duration`, `error` if the file is present but not loadable, and optionally `strips` (list of strip names statically extracted from the DSL source; omitted when extraction is not possible) |
 | `session` | Active session if any — includes all metadata needed to render the seek bar and receive frames. `null` if no program is loaded |
 | `session.strips` | Canonical logical strip order and lengths — defines how program frame payloads are sliced. Each strip may also include `targets`, the currently bound physical devices. |
 | `devices` | Per-device status: `device_id` (numeric), `device_uid` (stable identity), `strip`, `length`, `device_type` (`"sim"` or `"esp32"`), `connected` (boolean) |

@@ -1,6 +1,6 @@
 # Elements — Design Document
 
-> **Status: Mixed.** Core pipeline (compiler, decoder, engine, compositor, PlaybackDevice base class, ESPSimulated), the Python controller service, UDS control API, simulator transport, and TUI workflow are implemented. Hardware parity, the web app, and some higher-level transport/design sections are still forward-looking — see `transport.md` and `controller.md`.
+> **Status: Mixed.** Core pipeline (compiler, decoder, engine, compositor, PlaybackDevice base class, ESPSimulated), the Python controller service, UDS control API, simulator transport, TUI workflow, and a minimal observer web relay (`elemctl web`) are implemented. Hardware parity, web-side control parity, and some higher-level transport/design sections are still forward-looking — see `transport.md` and `controller.md`.
 
 ## Overview
 
@@ -22,11 +22,11 @@ The core design principle: **tight timing sync over complex rendering**. Simple 
 │                                                   │
 │  ┌──────────────────┐     ┌───────────────────┐  │
 │  │    Controller     │     │     Web App       │  │
-│  │  (compiles, routes│<--->│  (serves browser, │  │
-│  │   blobs, syncs,   │     │   relays commands │  │
+│  │  (compiles, routes│---->│  (serves browser, │  │
+│  │   blobs, syncs,   │     │   relays snapshots│  │
 │  │   manages sessions│     │   and frames)     │  │
 │  │   + playback)     │     └────────┬──────────┘  │
-│  └────────┬──────────┘              │ (planned)   │
+│  └────────┬──────────┘              │             │
 │           │                         │             │
 │     TCP + UDP                                     │
 │     (device protocol)                             │
@@ -126,7 +126,7 @@ TCP for commands (LOAD, START, JUMP, PAUSE, RESUME, STOP, debug) and clock sync 
 ### Music Sync Mode
 
 1. **Pre-analysis:** Before playback, the base station analyzes the audio track offline — beat detection, energy analysis, frequency band decomposition
-2. **Compilation:** Results are compiled into a bytecode program. There is no artifact cache yet; each load recompiles from source.
+2. **Compilation:** Results are compiled into a bytecode program. Raw `load` recompiles from source each time; `load_program` uses an in-memory artifact cache keyed by source hash and topology fingerprint.
 3. **Upload:** LOAD bytecode to device, wait for ACK
 4. **Trigger:** START with absolute timestamp T0
 5. **Playback:** Device executes bytecode against its controller-synced clock
@@ -223,10 +223,9 @@ The original phase breakdown is no longer a useful roadmap. The simulator/contro
 Current areas of work:
 
 - **ESP32 parity** — make real hardware follow the same discovery + configure + playback model as `network_sim`
-- **Web client** — add a browser-facing client layer on top of the existing controller protocol
+- **Web control parity** — extend `elemctl web` from observer-only relay to full control (load, play, seek, config mutations)
 - **Clock sync implementation** — move the documented custom sync protocol from design to code
 - **Audio-player integration** — implement the controller ↔ audio contract described in `controller.md`
-- **Artifact caching (optional)** — avoid recompiling on every load if it becomes a real bottleneck
 
 ---
 

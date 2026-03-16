@@ -220,7 +220,7 @@ Milestone 2 is complete.
 
 #### Round 3: TUI scene workflow
 
-- Add a TUI path for submitting a scene file or scene spec.
+- Add a TUI path for submitting a scene file (`/scene FILE`).
 - Keep this separate from the simpler `/programs` flow.
 - Add tests and docs.
 
