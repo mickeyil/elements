@@ -254,10 +254,15 @@ class ProgramPublishDialogState:
 
 
 @dataclass
-class ProgramTargetDialogState:
-    program_id: str
+class ProgramTargetSection:
     strip_id: str
     target_list: CheckboxList | None
+
+
+@dataclass
+class ProgramTargetDialogState:
+    program_id: str
+    strip_sections: list[ProgramTargetSection]
     load_button: Button | None
     loop_toggle_button: Button
     back_button: Button
@@ -266,6 +271,22 @@ class ProgramTargetDialogState:
     error_text: str = ''
     pending_request_id: int | None = None
     loop_enabled: bool = False
+
+    @property
+    def strip_ids(self) -> list[str]:
+        return [section.strip_id for section in self.strip_sections]
+
+    @property
+    def strip_id(self) -> str | None:
+        if len(self.strip_sections) != 1:
+            return None
+        return self.strip_sections[0].strip_id
+
+    @property
+    def target_list(self) -> CheckboxList | None:
+        if len(self.strip_sections) != 1:
+            return None
+        return self.strip_sections[0].target_list
 
 
 @dataclass
@@ -2012,6 +2033,15 @@ class TuiApp:
             if entry.strip_id == strip_id
         ]
 
+    def _eligible_target_devices_by_strip(
+        self,
+        strip_ids: list[str],
+    ) -> list[tuple[str, list[DeviceCatalogEntry]]]:
+        return [
+            (strip_id, self._eligible_target_devices_for_strip(strip_id))
+            for strip_id in strip_ids
+        ]
+
     def _refresh_program_manager_dialog(self) -> None:
         if not isinstance(self._active_modal, ProgramManagerDialogState):
             return
@@ -2047,10 +2077,12 @@ class TuiApp:
             return
         self._open_program_target_dialog(
             program_id=modal.program_id,
-            strip_id=modal.strip_id,
-            selected_targets=(
-                None if modal.target_list is None else list(modal.target_list.current_values)
-            ),
+            strip_ids=modal.strip_ids,
+            selected_targets_by_strip={
+                section.strip_id: list(section.target_list.current_values)
+                for section in modal.strip_sections
+                if section.target_list is not None
+            },
             error_text=modal.error_text,
             pending_request_id=modal.pending_request_id,
             loop_enabled=modal.loop_enabled,
@@ -2079,7 +2111,7 @@ class TuiApp:
                 eligible = len(self._eligible_target_devices_for_strip(entry.strips[0]))
                 detail += f'   strip: {entry.strips[0]}   eligible targets: {eligible}'
             else:
-                detail += f'   strips: {", ".join(entry.strips)}   direct load only for now'
+                detail += f'   strips: {", ".join(entry.strips)}   target selection available'
         hidden = self._hidden_program_count()
         if hidden:
             noun = 'program' if hidden == 1 else 'programs'
@@ -2090,11 +2122,16 @@ class TuiApp:
         state = self._active_modal
         if not isinstance(state, ProgramTargetDialogState):
             return ' '
-        selected = 0 if state.target_list is None else len(state.target_list.current_values)
+        counts = []
+        total = 0
+        for section in state.strip_sections:
+            selected = 0 if section.target_list is None else len(section.target_list.current_values)
+            counts.append(f'{section.strip_id}={selected}')
+            total += selected
         loop_text = 'On' if state.loop_enabled else 'Off'
         return (
-            f'Program: {state.program_id}   strip: {state.strip_id}   '
-            f'selected targets: {selected}   loop: {loop_text}'
+            f'Program: {state.program_id}   selected: {", ".join(counts)}   '
+            f'total targets: {total}   loop: {loop_text}'
         )
 
     def _toggle_program_loop(self) -> None:
@@ -2223,30 +2260,13 @@ class TuiApp:
         self,
         *,
         program_id: str,
-        strip_id: str,
-        selected_targets: list[str] | None = None,
+        strip_ids: list[str],
+        selected_targets_by_strip: dict[str, list[str]] | None = None,
         error_text: str = '',
         pending_request_id: int | None = None,
         loop_enabled: bool = False,
     ) -> None:
-        eligible = self._eligible_target_devices_for_strip(strip_id)
-        options = [
-            (
-                entry.device_uid,
-                f'{entry.device_uid:<18s} '
-                f'{str(entry.length if entry.length is not None else "?"):<5s} '
-                f'{"online" if entry.connected else "offline"}',
-            )
-            for entry in eligible
-        ]
-        if selected_targets is None:
-            selected_targets = [device_uid for device_uid, _label in options]
-        else:
-            selected_targets = [
-                device_uid
-                for device_uid in selected_targets
-                if any(device_uid == option_uid for option_uid, _label in options)
-            ]
+        selected_targets_by_strip = selected_targets_by_strip or {}
         error_control = FormattedTextControl(
             text=lambda: (
                 self._active_modal.error_text
@@ -2255,13 +2275,50 @@ class TuiApp:
             )
         )
         detail_control = FormattedTextControl(text=self._program_target_detail_text)
+        strip_sections: list[ProgramTargetSection] = []
+        body_children: list = [
+            Label(text=f'Program: {program_id}', style='class:newdevice.label'),
+        ]
+        has_any_options = False
+        for strip_id, eligible in self._eligible_target_devices_by_strip(strip_ids):
+            options = [
+                (
+                    entry.device_uid,
+                    f'{entry.device_uid:<18s} '
+                    f'{str(entry.length if entry.length is not None else "?"):<5s} '
+                    f'{"online" if entry.connected else "offline"}',
+                )
+                for entry in eligible
+            ]
+            selected_targets = selected_targets_by_strip.get(strip_id)
+            if selected_targets is None:
+                selected_targets = [device_uid for device_uid, _label in options]
+            else:
+                selected_targets = [
+                    device_uid
+                    for device_uid in selected_targets
+                    if any(device_uid == option_uid for option_uid, _label in options)
+                ]
+            if options:
+                has_any_options = True
+                target_list = CheckboxList(values=options, default_values=selected_targets)
+            else:
+                target_list = None
+            strip_sections.append(ProgramTargetSection(strip_id=strip_id, target_list=target_list))
+            body_children.append(Label(text=f'Strip: {strip_id}', style='class:newdevice.label'))
+            if target_list is not None:
+                body_children.append(target_list)
+            else:
+                body_children.append(Label(
+                    text=f'No configured devices match strip "{strip_id}".',
+                    style='class:newdevice.help',
+                ))
 
-        if options:
-            target_list = CheckboxList(values=options, default_values=selected_targets)
-            load_button = DialogButton('Load', handler=self._submit_program_target_load)
-        else:
-            target_list = None
-            load_button = None
+        load_button = (
+            DialogButton('Load', handler=self._submit_program_target_load)
+            if has_any_options
+            else None
+        )
 
         loop_toggle_button = DialogButton(
             'Loop: On' if loop_enabled else 'Loop: Off',
@@ -2269,24 +2326,8 @@ class TuiApp:
         )
         back_button = DialogButton('Back', handler=self._cancel_program_target_dialog)
         close_button = DialogButton('Close', handler=self._close_modal)
-        body_children: list = [
-            Label(text=f'Program: {program_id}', style='class:newdevice.label'),
-            Label(text=f'Strip: {strip_id}', style='class:newdevice.label'),
-        ]
-        if target_list is not None:
-            body_children.extend([
-                target_list,
-                Window(height=1, content=detail_control),
-            ])
-        else:
-            body_children.extend([
-                Label(
-                    text=f'No configured devices match strip "{strip_id}".',
-                    style='class:newdevice.help',
-                ),
-                Window(height=1, content=detail_control),
-            ])
         body_children.extend([
+            Window(height=1, content=detail_control),
             Window(height=1, content=error_control, style='class:newdevice.error'),
             Label(
                 text='Space: toggle target   Tab: move   Esc: close',
@@ -2301,8 +2342,7 @@ class TuiApp:
         )
         state = ProgramTargetDialogState(
             program_id=program_id,
-            strip_id=strip_id,
-            target_list=target_list,
+            strip_sections=strip_sections,
             load_button=load_button,
             loop_toggle_button=loop_toggle_button,
             back_button=back_button,
@@ -2312,7 +2352,11 @@ class TuiApp:
             pending_request_id=pending_request_id,
             loop_enabled=loop_enabled,
         )
-        self._set_modal(state, focus=target_list if target_list is not None else back_button)
+        focus_target = next(
+            (section.target_list for section in strip_sections if section.target_list is not None),
+            back_button,
+        )
+        self._set_modal(state, focus=focus_target)
 
     def _start_program_publish(self) -> None:
         if not isinstance(self._active_modal, ProgramManagerDialogState):
@@ -2431,16 +2475,16 @@ class TuiApp:
             self._app.invalidate()
             return
 
-        if entry.strips is not None and len(entry.strips) == 1:
+        if entry.strips:
             self._open_program_target_dialog(
                 program_id=entry.program_id,
-                strip_id=entry.strips[0],
+                strip_ids=entry.strips,
                 loop_enabled=state.loop_enabled,
             )
             return
 
         cmd_id, error = self._send_program_load_request(
-            entry,
+            entry.program_id,
             loop=state.loop_enabled,
         )
         if error is not None:
@@ -2456,25 +2500,27 @@ class TuiApp:
             return
         if state.pending_request_id is not None:
             return
-        if state.target_list is None:
-            state.error_text = f'no configured devices match strip "{state.strip_id}"'
-            self._app.invalidate()
-            return
-        selected_targets = list(state.target_list.current_values)
-        if not selected_targets:
-            state.error_text = 'select at least one target device'
-            self._app.invalidate()
-            return
-        entry = next(
-            (item for item in self._program_catalog if item.program_id == state.program_id),
-            None,
-        )
-        if entry is None:
-            state.error_text = f'program not found: {state.program_id}'
+        selected_targets: list[str] = []
+        for section in state.strip_sections:
+            if section.target_list is None:
+                state.error_text = f'no configured devices match strip "{section.strip_id}"'
+                self._app.invalidate()
+                return
+            section_targets = list(section.target_list.current_values)
+            if not section_targets:
+                if len(state.strip_sections) == 1:
+                    state.error_text = 'select at least one target device'
+                else:
+                    state.error_text = f'select at least one target for strip "{section.strip_id}"'
+                self._app.invalidate()
+                return
+            selected_targets.extend(section_targets)
+        if len(selected_targets) != len(set(selected_targets)):
+            state.error_text = 'duplicate target selected'
             self._app.invalidate()
             return
         cmd_id, error = self._send_program_load_request(
-            entry,
+            state.program_id,
             loop=state.loop_enabled,
             targets=selected_targets,
         )
@@ -3058,14 +3104,14 @@ class TuiApp:
 
     def _send_program_load_request(
         self,
-        entry: ProgramCatalogEntry,
+        program_id: str,
         *,
         loop: bool,
         targets: list[str] | None = None,
     ) -> tuple[int | None, str | None]:
         cmd = {
             'cmd': 'load_program',
-            'program_id': entry.program_id,
+            'program_id': program_id,
             'loop': loop,
         }
         if targets is not None:
@@ -3152,7 +3198,7 @@ class TuiApp:
 
         loop_str = ' loop' if loop else ''
         self._local_log(f"> /load {entry.program_id}{loop_str}")
-        _cmd_id, error = self._send_program_load_request(entry, loop=loop)
+        _cmd_id, error = self._send_program_load_request(entry.program_id, loop=loop)
         if error is not None:
             self._local_log(error)
 

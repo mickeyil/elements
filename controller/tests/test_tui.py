@@ -1831,6 +1831,25 @@ class TestProgramCatalogCommands:
             if app._log_fp is not None:
                 app._log_fp.close()
 
+    def test_program_manager_detail_text_shows_multistrip_target_hint(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        app._set_client(self._FakeClient())
+        app._program_catalog_ready = True
+        app._program_catalog = [ProgramCatalogEntry('duo_show', 1.0, 8.0, None, ['left', 'right'])]
+
+        try:
+            app._do_programs()
+            assert app._program_manager_detail_text() == (
+                'Selected: duo_show   duration: 8s   beat: 1   loop: Off   '
+                'strips: left, right   target selection available'
+            )
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
     def test_program_manager_detail_text_reports_hidden_broken_count(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
@@ -2140,7 +2159,7 @@ class TestProgramCatalogCommands:
             if app._log_fp is not None:
                 app._log_fp.close()
 
-    def test_program_manager_multistrip_program_still_loads_directly(self, tmp_path):
+    def test_program_manager_multistrip_load_opens_grouped_target_dialog(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
             log_file=str(tmp_path / 'tui.log'),
@@ -2149,12 +2168,60 @@ class TestProgramCatalogCommands:
         app._set_client(client)
         app._program_catalog_ready = True
         app._program_catalog = [ProgramCatalogEntry('duo_show', 1.0, 8.0, None, ['left', 'right'])]
+        app._device_catalog = [
+            DeviceCatalogEntry(1, 'sim-left', 'sim', 'left', 5, True),
+            DeviceCatalogEntry(2, 'esp-left', 'esp32', 'left', 5, False),
+            DeviceCatalogEntry(3, 'sim-right', 'sim', 'right', 5, True),
+            DeviceCatalogEntry(4, 'esp-right', 'esp32', 'right', 5, True),
+            DeviceCatalogEntry(5, 'bench', 'sim', 'bench', 5, True),
+        ]
 
         try:
             app._do_programs()
             app._submit_program_load()
             state = app._active_modal
-            assert isinstance(state, ProgramManagerDialogState)
+            assert isinstance(state, ProgramTargetDialogState)
+            assert state.strip_ids == ['left', 'right']
+            assert len(state.strip_sections) == 2
+            assert [value for value, _label in state.strip_sections[0].target_list.values] == [
+                'sim-left', 'esp-left',
+            ]
+            assert [value for value, _label in state.strip_sections[1].target_list.values] == [
+                'sim-right', 'esp-right',
+            ]
+            assert state.strip_sections[0].target_list.current_values == ['sim-left', 'esp-left']
+            assert state.strip_sections[1].target_list.current_values == ['sim-right', 'esp-right']
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        assert client.commands == []
+
+    def test_program_target_dialog_multistrip_submits_flat_targets(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        client = self._FakeClient()
+        app._set_client(client)
+        app._program_catalog_ready = True
+        app._program_catalog = [ProgramCatalogEntry('duo_show', 1.0, 8.0, None, ['left', 'right'])]
+        app._device_catalog = [
+            DeviceCatalogEntry(1, 'sim-left', 'sim', 'left', 5, True),
+            DeviceCatalogEntry(2, 'esp-left', 'esp32', 'left', 5, False),
+            DeviceCatalogEntry(3, 'sim-right', 'sim', 'right', 5, True),
+            DeviceCatalogEntry(4, 'esp-right', 'esp32', 'right', 5, True),
+        ]
+
+        try:
+            app._do_programs()
+            app._toggle_program_loop()
+            app._submit_program_load()
+            state = app._active_modal
+            assert isinstance(state, ProgramTargetDialogState)
+            state.strip_sections[0].target_list.current_values = ['esp-left']
+            state.strip_sections[1].target_list.current_values = ['sim-right', 'esp-right']
+            app._submit_program_target_load()
             assert state.pending_request_id == 1
         finally:
             if app._log_fp is not None:
@@ -2163,9 +2230,97 @@ class TestProgramCatalogCommands:
         assert client.commands == [{
             'cmd': 'load_program',
             'program_id': 'duo_show',
-            'loop': False,
+            'loop': True,
+            'targets': ['esp-left', 'sim-right', 'esp-right'],
             'id': 1,
         }]
+
+    def test_program_target_dialog_multistrip_requires_selection_for_each_strip(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        app._set_client(self._FakeClient())
+        app._program_catalog_ready = True
+        app._program_catalog = [ProgramCatalogEntry('duo_show', 1.0, 8.0, None, ['left', 'right'])]
+        app._device_catalog = [
+            DeviceCatalogEntry(1, 'sim-left', 'sim', 'left', 5, True),
+            DeviceCatalogEntry(2, 'sim-right', 'sim', 'right', 5, True),
+        ]
+
+        try:
+            app._do_programs()
+            app._submit_program_load()
+            state = app._active_modal
+            assert isinstance(state, ProgramTargetDialogState)
+            state.strip_sections[0].target_list.current_values = ['sim-left']
+            state.strip_sections[1].target_list.current_values = []
+            app._submit_program_target_load()
+            assert state.error_text == 'select at least one target for strip "right"'
+            assert state.pending_request_id is None
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+    def test_program_target_dialog_multistrip_reports_missing_device_group(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        app._set_client(self._FakeClient())
+        app._program_catalog_ready = True
+        app._program_catalog = [ProgramCatalogEntry('duo_show', 1.0, 8.0, None, ['left', 'right'])]
+        app._device_catalog = [
+            DeviceCatalogEntry(1, 'sim-left', 'sim', 'left', 5, True),
+        ]
+
+        try:
+            app._do_programs()
+            app._submit_program_load()
+            state = app._active_modal
+            assert isinstance(state, ProgramTargetDialogState)
+            assert state.strip_sections[1].target_list is None
+            app._submit_program_target_load()
+            assert state.error_text == 'no configured devices match strip "right"'
+            assert state.pending_request_id is None
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+    def test_program_target_dialog_multistrip_refresh_preserves_valid_selections(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        app._set_client(self._FakeClient())
+        app._program_catalog_ready = True
+        app._program_catalog = [ProgramCatalogEntry('duo_show', 1.0, 8.0, None, ['left', 'right'])]
+        app._device_catalog = [
+            DeviceCatalogEntry(1, 'sim-left', 'sim', 'left', 5, True),
+            DeviceCatalogEntry(2, 'esp-left', 'esp32', 'left', 5, True),
+            DeviceCatalogEntry(3, 'sim-right', 'sim', 'right', 5, True),
+        ]
+
+        try:
+            app._do_programs()
+            app._submit_program_load()
+            state = app._active_modal
+            assert isinstance(state, ProgramTargetDialogState)
+            state.strip_sections[0].target_list.current_values = ['esp-left']
+            state.strip_sections[1].target_list.current_values = ['sim-right']
+            app._apply_panel_update(DeviceCatalogSnapshotUpdate([
+                DeviceCatalogEntry(1, 'sim-left', 'sim', 'left', 5, True),
+                DeviceCatalogEntry(2, 'esp-left', 'esp32', 'left', 5, False),
+                DeviceCatalogEntry(3, 'sim-right', 'sim', 'right', 5, True),
+                DeviceCatalogEntry(4, 'esp-right', 'esp32', 'right', 5, True),
+            ]))
+            refreshed = app._active_modal
+            assert isinstance(refreshed, ProgramTargetDialogState)
+            assert refreshed.strip_sections[0].target_list.current_values == ['esp-left']
+            assert refreshed.strip_sections[1].target_list.current_values == ['sim-right']
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
 
     def test_program_manager_loop_toggle_changes_load_flag(self, tmp_path):
         app = TuiApp(

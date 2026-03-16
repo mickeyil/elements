@@ -138,7 +138,7 @@ These decisions are settled unless a later milestone explicitly revisits them:
 
 Milestone 1 is complete.
 
-## Active milestone
+## Completed milestone
 
 ### Milestone 2: TUI target-selection flow
 
@@ -171,9 +171,9 @@ Milestone 1 is complete.
   - selection remains device-based, routing remains named/config-driven
 - Add TUI tests for mirrored single-strip and multi-strip target-selection flows.
 
-Rounds 1 and 2 are complete.
+Milestone 2 is complete.
 
-## Later milestone
+## Active milestone
 
 ### Milestone 3: Scene loading
 
@@ -237,8 +237,8 @@ These are valid future items, but they are not the next implementation target:
 
 If asked "what's next?" and no newer decision has superseded this file, the answer is:
 
-1. **Milestone 2, Round 3**
-2. then **Milestone 3, Round 1**
-3. then **Milestone 3, Round 2**
+1. **Milestone 3, Round 1**
+2. then **Milestone 3, Round 2**
+3. then **Milestone 3, Round 3**
 
-Do not jump to scenes before the TUI target-selection flow is usable end to end.
+Scene loading is now the next milestone because the TUI target-selection flow is usable end to end.
