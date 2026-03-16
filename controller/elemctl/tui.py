@@ -59,7 +59,6 @@ _DEVICES_SENTINEL = object()
 _PROGRAMS_SENTINEL = object()
 _SESSION_SENTINEL = object()
 _NEWDEVICE_SENTINEL = object()
-_SCENE_SENTINEL = object()
 
 _COMMANDS = {
     'status', 'play', 'pause', 'stop', 'shutdown',
@@ -291,16 +290,6 @@ class ProgramTargetDialogState:
 
 
 @dataclass
-class SceneDialogState:
-    text_area: TextArea
-    submit_button: Button
-    close_button: Button
-    dialog: Dialog
-    error_text: str = ''
-    pending_request_id: int | None = None
-
-
-@dataclass
 class SessionManagerDialogState:
     mode: str
     play_button: Button | None
@@ -408,16 +397,14 @@ def parse_command(text: str, next_id: int) -> tuple[dict | None | object, str | 
             return None, "/newdevice does not take arguments"
         return _NEWDEVICE_SENTINEL, None
 
-    if name == 'scene':
-        if len(parts) > 1:
-            return None, "/scene does not take arguments"
-        return _SCENE_SENTINEL, None
-
     if name == 'rmdevice':
         return _parse_rmdevice(parts)
 
     if name == 'publish':
         return _parse_publish(parts, next_id)
+
+    if name == 'scene':
+        return _parse_scene(parts, next_id)
 
     if name == 'load':
         return _parse_load(parts, next_id)
@@ -485,6 +472,19 @@ def _parse_publish(parts: list[str], next_id: int) -> tuple[dict | None, str | N
         'cmd': 'publish',
         'path': path,
         'program_id': program_id,
+        'id': next_id,
+    }, None
+
+
+def _parse_scene(parts: list[str], next_id: int) -> tuple[dict | None, str | None]:
+    if len(parts) < 2:
+        return None, "/scene requires a file path"
+    args = parts[1].split()
+    if len(args) != 1:
+        return None, "/scene usage: /scene PATH"
+    return {
+        'cmd': 'scene',
+        'path': args[0],
         'id': next_id,
     }, None
 
@@ -1500,16 +1500,6 @@ class TuiApp:
                 modal.error_text = update.error or 'unknown error'
                 self._app.invalidate()
             return
-        if isinstance(modal, SceneDialogState):
-            if modal.pending_request_id != update.reply_id:
-                return
-            modal.pending_request_id = None
-            if update.ok:
-                self._close_modal()
-            else:
-                modal.error_text = update.error or 'unknown error'
-                self._app.invalidate()
-            return
         if isinstance(modal, SessionManagerDialogState):
             if modal.pending_request_id != update.reply_id:
                 return
@@ -1777,12 +1767,12 @@ class TuiApp:
             self._start_newdevice()
             return
 
-        if cmd is _SCENE_SENTINEL:
-            self._do_scene()
-            return
-
         if isinstance(cmd, dict) and cmd.get('cmd') == 'publish':
             self._do_publish(cmd)
+            return
+
+        if isinstance(cmd, dict) and cmd.get('cmd') == 'scene':
+            self._do_scene(cmd)
             return
 
         if isinstance(cmd, dict) and cmd.get('cmd') == 'load':
@@ -1815,7 +1805,7 @@ class TuiApp:
         self._local_log("  /help               show this help")
         self._local_log("  /devices            manage configured devices")
         self._local_log("  /programs           manage programs in the controller library")
-        self._local_log("  /scene              submit a scene JSON spec")
+        self._local_log("  /scene FILE         load a scene JSON file")
         self._local_log("  /session            manage live playback session")
         self._local_log("  /newdevice          open new device dialog")
         self._local_log("  /rmdevice UID       remove a configured device")
@@ -1867,14 +1857,38 @@ class TuiApp:
             return
         self._open_session_manager()
 
-    def _do_scene(self) -> None:
-        client = self._get_client()
-        if client is None:
-            self._local_log("controller not connected")
+    def _do_scene(self, cmd: dict) -> None:
+        path = cmd.get('path')
+        if not isinstance(path, str) or not path:
+            self._local_log("scene path is required")
             return
-        if self._active_modal is not None:
+
+        if self._get_client() is None:
+            self._local_log("not connected")
             return
-        self._open_scene_dialog()
+
+        source, error = self._read_publish_source(path)
+        if error is not None:
+            self._local_log(error.replace('cannot read ', 'cannot read scene ', 1))
+            return
+
+        try:
+            payload = json.loads(source)
+        except json.JSONDecodeError as e:
+            self._local_log(f'invalid scene JSON in {path}: {e.msg}')
+            return
+
+        if not isinstance(payload, dict):
+            self._local_log('scene file must contain a JSON object')
+            return
+
+        self._local_log(f"> /scene {path}")
+        _cmd_id, error = self._send_controller_cmd({
+            **payload,
+            'cmd': 'load_scene',
+        })
+        if error is not None:
+            self._local_log(error)
 
     def _do_rmdevice(self, device_uid: str) -> None:
         client = self._get_client()
@@ -2398,66 +2412,6 @@ class TuiApp:
         )
         self._set_modal(state, focus=focus_target)
 
-    @staticmethod
-    def _scene_template_text() -> str:
-        return json.dumps(
-            {
-                'loop': True,
-                'entries': [
-                    {
-                        'program_id': 'your_program',
-                        'targets': ['your_device'],
-                    }
-                ],
-            },
-            indent=2,
-        )
-
-    def _open_scene_dialog(
-        self,
-        *,
-        text: str | None = None,
-        error_text: str = '',
-        pending_request_id: int | None = None,
-    ) -> None:
-        text_area = TextArea(
-            text=self._scene_template_text() if text is None else text,
-            multiline=True,
-            wrap_lines=False,
-        )
-        submit_button = DialogButton('Submit', handler=self._submit_scene_dialog)
-        close_button = DialogButton('Close', handler=self._close_modal)
-        error_control = FormattedTextControl(
-            text=lambda: (
-                self._active_modal.error_text
-                if isinstance(self._active_modal, SceneDialogState)
-                else ' '
-            )
-        )
-        dialog = Dialog(
-            title='Load scene',
-            body=HSplit([
-                Label(text='Scene JSON', style='class:newdevice.label'),
-                text_area,
-                Window(height=1, content=error_control, style='class:newdevice.error'),
-                Label(
-                    text='Tab: move   Esc: close',
-                    style='class:newdevice.help',
-                ),
-            ]),
-            buttons=[submit_button, close_button],
-            with_background=True,
-        )
-        state = SceneDialogState(
-            text_area=text_area,
-            submit_button=submit_button,
-            close_button=close_button,
-            dialog=dialog,
-            error_text=error_text,
-            pending_request_id=pending_request_id,
-        )
-        self._set_modal(state, focus=text_area)
-
     def _start_program_publish(self) -> None:
         if not isinstance(self._active_modal, ProgramManagerDialogState):
             return
@@ -2639,37 +2593,6 @@ class TuiApp:
             return
 
         cmd_id, error = self._send_program_rescan_request()
-        if error is not None:
-            state.error_text = error
-            self._app.invalidate()
-            return
-        state.pending_request_id = cmd_id
-        state.error_text = ''
-
-    def _submit_scene_dialog(self) -> None:
-        state = self._active_modal
-        if not isinstance(state, SceneDialogState):
-            return
-        if state.pending_request_id is not None:
-            return
-
-        raw_text = state.text_area.text
-        try:
-            payload = json.loads(raw_text)
-        except json.JSONDecodeError as e:
-            state.error_text = f'invalid JSON: {e.msg}'
-            self._app.invalidate()
-            return
-
-        if not isinstance(payload, dict):
-            state.error_text = 'scene must be a JSON object'
-            self._app.invalidate()
-            return
-
-        cmd_id, error = self._send_controller_cmd({
-            **payload,
-            'cmd': 'load_scene',
-        })
         if error is not None:
             state.error_text = error
             self._app.invalidate()

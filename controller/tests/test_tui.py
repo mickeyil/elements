@@ -30,7 +30,6 @@ from elemctl.tui import (
     ProgramTargetDialogState,
     ProgramCatalogEntry,
     ProgramCatalogUpdate,
-    SceneDialogState,
     TuiApp,
     _decode_tui_message,
     format_event,
@@ -46,7 +45,6 @@ from elemctl.tui import (
     _PROGRAMS_SENTINEL,
     _QUIT_SENTINEL,
     _RESCAN_SENTINEL,
-    _SCENE_SENTINEL,
     _SESSION_SENTINEL,
 )
 from elemctl.uds_wire import KIND_JSON, KIND_FRAME, UdsReader, encode_json
@@ -328,8 +326,12 @@ class TestParseCommand:
         assert err is None
 
     def test_scene(self):
-        cmd, err = parse_command('/scene', 1)
-        assert cmd is _SCENE_SENTINEL
+        cmd, err = parse_command('/scene scenes/validate.json', 1)
+        assert cmd == {
+            'cmd': 'scene',
+            'path': 'scenes/validate.json',
+            'id': 1,
+        }
         assert err is None
 
     def test_rmdevice(self):
@@ -417,10 +419,15 @@ class TestParseCommand:
         assert cmd is None
         assert 'does not take arguments' in err
 
-    def test_scene_extra_args_rejected(self):
-        cmd, err = parse_command('/scene foo', 1)
+    def test_scene_requires_path(self):
+        cmd, err = parse_command('/scene', 1)
         assert cmd is None
-        assert 'does not take arguments' in err
+        assert 'requires a file path' in err
+
+    def test_scene_extra_args_rejected(self):
+        cmd, err = parse_command('/scene a.json extra', 1)
+        assert cmd is None
+        assert 'usage' in err
 
     # /publish
     def test_publish_by_path(self):
@@ -2700,32 +2707,21 @@ class TestSceneCommands:
         )
 
         try:
-            app._do_scene()
+            app._do_scene({'cmd': 'scene', 'path': 'scenes/validate.json', 'id': 1})
         finally:
             if app._log_fp is not None:
                 app._log_fp.close()
 
-        assert app._active_modal is None
-        assert any(line.endswith('controller not connected') for line in app._log_lines)
+        assert any(line.endswith('not connected') for line in app._log_lines)
 
-    def test_scene_opens_dialog(self, tmp_path):
-        app = TuiApp(
-            '/tmp/elemctl.sock',
-            log_file=str(tmp_path / 'tui.log'),
-        )
-        app._set_client(self._FakeClient())
-
-        try:
-            app._do_scene()
-            state = app._active_modal
-            assert isinstance(state, SceneDialogState)
-            assert '"cmd"' not in state.text_area.text
-            assert '"program_id": "your_program"' in state.text_area.text
-        finally:
-            if app._log_fp is not None:
-                app._log_fp.close()
-
-    def test_scene_submit_sends_load_scene(self, tmp_path):
+    def test_scene_sends_load_scene(self, tmp_path):
+        path = tmp_path / 'validate.json'
+        path.write_text(json.dumps({
+            'loop': True,
+            'entries': [
+                {'program_id': 'ambient', 'targets': ['sim-1']},
+            ],
+        }))
         app = TuiApp(
             '/tmp/elemctl.sock',
             log_file=str(tmp_path / 'tui.log'),
@@ -2734,17 +2730,7 @@ class TestSceneCommands:
         app._set_client(client)
 
         try:
-            app._do_scene()
-            state = app._active_modal
-            assert isinstance(state, SceneDialogState)
-            state.text_area.text = json.dumps({
-                'loop': True,
-                'entries': [
-                    {'program_id': 'ambient', 'targets': ['sim-1']},
-                ],
-            })
-            app._submit_scene_dialog()
-            assert state.pending_request_id == 1
+            app._do_scene({'cmd': 'scene', 'path': str(path), 'id': 1})
         finally:
             if app._log_fp is not None:
                 app._log_fp.close()
@@ -2757,8 +2743,30 @@ class TestSceneCommands:
             ],
             'id': 1,
         }]
+        assert any(line.endswith(f'> /scene {path}') for line in app._log_lines)
 
-    def test_scene_invalid_json_stays_inline(self, tmp_path):
+    def test_scene_missing_file_logs_local_error(self, tmp_path):
+        app = TuiApp(
+            '/tmp/elemctl.sock',
+            log_file=str(tmp_path / 'tui.log'),
+        )
+        app._set_client(self._FakeClient())
+        path = tmp_path / 'missing.json'
+
+        try:
+            app._do_scene({'cmd': 'scene', 'path': str(path), 'id': 1})
+        finally:
+            if app._log_fp is not None:
+                app._log_fp.close()
+
+        assert any(
+            line.endswith(f"cannot read scene {path}: [Errno 2] No such file or directory: '{path}'")
+            for line in app._log_lines
+        )
+
+    def test_scene_invalid_json_logs_local_error(self, tmp_path):
+        path = tmp_path / 'invalid.json'
+        path.write_text('{')
         app = TuiApp(
             '/tmp/elemctl.sock',
             log_file=str(tmp_path / 'tui.log'),
@@ -2766,18 +2774,19 @@ class TestSceneCommands:
         app._set_client(self._FakeClient())
 
         try:
-            app._do_scene()
-            state = app._active_modal
-            assert isinstance(state, SceneDialogState)
-            state.text_area.text = '{'
-            app._submit_scene_dialog()
-            assert 'invalid JSON:' in state.error_text
-            assert state.pending_request_id is None
+            app._do_scene({'cmd': 'scene', 'path': str(path), 'id': 1})
         finally:
             if app._log_fp is not None:
                 app._log_fp.close()
 
-    def test_scene_non_object_json_stays_inline(self, tmp_path):
+        assert any(
+            line.endswith(f'invalid scene JSON in {path}: Expecting property name enclosed in double quotes')
+            for line in app._log_lines
+        )
+
+    def test_scene_non_object_json_logs_local_error(self, tmp_path):
+        path = tmp_path / 'list.json'
+        path.write_text('[]')
         app = TuiApp(
             '/tmp/elemctl.sock',
             log_file=str(tmp_path / 'tui.log'),
@@ -2785,101 +2794,12 @@ class TestSceneCommands:
         app._set_client(self._FakeClient())
 
         try:
-            app._do_scene()
-            state = app._active_modal
-            assert isinstance(state, SceneDialogState)
-            state.text_area.text = '[]'
-            app._submit_scene_dialog()
-            assert state.error_text == 'scene must be a JSON object'
-            assert state.pending_request_id is None
+            app._do_scene({'cmd': 'scene', 'path': str(path), 'id': 1})
         finally:
             if app._log_fp is not None:
                 app._log_fp.close()
 
-    def test_scene_reply_error_stays_inline(self, tmp_path):
-        app = TuiApp(
-            '/tmp/elemctl.sock',
-            log_file=str(tmp_path / 'tui.log'),
-        )
-        client = self._FakeClient()
-        app._set_client(client)
-
-        try:
-            app._do_scene()
-            state = app._active_modal
-            assert isinstance(state, SceneDialogState)
-            state.text_area.text = json.dumps({
-                'loop': False,
-                'entries': [
-                    {'program_id': 'ambient', 'targets': ['sim-1']},
-                ],
-            })
-            app._submit_scene_dialog()
-            app._apply_panel_update(CommandReplyUpdate(
-                reply_id=1,
-                ok=False,
-                error='scene entries must share one duration',
-            ))
-            state = app._active_modal
-            assert isinstance(state, SceneDialogState)
-            assert state.error_text == 'scene entries must share one duration'
-            assert state.pending_request_id is None
-        finally:
-            if app._log_fp is not None:
-                app._log_fp.close()
-
-    def test_scene_success_closes_dialog(self, tmp_path):
-        app = TuiApp(
-            '/tmp/elemctl.sock',
-            log_file=str(tmp_path / 'tui.log'),
-        )
-        client = self._FakeClient()
-        app._set_client(client)
-
-        try:
-            app._do_scene()
-            state = app._active_modal
-            assert isinstance(state, SceneDialogState)
-            state.text_area.text = json.dumps({
-                'entries': [
-                    {'program_id': 'ambient', 'targets': ['sim-1']},
-                ],
-            })
-            app._submit_scene_dialog()
-            app._apply_panel_update(CommandReplyUpdate(reply_id=1, ok=True, error=None))
-            assert app._active_modal is None
-        finally:
-            if app._log_fp is not None:
-                app._log_fp.close()
-
-    def test_scene_draft_survives_refresh(self, tmp_path):
-        app = TuiApp(
-            '/tmp/elemctl.sock',
-            log_file=str(tmp_path / 'tui.log'),
-        )
-        app._set_client(self._FakeClient())
-
-        try:
-            app._do_scene()
-            state = app._active_modal
-            assert isinstance(state, SceneDialogState)
-            draft = json.dumps({
-                'entries': [
-                    {'program_id': 'ambient', 'targets': ['sim-1']},
-                    {'program_id': 'duo_show', 'targets': ['sim-left', 'sim-right']},
-                ],
-            }, indent=2)
-            state.text_area.text = draft
-            app._apply_panel_update(ProgramCatalogUpdate([
-                ProgramCatalogEntry('ambient', 1.0, 8.0, None),
-                ProgramCatalogEntry('duo_show', 1.0, 8.0, None),
-            ]))
-            refreshed = app._active_modal
-            assert isinstance(refreshed, SceneDialogState)
-            assert refreshed.text_area.text == draft
-        finally:
-            if app._log_fp is not None:
-                app._log_fp.close()
+        assert any(line.endswith('scene file must contain a JSON object') for line in app._log_lines)
 
 
 class TestSessionCommands:
