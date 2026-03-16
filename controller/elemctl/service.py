@@ -178,26 +178,7 @@ class ControllerService:
         program_id = cmd.get('program_id')
         targets = self._require_targets(cmd.get('targets'))
         loop = cmd.get('loop', False)
-        if not isinstance(program_id, str) or not program_id:
-            raise ValueError("missing 'program_id' field")
-
-        entry = self._library.get(program_id)
-        if entry is None:
-            raise ValueError(f'program not found: {program_id}')
-        if entry.error is not None:
-            raise ValueError(f'program {program_id} is not loadable: {entry.error}')
-        if entry.source is None or entry.source_hash is None:
-            raise ValueError(f'program {program_id} is missing source')
-        if entry.beat is None or entry.duration is None:
-            raise ValueError(f'program {program_id} is missing metadata')
-
-        topology = self._topology_fingerprint()
-        manifest = self._artifact_cache.get(entry.source_hash, topology)
-        if manifest is None:
-            manifest = self._compile(entry.source, entry.beat, entry.duration)
-            self._artifact_cache.put(entry.source_hash, topology, manifest)
-
-        target_groups = self._resolve_manifest_target_groups(manifest, targets)
+        _entry, manifest, target_groups = self._prepare_program_load(program_id, targets)
 
         if not self._controller.load(manifest, loop=loop, target_groups=target_groups):
             errors = self._controller.drain_events()
@@ -750,6 +731,97 @@ class ControllerService:
             seen.add(target)
             out.append(target)
         return out
+
+    def _prepare_program_load(
+        self,
+        program_id,
+        targets: list[str] | None,
+    ) -> tuple[ProgramEntry, object, list[list[int]]]:
+        if not isinstance(program_id, str) or not program_id:
+            raise ValueError("missing 'program_id' field")
+
+        entry = self._library.get(program_id)
+        if entry is None:
+            raise ValueError(f'program not found: {program_id}')
+        if entry.error is not None:
+            raise ValueError(f'program {program_id} is not loadable: {entry.error}')
+        if entry.source is None or entry.source_hash is None:
+            raise ValueError(f'program {program_id} is missing source')
+        if entry.beat is None or entry.duration is None:
+            raise ValueError(f'program {program_id} is missing metadata')
+
+        topology = self._topology_fingerprint()
+        manifest = self._artifact_cache.get(entry.source_hash, topology)
+        if manifest is None:
+            manifest = self._compile(entry.source, entry.beat, entry.duration)
+            self._artifact_cache.put(entry.source_hash, topology, manifest)
+
+        target_groups = self._resolve_manifest_target_groups(manifest, targets)
+        return entry, manifest, target_groups
+
+    def _prepare_scene_plan(self, cmd: dict) -> dict:
+        self._require_configured_devices_for_load()
+
+        loop = cmd.get('loop', False)
+        if not isinstance(loop, bool):
+            raise ValueError("'loop' must be a boolean")
+
+        entries = cmd.get('entries')
+        if entries is None:
+            raise ValueError("missing 'entries' field")
+        if not isinstance(entries, list) or not entries:
+            raise ValueError("'entries' must be a non-empty list")
+
+        prepared_entries: list[dict] = []
+        seen_targets: dict[str, tuple[int, str]] = {}
+
+        for entry_index, entry_cmd in enumerate(entries, start=1):
+            if not isinstance(entry_cmd, dict):
+                raise ValueError(f'entry {entry_index}: must be an object')
+
+            program_id = entry_cmd.get('program_id')
+            if not isinstance(program_id, str) or not program_id:
+                raise ValueError(f"entry {entry_index}: missing 'program_id' field")
+
+            if 'targets' not in entry_cmd:
+                raise ValueError(f"entry {entry_index} ({program_id}): missing 'targets' field")
+            try:
+                targets = self._require_targets(entry_cmd.get('targets'))
+            except ValueError as e:
+                raise ValueError(f'entry {entry_index} ({program_id}): {e}') from e
+            if not targets:
+                raise ValueError(f"entry {entry_index} ({program_id}): 'targets' must be a non-empty list")
+
+            for target in targets:
+                previous = seen_targets.get(target)
+                if previous is not None:
+                    prev_index, prev_program_id = previous
+                    raise ValueError(
+                        f'entry {entry_index} ({program_id}): duplicate target across scene: '
+                        f'{target} already used by entry {prev_index} ({prev_program_id})'
+                    )
+
+            try:
+                _entry, manifest, target_groups = self._prepare_program_load(program_id, targets)
+            except ValueError as e:
+                raise ValueError(f'entry {entry_index} ({program_id}): {e}') from e
+
+            for target in targets:
+                seen_targets[target] = (entry_index, program_id)
+
+            prepared_entries.append({
+                'program_id': program_id,
+                'targets': list(targets),
+                'manifest': manifest,
+                'target_groups': [list(group) for group in target_groups],
+                'duration': manifest.duration,
+                'safe_intervals': list(manifest.safe_intervals),
+            })
+
+        return {
+            'loop': loop,
+            'entries': prepared_entries,
+        }
 
     def _session_strips_to_wire(self, ctrl: Controller) -> list[dict]:
         strips = ctrl.session_strips

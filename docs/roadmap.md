@@ -197,11 +197,14 @@ Milestone 2 is complete.
 }
 ```
 
-#### Round 1: Scene format and service command
+#### Round 1: Scene format and service planning
 
-- Introduce a new command:
-  - `load_scene`
-- Define and document the scene schema.
+- Define and validate the scene schema.
+- Add internal service-side scene planning that:
+  - normalizes scene entries
+  - reuses per-program compile/target validation
+  - rejects duplicate physical target assignment across entries
+- Keep `load_scene` internal until Round 2 can execute it end to end.
 - Validate:
   - each entry program exists
   - each entry target list is valid
@@ -209,6 +212,7 @@ Milestone 2 is complete.
 
 #### Round 2: Global-session orchestration
 
+- Expose `load_scene` publicly once execution is wired.
 - Keep scene v1 within one global session/timeline.
 - Require all programs in the scene to have a compatible duration/timeline policy.
 - Define how global safe intervals are derived across scene entries.
@@ -219,6 +223,8 @@ Milestone 2 is complete.
 - Add a TUI path for submitting a scene file or scene spec.
 - Keep this separate from the simpler `/programs` flow.
 - Add tests and docs.
+
+Round 1 is complete.
 
 ## Backlog
 
@@ -237,8 +243,8 @@ These are valid future items, but they are not the next implementation target:
 
 If asked "what's next?" and no newer decision has superseded this file, the answer is:
 
-1. **Milestone 3, Round 1**
-2. then **Milestone 3, Round 2**
-3. then **Milestone 3, Round 3**
+1. **Milestone 3, Round 2**
+2. then **Milestone 3, Round 3**
+3. then backlog / follow-up docs as needed
 
 Scene loading is now the next milestone because the TUI target-selection flow is usable end to end.

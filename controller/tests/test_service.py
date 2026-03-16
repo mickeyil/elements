@@ -1211,6 +1211,246 @@ sp.schedule(s.pixels('0-4'), at=0, duration=sec(0.5))
             }
         ]
 
+
+class TestScenePlanning:
+    def test_prepare_scene_plan_valid(self):
+        entries = [
+            _make_program_entry('main_show', source=_MAIN_144_DSL),
+            _make_program_entry('duo_show', source=_LEFT_RIGHT_DSL),
+        ]
+        fake_devices = [_FakeDevice(), _FakeDevice(), _FakeDevice(), _FakeDevice()]
+        svc = ControllerService(
+            _make_mirrored_lr_config(),
+            receiver_factory=_NoopReceiver,
+            device_factory=_make_fake_factory(fake_devices),
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir, entries),
+        )
+
+        plan = svc._prepare_scene_plan({
+            'loop': True,
+            'entries': [
+                {'program_id': 'duo_show', 'targets': ['sim-left', 'esp-left', 'sim-right', 'esp-right']},
+            ],
+        })
+
+        assert plan['loop'] is True
+        assert [entry['program_id'] for entry in plan['entries']] == ['duo_show']
+        assert plan['entries'][0]['targets'] == ['sim-left', 'esp-left', 'sim-right', 'esp-right']
+        assert plan['entries'][0]['target_groups'] == [[0, 1], [2, 3]]
+        assert plan['entries'][0]['duration'] == 0.5
+        assert isinstance(plan['entries'][0]['safe_intervals'], list)
+
+    def test_prepare_scene_plan_preserves_request_order(self):
+        entries = [
+            _make_program_entry('main_show', source=_MAIN_144_DSL),
+            _make_program_entry('duo_show', source=_LEFT_RIGHT_DSL),
+        ]
+        fake_devices = [_FakeDevice(), _FakeDevice(), _FakeDevice(), _FakeDevice()]
+        svc = ControllerService(
+            Config(frame_port=1, devices=[
+                DeviceConfig(1, 'sim-main', 'sim', '127.0.0.1', 9001, 'main', 144),
+                DeviceConfig(2, 'sim-left', 'sim', '127.0.0.1', 9002, 'left', 5),
+                DeviceConfig(3, 'sim-right', 'sim', '127.0.0.1', 9003, 'right', 5),
+                DeviceConfig(4, 'esp-right', 'esp32', '127.0.0.1', 9004, 'right', 5),
+            ]),
+            receiver_factory=_NoopReceiver,
+            device_factory=_make_fake_factory(fake_devices),
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir, entries),
+        )
+
+        plan = svc._prepare_scene_plan({
+            'entries': [
+                {'program_id': 'duo_show', 'targets': ['sim-left', 'sim-right', 'esp-right']},
+                {'program_id': 'main_show', 'targets': ['sim-main']},
+            ],
+        })
+
+        assert [entry['program_id'] for entry in plan['entries']] == ['duo_show', 'main_show']
+
+    def test_prepare_scene_plan_empty_entries_rejected(self):
+        svc, _ = _make_service()
+
+        with pytest.raises(ValueError, match="'entries' must be a non-empty list"):
+            svc._prepare_scene_plan({'entries': []})
+
+    def test_prepare_scene_plan_missing_program_id_rejected(self):
+        svc, _ = _make_service()
+
+        with pytest.raises(ValueError, match="entry 1: missing 'program_id' field"):
+            svc._prepare_scene_plan({'entries': [{'targets': ['sim-1']}]})
+
+    def test_prepare_scene_plan_missing_targets_rejected(self):
+        entry = _make_program_entry('main_show')
+        svc, _ = _make_service(
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir, [entry]),
+        )
+
+        with pytest.raises(ValueError, match=r"entry 1 \(main_show\): missing 'targets' field"):
+            svc._prepare_scene_plan({'entries': [{'program_id': 'main_show'}]})
+
+    def test_prepare_scene_plan_empty_targets_rejected(self):
+        entry = _make_program_entry('main_show')
+        svc, _ = _make_service(
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir, [entry]),
+        )
+
+        with pytest.raises(ValueError, match=r"entry 1 \(main_show\): 'targets' must be a non-empty list"):
+            svc._prepare_scene_plan({'entries': [{'program_id': 'main_show', 'targets': []}]})
+
+    def test_prepare_scene_plan_unknown_program_rejected_with_context(self):
+        svc, _ = _make_service()
+
+        with pytest.raises(ValueError, match=r"entry 1 \(missing\): program not found: missing"):
+            svc._prepare_scene_plan({'entries': [{'program_id': 'missing', 'targets': ['sim-1']}]})
+
+    def test_prepare_scene_plan_broken_program_rejected_with_context(self):
+        entry = _make_program_entry('broken', error='missing DURATION')
+        svc, _ = _make_service(
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir, [entry]),
+        )
+
+        with pytest.raises(
+            ValueError,
+            match=r"entry 1 \(broken\): program broken is not loadable: missing DURATION",
+        ):
+            svc._prepare_scene_plan({'entries': [{'program_id': 'broken', 'targets': ['sim-1']}]})
+
+    def test_prepare_scene_plan_unknown_target_rejected_with_context(self):
+        entry = _make_program_entry('main_show')
+        svc, _ = _make_service(
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir, [entry]),
+        )
+
+        with pytest.raises(
+            ValueError,
+            match=r"entry 1 \(main_show\): target not found: missing",
+        ):
+            svc._prepare_scene_plan({'entries': [{'program_id': 'main_show', 'targets': ['missing']}]})
+
+    def test_prepare_scene_plan_duplicate_target_within_entry_rejected_with_context(self):
+        entry = _make_program_entry('main_show')
+        svc, _ = _make_service(
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir, [entry]),
+        )
+
+        with pytest.raises(
+            ValueError,
+            match=r"entry 1 \(main_show\): duplicate target: sim-1",
+        ):
+            svc._prepare_scene_plan({
+                'entries': [{'program_id': 'main_show', 'targets': ['sim-1', 'sim-1']}],
+            })
+
+    def test_prepare_scene_plan_duplicate_target_across_entries_rejected(self):
+        entry = _make_program_entry('main_show', source=_MAIN_144_DSL)
+        fake_devices = [_FakeDevice(), _FakeDevice()]
+        svc = ControllerService(
+            _make_mirrored_main_config(),
+            receiver_factory=_NoopReceiver,
+            device_factory=_make_fake_factory(fake_devices),
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir, [entry]),
+        )
+
+        with pytest.raises(
+            ValueError,
+            match=r"entry 2 \(main_show\): duplicate target across scene: sim-144 already used by entry 1 \(main_show\)",
+        ):
+            svc._prepare_scene_plan({
+                'entries': [
+                    {'program_id': 'main_show', 'targets': ['sim-144']},
+                    {'program_id': 'main_show', 'targets': ['sim-144']},
+                ],
+            })
+
+    def test_prepare_scene_plan_missing_strip_coverage_rejected_with_context(self):
+        entry = _make_program_entry('duo_show', source=_LEFT_RIGHT_DSL)
+        fake_devices = [_FakeDevice(), _FakeDevice(), _FakeDevice(), _FakeDevice()]
+        svc = ControllerService(
+            _make_mirrored_lr_config(),
+            receiver_factory=_NoopReceiver,
+            device_factory=_make_fake_factory(fake_devices),
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir, [entry]),
+        )
+
+        with pytest.raises(
+            ValueError,
+            match=r"entry 1 \(duo_show\): missing targets for strip: right",
+        ):
+            svc._prepare_scene_plan({
+                'entries': [{'program_id': 'duo_show', 'targets': ['sim-left', 'esp-left']}],
+            })
+
+    def test_prepare_scene_plan_unused_target_rejected_with_context(self):
+        entry = _make_program_entry('main_show', source=_MAIN_144_DSL)
+        config = Config(frame_port=1, devices=[
+            DeviceConfig(1, 'sim-144', 'sim', '127.0.0.1', 9001, 'main', 144),
+            DeviceConfig(2, 'sim-bench', 'sim', '127.0.0.1', 9002, 'bench', 144),
+        ])
+        fake_devices = [_FakeDevice(), _FakeDevice()]
+        svc = ControllerService(
+            config,
+            receiver_factory=_NoopReceiver,
+            device_factory=_make_fake_factory(fake_devices),
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir, [entry]),
+        )
+
+        with pytest.raises(
+            ValueError,
+            match=r"entry 1 \(main_show\): unused target: sim-bench",
+        ):
+            svc._prepare_scene_plan({
+                'entries': [{'program_id': 'main_show', 'targets': ['sim-144', 'sim-bench']}],
+            })
+
+    def test_prepare_scene_plan_shorter_target_rejected_with_context(self):
+        entry = _make_program_entry('main_show', source=_MAIN_144_DSL)
+        config = Config(frame_port=1, devices=[
+            DeviceConfig(1, 'sim-100', 'sim', '127.0.0.1', 9001, 'main', 100),
+        ])
+        fake_devices = [_FakeDevice()]
+        svc = ControllerService(
+            config,
+            receiver_factory=_NoopReceiver,
+            device_factory=_make_fake_factory(fake_devices),
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir, [entry]),
+        )
+
+        with pytest.raises(
+            ValueError,
+            match=r"entry 1 \(main_show\): strip 'main' length 144 exceeds configured length 100",
+        ):
+            svc._prepare_scene_plan({
+                'entries': [{'program_id': 'main_show', 'targets': ['sim-100']}],
+            })
+
+    def test_prepare_scene_plan_same_program_disjoint_targets_reuses_cache(self, monkeypatch):
+        entry = _make_program_entry('main_show', source=_MAIN_144_DSL)
+        fake_devices = [_FakeDevice(), _FakeDevice()]
+        svc = ControllerService(
+            _make_mirrored_main_config(),
+            receiver_factory=_NoopReceiver,
+            device_factory=_make_fake_factory(fake_devices),
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir, [entry]),
+        )
+        calls = []
+        original = svc._compile
+
+        def wrapped_compile(source, beat, duration):
+            calls.append((source, beat, duration))
+            return original(source, beat, duration)
+
+        monkeypatch.setattr(svc, '_compile', wrapped_compile)
+
+        plan = svc._prepare_scene_plan({
+            'entries': [
+                {'program_id': 'main_show', 'targets': ['sim-144']},
+                {'program_id': 'main_show', 'targets': ['esp-144']},
+            ],
+        })
+
+        assert [entry['targets'] for entry in plan['entries']] == [['sim-144'], ['esp-144']]
+        assert len(calls) == 1
+
     def test_publish_program_same_source_keeps_cache_hit(self, monkeypatch):
         fake_library = _FakeLibrary('/tmp/programs')
         svc, _ = _make_service(
