@@ -32,6 +32,7 @@ from elemctl.uds_wire import (
     encode_json,
     parse_json_payload,
 )
+from elements.types import CompiledManifest, CompiledStripArtifact
 
 
 # ---------------------------------------------------------------------------
@@ -1450,6 +1451,241 @@ class TestScenePlanning:
 
         assert [entry['targets'] for entry in plan['entries']] == [['sim-144'], ['esp-144']]
         assert len(calls) == 1
+
+
+class TestSceneLoading:
+    def test_intersect_safe_intervals_overlap(self):
+        svc, _ = _make_service()
+        assert svc._intersect_safe_intervals(
+            [(0.0, 0.0), (1.0, 4.0)],
+            [(0.0, 0.0), (2.0, 5.0)],
+        ) == [(0.0, 0.0), (2.0, 4.0)]
+
+    def test_intersect_safe_intervals_disjoint(self):
+        svc, _ = _make_service()
+        assert svc._intersect_safe_intervals(
+            [(0.0, 0.0), (1.0, 2.0)],
+            [(3.0, 4.0)],
+        ) == []
+
+    def test_intersect_safe_intervals_empty_side(self):
+        svc, _ = _make_service()
+        assert svc._intersect_safe_intervals([(0.0, 1.0)], []) == []
+
+    def test_load_scene_valid(self):
+        entries = [
+            _make_program_entry('main_show', source=_MAIN_144_DSL),
+            _make_program_entry('duo_show', source=_LEFT_RIGHT_DSL),
+        ]
+        config = Config(frame_port=1, devices=[
+            DeviceConfig(1, 'sim-144', 'sim', '127.0.0.1', 9001, 'main', 144),
+            DeviceConfig(2, 'esp-144', 'esp32', '127.0.0.1', 9002, 'main', 144),
+            DeviceConfig(3, 'sim-left', 'sim', '127.0.0.1', 9003, 'left', 5),
+            DeviceConfig(4, 'esp-left', 'esp32', '127.0.0.1', 9004, 'left', 5),
+            DeviceConfig(5, 'sim-right', 'sim', '127.0.0.1', 9005, 'right', 5),
+            DeviceConfig(6, 'esp-right', 'esp32', '127.0.0.1', 9006, 'right', 5),
+        ])
+        fake_devices = [_FakeDevice() for _ in range(6)]
+        svc = ControllerService(
+            config,
+            receiver_factory=_NoopReceiver,
+            device_factory=_make_fake_factory(fake_devices),
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir, entries),
+        )
+
+        reply = svc.handle_cmd({
+            'id': 40,
+            'cmd': 'load_scene',
+            'loop': True,
+            'entries': [
+                {'program_id': 'main_show', 'targets': ['sim-144', 'esp-144']},
+                {'program_id': 'duo_show', 'targets': ['sim-left', 'esp-left', 'sim-right', 'esp-right']},
+            ],
+        })
+
+        assert reply['ok'] is True
+        assert reply['result']['session_id'] == 1
+        assert [dev.load_calls for dev in fake_devices] == [1, 1, 1, 1, 1, 1]
+
+        snap = svc.build_snapshot()
+        assert snap['session']['duration'] == 0.5
+        assert snap['session']['strips'] == [
+            {
+                'name': 'main',
+                'length': 144,
+                'targets': [
+                    {'device_id': 1, 'device_uid': 'sim-144', 'length': 144},
+                    {'device_id': 2, 'device_uid': 'esp-144', 'length': 144},
+                ],
+            },
+            {
+                'name': 'left',
+                'length': 5,
+                'targets': [
+                    {'device_id': 3, 'device_uid': 'sim-left', 'length': 5},
+                    {'device_id': 4, 'device_uid': 'esp-left', 'length': 5},
+                ],
+            },
+            {
+                'name': 'right',
+                'length': 5,
+                'targets': [
+                    {'device_id': 5, 'device_uid': 'sim-right', 'length': 5},
+                    {'device_id': 6, 'device_uid': 'esp-right', 'length': 5},
+                ],
+            },
+        ]
+
+        json_msgs, _ = svc.tick_once()
+        events = _decode_json_msgs(json_msgs)
+        session_start = next(e for e in events if e.get('event') == 'session_start')
+        assert session_start['strips'] == snap['session']['strips']
+
+    def test_load_scene_repeated_program_id_disjoint_targets_allowed(self):
+        entry = _make_program_entry('main_show', source=_MAIN_144_DSL)
+        fake_devices = [_FakeDevice(), _FakeDevice()]
+        svc = ControllerService(
+            _make_mirrored_main_config(),
+            receiver_factory=_NoopReceiver,
+            device_factory=_make_fake_factory(fake_devices),
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir, [entry]),
+        )
+
+        reply = svc.handle_cmd({
+            'id': 41,
+            'cmd': 'load_scene',
+            'entries': [
+                {'program_id': 'main_show', 'targets': ['sim-144']},
+                {'program_id': 'main_show', 'targets': ['esp-144']},
+            ],
+        })
+
+        assert reply['ok'] is True
+        assert [dev.load_calls for dev in fake_devices] == [1, 1]
+        assert svc.build_snapshot()['session']['strips'] == [
+            {
+                'name': 'main',
+                'length': 144,
+                'targets': [{'device_id': 1, 'device_uid': 'sim-144', 'length': 144}],
+            },
+            {
+                'name': 'main',
+                'length': 144,
+                'targets': [{'device_id': 2, 'device_uid': 'esp-144', 'length': 144}],
+            },
+        ]
+
+    def test_load_scene_rejects_mismatched_durations(self):
+        entries = [
+            _make_program_entry('short_show', source=_SIMPLE_DSL, duration=0.5),
+            _make_program_entry(
+                'long_show',
+                source="BEAT = 1.0\nDURATION = 1.0\n" + _SIMPLE_DSL,
+                duration=1.0,
+            ),
+        ]
+        config = Config(frame_port=1, devices=[
+            DeviceConfig(1, 'sim-1', 'sim', '127.0.0.1', 9001, 'test', 5),
+            DeviceConfig(2, 'sim-2', 'sim', '127.0.0.1', 9002, 'test', 5),
+        ])
+        svc = ControllerService(
+            config,
+            receiver_factory=_NoopReceiver,
+            device_factory=_make_fake_factory([_FakeDevice(), _FakeDevice()]),
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir, entries),
+        )
+
+        reply = svc.handle_cmd({
+            'id': 42,
+            'cmd': 'load_scene',
+            'entries': [
+                {'program_id': 'short_show', 'targets': ['sim-1']},
+                {'program_id': 'long_show', 'targets': ['sim-2']},
+            ],
+        })
+
+        assert reply['ok'] is False
+        assert 'scene entries must share one duration' in reply['error']
+
+    def test_load_scene_rejects_duplicate_target_across_entries(self):
+        entry = _make_program_entry('main_show', source=_MAIN_144_DSL)
+        fake_devices = [_FakeDevice(), _FakeDevice()]
+        svc = ControllerService(
+            _make_mirrored_main_config(),
+            receiver_factory=_NoopReceiver,
+            device_factory=_make_fake_factory(fake_devices),
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir, [entry]),
+        )
+
+        reply = svc.handle_cmd({
+            'id': 43,
+            'cmd': 'load_scene',
+            'entries': [
+                {'program_id': 'main_show', 'targets': ['sim-144']},
+                {'program_id': 'main_show', 'targets': ['sim-144']},
+            ],
+        })
+
+        assert reply['ok'] is False
+        assert (
+            reply['error']
+            == 'entry 2 (main_show): duplicate target across scene: sim-144 already used by entry 1 (main_show)'
+        )
+
+    def test_load_scene_allows_empty_merged_safe_intervals(self):
+        config = Config(frame_port=1, devices=[
+            DeviceConfig(1, 'sim-1', 'sim', '127.0.0.1', 9001, 'test-a', 5),
+            DeviceConfig(2, 'sim-2', 'sim', '127.0.0.1', 9002, 'test-b', 5),
+        ])
+        fake_devices = [_FakeDevice(), _FakeDevice()]
+        svc = ControllerService(
+            config,
+            receiver_factory=_NoopReceiver,
+            device_factory=_make_fake_factory(fake_devices),
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir),
+        )
+
+        def fake_prepare(cmd):
+            return {
+                'loop': cmd.get('loop', False),
+                'entries': [
+                    {
+                        'program_id': 'alpha',
+                        'targets': ['sim-1'],
+                        'manifest': CompiledManifest(
+                            duration=1.0,
+                            strips=[CompiledStripArtifact('test-a', 5, b'a')],
+                            safe_intervals=[(0.0, 0.0), (1.0, 2.0)],
+                        ),
+                        'target_groups': [[0]],
+                        'duration': 1.0,
+                        'safe_intervals': [(0.0, 0.0), (1.0, 2.0)],
+                    },
+                    {
+                        'program_id': 'beta',
+                        'targets': ['sim-2'],
+                        'manifest': CompiledManifest(
+                            duration=1.0,
+                            strips=[CompiledStripArtifact('test-b', 5, b'b')],
+                            safe_intervals=[(3.0, 4.0)],
+                        ),
+                        'target_groups': [[1]],
+                        'duration': 1.0,
+                        'safe_intervals': [(3.0, 4.0)],
+                    },
+                ],
+            }
+
+        svc._prepare_scene_plan = fake_prepare
+
+        reply = svc.handle_cmd({
+            'id': 44,
+            'cmd': 'load_scene',
+            'entries': [{'program_id': 'ignored', 'targets': ['sim-1']}],
+        })
+
+        assert reply['ok'] is True
+        assert svc.build_snapshot()['session']['safe_intervals'] == []
 
     def test_publish_program_same_source_keeps_cache_hit(self, monkeypatch):
         fake_library = _FakeLibrary('/tmp/programs')

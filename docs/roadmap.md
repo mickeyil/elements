@@ -224,7 +224,7 @@ Milestone 2 is complete.
 - Keep this separate from the simpler `/programs` flow.
 - Add tests and docs.
 
-Round 1 is complete.
+Rounds 1 and 2 are complete.
 
 ## Backlog
 
@@ -243,8 +243,7 @@ These are valid future items, but they are not the next implementation target:
 
 If asked "what's next?" and no newer decision has superseded this file, the answer is:
 
-1. **Milestone 3, Round 2**
-2. then **Milestone 3, Round 3**
-3. then backlog / follow-up docs as needed
+1. **Milestone 3, Round 3**
+2. then backlog / follow-up docs as needed
 
-Scene loading is now the next milestone because the TUI target-selection flow is usable end to end.
+Scene loading remains the active milestone; the next implementation step is the TUI scene workflow.

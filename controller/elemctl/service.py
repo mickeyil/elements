@@ -14,6 +14,8 @@ import math
 import re
 import time
 
+from elements.types import CompiledManifest, CompiledStripArtifact
+
 from .config import (
     DEFAULT_ANIMATIONS_PATH,
     Config,
@@ -124,6 +126,7 @@ class ControllerService:
             'status': self._cmd_status,
             'load': self._cmd_load,
             'load_program': self._cmd_load_program,
+            'load_scene': self._cmd_load_scene,
             'play': self._cmd_play,
             'pause': self._cmd_pause,
             'publish_program': self._cmd_publish_program,
@@ -181,6 +184,57 @@ class ControllerService:
         _entry, manifest, target_groups = self._prepare_program_load(program_id, targets)
 
         if not self._controller.load(manifest, loop=loop, target_groups=target_groups):
+            errors = self._controller.drain_events()
+            msg = '; '.join(e.message for e in errors if e.message)
+            raise ValueError(f"load failed: {msg}" if msg else "load failed")
+
+        return {'session_id': self._controller.session_id}
+
+    def _cmd_load_scene(self, cmd: dict) -> dict:
+        plan = self._prepare_scene_plan(cmd)
+        entries = plan['entries']
+        if not entries:
+            raise ValueError('scene must contain at least one entry')
+
+        duration = entries[0]['duration']
+        combined_strips: list[CompiledStripArtifact] = []
+        combined_target_groups: list[list[int]] = []
+        merged_safe_intervals = list(entries[0]['safe_intervals'])
+
+        for index, entry in enumerate(entries):
+            entry_duration = entry['duration']
+            if not math.isclose(duration, entry_duration, rel_tol=0.0, abs_tol=1e-9):
+                raise ValueError(
+                    'scene entries must share one duration '
+                    f'(entry {index + 1} {entry["program_id"]}: {entry_duration:g}s '
+                    f'!= {duration:g}s)'
+                )
+            manifest = entry['manifest']
+            combined_strips.extend(manifest.strips)
+            combined_target_groups.extend(entry['target_groups'])
+            if index > 0:
+                merged_safe_intervals = self._intersect_safe_intervals(
+                    merged_safe_intervals,
+                    entry['safe_intervals'],
+                )
+
+        manifest = CompiledManifest(
+            duration=duration,
+            strips=[
+                CompiledStripArtifact(
+                    strip_id=strip.strip_id,
+                    length=strip.length,
+                    blob=strip.blob,
+                )
+                for strip in combined_strips
+            ],
+            safe_intervals=merged_safe_intervals,
+        )
+        if not self._controller.load(
+            manifest,
+            loop=plan['loop'],
+            target_groups=combined_target_groups,
+        ):
             errors = self._controller.drain_events()
             msg = '; '.join(e.message for e in errors if e.message)
             raise ValueError(f"load failed: {msg}" if msg else "load failed")
@@ -822,6 +876,27 @@ class ControllerService:
             'loop': loop,
             'entries': prepared_entries,
         }
+
+    @staticmethod
+    def _intersect_safe_intervals(
+        left: list[tuple[float, float]],
+        right: list[tuple[float, float]],
+    ) -> list[tuple[float, float]]:
+        if not left or not right:
+            return []
+        i = 0
+        j = 0
+        out: list[tuple[float, float]] = []
+        while i < len(left) and j < len(right):
+            lo = max(left[i][0], right[j][0])
+            hi = min(left[i][1], right[j][1])
+            if lo <= hi:
+                out.append((lo, hi))
+            if left[i][1] < right[j][1]:
+                i += 1
+            else:
+                j += 1
+        return out
 
     def _session_strips_to_wire(self, ctrl: Controller) -> list[dict]:
         strips = ctrl.session_strips
