@@ -918,6 +918,7 @@ sp.schedule(s.pixels(f'0-{s.length - 1}'), at=0, duration=sec(0.5))
                     {
                         'device_id': 1,
                         'device_uid': 'sim-1',
+                        'device_type': 'sim',
                         'length': 5,
                     }
                 ],
@@ -982,8 +983,8 @@ sp.schedule(s.pixels(f'0-{s.length - 1}'), at=0, duration=sec(0.5))
                 'name': 'main',
                 'length': 144,
                 'targets': [
-                    {'device_id': 1, 'device_uid': 'sim-144', 'length': 144},
-                    {'device_id': 2, 'device_uid': 'esp-144', 'length': 144},
+                    {'device_id': 1, 'device_uid': 'sim-144', 'device_type': 'sim', 'length': 144},
+                    {'device_id': 2, 'device_uid': 'esp-144', 'device_type': 'esp32', 'length': 144},
                 ],
             }
         ]
@@ -996,8 +997,8 @@ sp.schedule(s.pixels(f'0-{s.length - 1}'), at=0, duration=sec(0.5))
                 'name': 'main',
                 'length': 144,
                 'targets': [
-                    {'device_id': 1, 'device_uid': 'sim-144', 'length': 144},
-                    {'device_id': 2, 'device_uid': 'esp-144', 'length': 144},
+                    {'device_id': 1, 'device_uid': 'sim-144', 'device_type': 'sim', 'length': 144},
+                    {'device_id': 2, 'device_uid': 'esp-144', 'device_type': 'esp32', 'length': 144},
                 ],
             }
         ]
@@ -1165,16 +1166,16 @@ sp.schedule(s.pixels(f'0-{s.length - 1}'), at=0, duration=sec(0.5))
                 'name': 'left',
                 'length': 5,
                 'targets': [
-                    {'device_id': 1, 'device_uid': 'sim-left', 'length': 5},
-                    {'device_id': 2, 'device_uid': 'esp-left', 'length': 5},
+                    {'device_id': 1, 'device_uid': 'sim-left', 'device_type': 'sim', 'length': 5},
+                    {'device_id': 2, 'device_uid': 'esp-left', 'device_type': 'esp32', 'length': 5},
                 ],
             },
             {
                 'name': 'right',
                 'length': 5,
                 'targets': [
-                    {'device_id': 3, 'device_uid': 'sim-right', 'length': 5},
-                    {'device_id': 4, 'device_uid': 'esp-right', 'length': 5},
+                    {'device_id': 3, 'device_uid': 'sim-right', 'device_type': 'sim', 'length': 5},
+                    {'device_id': 4, 'device_uid': 'esp-right', 'device_type': 'esp32', 'length': 5},
                 ],
             },
         ]
@@ -1207,7 +1208,7 @@ sp.schedule(s.pixels('0-4'), at=0, duration=sec(0.5))
                 'name': 'main',
                 'length': 5,
                 'targets': [
-                    {'device_id': 1, 'device_uid': 'esp-main', 'length': 10},
+                    {'device_id': 1, 'device_uid': 'esp-main', 'device_type': 'esp32', 'length': 10},
                 ],
             }
         ]
@@ -1514,24 +1515,24 @@ class TestSceneLoading:
                 'name': 'main',
                 'length': 144,
                 'targets': [
-                    {'device_id': 1, 'device_uid': 'sim-144', 'length': 144},
-                    {'device_id': 2, 'device_uid': 'esp-144', 'length': 144},
+                    {'device_id': 1, 'device_uid': 'sim-144', 'device_type': 'sim', 'length': 144},
+                    {'device_id': 2, 'device_uid': 'esp-144', 'device_type': 'esp32', 'length': 144},
                 ],
             },
             {
                 'name': 'left',
                 'length': 5,
                 'targets': [
-                    {'device_id': 3, 'device_uid': 'sim-left', 'length': 5},
-                    {'device_id': 4, 'device_uid': 'esp-left', 'length': 5},
+                    {'device_id': 3, 'device_uid': 'sim-left', 'device_type': 'sim', 'length': 5},
+                    {'device_id': 4, 'device_uid': 'esp-left', 'device_type': 'esp32', 'length': 5},
                 ],
             },
             {
                 'name': 'right',
                 'length': 5,
                 'targets': [
-                    {'device_id': 5, 'device_uid': 'sim-right', 'length': 5},
-                    {'device_id': 6, 'device_uid': 'esp-right', 'length': 5},
+                    {'device_id': 5, 'device_uid': 'sim-right', 'device_type': 'sim', 'length': 5},
+                    {'device_id': 6, 'device_uid': 'esp-right', 'device_type': 'esp32', 'length': 5},
                 ],
             },
         ]
@@ -1566,12 +1567,12 @@ class TestSceneLoading:
             {
                 'name': 'main',
                 'length': 144,
-                'targets': [{'device_id': 1, 'device_uid': 'sim-144', 'length': 144}],
+                'targets': [{'device_id': 1, 'device_uid': 'sim-144', 'device_type': 'sim', 'length': 144}],
             },
             {
                 'name': 'main',
                 'length': 144,
-                'targets': [{'device_id': 2, 'device_uid': 'esp-144', 'length': 144}],
+                'targets': [{'device_id': 2, 'device_uid': 'esp-144', 'device_type': 'esp32', 'length': 144}],
             },
         ]
 

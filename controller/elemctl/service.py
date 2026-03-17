@@ -916,6 +916,7 @@ class ControllerService:
                 targets.append({
                     'device_id': dc.device_id,
                     'device_uid': dc.device_uid,
+                    'device_type': dc.device_type,
                     'length': dc.length,
                 })
             wire.append({
