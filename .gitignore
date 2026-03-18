@@ -10,6 +10,8 @@ bin/*
 .pio/
 compiler/.venv/
 compiler/.pytest_cache/
+controller/web_ui/node_modules/
+controller/web_ui/.vite/
 *.egg-info/
 __pycache__/
 build/

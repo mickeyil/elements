@@ -9,13 +9,14 @@ import copy
 import hashlib
 import json
 import logging
+import mimetypes
 import os
 import select
 import struct
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from .config import (
     DEFAULT_CONFIG_PATH,
@@ -35,6 +36,7 @@ from .version import get_runtime_version
 log = logging.getLogger(__name__)
 
 _STATIC_DIR = Path(__file__).resolve().parent / 'web_static'
+_STATIC_ROOT = _STATIC_DIR.resolve()
 _WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
 _FRAME_HEADER = struct.Struct('<If')
 _HTTP_TYPES = {
@@ -107,6 +109,21 @@ def _encode_ws_frame(opcode: int, payload: bytes) -> bytes:
         head.append(127)
         head.extend(size.to_bytes(8, 'big'))
     return bytes(head) + payload
+
+
+def _resolve_asset_path(path: str) -> Path | None:
+    rel = 'index.html' if path in ('', '/') else unquote(path.lstrip('/'))
+    if not rel:
+        rel = 'index.html'
+
+    asset_path = (_STATIC_ROOT / rel).resolve()
+    try:
+        asset_path.relative_to(_STATIC_ROOT)
+    except ValueError:
+        return None
+    if not asset_path.is_file():
+        return None
+    return asset_path
 
 
 class WebRelay:
@@ -411,27 +428,26 @@ class WebRelay:
             await writer.wait_closed()
 
     async def _serve_asset(self, path: str, writer: asyncio.StreamWriter) -> None:
-        rel = {
-            '/': 'index.html',
-            '/app.js': 'app.js',
-            '/style.css': 'style.css',
-        }.get(path)
-        if rel is None:
+        asset_path = _resolve_asset_path(path)
+        if asset_path is None:
             await self._write_http_response(writer, 404, b'not found')
             return
 
-        asset_path = _STATIC_DIR / rel
         try:
             body = asset_path.read_bytes()
         except OSError:
             await self._write_http_response(writer, 500, b'missing asset')
             return
 
+        content_type = _HTTP_TYPES.get(asset_path.suffix)
+        if content_type is None:
+            content_type = mimetypes.guess_type(str(asset_path))[0] or 'application/octet-stream'
+
         await self._write_http_response(
             writer,
             200,
             body,
-            content_type=_HTTP_TYPES.get(asset_path.suffix, 'application/octet-stream'),
+            content_type=content_type,
         )
 
     async def _write_http_response(

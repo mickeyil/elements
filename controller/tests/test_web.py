@@ -1,9 +1,11 @@
+import elemctl.web as web_mod
 from elemctl.uds_wire import PROTOCOL_VERSION
 from elemctl.web import (
     WebRelay,
     _build_parser,
     _encode_ws_frame,
     _make_disconnected_snapshot,
+    _resolve_asset_path,
 )
 
 
@@ -121,6 +123,31 @@ def test_make_disconnected_snapshot_preserves_layouts():
     assert out['layouts'] == {'sim-1': {'rows': [[1], [2]]}}
     assert out['session'] is None
     assert out['devices'][0]['connected'] is False
+
+
+def test_resolve_asset_path_allows_nested_assets(tmp_path, monkeypatch):
+    static_dir = tmp_path / 'web_static'
+    asset_dir = static_dir / 'assets'
+    asset_dir.mkdir(parents=True)
+    asset_path = asset_dir / 'index-abc123.js'
+    asset_path.write_text('console.log("ok")', encoding='utf-8')
+
+    monkeypatch.setattr(web_mod, '_STATIC_DIR', static_dir)
+    monkeypatch.setattr(web_mod, '_STATIC_ROOT', static_dir.resolve())
+
+    assert _resolve_asset_path('/assets/index-abc123.js') == asset_path.resolve()
+
+
+def test_resolve_asset_path_rejects_traversal(tmp_path, monkeypatch):
+    static_dir = tmp_path / 'web_static'
+    static_dir.mkdir()
+    (tmp_path / 'secret.txt').write_text('nope', encoding='utf-8')
+
+    monkeypatch.setattr(web_mod, '_STATIC_DIR', static_dir)
+    monkeypatch.setattr(web_mod, '_STATIC_ROOT', static_dir.resolve())
+
+    assert _resolve_asset_path('/../secret.txt') is None
+    assert _resolve_asset_path('/..%2Fsecret.txt') is None
 
 
 def test_web_parser_defaults_bind_all_interfaces():
