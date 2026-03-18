@@ -3,7 +3,15 @@ from pathlib import Path
 import pytest
 
 from elemctl.config import DeviceConfig
-from elemctl.sim_layout import LayoutError, load_layouts_for_devices, parse_layout_csv
+from elemctl.sim_layout import (
+    LayoutError,
+    canonical_csv_hash,
+    load_layout_for_editor,
+    load_layouts_for_devices,
+    parse_layout_csv,
+    rows_to_canonical_csv,
+    save_layout_for_editor,
+)
 
 
 def _sim_device(device_uid: str = 'sim-1', length: int = 10) -> DeviceConfig:
@@ -96,3 +104,106 @@ def test_load_layouts_for_devices_skips_missing_and_invalid(tmp_path, caplog):
     assert 'sim-2' not in layouts
     assert 'sim-3' not in layouts
     assert 'ignoring invalid layout for sim-2' in caplog.text
+
+
+def test_rows_to_canonical_csv_trims_empty_border():
+    csv_text = rows_to_canonical_csv(
+        [
+            [None, None, None, None],
+            [None, 1, 2, None],
+            [None, 3, 4, None],
+            [None, None, None, None],
+        ],
+        configured_length=4,
+    )
+
+    assert csv_text == "1,2\n3,4\n"
+
+
+def test_save_and_load_layout_for_editor_round_trip(tmp_path):
+    saved = save_layout_for_editor(
+        'sim-1',
+        configured_length=4,
+        layouts_dir=str(tmp_path),
+        rows=[
+            [None, None, None],
+            [None, 1, 2],
+            [None, 3, 4],
+        ],
+        editor_payload={
+            'version': 1,
+            'primitives': [
+                {'type': 'single', 'index': 1, 'position': [0, 0]},
+                {'type': 'single', 'index': 2, 'position': [1, 0]},
+                {'type': 'single', 'index': 3, 'position': [0, 1]},
+                {'type': 'single', 'index': 4, 'position': [1, 1]},
+            ],
+        },
+    )
+
+    expected_hash = canonical_csv_hash("1,2\n3,4\n")
+    assert saved == {
+        'rows': [
+            [1, 2],
+            [3, 4],
+        ],
+        'editor': {
+            'version': 1,
+            'csv_hash': expected_hash,
+            'primitives': [
+                {'type': 'single', 'index': 1, 'position': [0, 0]},
+                {'type': 'single', 'index': 2, 'position': [1, 0]},
+                {'type': 'single', 'index': 3, 'position': [0, 1]},
+                {'type': 'single', 'index': 4, 'position': [1, 1]},
+            ],
+        },
+    }
+
+    loaded = load_layout_for_editor('sim-1', configured_length=4, layouts_dir=str(tmp_path))
+    assert loaded == saved
+
+
+def test_load_layout_for_editor_invalidates_drifted_meta(tmp_path):
+    save_layout_for_editor(
+        'sim-1',
+        configured_length=4,
+        layouts_dir=str(tmp_path),
+        rows=[[1, 2], [3, 4]],
+        editor_payload={
+            'version': 1,
+            'primitives': [
+                {'type': 'single', 'index': 1, 'position': [0, 0]},
+                {'type': 'single', 'index': 2, 'position': [1, 0]},
+                {'type': 'single', 'index': 3, 'position': [0, 1]},
+                {'type': 'single', 'index': 4, 'position': [1, 1]},
+            ],
+        },
+    )
+    (Path(tmp_path) / 'sim-1.csv').write_text("1,2\n4,3\n", encoding='utf-8')
+
+    loaded = load_layout_for_editor('sim-1', configured_length=4, layouts_dir=str(tmp_path))
+
+    assert loaded == {
+        'rows': [
+            [1, 2],
+            [4, 3],
+        ],
+        'editor': None,
+    }
+
+
+def test_save_layout_for_editor_rejects_rows_editor_mismatch(tmp_path):
+    with pytest.raises(LayoutError, match='editor primitives do not match rows'):
+        save_layout_for_editor(
+            'sim-1',
+            configured_length=4,
+            layouts_dir=str(tmp_path),
+            rows=[[1, 2]],
+            editor_payload={
+                'version': 1,
+                'primitives': [
+                    {'type': 'single', 'index': 1, 'position': [1, 0]},
+                    {'type': 'single', 'index': 2, 'position': [0, 0]},
+                ],
+            },
+        )

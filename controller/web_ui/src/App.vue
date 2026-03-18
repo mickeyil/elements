@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 
+import LayoutEditorModal from './components/LayoutEditorModal.vue';
 import { useRelayState } from './composables/useRelayState';
 import { CELL_PX, type SimTarget } from './lib/viewerRenderer';
 
@@ -16,6 +17,7 @@ const {
 const playbackState = computed(() => session.value?.playback_state ?? 'idle');
 const sessionId = computed(() => session.value?.session_id ?? 'none');
 const timeReadout = computed(() => `${Number(session.value?.current_t_rel ?? 0).toFixed(2)}s`);
+const editorTarget = ref<SimTarget | null>(null);
 
 function pillClass(isOnline: boolean): string {
   return isOnline ? 'pill-online' : 'pill-offline';
@@ -23,6 +25,14 @@ function pillClass(isOnline: boolean): string {
 
 function hasLayout(target: SimTarget): boolean {
   return Boolean(target.layout && target.gridWidth > 0 && target.gridHeight > 0);
+}
+
+function openEditor(target: SimTarget): void {
+  editorTarget.value = target;
+}
+
+function closeEditor(): void {
+  editorTarget.value = null;
 }
 </script>
 
@@ -97,10 +107,23 @@ function hasLayout(target: SimTarget): boolean {
           />
 
           <div v-else class="target-no-layout">No layout file for this sim target.</div>
+
+          <div class="target-actions">
+            <button type="button" class="target-action" @click="openEditor(target)">
+              {{ hasLayout(target) ? 'Edit layout' : 'Create layout' }}
+            </button>
+          </div>
         </section>
       </div>
     </section>
   </main>
+
+  <LayoutEditorModal
+    v-if="editorTarget"
+    :device-length="editorTarget.physicalLength"
+    :device-uid="editorTarget.deviceUid"
+    @close="closeEditor"
+  />
 </template>
 
 <style scoped>
@@ -271,6 +294,20 @@ h1 {
   background: rgba(9, 16, 21, 0.58);
   color: var(--muted);
   font-size: 0.85rem;
+}
+
+.target-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.target-action {
+  border: 1px solid var(--panel-edge);
+  border-radius: 999px;
+  padding: 0.55rem 0.95rem;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  cursor: pointer;
 }
 
 .target-panel-offline .target-canvas {

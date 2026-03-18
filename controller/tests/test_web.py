@@ -1,9 +1,12 @@
+import asyncio
 import elemctl.web as web_mod
+import pytest
 from elemctl.uds_wire import PROTOCOL_VERSION
 from elemctl.web import (
     WebRelay,
     _build_parser,
     _encode_ws_frame,
+    _layout_device_uid_from_path,
     _make_disconnected_snapshot,
     _resolve_asset_path,
 )
@@ -148,6 +151,141 @@ def test_resolve_asset_path_rejects_traversal(tmp_path, monkeypatch):
 
     assert _resolve_asset_path('/../secret.txt') is None
     assert _resolve_asset_path('/..%2Fsecret.txt') is None
+
+
+def test_layout_device_uid_from_path_extracts_device_uid():
+    assert _layout_device_uid_from_path('/api/layouts/sim-1') == 'sim-1'
+    assert _layout_device_uid_from_path('/api/layouts/') is None
+    assert _layout_device_uid_from_path('/api/layouts/a/b') is None
+
+
+def test_get_layout_response_missing_known_sim_returns_404(tmp_path):
+    relay = WebRelay(
+        '/tmp/elemctl.sock',
+        '127.0.0.1',
+        8080,
+        {},
+        {'sim-1': 4},
+        str(tmp_path),
+    )
+
+    status, payload = relay._get_layout_response('sim-1')
+
+    assert status == 404
+    assert payload == {'error': 'layout not found'}
+
+
+def test_get_layout_response_unknown_device_returns_400(tmp_path):
+    relay = WebRelay('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+
+    status, payload = relay._get_layout_response('sim-1')
+
+    assert status == 400
+    assert payload == {'error': 'unknown sim device'}
+
+
+def test_get_layout_response_returns_rows_without_editor_when_sidecar_missing(tmp_path):
+    (tmp_path / 'sim-1.csv').write_text("1,2\n3,4\n", encoding='utf-8')
+    relay = WebRelay(
+        '/tmp/elemctl.sock',
+        '127.0.0.1',
+        8080,
+        {},
+        {'sim-1': 4},
+        str(tmp_path),
+    )
+
+    status, payload = relay._get_layout_response('sim-1')
+
+    assert status == 200
+    assert payload == {
+        'rows': [
+            [1, 2],
+            [3, 4],
+        ],
+        'editor': None,
+    }
+
+
+def test_save_layout_response_updates_layout_cache_and_snapshot(tmp_path):
+    relay = WebRelay(
+        '/tmp/elemctl.sock',
+        '127.0.0.1',
+        8080,
+        {},
+        {'sim-1': 4},
+        str(tmp_path),
+    )
+
+    status, payload = relay._save_layout_response(
+        'sim-1',
+        {
+            'rows': [[None, 1, 2], [None, 3, 4]],
+            'editor': {
+                'version': 1,
+                'primitives': [
+                    {'type': 'single', 'index': 1, 'position': [0, 0]},
+                    {'type': 'single', 'index': 2, 'position': [1, 0]},
+                    {'type': 'single', 'index': 3, 'position': [0, 1]},
+                    {'type': 'single', 'index': 4, 'position': [1, 1]},
+                ],
+            },
+            'base_csv_hash': None,
+        },
+    )
+
+    assert status == 200
+    assert payload['rows'] == [
+        [1, 2],
+        [3, 4],
+    ]
+    assert payload['editor']['csv_hash']
+    assert relay._layouts == {'sim-1': {'rows': [[1, 2], [3, 4]]}}
+    assert relay._snapshot['layouts'] == relay._layouts
+
+
+def test_save_layout_response_rejects_invalid_payload(tmp_path):
+    relay = WebRelay(
+        '/tmp/elemctl.sock',
+        '127.0.0.1',
+        8080,
+        {},
+        {'sim-1': 4},
+        str(tmp_path),
+    )
+
+    status, payload = relay._save_layout_response(
+        'sim-1',
+        {
+            'rows': [[1, 2]],
+            'editor': {
+                'version': 1,
+                'primitives': [
+                    {'type': 'single', 'index': 1, 'position': [1, 0]},
+                    {'type': 'single', 'index': 2, 'position': [0, 0]},
+                ],
+            },
+            'base_csv_hash': None,
+        },
+    )
+
+    assert status == 400
+    assert payload == {'error': 'editor primitives do not match rows'}
+
+
+def test_read_http_body_rejects_oversized_request(tmp_path):
+    relay = WebRelay('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+    
+    async def run() -> None:
+        reader = asyncio.StreamReader()
+        reader.feed_eof()
+        await relay._read_http_body(reader, {'content-length': str((1 << 20) + 1)})
+
+    with pytest.raises(web_mod._HttpError) as exc:
+        asyncio.run(run())
+
+    assert exc.value.status == 413
+    assert exc.value.message == 'request body too large'
 
 
 def test_web_parser_defaults_bind_all_interfaces():

@@ -27,7 +27,13 @@ from .config import (
     resolve_config_path,
     resolve_runtime_path,
 )
-from .sim_layout import load_layouts_for_devices
+from .sim_layout import (
+    DEFAULT_LAYOUTS_PATH,
+    LayoutError,
+    load_layout_for_editor,
+    load_layouts_for_devices,
+    save_layout_for_editor,
+)
 from .slogger import configure_logger
 from .uds_client import UdsClient
 from .uds_wire import KIND_FRAME, KIND_JSON, PROTOCOL_VERSION, ROLE_OBSERVER, parse_json_payload
@@ -39,6 +45,7 @@ _STATIC_DIR = Path(__file__).resolve().parent / 'web_static'
 _STATIC_ROOT = _STATIC_DIR.resolve()
 _WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
 _FRAME_HEADER = struct.Struct('<If')
+_MAX_HTTP_BODY = 1 << 20
 _HTTP_TYPES = {
     '.html': 'text/html; charset=utf-8',
     '.js': 'application/javascript; charset=utf-8',
@@ -50,6 +57,12 @@ _HTTP_TYPES = {
 class _WsClient:
     writer: asyncio.StreamWriter
     peer: str
+
+
+@dataclass
+class _HttpError(Exception):
+    status: int
+    message: str
 
 
 def _empty_snapshot() -> dict:
@@ -126,8 +139,26 @@ def _resolve_asset_path(path: str) -> Path | None:
     return asset_path
 
 
+def _layout_device_uid_from_path(path: str) -> str | None:
+    prefix = '/api/layouts/'
+    if not path.startswith(prefix):
+        return None
+    device_uid = unquote(path[len(prefix):])
+    if not device_uid or '/' in device_uid:
+        return None
+    return device_uid
+
+
 class WebRelay:
-    def __init__(self, socket_path: str, host: str, port: int, layouts: dict[str, dict] | None = None):
+    def __init__(
+        self,
+        socket_path: str,
+        host: str,
+        port: int,
+        layouts: dict[str, dict] | None = None,
+        sim_devices: dict[str, int] | None = None,
+        layouts_dir: str = DEFAULT_LAYOUTS_PATH,
+    ):
         self._socket_path = socket_path
         self._host = host
         self._port = port
@@ -139,6 +170,8 @@ class WebRelay:
 
         self._controller_connected = False
         self._layouts = layouts or {}
+        self._sim_devices = sim_devices or {}
+        self._layouts_dir = os.path.expanduser(layouts_dir)
         self._snapshot = _empty_snapshot()
         self._snapshot['layouts'] = self._layouts
         self._ws_clients: set[_WsClient] = set()
@@ -373,16 +406,123 @@ class WebRelay:
             name, value = line.split(':', 1)
             headers[name.strip().lower()] = value.strip()
 
+        path = urlsplit(target).path or '/'
+        if path == '/ws':
+            if method != 'GET':
+                await self._write_http_response(writer, 405, b'method not allowed')
+                return
+            await self._handle_ws(reader, writer, headers)
+            return
+
+        if _layout_device_uid_from_path(path) is not None:
+            await self._handle_layout_api(method, path, headers, reader, writer)
+            return
+
         if method != 'GET':
             await self._write_http_response(writer, 405, b'method not allowed')
             return
 
-        path = urlsplit(target).path or '/'
-        if path == '/ws':
-            await self._handle_ws(reader, writer, headers)
+        await self._serve_asset(path, writer)
+
+    async def _handle_layout_api(
+        self,
+        method: str,
+        path: str,
+        headers: dict[str, str],
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        device_uid = _layout_device_uid_from_path(path)
+        if device_uid is None:
+            await self._write_json_response(writer, 404, {'error': 'not found'})
             return
 
-        await self._serve_asset(path, writer)
+        if method == 'GET':
+            status, payload = self._get_layout_response(device_uid)
+            await self._write_json_response(writer, status, payload)
+            return
+
+        if method != 'POST':
+            await self._write_http_response(writer, 405, b'method not allowed')
+            return
+
+        try:
+            body = await self._read_http_body(reader, headers)
+            payload = json.loads(body.decode('utf-8'))
+        except _HttpError as e:
+            await self._write_json_response(writer, e.status, {'error': e.message})
+            return
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            await self._write_json_response(writer, 400, {'error': 'invalid json body'})
+            return
+
+        status, response = self._save_layout_response(device_uid, payload)
+        await self._write_json_response(writer, status, response)
+        if status == 200:
+            await self._broadcast_json(self._snapshot)
+
+    def _get_layout_response(self, device_uid: str) -> tuple[int, dict]:
+        configured_length = self._sim_devices.get(device_uid)
+        if configured_length is None:
+            return 400, {'error': 'unknown sim device'}
+
+        try:
+            payload = load_layout_for_editor(device_uid, configured_length, self._layouts_dir)
+        except (LayoutError, OSError) as e:
+            return 500, {'error': f'failed to load layout: {e}'}
+
+        if payload is None:
+            return 404, {'error': 'layout not found'}
+        return 200, payload
+
+    def _save_layout_response(self, device_uid: str, payload: object) -> tuple[int, dict]:
+        configured_length = self._sim_devices.get(device_uid)
+        if configured_length is None:
+            return 400, {'error': 'unknown sim device'}
+        if not isinstance(payload, dict):
+            return 400, {'error': 'request body must be a JSON object'}
+
+        base_csv_hash = payload.get('base_csv_hash')
+        if base_csv_hash is not None and not isinstance(base_csv_hash, str):
+            return 400, {'error': 'base_csv_hash must be a string or null'}
+
+        try:
+            saved = save_layout_for_editor(
+                device_uid,
+                configured_length,
+                self._layouts_dir,
+                payload.get('rows'),
+                payload.get('editor'),
+            )
+        except LayoutError as e:
+            return 400, {'error': str(e)}
+        except OSError as e:
+            return 500, {'error': f'failed to write layout: {e}'}
+
+        self._layouts[device_uid] = {'rows': saved['rows']}
+        self._snapshot['layouts'] = self._layouts
+        return 200, saved
+
+    async def _read_http_body(
+        self,
+        reader: asyncio.StreamReader,
+        headers: dict[str, str],
+    ) -> bytes:
+        raw_length = headers.get('content-length')
+        if raw_length is None:
+            raise _HttpError(400, 'missing content-length')
+        try:
+            content_length = int(raw_length)
+        except ValueError as e:
+            raise _HttpError(400, 'invalid content-length') from e
+        if content_length < 0:
+            raise _HttpError(400, 'invalid content-length')
+        if content_length > _MAX_HTTP_BODY:
+            raise _HttpError(413, 'request body too large')
+        try:
+            return await reader.readexactly(content_length)
+        except asyncio.IncompleteReadError as e:
+            raise _HttpError(400, 'incomplete request body') from e
 
     async def _handle_ws(
         self,
@@ -450,6 +590,14 @@ class WebRelay:
             content_type=content_type,
         )
 
+    async def _write_json_response(self, writer: asyncio.StreamWriter, status: int, payload: dict) -> None:
+        await self._write_http_response(
+            writer,
+            status,
+            json.dumps(payload, separators=(',', ':')).encode('utf-8'),
+            content_type='application/json; charset=utf-8',
+        )
+
     async def _write_http_response(
         self,
         writer: asyncio.StreamWriter,
@@ -463,6 +611,7 @@ class WebRelay:
             400: 'Bad Request',
             404: 'Not Found',
             405: 'Method Not Allowed',
+            413: 'Payload Too Large',
             500: 'Internal Server Error',
         }
         head = (
@@ -575,9 +724,18 @@ def main() -> None:
     log.info('using config %s', config_path)
     Path(log_dir).mkdir(parents=True, exist_ok=True)
 
-    layouts = load_layouts_for_devices(config.devices)
+    layouts_dir = os.path.expanduser(DEFAULT_LAYOUTS_PATH)
+    layouts = load_layouts_for_devices(config.devices, layouts_dir=layouts_dir)
+    sim_devices = {dc.device_uid: dc.length for dc in config.devices if dc.device_type == 'sim'}
 
-    relay = WebRelay(os.path.expanduser(args.socket), args.host, args.port, layouts)
+    relay = WebRelay(
+        os.path.expanduser(args.socket),
+        args.host,
+        args.port,
+        layouts,
+        sim_devices,
+        layouts_dir,
+    )
 
     try:
         asyncio.run(relay.run())
