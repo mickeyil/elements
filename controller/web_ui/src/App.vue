@@ -1,330 +1,134 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, provide } from 'vue';
+import { RouterLink, RouterView } from 'vue-router';
 
-import LayoutEditorModal from './components/LayoutEditorModal.vue';
-import { useRelayState } from './composables/useRelayState';
-import { CELL_PX, type SimTarget } from './lib/viewerRenderer';
+import { relayStateKey, useRelayState } from './composables/useRelayState';
 
-const {
-  assignCanvas,
-  controllerConnected,
-  emptyState,
-  relayConnected,
-  session,
-  simTargets,
-} = useRelayState();
+const relayState = useRelayState();
+provide(relayStateKey, relayState);
 
-const playbackState = computed(() => session.value?.playback_state ?? 'idle');
-const sessionId = computed(() => session.value?.session_id ?? 'none');
-const timeReadout = computed(() => `${Number(session.value?.current_t_rel ?? 0).toFixed(2)}s`);
-const editorTarget = ref<SimTarget | null>(null);
+const { controllerConnected, relayConnected } = relayState;
 
-function pillClass(isOnline: boolean): string {
-  return isOnline ? 'pill-online' : 'pill-offline';
-}
-
-function hasLayout(target: SimTarget): boolean {
-  return Boolean(target.layout && target.gridWidth > 0 && target.gridHeight > 0);
-}
-
-function openEditor(target: SimTarget): void {
-  editorTarget.value = target;
-}
-
-function closeEditor(): void {
-  editorTarget.value = null;
-}
+const relayStatusClass = computed(() =>
+  relayConnected.value ? 'pill-online' : 'pill-offline',
+);
+const controllerStatusClass = computed(() =>
+  controllerConnected.value ? 'pill-online' : 'pill-offline',
+);
 </script>
 
 <template>
-  <main class="shell">
-    <header class="topbar">
-      <div>
-        <p class="eyebrow">Elements</p>
-        <h1>Realtime Viewer</h1>
-      </div>
-      <div class="statusbox">
-        <span class="pill" :class="pillClass(relayConnected)"> 
-          {{ relayConnected ? 'relay connected' : 'relay disconnected' }}
-        </span>
-        <span class="pill" :class="pillClass(controllerConnected)">
-          {{ controllerConnected ? 'controller connected' : 'controller disconnected' }}
-        </span>
+  <div class="app-shell">
+    <header class="app-topbar">
+      <div class="app-topbar-inner">
+        <div class="app-branding">
+          <p class="app-eyebrow">Elements</p>
+          <strong class="app-title">Web Console</strong>
+        </div>
+
+        <nav class="app-nav" aria-label="Primary">
+          <RouterLink class="app-nav-link" to="/">Status</RouterLink>
+          <RouterLink class="app-nav-link" to="/viewer">Viewer</RouterLink>
+        </nav>
+
+        <div class="statusbox">
+          <span class="pill" :class="relayStatusClass">
+            {{ relayConnected ? 'relay connected' : 'relay disconnected' }}
+          </span>
+          <span class="pill" :class="controllerStatusClass">
+            {{ controllerConnected ? 'controller connected' : 'controller disconnected' }}
+          </span>
+        </div>
       </div>
     </header>
 
-    <section class="summary">
-      <div class="summary-card">
-        <span class="label">Playback</span>
-        <strong>{{ playbackState }}</strong>
-      </div>
-      <div class="summary-card">
-        <span class="label">Session</span>
-        <strong>{{ sessionId }}</strong>
-      </div>
-      <div class="summary-card">
-        <span class="label">Time</span>
-        <strong>{{ timeReadout }}</strong>
-      </div>
-    </section>
-
-    <section class="viewer">
-      <div v-if="emptyState" class="empty-state">
-        <h2>{{ emptyState.title }}</h2>
-        <p>{{ emptyState.copy }}</p>
-      </div>
-
-      <div v-else class="strip-list">
-        <section
-          v-for="target in simTargets"
-          :key="target.deviceUid"
-          class="target-panel"
-          :class="{ 'target-panel-offline': !target.connected }"
-        >
-          <div class="target-head">
-            <div class="target-info">
-              <strong class="target-name">{{ target.deviceUid }}</strong>
-              <span class="target-strip">strip {{ target.stripName }}</span>
-              <span class="target-length">
-                logical {{ target.logicalLength }} / physical {{ target.physicalLength }} px
-              </span>
-            </div>
-            <span class="pill target-pill" :class="pillClass(target.connected)">
-              {{ target.connected ? 'connected' : 'disconnected' }}
-            </span>
-          </div>
-
-          <canvas
-            v-if="hasLayout(target)"
-            :ref="(el) => assignCanvas(target, el)"
-            class="target-canvas target-canvas-2d"
-            :width="target.gridWidth"
-            :height="target.gridHeight"
-            :style="{
-              width: `${target.gridWidth * CELL_PX}px`,
-              height: `${target.gridHeight * CELL_PX}px`,
-            }"
-          />
-
-          <div v-else class="target-no-layout">No layout file for this sim target.</div>
-
-          <div class="target-actions">
-            <button type="button" class="target-action" @click="openEditor(target)">
-              {{ hasLayout(target) ? 'Edit layout' : 'Create layout' }}
-            </button>
-          </div>
-        </section>
-      </div>
-    </section>
-  </main>
-
-  <LayoutEditorModal
-    v-if="editorTarget"
-    :device-length="editorTarget.physicalLength"
-    :device-uid="editorTarget.deviceUid"
-    @close="closeEditor"
-  />
+    <RouterView />
+  </div>
 </template>
 
 <style scoped>
-.shell {
-  width: min(1100px, calc(100vw - 2rem));
+.app-shell {
+  min-height: 100vh;
+}
+
+.app-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  backdrop-filter: blur(12px);
+  background: rgba(12, 18, 22, 0.82);
+  border-bottom: 1px solid var(--panel-edge);
+}
+
+.app-topbar-inner {
+  width: min(1200px, calc(100vw - 2rem));
   margin: 0 auto;
-  padding: 1.5rem 0 2.5rem;
-}
-
-.topbar {
+  padding: 0.9rem 0;
   display: flex;
-  justify-content: space-between;
-  gap: 1rem;
-  align-items: flex-start;
-  margin-bottom: 1.5rem;
-}
-
-.eyebrow {
-  margin: 0 0 0.35rem;
-  text-transform: uppercase;
-  letter-spacing: 0.18em;
-  font-size: 0.72rem;
-  color: var(--accent);
-}
-
-h1 {
-  margin: 0;
-  font-family: 'IBM Plex Mono', 'SFMono-Regular', monospace;
-  font-size: clamp(1.75rem, 4vw, 2.6rem);
-}
-
-.statusbox,
-.summary {
-  display: flex;
-  gap: 0.75rem;
-  flex-wrap: wrap;
-}
-
-.summary {
-  margin-bottom: 1.5rem;
-}
-
-.summary-card,
-.viewer,
-.target-panel {
-  background: var(--panel);
-  border: 1px solid var(--panel-edge);
-  border-radius: 18px;
-  backdrop-filter: blur(10px);
-}
-
-.summary-card {
-  min-width: 10rem;
-  padding: 0.9rem 1rem;
-}
-
-.label {
-  display: block;
-  margin-bottom: 0.3rem;
-  font-size: 0.78rem;
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-}
-
-.pill {
-  display: inline-flex;
   align-items: center;
-  padding: 0.45rem 0.8rem;
-  border-radius: 999px;
-  font-size: 0.82rem;
-  background: var(--surface);
-  border: 1px solid var(--panel-edge);
-}
-
-.pill-online {
-  color: #f7f3eb;
-  background: var(--accent-soft);
-  border-color: rgba(229, 156, 76, 0.35);
-}
-
-.pill-offline {
-  color: #f7e5e5;
-  background: rgba(182, 83, 83, 0.16);
-  border-color: rgba(182, 83, 83, 0.35);
-}
-
-.viewer {
-  padding: 1rem;
-}
-
-.empty-state {
-  padding: 2rem 1rem;
-  text-align: center;
-  color: var(--muted);
-}
-
-.empty-state h2 {
-  margin-top: 0;
-  margin-bottom: 0.5rem;
-  color: var(--text);
-  font-size: 1.15rem;
-}
-
-.empty-state p {
-  margin: 0;
-}
-
-.strip-list {
-  display: grid;
-  gap: 1rem;
-}
-
-.target-panel {
-  padding: 0.9rem;
-  display: grid;
-  gap: 0.8rem;
-}
-
-.target-head {
-  display: flex;
   justify-content: space-between;
   gap: 1rem;
-  align-items: flex-start;
 }
 
-.target-info {
+.app-branding {
   display: grid;
   gap: 0.2rem;
 }
 
-.target-name {
+.app-eyebrow {
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  font-size: 0.7rem;
+  color: var(--accent);
+}
+
+.app-title {
   font-family: 'IBM Plex Mono', 'SFMono-Regular', monospace;
-  font-size: 0.95rem;
+  font-size: 1rem;
 }
 
-.target-strip,
-.target-length {
-  color: var(--muted);
-  font-size: 0.8rem;
-}
-
-.target-pill {
-  flex: 0 0 auto;
-}
-
-.target-canvas {
-  display: block;
-  background:
-    linear-gradient(90deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0)),
-    #091015;
-  border-radius: 12px;
-  image-rendering: pixelated;
-}
-
-.target-canvas-2d {
-  width: auto;
-  min-height: 0;
-  margin-top: 0.1rem;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
-}
-
-.target-no-layout {
-  padding: 1rem;
-  border-radius: 12px;
-  border: 1px dashed rgba(255, 255, 255, 0.14);
-  background: rgba(9, 16, 21, 0.58);
-  color: var(--muted);
-  font-size: 0.85rem;
-}
-
-.target-actions {
+.app-nav {
   display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.app-nav-link {
+  color: var(--muted);
+  text-decoration: none;
+  border-radius: 999px;
+  padding: 0.45rem 0.9rem;
+  border: 1px solid transparent;
+  transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
+}
+
+.app-nav-link:hover {
+  color: var(--text);
+  border-color: var(--panel-edge);
+}
+
+.app-nav-link.router-link-active {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--panel-edge);
+}
+
+.statusbox {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
   justify-content: flex-end;
 }
 
-.target-action {
-  border: 1px solid var(--panel-edge);
-  border-radius: 999px;
-  padding: 0.55rem 0.95rem;
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--text);
-  cursor: pointer;
-}
-
-.target-panel-offline .target-canvas {
-  opacity: 0.55;
-}
-
-.target-panel-offline .target-no-layout {
-  opacity: 0.7;
-}
-
-@media (max-width: 640px) {
-  .topbar {
-    flex-direction: column;
+@media (max-width: 900px) {
+  .app-topbar-inner {
+    flex-wrap: wrap;
   }
 
-  .summary-card {
-    flex: 1 1 100%;
+  .statusbox {
+    width: 100%;
+    justify-content: flex-start;
   }
 }
 </style>

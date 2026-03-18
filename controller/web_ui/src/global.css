@@ -30,9 +30,131 @@ body {
   font-family: 'IBM Plex Sans', 'Segoe UI', sans-serif;
 }
 
+a {
+  color: inherit;
+}
+
 button,
 input,
 textarea,
 select {
   font: inherit;
+}
+
+.page-shell {
+  width: min(1200px, calc(100vw - 2rem));
+  margin: 0 auto;
+  padding: 1.5rem 0 2.5rem;
+}
+
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.page-title {
+  margin: 0;
+  font-family: 'IBM Plex Mono', 'SFMono-Regular', monospace;
+  font-size: clamp(1.6rem, 4vw, 2.4rem);
+}
+
+.page-eyebrow {
+  margin: 0 0 0.35rem;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  font-size: 0.72rem;
+  color: var(--accent);
+}
+
+.page-copy {
+  margin: 0;
+  color: var(--muted);
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--panel-edge);
+  border-radius: 18px;
+  backdrop-filter: blur(10px);
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.45rem 0.8rem;
+  border-radius: 999px;
+  font-size: 0.82rem;
+  background: var(--surface);
+  border: 1px solid var(--panel-edge);
+}
+
+.pill-online {
+  color: #f7f3eb;
+  background: var(--accent-soft);
+  border-color: rgba(229, 156, 76, 0.35);
+}
+
+.pill-offline {
+  color: #f7e5e5;
+  background: rgba(182, 83, 83, 0.16);
+  border-color: rgba(182, 83, 83, 0.35);
+}
+
+.ghost-button,
+.action-button,
+.primary-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  border-radius: 999px;
+  padding: 0.6rem 1rem;
+  text-decoration: none;
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease, color 120ms ease;
+}
+
+.ghost-button,
+.action-button {
+  border: 1px solid var(--panel-edge);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+}
+
+.ghost-button:hover,
+.action-button:hover {
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+.primary-button {
+  border: 1px solid rgba(229, 156, 76, 0.35);
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.ghost-button:disabled,
+.action-button:disabled,
+.primary-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.empty-state {
+  padding: 2rem 1rem;
+  text-align: center;
+  color: var(--muted);
+}
+
+.empty-state h2 {
+  margin-top: 0;
+  margin-bottom: 0.5rem;
+  color: var(--text);
+  font-size: 1.15rem;
+}
+
+.empty-state p {
+  margin: 0;
 }

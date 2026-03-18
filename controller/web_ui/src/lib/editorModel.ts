@@ -167,6 +167,34 @@ export function setCurrentIndex(document: EditorDocument, nextIndex: number): Ed
   };
 }
 
+export function cloneDocument(document: EditorDocument): EditorDocument {
+  return setCurrentIndex(buildDocument(document.maxIndex, document.primitives), document.currentIndex);
+}
+
+export function documentsEqual(left: EditorDocument, right: EditorDocument): boolean {
+  if (left.maxIndex !== right.maxIndex || left.currentIndex !== right.currentIndex) {
+    return false;
+  }
+  if (left.primitives.length !== right.primitives.length) {
+    return false;
+  }
+
+  for (let i = 0; i < left.primitives.length; i += 1) {
+    const leftPrimitive = left.primitives[i];
+    const rightPrimitive = right.primitives[i];
+    if (
+      leftPrimitive.type !== rightPrimitive.type ||
+      leftPrimitive.index !== rightPrimitive.index ||
+      leftPrimitive.position[0] !== rightPrimitive.position[0] ||
+      leftPrimitive.position[1] !== rightPrimitive.position[1]
+    ) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 export function incrementCurrentIndex(document: EditorDocument, delta: number): EditorDocument {
   return setCurrentIndex(document, document.currentIndex + delta);
 }

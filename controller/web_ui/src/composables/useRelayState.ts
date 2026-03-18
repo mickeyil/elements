@@ -1,4 +1,12 @@
-import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue';
+import {
+  computed,
+  inject,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  shallowRef,
+  type InjectionKey,
+} from 'vue';
 
 import {
   attachTargetCanvas,
@@ -8,8 +16,12 @@ import {
   type SimTarget,
 } from '../lib/viewerRenderer';
 
-interface SnapshotDevice {
+export interface SnapshotDevice {
+  device_id?: number;
   device_uid?: string;
+  device_type?: string;
+  strip_id?: string;
+  length?: number;
   connected?: boolean;
 }
 
@@ -25,7 +37,7 @@ interface SessionStrip {
   targets?: SessionStripTarget[];
 }
 
-interface SessionState {
+export interface SessionState {
   session_id?: number | string;
   epoch?: number;
   duration?: number;
@@ -35,13 +47,13 @@ interface SessionState {
   strips?: SessionStrip[];
 }
 
-interface SnapshotEvent {
+export interface SnapshotEvent {
   devices?: SnapshotDevice[];
   layouts?: Record<string, LayoutPayload>;
   session?: SessionState | null;
 }
 
-interface EmptyState {
+export interface EmptyState {
   title: string;
   copy: string;
 }
@@ -324,6 +336,19 @@ export function useRelayState() {
     emptyState,
     relayConnected,
     session,
+    snapshot,
     simTargets,
   };
+}
+
+export type RelayState = ReturnType<typeof useRelayState>;
+
+export const relayStateKey: InjectionKey<RelayState> = Symbol('relay-state');
+
+export function useInjectedRelayState(): RelayState {
+  const relayState = inject(relayStateKey);
+  if (!relayState) {
+    throw new Error('Relay state is not available.');
+  }
+  return relayState;
 }

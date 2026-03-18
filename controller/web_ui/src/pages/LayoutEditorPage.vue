@@ -1,18 +1,28 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
-
 import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  shallowRef,
+  watch,
+} from 'vue';
+import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router';
+
+import { useInjectedRelayState, type SnapshotDevice } from '../composables/useRelayState';
+import {
+  cloneDocument,
   createDocumentFromLayout,
   createEmptyDocument,
   documentCenter,
+  documentsEqual,
   GRID_SIZE,
   incrementCurrentIndex,
   placeSinglePrimitive,
   serializeDocument,
-  setCurrentIndex,
   undoLastPrimitive,
   type EditorDocument,
-  type LayoutDocumentPayload,
   type Point,
 } from '../lib/editorModel';
 import {
@@ -27,30 +37,37 @@ import {
 } from '../lib/editorRenderer';
 import { getLayout, saveLayout } from '../lib/layoutApi';
 
-const props = defineProps<{
-  deviceLength: number;
+interface DeviceMeta {
   deviceUid: string;
-}>();
+  deviceType: string;
+  length: number;
+  stripId: string;
+}
 
-const emit = defineEmits<{
-  close: [];
-}>();
+const route = useRoute();
+const router = useRouter();
+const { snapshot } = useInjectedRelayState();
 
 const canvasRef = ref<HTMLCanvasElement | null>(null);
-const loading = ref(true);
+const loadingLayout = ref(false);
 const saving = ref(false);
 const error = ref('');
+const statusNotice = ref('');
 const hoverCell = ref<Point | null>(null);
-const documentRef = shallowRef<EditorDocument>(createEmptyDocument(props.deviceLength));
 const viewport = ref<EditorViewport>({
   zoom: DEFAULT_ZOOM,
   offsetX: 0,
   offsetY: 0,
 });
-const baselinePayload = shallowRef<LayoutDocumentPayload | null>(null);
+const documentRef = shallowRef<EditorDocument>(createEmptyDocument(1));
+const baselineDocument = shallowRef<EditorDocument>(createEmptyDocument(1));
 const baseCsvHash = ref<string | null>(null);
+const resolvedDeviceMeta = shallowRef<DeviceMeta | null>(null);
 
 let spacePressed = false;
+let renderPending = false;
+let loadToken = 0;
+let suppressClick = false;
 let panning:
   | {
       startClientX: number;
@@ -59,13 +76,99 @@ let panning:
       startOffsetY: number;
     }
   | null = null;
-let suppressClick = false;
-let renderPending = false;
 
+const routeDeviceUid = computed(() =>
+  typeof route.params.deviceUid === 'string' ? route.params.deviceUid : '',
+);
+
+const snapshotDevices = computed<SnapshotDevice[]>(() => {
+  const devices = snapshot.value?.devices;
+  return Array.isArray(devices) ? devices : [];
+});
+
+const matchedSnapshotDevice = computed<SnapshotDevice | null>(() => {
+  if (!routeDeviceUid.value) {
+    return null;
+  }
+  return (
+    snapshotDevices.value.find((device) => device?.device_uid === routeDeviceUid.value) ?? null
+  );
+});
+
+const currentDeviceMeta = computed<DeviceMeta | null>(() => {
+  const matched = matchedSnapshotDevice.value;
+  if (matched?.device_uid) {
+    return {
+      deviceUid: matched.device_uid,
+      deviceType: String(matched.device_type ?? ''),
+      length: Number(matched.length ?? 0),
+      stripId: String(matched.strip_id ?? 'n/a'),
+    };
+  }
+  if (resolvedDeviceMeta.value?.deviceUid === routeDeviceUid.value) {
+    return resolvedDeviceMeta.value;
+  }
+  return null;
+});
+
+const routeState = computed<
+  | { kind: 'waiting'; message: string }
+  | { kind: 'invalid'; message: string }
+  | { kind: 'ready'; device: DeviceMeta }
+>(() => {
+  if (!routeDeviceUid.value) {
+    return { kind: 'invalid', message: 'Invalid layout route.' };
+  }
+
+  const device = currentDeviceMeta.value;
+  if (!device) {
+    if (!snapshot.value) {
+      return { kind: 'waiting', message: 'Waiting for device metadata from the relay.' };
+    }
+    return { kind: 'invalid', message: `Unknown device: ${routeDeviceUid.value}` };
+  }
+
+  if (device.deviceType !== 'sim') {
+    return {
+      kind: 'invalid',
+      message: `${device.deviceUid} is a ${device.deviceType || 'non-sim'} device and cannot be edited in the browser.`,
+    };
+  }
+
+  if (device.length < 1) {
+    return {
+      kind: 'invalid',
+      message: `${device.deviceUid} has an invalid configured length.`,
+    };
+  }
+
+  return { kind: 'ready', device };
+});
+
+const readyDeviceKey = computed(() => {
+  if (routeState.value.kind !== 'ready') {
+    return null;
+  }
+  return `${routeState.value.device.deviceUid}:${routeState.value.device.length}`;
+});
+
+const deviceLength = computed(() =>
+  routeState.value.kind === 'ready' ? routeState.value.device.length : baselineDocument.value.maxIndex,
+);
 const currentIndex = computed(() => documentRef.value.currentIndex);
 const placedCount = computed(() => documentRef.value.placedCount);
-const canUndo = computed(() => documentRef.value.primitives.length > 0 && !loading.value && !saving.value);
-const canSave = computed(() => !loading.value && !saving.value);
+const canUndo = computed(
+  () => routeState.value.kind === 'ready' && !loadingLayout.value && !saving.value && documentRef.value.primitives.length > 0,
+);
+const canSave = computed(
+  () => routeState.value.kind === 'ready' && !loadingLayout.value && !saving.value,
+);
+const isDirty = computed(() => !documentsEqual(documentRef.value, baselineDocument.value));
+
+function setDocument(nextDocument: EditorDocument): void {
+  documentRef.value = nextDocument;
+  statusNotice.value = '';
+}
 
 function requestRender(): void {
   if (renderPending) {
@@ -75,7 +178,7 @@ function requestRender(): void {
   window.requestAnimationFrame(() => {
     renderPending = false;
     const canvas = canvasRef.value;
-    if (!canvas || loading.value) {
+    if (!canvas) {
       return;
     }
     renderEditor(canvas, documentRef.value, viewport.value, hoverCell.value);
@@ -92,24 +195,37 @@ async function resetViewport(): Promise<void> {
   requestRender();
 }
 
-async function loadInitialDocument(): Promise<void> {
-  loading.value = true;
+async function loadInitialDocument(device: DeviceMeta): Promise<void> {
+  loadingLayout.value = true;
   error.value = '';
+  statusNotice.value = '';
+  const token = ++loadToken;
+
   try {
-    const payload = await getLayout(props.deviceUid);
-    baselinePayload.value = payload;
+    const payload = await getLayout(device.deviceUid);
+    if (token !== loadToken) {
+      return;
+    }
+    const nextDocument = createDocumentFromLayout(payload, device.length);
+    documentRef.value = nextDocument;
+    baselineDocument.value = cloneDocument(nextDocument);
     baseCsvHash.value = payload?.editor?.csv_hash ?? null;
-    documentRef.value = createDocumentFromLayout(payload, props.deviceLength);
     await resetViewport();
   } catch (err) {
-    error.value = err instanceof Error ? err.message : 'Failed to load layout.';
-    baselinePayload.value = null;
+    if (token !== loadToken) {
+      return;
+    }
+    const nextDocument = createEmptyDocument(device.length);
+    documentRef.value = nextDocument;
+    baselineDocument.value = cloneDocument(nextDocument);
     baseCsvHash.value = null;
-    documentRef.value = createEmptyDocument(props.deviceLength);
+    error.value = err instanceof Error ? err.message : 'Failed to load layout.';
     await resetViewport();
   } finally {
-    loading.value = false;
-    requestRender();
+    if (token === loadToken) {
+      loadingLayout.value = false;
+      requestRender();
+    }
   }
 }
 
@@ -188,7 +304,7 @@ function handleWheel(event: WheelEvent): void {
 }
 
 function handleClick(event: MouseEvent): void {
-  if (loading.value || saving.value) {
+  if (routeState.value.kind !== 'ready' || loadingLayout.value || saving.value) {
     return;
   }
   if (suppressClick) {
@@ -204,7 +320,7 @@ function handleClick(event: MouseEvent): void {
     return;
   }
   try {
-    documentRef.value = placeSinglePrimitive(documentRef.value, cell.x, cell.y);
+    setDocument(placeSinglePrimitive(documentRef.value, cell.x, cell.y));
     error.value = '';
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'Failed to place LED.';
@@ -212,39 +328,40 @@ function handleClick(event: MouseEvent): void {
 }
 
 function shiftCurrentIndex(delta: number): void {
-  documentRef.value = incrementCurrentIndex(documentRef.value, delta);
+  setDocument(incrementCurrentIndex(documentRef.value, delta));
 }
 
 function undo(): void {
-  documentRef.value = undoLastPrimitive(documentRef.value);
+  setDocument(undoLastPrimitive(documentRef.value));
   error.value = '';
 }
 
 function resetDocument(): void {
-  documentRef.value = createDocumentFromLayout(baselinePayload.value, props.deviceLength);
+  setDocument(cloneDocument(baselineDocument.value));
   error.value = '';
   void resetViewport();
 }
 
-function close(): void {
-  if (!saving.value) {
-    emit('close');
-  }
+function backToDevices(): void {
+  void router.push('/');
 }
 
 async function save(): Promise<void> {
+  if (routeState.value.kind !== 'ready') {
+    return;
+  }
   try {
     saving.value = true;
     error.value = '';
     const serialized = serializeDocument(documentRef.value);
-    const response = await saveLayout(props.deviceUid, {
+    const response = await saveLayout(routeState.value.device.deviceUid, {
       rows: serialized.rows,
       editor: serialized.editor,
       base_csv_hash: baseCsvHash.value,
     });
-    baselinePayload.value = response;
+    baselineDocument.value = cloneDocument(documentRef.value);
     baseCsvHash.value = response.editor?.csv_hash ?? null;
-    emit('close');
+    statusNotice.value = 'Saved.';
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'Failed to save layout.';
   } finally {
@@ -265,7 +382,40 @@ function handleKeyUp(event: KeyboardEvent): void {
   }
 }
 
-watch([documentRef, viewport, hoverCell, loading], () => {
+function beforeUnloadHandler(event: BeforeUnloadEvent): void {
+  event.preventDefault();
+  event.returnValue = '';
+}
+
+function confirmNavigationAway(): boolean {
+  if (!isDirty.value) {
+    return true;
+  }
+  return window.confirm('Discard unsaved layout changes?');
+}
+
+watch(
+  currentDeviceMeta,
+  (device) => {
+    if (device && device.deviceUid === routeDeviceUid.value) {
+      resolvedDeviceMeta.value = device;
+    }
+  },
+  { immediate: true },
+);
+
+watch(
+  readyDeviceKey,
+  (key) => {
+    if (!key || routeState.value.kind !== 'ready') {
+      return;
+    }
+    void loadInitialDocument(routeState.value.device);
+  },
+  { immediate: true },
+);
+
+watch([documentRef, viewport, hoverCell], () => {
   requestRender();
 });
 
@@ -276,12 +426,37 @@ watch(
   },
 );
 
+watch(
+  isDirty,
+  (dirty) => {
+    if (dirty) {
+      window.addEventListener('beforeunload', beforeUnloadHandler);
+    } else {
+      window.removeEventListener('beforeunload', beforeUnloadHandler);
+    }
+  },
+  { immediate: true },
+);
+
+onBeforeRouteLeave(() => {
+  if (!confirmNavigationAway()) {
+    return false;
+  }
+  return true;
+});
+
+onBeforeRouteUpdate(() => {
+  if (!confirmNavigationAway()) {
+    return false;
+  }
+  return true;
+});
+
 onMounted(() => {
   window.addEventListener('mouseup', handleMouseUp);
   window.addEventListener('keydown', handleKeyDown);
   window.addEventListener('keyup', handleKeyUp);
   window.addEventListener('resize', requestRender);
-  void loadInitialDocument();
 });
 
 onBeforeUnmount(() => {
@@ -289,20 +464,39 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleKeyDown);
   window.removeEventListener('keyup', handleKeyUp);
   window.removeEventListener('resize', requestRender);
+  window.removeEventListener('beforeunload', beforeUnloadHandler);
 });
 </script>
 
 <template>
-  <div class="editor-backdrop" @click.self="close">
-    <section class="editor-modal" aria-modal="true" role="dialog">
-      <header class="editor-head">
-        <div>
-          <p class="editor-eyebrow">Layout Editor</p>
-          <h2>{{ deviceUid }}</h2>
-        </div>
-        <button class="ghost-button" type="button" @click="close">Close</button>
-      </header>
+  <main class="page-shell editor-page">
+    <header class="page-header editor-page-head">
+      <div>
+        <p class="page-eyebrow">Layout Editor</p>
+        <h1 class="page-title">
+          {{ routeState.kind === 'ready' ? routeState.device.deviceUid : routeDeviceUid || 'Layout' }}
+        </h1>
+        <p v-if="routeState.kind === 'ready'" class="page-copy">
+          strip {{ routeState.device.stripId }} · {{ routeState.device.length }} px · single LED tool
+        </p>
+        <p v-else class="page-copy">
+          {{ routeState.message }}
+        </p>
+      </div>
 
+      <div class="editor-page-actions">
+        <button type="button" class="ghost-button" @click="backToDevices">Back to devices</button>
+      </div>
+    </header>
+
+    <section v-if="routeState.kind !== 'ready'" class="panel editor-state-panel">
+      <div class="empty-state">
+        <h2>{{ routeState.kind === 'waiting' ? 'Waiting for device metadata' : 'Editor unavailable' }}</h2>
+        <p>{{ routeState.message }}</p>
+      </div>
+    </section>
+
+    <section v-else class="panel editor-page-panel">
       <div class="editor-toolbar">
         <div class="toolbar-group">
           <span class="toolbar-label">Tool</span>
@@ -311,10 +505,14 @@ onBeforeUnmount(() => {
         <div class="toolbar-group">
           <span class="toolbar-label">Index</span>
           <div class="index-controls">
-            <button type="button" @click="shiftCurrentIndex(-1)" :disabled="loading || saving">&lt;</button>
+            <button type="button" @click="shiftCurrentIndex(-1)" :disabled="loadingLayout || saving">
+              &lt;
+            </button>
             <strong>{{ currentIndex }}</strong>
             <span>/ {{ deviceLength }}</span>
-            <button type="button" @click="shiftCurrentIndex(1)" :disabled="loading || saving">&gt;</button>
+            <button type="button" @click="shiftCurrentIndex(1)" :disabled="loadingLayout || saving">
+              &gt;
+            </button>
           </div>
         </div>
         <div class="toolbar-group">
@@ -328,8 +526,9 @@ onBeforeUnmount(() => {
       </div>
 
       <p v-if="error" class="editor-error">{{ error }}</p>
+      <p v-else-if="statusNotice" class="editor-saved">{{ statusNotice }}</p>
 
-      <div v-if="loading" class="editor-loading">Loading layout…</div>
+      <div v-if="loadingLayout" class="editor-loading">Loading layout…</div>
       <div v-else class="editor-surface">
         <canvas
           ref="canvasRef"
@@ -347,64 +546,54 @@ onBeforeUnmount(() => {
           Click to place the current index. Use the wheel to zoom and hold space while dragging to pan.
         </div>
         <div class="editor-actions">
-          <button type="button" class="ghost-button" :disabled="loading || saving" @click="resetDocument">
+          <button type="button" class="ghost-button" :disabled="loadingLayout || saving" @click="resetDocument">
             Reset
           </button>
-          <button type="button" class="ghost-button" :disabled="saving" @click="close">Cancel</button>
-          <button type="button" class="save-button" :disabled="!canSave" @click="save">
+          <button type="button" class="ghost-button" :disabled="saving" @click="backToDevices">
+            Back
+          </button>
+          <button type="button" class="primary-button" :disabled="!canSave" @click="save">
             {{ saving ? 'Saving…' : 'Save' }}
           </button>
         </div>
       </footer>
     </section>
-  </div>
+  </main>
 </template>
 
 <style scoped>
-.editor-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 20;
-  display: grid;
-  place-items: center;
-  padding: 2rem;
-  background: rgba(5, 9, 12, 0.82);
-  backdrop-filter: blur(6px);
+.editor-page {
+  min-height: calc(100vh - 4.5rem);
 }
 
-.editor-modal {
-  width: min(96vw, 1200px);
-  height: min(92vh, 900px);
+.editor-page-head {
+  margin-bottom: 1rem;
+}
+
+.editor-page-actions {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.editor-state-panel,
+.editor-page-panel {
+  padding: 1rem;
+}
+
+.editor-page-panel {
+  min-height: calc(100vh - 14rem);
   display: grid;
-  grid-template-rows: auto auto auto 1fr auto;
+  grid-template-rows: auto auto 1fr auto;
   gap: 1rem;
-  padding: 1.25rem;
-  border-radius: 22px;
-  border: 1px solid var(--panel-edge);
-  background: rgba(13, 19, 24, 0.96);
-  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.45);
 }
 
-.editor-head,
 .editor-toolbar,
 .editor-footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-}
-
-.editor-eyebrow {
-  margin: 0 0 0.35rem;
-  text-transform: uppercase;
-  letter-spacing: 0.18em;
-  font-size: 0.72rem;
-  color: var(--accent);
-}
-
-.editor-head h2 {
-  margin: 0;
-  font-family: 'IBM Plex Mono', 'SFMono-Regular', monospace;
 }
 
 .editor-toolbar {
@@ -438,9 +627,7 @@ onBeforeUnmount(() => {
   gap: 0.5rem;
 }
 
-.index-controls button,
-.ghost-button,
-.save-button {
+.index-controls button {
   border: 1px solid var(--panel-edge);
   border-radius: 999px;
   padding: 0.55rem 0.9rem;
@@ -449,16 +636,9 @@ onBeforeUnmount(() => {
   cursor: pointer;
 }
 
-.index-controls button:disabled,
-.ghost-button:disabled,
-.save-button:disabled {
+.index-controls button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
-}
-
-.save-button {
-  background: var(--accent-soft);
-  border-color: rgba(229, 156, 76, 0.35);
 }
 
 .zoom-range {
@@ -466,13 +646,23 @@ onBeforeUnmount(() => {
   font-size: 0.8rem;
 }
 
-.editor-error {
+.editor-error,
+.editor-saved {
   margin: 0;
   padding: 0.75rem 0.9rem;
   border-radius: 14px;
+}
+
+.editor-error {
   border: 1px solid rgba(182, 83, 83, 0.35);
   background: rgba(182, 83, 83, 0.16);
   color: #f7e5e5;
+}
+
+.editor-saved {
+  border: 1px solid rgba(229, 156, 76, 0.35);
+  background: rgba(229, 156, 76, 0.14);
+  color: #f7f3eb;
 }
 
 .editor-loading,
@@ -517,25 +707,21 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 900px) {
-  .editor-backdrop {
-    padding: 1rem;
+  .editor-page-panel {
+    min-height: calc(100vh - 11rem);
   }
 
-  .editor-modal {
-    width: 100%;
-    height: 100%;
-  }
-
-  .editor-footer,
-  .editor-head,
-  .editor-toolbar {
-    align-items: flex-start;
+  .editor-toolbar,
+  .editor-footer {
+    align-items: stretch;
     flex-direction: column;
   }
 
-  .toolbar-group-actions {
+  .toolbar-group-actions,
+  .editor-actions {
     margin-left: 0;
-    align-items: flex-start;
+    width: 100%;
+    justify-content: flex-start;
   }
 }
 </style>
