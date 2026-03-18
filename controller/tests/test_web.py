@@ -1,4 +1,5 @@
 import asyncio
+import signal
 import elemctl.web as web_mod
 import pytest
 from elemctl.uds_wire import PROTOCOL_VERSION
@@ -306,6 +307,97 @@ def test_read_http_body_rejects_oversized_request(tmp_path):
 
     assert exc.value.status == 413
     assert exc.value.message == 'request body too large'
+
+
+def test_close_all_ws_clients_aborts_stuck_writer(tmp_path, monkeypatch):
+    relay = WebRelay('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+
+    class Transport:
+        def __init__(self) -> None:
+            self.aborted = False
+
+        def abort(self) -> None:
+            self.aborted = True
+
+    class Writer:
+        def __init__(self) -> None:
+            self.closed = False
+            self.transport = Transport()
+
+        def close(self) -> None:
+            self.closed = True
+
+        async def wait_closed(self) -> None:
+            await asyncio.Event().wait()
+
+    writer = Writer()
+    relay._ws_clients.add(web_mod._WsClient(writer=writer, peer='browser'))  # type: ignore[arg-type]
+    monkeypatch.setattr(web_mod, '_WS_CLOSE_TIMEOUT', 0.001)
+
+    asyncio.run(relay._close_all_ws_clients())
+
+    assert writer.closed is True
+    assert writer.transport.aborted is True
+    assert relay._ws_clients == set()
+
+
+def test_shutdown_cancels_ws_tasks_before_waiting_for_server_close(tmp_path):
+    relay = WebRelay('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+    events: list[str] = []
+
+    class Loop:
+        def remove_signal_handler(self, signum) -> None:
+            events.append(f'remove-handler:{int(signum)}')
+
+    class Server:
+        def close(self) -> None:
+            events.append('server-close')
+
+        async def wait_closed(self) -> None:
+            events.append('server-wait-closed')
+
+    class Thread:
+        def join(self, timeout=None) -> None:
+            events.append(f'thread-join:{timeout}')
+
+    async def fake_close_all_ws_clients() -> None:
+        events.append('close-ws-clients')
+
+    async def ws_task_body() -> None:
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            events.append('ws-task-cancelled')
+            raise
+
+    async def broadcast_task_body() -> None:
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            events.append('broadcast-task-cancelled')
+            raise
+
+    async def run() -> None:
+        relay._loop = Loop()  # type: ignore[assignment]
+        relay._uds_thread = Thread()  # type: ignore[assignment]
+        relay._close_all_ws_clients = fake_close_all_ws_clients  # type: ignore[method-assign]
+
+        ws_task = asyncio.create_task(ws_task_body())
+        await asyncio.sleep(0)
+        relay._ws_tasks.add(ws_task)
+
+        broadcast_task = asyncio.create_task(broadcast_task_body())
+        await asyncio.sleep(0)
+
+        await relay._shutdown(Server(), broadcast_task, [signal.SIGINT])
+
+    asyncio.run(run())
+
+    assert relay._stop.is_set() is True
+    assert events.index('server-close') < events.index('ws-task-cancelled')
+    assert events.index('ws-task-cancelled') < events.index('server-wait-closed')
+    assert events.index('broadcast-task-cancelled') < events.index('server-wait-closed')
+    assert events[-1] == 'close-ws-clients'
 
 
 def test_web_parser_defaults_bind_all_interfaces():

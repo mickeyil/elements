@@ -49,6 +49,7 @@ _STATIC_ROOT = _STATIC_DIR.resolve()
 _WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
 _FRAME_HEADER = struct.Struct('<If')
 _MAX_HTTP_BODY = 1 << 20
+_WS_CLOSE_TIMEOUT = 0.25
 _HTTP_TYPES = {
     '.html': 'text/html; charset=utf-8',
     '.js': 'application/javascript; charset=utf-8',
@@ -206,6 +207,7 @@ class WebRelay:
         self._snapshot = _empty_snapshot()
         self._snapshot['layouts'] = self._layouts
         self._ws_clients: set[_WsClient] = set()
+        self._ws_tasks: set[asyncio.Task] = set()
 
     async def run(self) -> None:
         self._loop = asyncio.get_running_loop()
@@ -240,19 +242,35 @@ class WebRelay:
 
         broadcast_task = asyncio.create_task(self._broadcast_loop())
         try:
-            async with server:
-                await stop_requested.wait()
+            await stop_requested.wait()
         finally:
+            await self._shutdown(server, broadcast_task, installed_handlers)
+
+    async def _shutdown(
+        self,
+        server: asyncio.AbstractServer,
+        broadcast_task: asyncio.Task,
+        installed_handlers: list[signal.Signals],
+    ) -> None:
+        if self._loop is not None:
             for signum in installed_handlers:
                 self._loop.remove_signal_handler(signum)
-            self._stop.set()
-            server.close()
-            await server.wait_closed()
-            broadcast_task.cancel()
-            await asyncio.gather(broadcast_task, return_exceptions=True)
-            if self._uds_thread is not None:
-                self._uds_thread.join(timeout=3.0)
-            await self._close_all_ws_clients()
+        self._stop.set()
+        server.close()
+
+        ws_tasks = list(self._ws_tasks)
+        for task in ws_tasks:
+            task.cancel()
+        if ws_tasks:
+            await asyncio.gather(*ws_tasks, return_exceptions=True)
+
+        broadcast_task.cancel()
+        await asyncio.gather(broadcast_task, return_exceptions=True)
+        await server.wait_closed()
+
+        if self._uds_thread is not None:
+            self._uds_thread.join(timeout=3.0)
+        await self._close_all_ws_clients()
 
     def _uds_reader_loop(self) -> None:
         client: UdsClient | None = None
@@ -607,6 +625,9 @@ class WebRelay:
         peer = str(writer.get_extra_info('peername') or 'browser')
         client = _WsClient(writer=writer, peer=peer)
         self._ws_clients.add(client)
+        task = asyncio.current_task()
+        if task is not None:
+            self._ws_tasks.add(task)
 
         try:
             await self._send_json(client, _relay_status(self._controller_connected))
@@ -617,9 +638,10 @@ class WebRelay:
                 if not data:
                     break
         finally:
+            if task is not None:
+                self._ws_tasks.discard(task)
             self._ws_clients.discard(client)
-            writer.close()
-            await writer.wait_closed()
+            await self._close_ws_writer(writer)
 
     async def _serve_asset(self, path: str, writer: asyncio.StreamWriter) -> None:
         asset_path = _resolve_asset_path(path)
@@ -692,8 +714,7 @@ class WebRelay:
                 dead.append(client)
         for client in dead:
             self._ws_clients.discard(client)
-            client.writer.close()
-            await client.writer.wait_closed()
+            await self._close_ws_writer(client.writer)
 
     async def _broadcast_binary(self, payload: bytes) -> None:
         dead: list[_WsClient] = []
@@ -704,8 +725,7 @@ class WebRelay:
                 dead.append(client)
         for client in dead:
             self._ws_clients.discard(client)
-            client.writer.close()
-            await client.writer.wait_closed()
+            await self._close_ws_writer(client.writer)
 
     async def _send_json(self, client: _WsClient, msg: dict) -> None:
         payload = json.dumps(msg, separators=(',', ':')).encode('utf-8')
@@ -721,11 +741,24 @@ class WebRelay:
     async def _close_all_ws_clients(self) -> None:
         for client in list(self._ws_clients):
             self._ws_clients.discard(client)
-            client.writer.close()
-            try:
-                await client.writer.wait_closed()
-            except OSError:
-                pass
+            await self._close_ws_writer(client.writer)
+
+    async def _close_ws_writer(self, writer: asyncio.StreamWriter) -> None:
+        writer.close()
+        try:
+            await asyncio.wait_for(writer.wait_closed(), timeout=_WS_CLOSE_TIMEOUT)
+            return
+        except asyncio.CancelledError:
+            self._abort_ws_writer(writer)
+            raise
+        except (asyncio.TimeoutError, ConnectionError, OSError):
+            self._abort_ws_writer(writer)
+
+    @staticmethod
+    def _abort_ws_writer(writer: asyncio.StreamWriter) -> None:
+        transport = getattr(writer, 'transport', None)
+        if transport is not None:
+            transport.abort()
 
 
 def _build_parser() -> argparse.ArgumentParser:
