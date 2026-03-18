@@ -1,4 +1,4 @@
-import type { EditorDocument, Point } from './editorModel';
+import type { EditorDocument, OccupiedCell, Point } from './editorModel';
 
 export const DEFAULT_ZOOM = 18;
 export const MIN_ZOOM = 4;
@@ -10,10 +10,19 @@ export interface EditorViewport {
   offsetY: number;
 }
 
+export interface EditorPreview {
+  cells: OccupiedCell[];
+  error: string | null;
+  anchor: Point | null;
+}
+
 const SURFACE = '#081015';
 const GRID_LINE = 'rgba(255, 255, 255, 0.08)';
 const HOVER = 'rgba(229, 156, 76, 0.18)';
 const PLACED = '#e59c4c';
+const PREVIEW = 'rgba(229, 156, 76, 0.42)';
+const PREVIEW_BLOCKED = 'rgba(182, 83, 83, 0.36)';
+const ANCHOR = 'rgba(229, 156, 76, 0.28)';
 const LABEL = '#091015';
 
 export function clampZoom(nextZoom: number): number {
@@ -75,11 +84,39 @@ export function screenToCell(
   return { x: cellX, y: cellY };
 }
 
+function drawCell(
+  ctx: CanvasRenderingContext2D,
+  viewport: EditorViewport,
+  cell: { x: number; y: number; index: number },
+  color: string,
+): void {
+  const inset = Math.max(1.5, viewport.zoom * 0.14);
+  const sx = viewport.offsetX + cell.x * viewport.zoom;
+  const sy = viewport.offsetY + cell.y * viewport.zoom;
+
+  ctx.fillStyle = color;
+  ctx.fillRect(
+    sx + inset,
+    sy + inset,
+    Math.max(1, viewport.zoom - inset * 2),
+    Math.max(1, viewport.zoom - inset * 2),
+  );
+
+  if (viewport.zoom >= 16) {
+    ctx.fillStyle = LABEL;
+    ctx.font = `${Math.max(10, viewport.zoom * 0.42)}px "IBM Plex Mono", monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(String(cell.index), sx + viewport.zoom / 2, sy + viewport.zoom / 2);
+  }
+}
+
 export function renderEditor(
   canvas: HTMLCanvasElement,
   document: EditorDocument,
   viewport: EditorViewport,
   hoverCell: Point | null,
+  preview: EditorPreview | null,
 ): void {
   resizeCanvasToDisplaySize(canvas);
   const ctx = canvas.getContext('2d');
@@ -123,34 +160,27 @@ export function renderEditor(
     ctx.fillRect(sx, sy, viewport.zoom, viewport.zoom);
   }
 
-  const inset = Math.max(1.5, viewport.zoom * 0.14);
-  for (const primitive of document.primitives) {
-    const [x, y] = primitive.position;
-    if (x < startX - 1 || x > endX || y < startY - 1 || y > endY) {
+  if (preview?.anchor) {
+    const sx = viewport.offsetX + preview.anchor.x * viewport.zoom;
+    const sy = viewport.offsetY + preview.anchor.y * viewport.zoom;
+    ctx.fillStyle = ANCHOR;
+    ctx.fillRect(sx, sy, viewport.zoom, viewport.zoom);
+  }
+
+  for (const cell of document.occupied.values()) {
+    if (cell.x < startX - 1 || cell.x > endX || cell.y < startY - 1 || cell.y > endY) {
       continue;
     }
+    drawCell(ctx, viewport, cell, PLACED);
+  }
 
-    const sx = viewport.offsetX + x * viewport.zoom;
-    const sy = viewport.offsetY + y * viewport.zoom;
-
-    ctx.fillStyle = PLACED;
-    ctx.fillRect(
-      sx + inset,
-      sy + inset,
-      Math.max(1, viewport.zoom - inset * 2),
-      Math.max(1, viewport.zoom - inset * 2),
-    );
-
-    if (viewport.zoom >= 16) {
-      ctx.fillStyle = LABEL;
-      ctx.font = `${Math.max(10, viewport.zoom * 0.42)}px "IBM Plex Mono", monospace`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(
-        String(primitive.index),
-        sx + viewport.zoom / 2,
-        sy + viewport.zoom / 2,
-      );
+  if (preview) {
+    const color = preview.error ? PREVIEW_BLOCKED : PREVIEW;
+    for (const cell of preview.cells) {
+      if (cell.x < startX - 1 || cell.x > endX || cell.y < startY - 1 || cell.y > endY) {
+        continue;
+      }
+      drawCell(ctx, viewport, cell, color);
     }
   }
 }

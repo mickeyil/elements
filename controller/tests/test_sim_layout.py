@@ -5,6 +5,7 @@ import pytest
 from elemctl.config import DeviceConfig
 from elemctl.sim_layout import (
     LayoutError,
+    _expand_line_cells,
     canonical_csv_hash,
     load_layout_for_editor,
     load_layouts_for_devices,
@@ -204,6 +205,80 @@ def test_save_layout_for_editor_rejects_rows_editor_mismatch(tmp_path):
                 'primitives': [
                     {'type': 'single', 'index': 1, 'position': [1, 0]},
                     {'type': 'single', 'index': 2, 'position': [0, 0]},
+                ],
+            },
+        )
+
+
+@pytest.mark.parametrize(
+    ('start', 'end', 'spacing', 'expected'),
+    [
+        ((0, 0), (4, 0), 0, [(0, 0), (1, 0), (2, 0), (3, 0), (4, 0)]),
+        ((0, 0), (4, 0), 1, [(0, 0), (2, 0), (4, 0)]),
+        ((0, 0), (0, 4), 1, [(0, 0), (0, 2), (0, 4)]),
+        ((0, 0), (4, 4), 1, [(0, 0), (2, 2), (4, 4)]),
+        ((4, 0), (0, 4), 0, [(4, 0), (3, 1), (2, 2), (1, 3), (0, 4)]),
+    ],
+)
+def test_expand_line_cells_matches_expected_points(start, end, spacing, expected):
+    assert _expand_line_cells(start, end, spacing) == expected
+
+
+def test_save_and_load_layout_for_editor_round_trip_with_line(tmp_path):
+    saved = save_layout_for_editor(
+        'sim-1',
+        configured_length=5,
+        layouts_dir=str(tmp_path),
+        rows=[[1, None, 2, None, 3]],
+        editor_payload={
+            'version': 1,
+            'primitives': [
+                {
+                    'type': 'line',
+                    'startIndex': 1,
+                    'count': 3,
+                    'spacing': 1,
+                    'start': [0, 0],
+                    'end': [4, 0],
+                },
+            ],
+        },
+    )
+
+    assert saved['rows'] == [[1, None, 2, None, 3]]
+    assert saved['editor']['primitives'] == [
+        {
+            'type': 'line',
+            'startIndex': 1,
+            'count': 3,
+            'spacing': 1,
+            'start': [0, 0],
+            'end': [4, 0],
+        },
+    ]
+
+    loaded = load_layout_for_editor('sim-1', configured_length=5, layouts_dir=str(tmp_path))
+    assert loaded == saved
+
+
+def test_save_layout_for_editor_rejects_line_count_mismatch(tmp_path):
+    with pytest.raises(LayoutError, match='editor line count does not match expanded cells'):
+        save_layout_for_editor(
+            'sim-1',
+            configured_length=5,
+            layouts_dir=str(tmp_path),
+            rows=[[1, None, 2, None, 3]],
+            editor_payload={
+                'version': 1,
+                'primitives': [
+                    {
+                        'type': 'line',
+                        'startIndex': 1,
+                        'count': 4,
+                        'spacing': 1,
+                        'start': [0, 0],
+                        'end': [4, 0],
+                    },
                 ],
             },
         )

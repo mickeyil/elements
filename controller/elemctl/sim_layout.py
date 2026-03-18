@@ -159,6 +159,137 @@ def _rows_to_single_primitives(rows: list[list[int | None]]) -> list[dict]:
     return primitives
 
 
+def _parse_position(value: object, field_name: str) -> tuple[int, int]:
+    if (
+        not isinstance(value, list)
+        or len(value) != 2
+        or any(isinstance(item, bool) or not isinstance(item, int) for item in value)
+    ):
+        raise LayoutError(f'{field_name} must be a two-item integer list')
+    x, y = value
+    if x < 0 or y < 0:
+        raise LayoutError(f'{field_name} coordinates must be >= 0')
+    return x, y
+
+
+def _expand_line_cells(
+    start: tuple[int, int],
+    end: tuple[int, int],
+    spacing: int,
+) -> list[tuple[int, int]]:
+    if spacing < 0:
+        raise LayoutError('editor line spacing must be >= 0')
+
+    x0, y0 = start
+    x1, y1 = end
+    dx = abs(x1 - x0)
+    dy = -abs(y1 - y0)
+    sx = 1 if x0 < x1 else -1
+    sy = 1 if y0 < y1 else -1
+    err = dx + dy
+
+    path: list[tuple[int, int]] = []
+    while True:
+        path.append((x0, y0))
+        if x0 == x1 and y0 == y1:
+            break
+        twice_err = err * 2
+        if twice_err >= dy:
+            err += dy
+            x0 += sx
+        if twice_err <= dx:
+            err += dx
+            y0 += sy
+
+    step = spacing + 1
+    return path[::step]
+
+
+def _expand_editor_primitive_cells(
+    primitive: dict,
+    configured_length: int,
+    max_x: int,
+    max_y: int,
+) -> tuple[dict, list[dict]]:
+    primitive_type = primitive.get('type')
+    if primitive_type == 'single':
+        index = primitive.get('index')
+        if isinstance(index, bool) or not isinstance(index, int):
+            raise LayoutError('editor primitive index must be an integer')
+        if not (1 <= index <= configured_length):
+            raise LayoutError(
+                f'editor primitive index must be 1-{configured_length}, got {index}'
+            )
+
+        x, y = _parse_position(primitive.get('position'), 'editor primitive position')
+        if x >= max_x or y >= max_y:
+            raise LayoutError('editor primitive position is outside the layout grid')
+
+        return (
+            {
+                'type': 'single',
+                'index': index,
+                'position': [x, y],
+            },
+            [{
+                'type': 'single',
+                'index': index,
+                'position': [x, y],
+            }],
+        )
+
+    if primitive_type == 'line':
+        start_index = primitive.get('startIndex')
+        if isinstance(start_index, bool) or not isinstance(start_index, int):
+            raise LayoutError('editor line startIndex must be an integer')
+        if not (1 <= start_index <= configured_length):
+            raise LayoutError(
+                f'editor line startIndex must be 1-{configured_length}, got {start_index}'
+            )
+
+        count = primitive.get('count')
+        if isinstance(count, bool) or not isinstance(count, int) or count < 1:
+            raise LayoutError('editor line count must be a positive integer')
+
+        spacing = primitive.get('spacing')
+        if isinstance(spacing, bool) or not isinstance(spacing, int) or spacing < 0:
+            raise LayoutError('editor line spacing must be a non-negative integer')
+
+        start = _parse_position(primitive.get('start'), 'editor line start')
+        end = _parse_position(primitive.get('end'), 'editor line end')
+        if start[0] >= max_x or start[1] >= max_y or end[0] >= max_x or end[1] >= max_y:
+            raise LayoutError('editor line endpoints are outside the layout grid')
+
+        cells = _expand_line_cells(start, end, spacing)
+        if len(cells) != count:
+            raise LayoutError('editor line count does not match expanded cells')
+        if start_index + count - 1 > configured_length:
+            raise LayoutError(
+                f'editor line indices must be 1-{configured_length}, got {start_index + count - 1}'
+            )
+
+        return (
+            {
+                'type': 'line',
+                'startIndex': start_index,
+                'count': count,
+                'spacing': spacing,
+                'start': [start[0], start[1]],
+                'end': [end[0], end[1]],
+            },
+            [
+                {
+                    'type': 'single',
+                    'index': start_index + offset,
+                    'position': [x, y],
+                }
+                for offset, (x, y) in enumerate(cells)
+            ],
+        )
+
+    raise LayoutError(f'unsupported editor primitive type: {primitive_type!r}')
+
+
 def _normalize_editor_primitives(
     editor_payload: object,
     rows: list[list[int | None]],
@@ -180,6 +311,7 @@ def _normalize_editor_primitives(
         raise LayoutError('editor primitives must be a list')
 
     norm: list[dict] = []
+    expanded: list[dict] = []
     seen_indices: set[int] = set()
     seen_positions: set[tuple[int, int]] = set()
     max_y = len(rows)
@@ -188,43 +320,27 @@ def _normalize_editor_primitives(
     for primitive in primitives:
         if not isinstance(primitive, dict):
             raise LayoutError('editor primitive must be an object')
-        if primitive.get('type') != 'single':
-            return None
+        normalized, expanded_cells = _expand_editor_primitive_cells(
+            primitive,
+            configured_length,
+            max_x,
+            max_y,
+        )
 
-        index = primitive.get('index')
-        if isinstance(index, bool) or not isinstance(index, int):
-            raise LayoutError('editor primitive index must be an integer')
-        if not (1 <= index <= configured_length):
-            raise LayoutError(
-                f'editor primitive index must be 1-{configured_length}, got {index}'
-            )
-        if index in seen_indices:
-            raise LayoutError(f'duplicate editor primitive index: {index}')
+        for cell in expanded_cells:
+            index = cell['index']
+            x, y = cell['position']
+            if index in seen_indices:
+                raise LayoutError(f'duplicate editor primitive index: {index}')
+            if (x, y) in seen_positions:
+                raise LayoutError(f'duplicate editor primitive position: {(x, y)}')
+            seen_indices.add(index)
+            seen_positions.add((x, y))
 
-        position = primitive.get('position')
-        if (
-            not isinstance(position, list)
-            or len(position) != 2
-            or any(isinstance(value, bool) or not isinstance(value, int) for value in position)
-        ):
-            raise LayoutError('editor primitive position must be a two-item integer list')
-        x, y = position
-        if x < 0 or y < 0:
-            raise LayoutError('editor primitive coordinates must be >= 0')
-        if x >= max_x or y >= max_y:
-            raise LayoutError('editor primitive position is outside the layout grid')
-        if (x, y) in seen_positions:
-            raise LayoutError(f'duplicate editor primitive position: {(x, y)}')
+        norm.append(normalized)
+        expanded.extend(expanded_cells)
 
-        seen_indices.add(index)
-        seen_positions.add((x, y))
-        norm.append({
-            'type': 'single',
-            'index': index,
-            'position': [x, y],
-        })
-
-    if sorted(norm, key=lambda item: item['index']) != _rows_to_single_primitives(rows):
+    if sorted(expanded, key=lambda item: item['index']) != _rows_to_single_primitives(rows):
         raise LayoutError('editor primitives do not match rows')
 
     payload = {

@@ -19,7 +19,9 @@ import {
   documentsEqual,
   GRID_SIZE,
   incrementCurrentIndex,
+  placeLinePrimitive,
   placeSinglePrimitive,
+  previewLinePlacement,
   serializeDocument,
   undoLastPrimitive,
   type EditorDocument,
@@ -33,6 +35,7 @@ import {
   renderEditor,
   screenToCell,
   zoomViewportAt,
+  type EditorPreview,
   type EditorViewport,
 } from '../lib/editorRenderer';
 import { getLayout, saveLayout } from '../lib/layoutApi';
@@ -43,6 +46,8 @@ interface DeviceMeta {
   length: number;
   stripId: string;
 }
+
+type Tool = 'single' | 'line';
 
 const route = useRoute();
 const router = useRouter();
@@ -63,6 +68,9 @@ const documentRef = shallowRef<EditorDocument>(createEmptyDocument(1));
 const baselineDocument = shallowRef<EditorDocument>(createEmptyDocument(1));
 const baseCsvHash = ref<string | null>(null);
 const resolvedDeviceMeta = shallowRef<DeviceMeta | null>(null);
+const activeTool = ref<Tool>('single');
+const lineSpacing = ref(0);
+const lineStart = ref<Point | null>(null);
 
 let spacePressed = false;
 let renderPending = false;
@@ -158,12 +166,61 @@ const deviceLength = computed(() =>
 const currentIndex = computed(() => documentRef.value.currentIndex);
 const placedCount = computed(() => documentRef.value.placedCount);
 const canUndo = computed(
-  () => routeState.value.kind === 'ready' && !loadingLayout.value && !saving.value && documentRef.value.primitives.length > 0,
+  () =>
+    routeState.value.kind === 'ready' &&
+    !loadingLayout.value &&
+    !saving.value &&
+    documentRef.value.primitives.length > 0,
 );
 const canSave = computed(
   () => routeState.value.kind === 'ready' && !loadingLayout.value && !saving.value,
 );
 const isDirty = computed(() => !documentsEqual(documentRef.value, baselineDocument.value));
+const currentSpacing = computed(() => Math.max(0, Math.floor(Number(lineSpacing.value) || 0)));
+const toolDescription = computed(() =>
+  activeTool.value === 'single' ? 'single LED tool' : `line tool · spacing ${currentSpacing.value}`,
+);
+
+const linePreview = computed<EditorPreview | null>(() => {
+  if (activeTool.value !== 'line' || !lineStart.value) {
+    return null;
+  }
+
+  if (!hoverCell.value) {
+    return {
+      cells: [],
+      error: null,
+      anchor: lineStart.value,
+    };
+  }
+
+  try {
+    const preview = previewLinePlacement(
+      documentRef.value,
+      lineStart.value,
+      hoverCell.value,
+      currentSpacing.value,
+    );
+    return {
+      cells: preview.cells,
+      error: preview.error,
+      anchor: lineStart.value,
+    };
+  } catch (err) {
+    return {
+      cells: [],
+      error: err instanceof Error ? err.message : 'Failed to preview line.',
+      anchor: lineStart.value,
+    };
+  }
+});
+
+const previewCount = computed(() => linePreview.value?.cells.length ?? 0);
+const previewError = computed(() => linePreview.value?.error ?? '');
+
+function clearLineDraft(): void {
+  lineStart.value = null;
+}
 
 function setDocument(nextDocument: EditorDocument): void {
   documentRef.value = nextDocument;
@@ -181,7 +238,7 @@ function requestRender(): void {
     if (!canvas) {
       return;
     }
-    renderEditor(canvas, documentRef.value, viewport.value, hoverCell.value);
+    renderEditor(canvas, documentRef.value, viewport.value, hoverCell.value, linePreview.value);
   });
 }
 
@@ -199,6 +256,8 @@ async function loadInitialDocument(device: DeviceMeta): Promise<void> {
   loadingLayout.value = true;
   error.value = '';
   statusNotice.value = '';
+  clearLineDraft();
+  activeTool.value = 'single';
   const token = ++loadToken;
 
   try {
@@ -303,6 +362,31 @@ function handleWheel(event: WheelEvent): void {
   requestRender();
 }
 
+function beginLineAt(cell: Point): void {
+  if (documentRef.value.occupied.has(`${cell.x},${cell.y}`)) {
+    error.value = 'That cell is already occupied.';
+    return;
+  }
+  lineStart.value = cell;
+  statusNotice.value = '';
+  error.value = '';
+}
+
+function commitLineAt(cell: Point): void {
+  if (!lineStart.value) {
+    beginLineAt(cell);
+    return;
+  }
+
+  try {
+    setDocument(placeLinePrimitive(documentRef.value, lineStart.value, cell, currentSpacing.value));
+    clearLineDraft();
+    error.value = '';
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : 'Failed to place line.';
+  }
+}
+
 function handleClick(event: MouseEvent): void {
   if (routeState.value.kind !== 'ready' || loadingLayout.value || saving.value) {
     return;
@@ -317,6 +401,10 @@ function handleClick(event: MouseEvent): void {
   }
   const cell = screenToCell(viewport.value, point.x, point.y, GRID_SIZE);
   if (!cell) {
+    return;
+  }
+  if (activeTool.value === 'line') {
+    commitLineAt(cell);
     return;
   }
   try {
@@ -334,16 +422,25 @@ function shiftCurrentIndex(delta: number): void {
 function undo(): void {
   setDocument(undoLastPrimitive(documentRef.value));
   error.value = '';
+  clearLineDraft();
 }
 
 function resetDocument(): void {
   setDocument(cloneDocument(baselineDocument.value));
+  clearLineDraft();
   error.value = '';
   void resetViewport();
 }
 
 function backToDevices(): void {
   void router.push('/');
+}
+
+function selectTool(tool: Tool): void {
+  activeTool.value = tool;
+  clearLineDraft();
+  error.value = '';
+  statusNotice.value = '';
 }
 
 async function save(): Promise<void> {
@@ -373,6 +470,14 @@ function handleKeyDown(event: KeyboardEvent): void {
   if (event.code === 'Space') {
     event.preventDefault();
     spacePressed = true;
+    return;
+  }
+
+  if (event.code === 'Escape' && lineStart.value) {
+    event.preventDefault();
+    clearLineDraft();
+    statusNotice.value = '';
+    error.value = '';
   }
 }
 
@@ -415,7 +520,7 @@ watch(
   { immediate: true },
 );
 
-watch([documentRef, viewport, hoverCell], () => {
+watch([documentRef, viewport, hoverCell, activeTool, lineStart, lineSpacing], () => {
   requestRender();
 });
 
@@ -477,7 +582,7 @@ onBeforeUnmount(() => {
           {{ routeState.kind === 'ready' ? routeState.device.deviceUid : routeDeviceUid || 'Layout' }}
         </h1>
         <p v-if="routeState.kind === 'ready'" class="page-copy">
-          strip {{ routeState.device.stripId }} · {{ routeState.device.length }} px · single LED tool
+          strip {{ routeState.device.stripId }} · {{ routeState.device.length }} px · {{ toolDescription }}
         </p>
         <p v-else class="page-copy">
           {{ routeState.message }}
@@ -500,7 +605,30 @@ onBeforeUnmount(() => {
       <div class="editor-toolbar">
         <div class="toolbar-group">
           <span class="toolbar-label">Tool</span>
-          <strong>Single LED</strong>
+          <div class="tool-buttons">
+            <button
+              type="button"
+              class="tool-button"
+              :class="{ 'tool-button-active': activeTool === 'single' }"
+              :disabled="loadingLayout || saving"
+              @click="selectTool('single')"
+            >
+              Single
+            </button>
+            <button
+              type="button"
+              class="tool-button"
+              :class="{ 'tool-button-active': activeTool === 'line' }"
+              :disabled="loadingLayout || saving"
+              @click="selectTool('line')"
+            >
+              Line
+            </button>
+          </div>
+        </div>
+        <div v-if="activeTool === 'line'" class="toolbar-group">
+          <span class="toolbar-label">Spacing</span>
+          <input v-model.number="lineSpacing" class="spacing-input" min="0" step="1" type="number" />
         </div>
         <div class="toolbar-group">
           <span class="toolbar-label">Index</span>
@@ -519,6 +647,13 @@ onBeforeUnmount(() => {
           <span class="toolbar-label">Placed</span>
           <strong>{{ placedCount }} / {{ deviceLength }}</strong>
         </div>
+        <div v-if="activeTool === 'line'" class="toolbar-group">
+          <span class="toolbar-label">Preview</span>
+          <strong v-if="lineStart">
+            {{ previewCount ? `${previewCount} LEDs` : 'Pick an end point' }}
+          </strong>
+          <strong v-else>Pick a start point</strong>
+        </div>
         <div class="toolbar-group toolbar-group-actions">
           <button type="button" class="ghost-button" :disabled="!canUndo" @click="undo">Undo</button>
           <span class="zoom-range">zoom {{ MIN_ZOOM }}-{{ MAX_ZOOM }}</span>
@@ -526,6 +661,7 @@ onBeforeUnmount(() => {
       </div>
 
       <p v-if="error" class="editor-error">{{ error }}</p>
+      <p v-else-if="activeTool === 'line' && previewError" class="editor-error">{{ previewError }}</p>
       <p v-else-if="statusNotice" class="editor-saved">{{ statusNotice }}</p>
 
       <div v-if="loadingLayout" class="editor-loading">Loading layout…</div>
@@ -543,7 +679,12 @@ onBeforeUnmount(() => {
 
       <footer class="editor-footer">
         <div class="editor-hint">
-          Click to place the current index. Use the wheel to zoom and hold space while dragging to pan.
+          <template v-if="activeTool === 'single'">
+            Click to place the current index. Use the wheel to zoom and hold space while dragging to pan.
+          </template>
+          <template v-else>
+            Click once to set the line start, move to preview, and click again to confirm. Press Escape to cancel the line draft.
+          </template>
         </div>
         <div class="editor-actions">
           <button type="button" class="ghost-button" :disabled="loadingLayout || saving" @click="resetDocument">
@@ -621,22 +762,38 @@ onBeforeUnmount(() => {
   color: var(--muted);
 }
 
+.tool-buttons,
 .index-controls {
   display: flex;
   align-items: center;
   gap: 0.5rem;
 }
 
-.index-controls button {
+.tool-button,
+.index-controls button,
+.spacing-input {
   border: 1px solid var(--panel-edge);
   border-radius: 999px;
   padding: 0.55rem 0.9rem;
   background: rgba(255, 255, 255, 0.04);
   color: var(--text);
+}
+
+.tool-button {
   cursor: pointer;
 }
 
-.index-controls button:disabled {
+.tool-button-active {
+  border-color: rgba(229, 156, 76, 0.35);
+  background: rgba(229, 156, 76, 0.16);
+}
+
+.spacing-input {
+  width: 6rem;
+}
+
+.index-controls button:disabled,
+.tool-button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
