@@ -19,6 +19,8 @@ const emptyState = document.getElementById("empty-state");
 const emptyTitle = document.getElementById("empty-title");
 const emptyCopy = document.getElementById("empty-copy");
 const stripList = document.getElementById("strip-list");
+const CELL_PX = 14;
+const EMPTY_CELL = [19, 28, 34, 255];
 
 let ws = null;
 
@@ -53,6 +55,11 @@ function getSnapshotDevices() {
   return Array.isArray(state.snapshot?.devices) ? state.snapshot.devices : [];
 }
 
+function getSnapshotLayouts() {
+  const layouts = state.snapshot?.layouts;
+  return layouts && typeof layouts === "object" ? layouts : {};
+}
+
 function getDeviceConnected(deviceUid) {
   const device = getSnapshotDevices().find((item) => item?.device_uid === deviceUid);
   return Boolean(device?.connected);
@@ -73,6 +80,7 @@ function rebuildTargets() {
   stripList.textContent = "";
   state.simTargets = [];
   state.logicalStrips = Array.isArray(state.session?.strips) ? state.session.strips : [];
+  const layouts = getSnapshotLayouts();
   clearFrameState();
 
   if (!state.session || !state.logicalStrips.length) {
@@ -121,14 +129,30 @@ function rebuildTargets() {
 
       head.appendChild(info);
       head.appendChild(statusNode);
-
-      const canvas = document.createElement("canvas");
-      canvas.className = "target-canvas";
-      canvas.width = target.length;
-      canvas.height = 1;
-
       panel.appendChild(head);
-      panel.appendChild(canvas);
+      const layout = layouts[target.device_uid] ?? null;
+      let canvas = null;
+      let ctx = null;
+
+      if (layout && Array.isArray(layout.rows) && layout.rows.length) {
+        const gridHeight = layout.rows.length;
+        const gridWidth = Math.max(0, ...layout.rows.map((row) => (Array.isArray(row) ? row.length : 0)));
+
+        canvas = document.createElement("canvas");
+        canvas.className = "target-canvas target-canvas-2d";
+        canvas.width = gridWidth;
+        canvas.height = gridHeight;
+        canvas.style.width = `${gridWidth * CELL_PX}px`;
+        canvas.style.height = `${gridHeight * CELL_PX}px`;
+        ctx = canvas.getContext("2d");
+        panel.appendChild(canvas);
+      } else {
+        const note = document.createElement("div");
+        note.className = "target-no-layout";
+        note.textContent = "No layout file for this sim target.";
+        panel.appendChild(note);
+      }
+
       stripList.appendChild(panel);
 
       const simTarget = {
@@ -140,7 +164,8 @@ function rebuildTargets() {
         panel,
         statusNode,
         canvas,
-        ctx: canvas.getContext("2d"),
+        ctx,
+        layout,
       };
       updateTargetConnection(simTarget, getDeviceConnected(target.device_uid));
       state.simTargets.push(simTarget);
@@ -187,21 +212,45 @@ function handleDeviceStatus(msg) {
 
 function paintTargets() {
   for (const target of state.simTargets) {
-    const image = target.ctx.createImageData(target.physicalLength, 1);
+    if (!target.layout || !target.canvas || !target.ctx) {
+      continue;
+    }
+
+    const rows = Array.isArray(target.layout.rows) ? target.layout.rows : [];
+    const gridHeight = rows.length;
+    const gridWidth = target.canvas.width;
+    const image = target.ctx.createImageData(gridWidth, gridHeight);
     const src = state.latestSlices[target.logicalIndex] ?? null;
     const srcPixels = src
       ? Math.min(target.logicalLength, target.physicalLength, Math.floor(src.length / 3))
       : 0;
 
-    for (let px = 0; px < target.physicalLength; px += 1) {
-      const di = px * 4;
-      if (px < srcPixels) {
-        const si = px * 3;
-        image.data[di] = src[si];
-        image.data[di + 1] = src[si + 1];
-        image.data[di + 2] = src[si + 2];
+    for (let y = 0; y < gridHeight; y += 1) {
+      const row = Array.isArray(rows[y]) ? rows[y] : [];
+      for (let x = 0; x < gridWidth; x += 1) {
+        const di = (y * gridWidth + x) * 4;
+        const cell = row[x] ?? null;
+        if (Number.isInteger(cell)) {
+          const pixelIndex = cell - 1;
+          if (pixelIndex >= 0 && pixelIndex < srcPixels) {
+            const si = pixelIndex * 3;
+            image.data[di] = src[si];
+            image.data[di + 1] = src[si + 1];
+            image.data[di + 2] = src[si + 2];
+          } else {
+            image.data[di] = 0;
+            image.data[di + 1] = 0;
+            image.data[di + 2] = 0;
+          }
+        } else {
+          image.data[di] = EMPTY_CELL[0];
+          image.data[di + 1] = EMPTY_CELL[1];
+          image.data[di + 2] = EMPTY_CELL[2];
+          image.data[di + 3] = EMPTY_CELL[3];
+          continue;
+        }
+        image.data[di + 3] = 255;
       }
-      image.data[di + 3] = 255;
     }
 
     target.ctx.putImageData(image, 0, 0);
