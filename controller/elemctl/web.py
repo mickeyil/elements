@@ -26,6 +26,7 @@ from .config import (
     resolve_config_path,
     resolve_runtime_path,
 )
+from .sim_layout import load_layouts_for_devices
 from .slogger import configure_logger
 from .uds_client import UdsClient
 from .uds_wire import KIND_FRAME, KIND_JSON, PROTOCOL_VERSION, ROLE_OBSERVER, parse_json_payload
@@ -109,7 +110,7 @@ def _encode_ws_frame(opcode: int, payload: bytes) -> bytes:
 
 
 class WebRelay:
-    def __init__(self, socket_path: str, host: str, port: int):
+    def __init__(self, socket_path: str, host: str, port: int, layouts: dict[str, dict] | None = None):
         self._socket_path = socket_path
         self._host = host
         self._port = port
@@ -120,7 +121,9 @@ class WebRelay:
         self._uds_thread: threading.Thread | None = None
 
         self._controller_connected = False
+        self._layouts = layouts or {}
         self._snapshot = _empty_snapshot()
+        self._snapshot['layouts'] = self._layouts
         self._ws_clients: set[_WsClient] = set()
 
     async def run(self) -> None:
@@ -234,6 +237,7 @@ class WebRelay:
                 await self._broadcast_json(msg)
                 if not connected:
                     self._snapshot = _make_disconnected_snapshot(self._snapshot)
+                    self._snapshot['layouts'] = self._layouts
                     await self._broadcast_json(self._snapshot)
                 continue
 
@@ -241,7 +245,10 @@ class WebRelay:
                 msg = payload
                 assert isinstance(msg, dict)
                 self._apply_json_message(msg)
-                await self._broadcast_json(msg)
+                if msg.get('type') == 'event' and msg.get('event') == 'snapshot':
+                    await self._broadcast_json(self._snapshot)
+                else:
+                    await self._broadcast_json(msg)
                 continue
 
             if item_type == 'frame':
@@ -257,6 +264,7 @@ class WebRelay:
         event = msg.get('event')
         if event == 'snapshot':
             self._snapshot = copy.deepcopy(msg)
+            self._snapshot['layouts'] = self._layouts
             return
 
         if event == 'session_start':
@@ -551,7 +559,9 @@ def main() -> None:
     log.info('using config %s', config_path)
     Path(log_dir).mkdir(parents=True, exist_ok=True)
 
-    relay = WebRelay(os.path.expanduser(args.socket), args.host, args.port)
+    layouts = load_layouts_for_devices(config.devices)
+
+    relay = WebRelay(os.path.expanduser(args.socket), args.host, args.port, layouts)
 
     try:
         asyncio.run(relay.run())
