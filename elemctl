@@ -28,10 +28,11 @@ commands:
   sim      launch a configured network simulator
   server   start controller server
   web      start observer web relay and viewer
-  run      compile and run a DSL program
   setup    install/update dependencies"""
 
-_SUBCOMMANDS = {'tui', 'sim', 'server', 'web', 'run', 'setup'}
+_PUBLIC_SUBCOMMANDS = {'tui', 'sim', 'server', 'web', 'setup'}
+_HIDDEN_SUBCOMMANDS = {'run'}
+_SUBCOMMANDS = _PUBLIC_SUBCOMMANDS | _HIDDEN_SUBCOMMANDS
 
 
 def _inside_venv():

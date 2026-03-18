@@ -12,7 +12,10 @@ import logging
 import mimetypes
 import os
 import select
+import shutil
+import signal
 import struct
+import subprocess
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -149,6 +152,34 @@ def _layout_device_uid_from_path(path: str) -> str | None:
     return device_uid
 
 
+def _tailscale_urls(port: int) -> list[str]:
+    if port <= 0:
+        return []
+    if shutil.which('tailscale') is None:
+        return []
+
+    try:
+        result = subprocess.run(
+            ['tailscale', 'ip', '-4'],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=1.0,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+
+    if result.returncode != 0:
+        return []
+
+    urls: list[str] = []
+    for line in result.stdout.splitlines():
+        ip = line.strip()
+        if ip:
+            urls.append(f'http://{ip}:{port}/')
+    return urls
+
+
 class WebRelay:
     def __init__(
         self,
@@ -185,12 +216,35 @@ class WebRelay:
         server = await asyncio.start_server(self._handle_http_client, self._host, self._port)
         sockets = ', '.join(str(sock.getsockname()) for sock in server.sockets or [])
         log.info('web relay listening on %s', sockets)
+        if server.sockets:
+            sockname = server.sockets[0].getsockname()
+            if isinstance(sockname, tuple) and len(sockname) >= 2:
+                for url in _tailscale_urls(int(sockname[1])):
+                    log.info('tailscale viewer url: %s', url)
+
+        stop_requested = asyncio.Event()
+        installed_handlers: list[signal.Signals] = []
+
+        def _request_shutdown() -> None:
+            if not stop_requested.is_set():
+                log.info('shutdown requested')
+                stop_requested.set()
+
+        if threading.current_thread() is threading.main_thread():
+            for signum in (signal.SIGINT, signal.SIGTERM):
+                try:
+                    self._loop.add_signal_handler(signum, _request_shutdown)
+                    installed_handlers.append(signum)
+                except (NotImplementedError, RuntimeError):
+                    pass
 
         broadcast_task = asyncio.create_task(self._broadcast_loop())
         try:
             async with server:
-                await server.serve_forever()
+                await stop_requested.wait()
         finally:
+            for signum in installed_handlers:
+                self._loop.remove_signal_handler(signum)
             self._stop.set()
             server.close()
             await server.wait_closed()

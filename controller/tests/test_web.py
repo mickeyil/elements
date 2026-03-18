@@ -159,6 +159,26 @@ def test_layout_device_uid_from_path_extracts_device_uid():
     assert _layout_device_uid_from_path('/api/layouts/a/b') is None
 
 
+def test_tailscale_urls_formats_ipv4_output(monkeypatch):
+    class Result:
+        returncode = 0
+        stdout = "100.101.102.103\n100.64.0.5\n"
+
+    monkeypatch.setattr(web_mod.shutil, 'which', lambda name: '/usr/bin/tailscale')
+    monkeypatch.setattr(web_mod.subprocess, 'run', lambda *args, **kwargs: Result())
+
+    assert web_mod._tailscale_urls(8080) == [
+        'http://100.101.102.103:8080/',
+        'http://100.64.0.5:8080/',
+    ]
+
+
+def test_tailscale_urls_returns_empty_when_binary_missing(monkeypatch):
+    monkeypatch.setattr(web_mod.shutil, 'which', lambda name: None)
+
+    assert web_mod._tailscale_urls(8080) == []
+
+
 def test_get_layout_response_missing_known_sim_returns_404(tmp_path):
     relay = WebRelay(
         '/tmp/elemctl.sock',
