@@ -21,6 +21,7 @@ from .config import (
     Config,
     ConfigError,
     DeviceConfig,
+    MAX_DEVICE_PIXELS,
     load_config_obj,
     resolve_runtime_path,
 )
@@ -1013,6 +1014,6 @@ class ControllerService:
             length = int(value)
         except (TypeError, ValueError):
             raise ValueError(f"length must be an integer, got {value!r}")
-        if length < 1:
-            raise ValueError(f"length must be >= 1, got {length}")
+        if not (1 <= length <= MAX_DEVICE_PIXELS):
+            raise ValueError(f"length must be 1-{MAX_DEVICE_PIXELS}, got {length}")
         return length

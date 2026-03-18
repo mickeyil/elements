@@ -41,6 +41,7 @@ from prompt_toolkit.widgets import Button, CheckboxList, Dialog, Frame, Label, R
 
 from .config import (
     DEFAULT_LOGS_PATH,
+    MAX_DEVICE_PIXELS,
     DEFAULT_SOCKET_PATH,
 )
 from .uds_client import UdsClient
@@ -538,8 +539,8 @@ def parse_length(text: str) -> tuple[int | None, str | None]:
         length = int(text)
     except ValueError:
         return None, f"length must be an integer, got {text!r}"
-    if length < 1:
-        return None, f"length must be >= 1, got {length}"
+    if not (1 <= length <= MAX_DEVICE_PIXELS):
+        return None, f"length must be 1-{MAX_DEVICE_PIXELS}, got {length}"
     return length, None
 
 

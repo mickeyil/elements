@@ -16,7 +16,7 @@ import pytest
 _repo = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_repo / 'compiler'))
 
-from elemctl.config import Config, DeviceConfig, load_config, load_config_obj
+from elemctl.config import Config, DeviceConfig, MAX_DEVICE_PIXELS, load_config, load_config_obj
 from elemctl.controller import ControllerState
 from elemctl.device import DeviceState
 from elemctl.library import ProgramEntry
@@ -2119,6 +2119,27 @@ class TestConfigMutations:
 
         assert reply['ok'] is False
         assert reply['error'] == "duplicate strip_id with different length: 'test'"
+
+    def test_add_device_length_above_max_rejected(self, tmp_path):
+        config = _make_config(n_devices=1)
+        config.discovery_port = 6040
+        svc, _path = _make_service_with_path(
+            tmp_path,
+            config,
+            device_factory=lambda *args, **kwargs: _FakeDevice(),
+        )
+
+        reply = svc.handle_cmd({
+            'id': 21,
+            'cmd': 'add_device',
+            'device_type': 'sim',
+            'device_uid': 'sim-too-long',
+            'strip_id': 'strip_c',
+            'length': MAX_DEVICE_PIXELS + 1,
+        })
+
+        assert reply['ok'] is False
+        assert reply['error'] == f'length must be 1-{MAX_DEVICE_PIXELS}, got {MAX_DEVICE_PIXELS + 1}'
 
     def test_edit_device_duplicate_strip_id_same_length_allowed(self, tmp_path):
         config = _make_config(n_devices=2)

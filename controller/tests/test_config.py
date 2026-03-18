@@ -6,6 +6,7 @@ import pytest
 
 from elemctl.config import (
     Config, ConfigError, DEFAULT_CONFIG_PATH, DEFAULT_DISCOVERY_PORT,
+    MAX_DEVICE_PIXELS,
     DEFAULT_LOGS_PATH, DeviceConfig, load_config, resolve_config_path,
     resolve_runtime_path,
 )
@@ -197,6 +198,17 @@ class TestLoadConfig:
         dev = _valid_device(length=0)
         data = _valid_config(devices=[dev])
         with pytest.raises(ConfigError, match="length"):
+            load_config(_write_config(tmp_path, data))
+
+    def test_max_device_pixels_boundary(self, tmp_path):
+        data = _valid_config(devices=[_valid_device(length=MAX_DEVICE_PIXELS)])
+        cfg = load_config(_write_config(tmp_path, data))
+        assert cfg.devices[0].length == MAX_DEVICE_PIXELS
+
+    def test_length_above_max_rejected(self, tmp_path):
+        dev = _valid_device(length=MAX_DEVICE_PIXELS + 1)
+        data = _valid_config(devices=[dev])
+        with pytest.raises(ConfigError, match=rf"devices\[0\]\.length must be 1-{MAX_DEVICE_PIXELS}"):
             load_config(_write_config(tmp_path, data))
 
     # --- discovery_port ---

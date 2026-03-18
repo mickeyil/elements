@@ -14,6 +14,7 @@ DEFAULT_CONFIG_PATH = '~/.config/elemctl/config.json'
 DEFAULT_SOCKET_PATH = '/tmp/elemctl.sock'
 DEFAULT_FRAME_PORT = 9002
 DEFAULT_DISCOVERY_PORT = 6040
+MAX_DEVICE_PIXELS = 250
 DEFAULT_ANIMATIONS_PATH = str(Path(__file__).resolve().parent.parent.parent / 'animations')
 DEFAULT_LOGS_PATH = str(Path(__file__).resolve().parent.parent.parent / 'logs')
 
@@ -190,9 +191,9 @@ def load_config_obj(raw: dict) -> Config:
                     f"devices[{i}].host must be non-empty"
                 )
 
-        if d["length"] < 1:
+        if not (1 <= d["length"] <= MAX_DEVICE_PIXELS):
             raise ConfigError(
-                f"devices[{i}].length must be >= 1, got {d['length']}"
+                f"devices[{i}].length must be 1-{MAX_DEVICE_PIXELS}, got {d['length']}"
             )
 
         if d["device_type"] not in _VALID_DEVICE_TYPES:

@@ -47,6 +47,7 @@ from elemctl.tui import (
     _RESCAN_SENTINEL,
     _SESSION_SENTINEL,
 )
+from elemctl.config import MAX_DEVICE_PIXELS
 from elemctl.uds_wire import KIND_JSON, KIND_FRAME, UdsReader, encode_json
 from elemctl.uds_client import UdsClient
 
@@ -555,6 +556,10 @@ class TestNewDeviceValidation:
     def test_parse_length(self):
         assert parse_length('60') == (60, None)
         assert parse_length('0')[1] is not None
+        assert parse_length(str(MAX_DEVICE_PIXELS)) == (MAX_DEVICE_PIXELS, None)
+        assert parse_length(str(MAX_DEVICE_PIXELS + 1))[1] == (
+            f'length must be 1-{MAX_DEVICE_PIXELS}, got {MAX_DEVICE_PIXELS + 1}'
+        )
         assert parse_length('abc')[1] is not None
 
     def test_parse_t_rel(self):
