@@ -17,6 +17,7 @@ import signal
 import struct
 import subprocess
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
@@ -57,6 +58,7 @@ _WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
 _FRAME_HEADER = struct.Struct('<If')
 _MAX_HTTP_BODY = 1 << 20
 _WS_CLOSE_TIMEOUT = 0.25
+_CONTROLLER_REPLY_TIMEOUT = 2.0
 _HTTP_TYPES = {
     '.html': 'text/html; charset=utf-8',
     '.js': 'application/javascript; charset=utf-8',
@@ -865,11 +867,26 @@ class WebRelay:
         try:
             cmd_id = client.next_id()
             client.send_cmd({**cmd, 'id': cmd_id})
+            deadline = time.monotonic() + _CONTROLLER_REPLY_TIMEOUT
             while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise _HttpError(503, 'controller timed out')
+
+                sock = getattr(client, '_sock', None)
+                previous_timeout = None
+                if sock is not None:
+                    previous_timeout = sock.gettimeout()
+                    sock.settimeout(min(previous_timeout or remaining, remaining))
                 try:
                     messages = client.recv_once()
+                except TimeoutError as e:
+                    raise _HttpError(503, 'controller timed out') from e
                 except (ConnectionError, OSError) as e:
                     raise _HttpError(503, f'controller unavailable: {e}') from e
+                finally:
+                    if sock is not None and previous_timeout is not None:
+                        sock.settimeout(previous_timeout)
                 for kind, payload in messages:
                     if kind != KIND_JSON:
                         continue

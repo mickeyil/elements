@@ -416,6 +416,51 @@ def test_create_device_response_returns_503_when_controller_unavailable(monkeypa
     assert payload == {'error': 'controller unavailable: hello failed'}
 
 
+def test_create_device_response_returns_503_when_controller_reply_times_out(monkeypatch, tmp_path):
+    relay = WebRelay('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+
+    class FakeSock:
+        def __init__(self) -> None:
+            self.timeout = 1.5
+
+        def gettimeout(self) -> float:
+            return self.timeout
+
+        def settimeout(self, timeout: float) -> None:
+            self.timeout = timeout
+
+    class TimeoutClient:
+        def __init__(self, socket_path: str, timeout: float, role: str) -> None:
+            assert socket_path == '/tmp/elemctl.sock'
+            assert role == web_mod.ROLE_WRITER
+            self._sock = FakeSock()
+
+        def next_id(self) -> int:
+            return 1
+
+        def send_cmd(self, cmd: dict) -> None:
+            return None
+
+        def recv_once(self) -> list[tuple[int, bytes]]:
+            raise TimeoutError('timed out')
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(web_mod, 'UdsClient', TimeoutClient)
+    monkeypatch.setattr(web_mod, '_CONTROLLER_REPLY_TIMEOUT', 0.01)
+
+    status, payload = relay._create_device_response({
+        'device_type': 'sim',
+        'device_uid': 'sim-1',
+        'strip_id': 'main',
+        'length': 60,
+    })
+
+    assert status == 503
+    assert payload == {'error': 'controller timed out'}
+
+
 def test_read_http_body_rejects_oversized_request(tmp_path):
     relay = WebRelay('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
     
