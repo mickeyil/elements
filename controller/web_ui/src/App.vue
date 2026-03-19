@@ -52,6 +52,20 @@ const footerStatus = computed(() => {
         <strong>{{ footerStatus.label }}</strong>
       </div>
     </footer>
+
+    <div
+      v-if="!relayConnected"
+      class="app-offline-overlay"
+      role="alert"
+      aria-live="polite"
+      aria-label="Offline. Reconnecting to backend."
+    >
+      <div class="app-offline-card">
+        <span class="app-offline-card-dot" aria-hidden="true" />
+        <h2 class="app-offline-title">Offline</h2>
+        <p class="app-offline-copy">Reconnecting to backend…</p>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -167,6 +181,52 @@ const footerStatus = computed(() => {
 
 .app-footer-status-offline {
   color: var(--status-dropped);
+}
+
+.app-offline-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+  background: rgba(8, 10, 14, 0.84);
+  backdrop-filter: blur(2px);
+}
+
+.app-offline-card {
+  width: min(26rem, 100%);
+  display: grid;
+  justify-items: center;
+  gap: 0.5rem;
+  padding: 1.6rem 1.75rem;
+  border: 1px solid rgba(239, 68, 68, 0.18);
+  border-radius: var(--radius-panel);
+  background: rgba(13, 16, 21, 0.98);
+  text-align: center;
+}
+
+.app-offline-card-dot {
+  width: 0.8rem;
+  height: 0.8rem;
+  border-radius: 999px;
+  background: var(--status-dropped);
+  box-shadow: 0 0 0 6px rgba(239, 68, 68, 0.12);
+}
+
+.app-offline-title {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+
+.app-offline-copy {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.92rem;
 }
 
 @media (max-width: 900px) {
