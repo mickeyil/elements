@@ -160,8 +160,7 @@ onBeforeUnmount(() => {
 
       <div v-else-if="!sortedDevices.length" class="panel">
         <div class="empty-state">
-          <h2>No configured devices</h2>
-          <p>The current snapshot does not include any configured devices.</p>
+          <h2>No devices</h2>
         </div>
       </div>
 
