@@ -10,6 +10,12 @@ import {
 } from 'vue';
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router';
 
+import IconBack from '../components/icons/IconBack.vue';
+import IconLineTool from '../components/icons/IconLineTool.vue';
+import IconReset from '../components/icons/IconReset.vue';
+import IconSave from '../components/icons/IconSave.vue';
+import IconSingle from '../components/icons/IconSingle.vue';
+import IconUndo from '../components/icons/IconUndo.vue';
 import { useInjectedRelayState, type SnapshotDevice } from '../composables/useRelayState';
 import {
   cloneDocument,
@@ -575,26 +581,13 @@ onBeforeUnmount(() => {
 
 <template>
   <main class="editor-page">
-    <header class="page-header editor-page-head">
-      <div>
-        <p class="page-eyebrow">Layout Editor</p>
-        <h1 class="page-title">
-          {{ routeState.kind === 'ready' ? routeState.device.deviceUid : routeDeviceUid || 'Layout' }}
-        </h1>
-        <p v-if="routeState.kind === 'ready'" class="page-copy">
-          strip {{ routeState.device.strip }} · {{ routeState.device.length }} px · {{ toolDescription }}
-        </p>
-        <p v-else class="page-copy">
-          {{ routeState.message }}
-        </p>
-      </div>
-
-      <div class="editor-page-actions">
-        <button type="button" class="ghost-button" @click="backToDevices">Back to devices</button>
-      </div>
-    </header>
-
     <section v-if="routeState.kind !== 'ready'" class="panel editor-state-panel">
+      <div class="editor-state-actions">
+        <button type="button" class="ghost-button" @click="backToDevices">
+          <IconBack />
+          <span>Back</span>
+        </button>
+      </div>
       <div class="empty-state">
         <h2>{{ routeState.kind === 'waiting' ? 'Waiting for device metadata' : 'Editor unavailable' }}</h2>
         <p>{{ routeState.message }}</p>
@@ -602,67 +595,115 @@ onBeforeUnmount(() => {
     </section>
 
     <section v-else class="panel editor-page-panel">
-      <div class="editor-toolbar">
-        <div class="toolbar-group">
-          <span class="toolbar-label">Tool</span>
-          <div class="tool-buttons">
-            <button
-              type="button"
-              class="tool-button"
-              :class="{ 'tool-button-active': activeTool === 'single' }"
-              :disabled="loadingLayout || saving"
-              @click="selectTool('single')"
-            >
-              Single
-            </button>
-            <button
-              type="button"
-              class="tool-button"
-              :class="{ 'tool-button-active': activeTool === 'line' }"
-              :disabled="loadingLayout || saving"
-              @click="selectTool('line')"
-            >
-              Line
-            </button>
+      <div class="editor-command-bar">
+        <div class="editor-command-left">
+          <button type="button" class="ghost-button editor-back-button" :disabled="saving" @click="backToDevices">
+            <IconBack />
+            <span>Back</span>
+          </button>
+          <div class="editor-device-meta">
+            <p class="editor-device-label">Layout Editor</p>
+            <strong class="editor-device-name">{{ routeState.device.deviceUid }}</strong>
+            <p class="editor-device-copy">
+              strip {{ routeState.device.strip }} · {{ routeState.device.length }} px · {{ toolDescription }}
+            </p>
           </div>
         </div>
-        <div v-if="activeTool === 'line'" class="toolbar-group">
-          <span class="toolbar-label">Spacing</span>
-          <input v-model.number="lineSpacing" class="spacing-input" min="0" step="1" type="number" />
-        </div>
-        <div class="toolbar-group">
-          <span class="toolbar-label">Index</span>
-          <div class="index-controls">
-            <button type="button" @click="shiftCurrentIndex(-1)" :disabled="loadingLayout || saving">
-              &lt;
-            </button>
-            <strong>{{ currentIndex }}</strong>
-            <span>/ {{ deviceLength }}</span>
-            <button type="button" @click="shiftCurrentIndex(1)" :disabled="loadingLayout || saving">
-              &gt;
-            </button>
+
+        <div class="editor-command-center">
+          <div class="toolbar-group">
+            <span class="toolbar-label">Tool</span>
+            <div class="tool-buttons">
+              <button
+                type="button"
+                class="tool-button"
+                :class="{ 'tool-button-active': activeTool === 'single' }"
+                :disabled="loadingLayout || saving"
+                @click="selectTool('single')"
+              >
+                <IconSingle />
+                <span>Single</span>
+              </button>
+              <button
+                type="button"
+                class="tool-button"
+                :class="{ 'tool-button-active': activeTool === 'line' }"
+                :disabled="loadingLayout || saving"
+                @click="selectTool('line')"
+              >
+                <IconLineTool />
+                <span>Line</span>
+              </button>
+            </div>
+          </div>
+          <div v-if="activeTool === 'line'" class="toolbar-group">
+            <span class="toolbar-label">Spacing</span>
+            <input v-model.number="lineSpacing" class="spacing-input" min="0" step="1" type="number" />
+          </div>
+          <div class="toolbar-group">
+            <span class="toolbar-label">Index</span>
+            <div class="index-controls">
+              <button type="button" @click="shiftCurrentIndex(-1)" :disabled="loadingLayout || saving">
+                &lt;
+              </button>
+              <strong>{{ currentIndex }}</strong>
+              <span>/ {{ deviceLength }}</span>
+              <button type="button" @click="shiftCurrentIndex(1)" :disabled="loadingLayout || saving">
+                &gt;
+              </button>
+            </div>
+          </div>
+          <div class="toolbar-group">
+            <span class="toolbar-label">Placed</span>
+            <strong>{{ placedCount }} / {{ deviceLength }}</strong>
+          </div>
+          <div v-if="activeTool === 'line'" class="toolbar-group">
+            <span class="toolbar-label">Preview</span>
+            <strong v-if="lineStart">
+              {{ previewCount ? `${previewCount} LEDs` : 'Pick an end point' }}
+            </strong>
+            <strong v-else>Pick a start point</strong>
+          </div>
+          <div class="toolbar-group">
+            <span class="toolbar-label">Zoom</span>
+            <strong>{{ MIN_ZOOM }}-{{ MAX_ZOOM }}</strong>
           </div>
         </div>
-        <div class="toolbar-group">
-          <span class="toolbar-label">Placed</span>
-          <strong>{{ placedCount }} / {{ deviceLength }}</strong>
-        </div>
-        <div v-if="activeTool === 'line'" class="toolbar-group">
-          <span class="toolbar-label">Preview</span>
-          <strong v-if="lineStart">
-            {{ previewCount ? `${previewCount} LEDs` : 'Pick an end point' }}
-          </strong>
-          <strong v-else>Pick a start point</strong>
-        </div>
-        <div class="toolbar-group toolbar-group-actions">
-          <button type="button" class="ghost-button" :disabled="!canUndo" @click="undo">Undo</button>
-          <span class="zoom-range">zoom {{ MIN_ZOOM }}-{{ MAX_ZOOM }}</span>
+
+        <div class="editor-command-right">
+          <button type="button" class="ghost-button" :disabled="!canUndo" @click="undo">
+            <IconUndo />
+            <span>Undo</span>
+          </button>
+          <button type="button" class="ghost-button" :disabled="loadingLayout || saving" @click="resetDocument">
+            <IconReset />
+            <span>Reset</span>
+          </button>
+          <button
+            type="button"
+            class="primary-button editor-save-button"
+            :class="{ 'editor-save-button-dirty': isDirty }"
+            :disabled="!canSave"
+            @click="save"
+          >
+            <IconSave />
+            <span>{{ saving ? 'Saving…' : 'Save' }}</span>
+            <span v-if="isDirty && !saving" class="editor-dirty-dot" aria-hidden="true" />
+          </button>
         </div>
       </div>
 
       <p v-if="error" class="editor-error">{{ error }}</p>
       <p v-else-if="activeTool === 'line' && previewError" class="editor-error">{{ previewError }}</p>
       <p v-else-if="statusNotice" class="editor-saved">{{ statusNotice }}</p>
+      <p v-else class="editor-note">
+        <template v-if="activeTool === 'single'">
+          Click to place the current index. Use the wheel to zoom and hold space while dragging to pan.
+        </template>
+        <template v-else>
+          Click once to set the line start, move to preview, and click again to confirm. Press Escape to cancel the line draft.
+        </template>
+      </p>
 
       <div v-if="loadingLayout" class="editor-loading">Loading layout…</div>
       <div v-else class="editor-surface">
@@ -676,28 +717,6 @@ onBeforeUnmount(() => {
           @wheel="handleWheel"
         />
       </div>
-
-      <footer class="editor-footer">
-        <div class="editor-hint">
-          <template v-if="activeTool === 'single'">
-            Click to place the current index. Use the wheel to zoom and hold space while dragging to pan.
-          </template>
-          <template v-else>
-            Click once to set the line start, move to preview, and click again to confirm. Press Escape to cancel the line draft.
-          </template>
-        </div>
-        <div class="editor-actions">
-          <button type="button" class="ghost-button" :disabled="loadingLayout || saving" @click="resetDocument">
-            Reset
-          </button>
-          <button type="button" class="ghost-button" :disabled="saving" @click="backToDevices">
-            Back
-          </button>
-          <button type="button" class="primary-button" :disabled="!canSave" @click="save">
-            {{ saving ? 'Saving…' : 'Save' }}
-          </button>
-        </div>
-      </footer>
     </section>
   </main>
 </template>
@@ -707,16 +726,7 @@ onBeforeUnmount(() => {
   height: 100%;
   min-height: 0;
   overflow: hidden;
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  gap: 1rem;
   padding: 1.5rem;
-}
-
-.editor-page-actions {
-  display: flex;
-  gap: 0.75rem;
-  align-items: center;
 }
 
 .editor-state-panel,
@@ -725,37 +735,87 @@ onBeforeUnmount(() => {
   padding: 1rem;
 }
 
+.editor-state-actions {
+  display: flex;
+  justify-content: flex-start;
+  margin-bottom: 1rem;
+}
+
 .editor-page-panel {
   display: grid;
-  grid-template-rows: auto auto 1fr auto;
+  grid-template-rows: auto auto 1fr;
   gap: 1rem;
   min-height: 0;
 }
 
-.editor-toolbar,
-.editor-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+.editor-command-bar {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
   gap: 1rem;
-}
-
-.editor-toolbar {
-  flex-wrap: wrap;
   padding: 0.85rem 1rem;
   border-radius: var(--radius-panel);
   border: 1px solid var(--panel-edge);
   background: rgba(255, 255, 255, 0.025);
 }
 
+.editor-command-left,
+.editor-command-right {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.editor-command-left {
+  min-width: 0;
+}
+
+.editor-command-center {
+  display: flex;
+  align-items: end;
+  justify-content: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.editor-device-meta {
+  min-width: 0;
+  display: grid;
+  gap: 0.18rem;
+}
+
+.editor-device-label {
+  margin: 0;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  font-size: 0.58rem;
+  font-weight: 700;
+}
+
+.editor-device-name {
+  font-size: 0.98rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.editor-device-copy {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .toolbar-group {
   display: grid;
   gap: 0.25rem;
-}
-
-.toolbar-group-actions {
-  margin-left: auto;
-  align-items: end;
 }
 
 .toolbar-label {
@@ -775,6 +835,10 @@ onBeforeUnmount(() => {
 .tool-button,
 .index-controls button,
 .spacing-input {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.42rem;
   border: 1px solid var(--panel-edge);
   border-radius: var(--radius-tight);
   padding: 0.55rem 0.9rem;
@@ -787,8 +851,8 @@ onBeforeUnmount(() => {
 }
 
 .tool-button-active {
-  border-color: rgba(229, 156, 76, 0.35);
-  background: rgba(229, 156, 76, 0.16);
+  border-color: rgba(108, 162, 255, 0.38);
+  background: rgba(108, 162, 255, 0.16);
 }
 
 .spacing-input {
@@ -801,13 +865,9 @@ onBeforeUnmount(() => {
   cursor: not-allowed;
 }
 
-.zoom-range {
-  color: var(--muted);
-  font-size: 0.8rem;
-}
-
 .editor-error,
-.editor-saved {
+.editor-saved,
+.editor-note {
   margin: 0;
   padding: 0.75rem 0.9rem;
   border-radius: var(--radius-panel);
@@ -820,9 +880,16 @@ onBeforeUnmount(() => {
 }
 
 .editor-saved {
-  border: 1px solid rgba(229, 156, 76, 0.35);
-  background: rgba(229, 156, 76, 0.14);
+  border: 1px solid rgba(108, 162, 255, 0.35);
+  background: rgba(108, 162, 255, 0.14);
   color: #f7f3eb;
+}
+
+.editor-note {
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--muted);
+  font-size: 0.84rem;
 }
 
 .editor-loading,
@@ -850,20 +917,24 @@ onBeforeUnmount(() => {
   cursor: crosshair;
 }
 
-.editor-footer {
-  align-items: end;
+.editor-back-button {
+  flex: 0 0 auto;
 }
 
-.editor-hint {
-  color: var(--muted);
-  font-size: 0.85rem;
-  max-width: 40rem;
+.editor-save-button {
+  position: relative;
 }
 
-.editor-actions {
-  display: flex;
-  gap: 0.75rem;
-  justify-content: flex-end;
+.editor-save-button-dirty {
+  border-color: rgba(108, 162, 255, 0.52);
+}
+
+.editor-dirty-dot {
+  width: 0.44rem;
+  height: 0.44rem;
+  border-radius: 999px;
+  background: #ffd166;
+  flex: 0 0 auto;
 }
 
 @media (max-width: 900px) {
@@ -871,15 +942,16 @@ onBeforeUnmount(() => {
     padding: 1rem;
   }
 
-  .editor-toolbar,
-  .editor-footer {
-    align-items: stretch;
-    flex-direction: column;
+  .editor-command-bar {
+    grid-template-columns: 1fr;
   }
 
-  .toolbar-group-actions,
-  .editor-actions {
-    margin-left: 0;
+  .editor-command-left,
+  .editor-command-right {
+    flex-wrap: wrap;
+  }
+
+  .editor-command-center {
     width: 100%;
     justify-content: flex-start;
   }

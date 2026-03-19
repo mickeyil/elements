@@ -9,17 +9,16 @@
     stroke-linejoin="miter"
     stroke-width="1.7"
   >
-    <path d="M12 11.5v4.5" />
-    <circle cx="12" cy="8" r="1.2" fill="currentColor" stroke="none" />
-    <path d="M7.5 16.5c0-2.5 2-4.5 4.5-4.5s4.5 2 4.5 4.5" />
-    <path d="M5 19.5c0-3.9 3.1-7 7-7s7 3.1 7 7" opacity="0.7" />
+    <path d="M5 4.5h11l3 3V19.5H5Z" />
+    <path d="M8 4.5v5h7v-5" />
+    <path d="M8.5 15.5h7" />
   </svg>
 </template>
 
 <style scoped>
 .icon {
-  width: 0.95rem;
-  height: 0.95rem;
+  width: 1rem;
+  height: 1rem;
   display: inline-block;
   flex: 0 0 auto;
 }

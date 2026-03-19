@@ -2,9 +2,6 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { RouterLink } from 'vue-router';
 
-import IconError from '../components/icons/IconError.vue';
-import IconPowerOff from '../components/icons/IconPowerOff.vue';
-import IconSensors from '../components/icons/IconSensors.vue';
 import { useInjectedRelayState, type SnapshotDevice } from '../composables/useRelayState';
 
 type DeviceStatus = 'online' | 'dropped' | 'offline';
@@ -91,10 +88,10 @@ function statusLabel(status: DeviceStatus): string {
 
 function statusClass(status: DeviceStatus): string {
   if (status === 'online') {
-    return 'device-status-online status-glow-online';
+    return 'device-status-online';
   }
   if (status === 'dropped') {
-    return 'device-status-dropped status-glow-dropped';
+    return 'device-status-dropped';
   }
   return 'device-status-offline';
 }
@@ -183,9 +180,7 @@ onBeforeUnmount(() => {
               {{ device.device_type === 'sim' ? 'SIM' : 'ESP' }}
             </span>
             <span class="device-status" :class="statusClass(device.status)" :title="statusTitle(device)">
-              <IconSensors v-if="device.status === 'online'" />
-              <IconError v-else-if="device.status === 'dropped'" />
-              <IconPowerOff v-else />
+              <span class="device-status-dot" />
               {{ statusLabel(device.status) }}
             </span>
           </div>
@@ -336,11 +331,19 @@ onBeforeUnmount(() => {
 .device-status {
   display: inline-flex;
   align-items: center;
-  gap: 0.2rem;
+  gap: 0.35rem;
   font-size: 0.54rem;
   font-weight: 700;
   letter-spacing: 0.14em;
   text-transform: uppercase;
+}
+
+.device-status-dot {
+  width: 0.48rem;
+  height: 0.48rem;
+  border-radius: 999px;
+  background: currentColor;
+  flex: 0 0 auto;
 }
 
 .device-status-online {

@@ -234,14 +234,6 @@ select {
   font-family: var(--font-mono);
 }
 
-.status-glow-online {
-  filter: drop-shadow(0 0 5px rgba(34, 197, 94, 0.32));
-}
-
-.status-glow-dropped {
-  filter: drop-shadow(0 0 5px rgba(239, 68, 68, 0.28));
-}
-
 @media (max-width: 900px) {
   .page-scroll {
     padding: 1rem;

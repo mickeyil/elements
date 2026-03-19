@@ -9,8 +9,8 @@
     stroke-linejoin="miter"
     stroke-width="1.7"
   >
-    <path d="M2.5 12c2.6-4.4 5.8-6.6 9.5-6.6s6.9 2.2 9.5 6.6c-2.6 4.4-5.8 6.6-9.5 6.6S5.1 16.4 2.5 12Z" />
-    <circle cx="12" cy="12" r="2.7" />
+    <path d="M19 11a7 7 0 1 1-2-4.9" />
+    <path d="M19 5v5h-5" />
   </svg>
 </template>
 

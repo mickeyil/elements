@@ -30,7 +30,7 @@ function hasLayout(target: SimTarget): boolean {
       <header class="page-header">
         <div>
           <p class="page-eyebrow">Simulation</p>
-          <h1 class="page-title">Realtime Viewer</h1>
+          <h1 class="page-title">Realtime Simulation</h1>
           <p class="page-copy">
             Session-driven simulation output for configured sim targets.
           </p>
@@ -183,7 +183,7 @@ function hasLayout(target: SimTarget): boolean {
 .target-no-layout {
   padding: 1rem;
   border-radius: var(--radius-panel);
-  border: 1px dashed rgba(229, 156, 76, 0.35);
+  border: 1px dashed rgba(108, 162, 255, 0.35);
   color: var(--muted);
   background: rgba(255, 255, 255, 0.02);
 }

@@ -18,11 +18,11 @@ export interface EditorPreview {
 
 const SURFACE = '#081015';
 const GRID_LINE = 'rgba(255, 255, 255, 0.08)';
-const HOVER = 'rgba(229, 156, 76, 0.18)';
-const PLACED = '#e59c4c';
-const PREVIEW = 'rgba(229, 156, 76, 0.42)';
+const HOVER = 'rgba(108, 162, 255, 0.18)';
+const PLACED = '#6ca2ff';
+const PREVIEW = 'rgba(108, 162, 255, 0.42)';
 const PREVIEW_BLOCKED = 'rgba(182, 83, 83, 0.36)';
-const ANCHOR = 'rgba(229, 156, 76, 0.28)';
+const ANCHOR = 'rgba(108, 162, 255, 0.28)';
 const LABEL = '#091015';
 
 export function clampZoom(nextZoom: number): number {

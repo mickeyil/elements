@@ -1,24 +1,32 @@
 <script setup lang="ts">
-import { provide } from 'vue';
+import { computed, provide } from 'vue';
 import { RouterLink, RouterView } from 'vue-router';
 
 import IconDevices from './components/icons/IconDevices.vue';
-import IconError from './components/icons/IconError.vue';
-import IconSensors from './components/icons/IconSensors.vue';
-import IconVisibility from './components/icons/IconVisibility.vue';
+import IconSimulation from './components/icons/IconSimulation.vue';
 import { relayStateKey, useRelayState } from './composables/useRelayState';
 
 const relayState = useRelayState();
 provide(relayStateKey, relayState);
 
 const { controllerConnected, relayConnected } = relayState;
+
+const footerStatus = computed(() => {
+  if (!relayConnected.value) {
+    return { label: 'Offline', className: 'app-footer-status-offline' };
+  }
+  if (!controllerConnected.value) {
+    return { label: 'Controller offline', className: 'app-footer-status-offline' };
+  }
+  return { label: 'Connected', className: 'app-footer-status-online' };
+});
 </script>
 
 <template>
   <div class="app-shell">
     <aside class="app-sidebar">
       <div class="app-branding">
-        <strong class="app-title">ELEM</strong>
+        <strong class="app-title">ELEMENTS</strong>
         <p class="app-eyebrow">Web Console</p>
       </div>
 
@@ -28,8 +36,8 @@ const { controllerConnected, relayConnected } = relayState;
           <span>Status</span>
         </RouterLink>
         <RouterLink class="app-nav-link" to="/viewer">
-          <IconVisibility />
-          <span>Viewer</span>
+          <IconSimulation />
+          <span>Simulation</span>
         </RouterLink>
       </nav>
     </aside>
@@ -39,20 +47,9 @@ const { controllerConnected, relayConnected } = relayState;
     </main>
 
     <footer class="app-footer">
-      <div class="app-footer-status" :class="relayConnected ? 'app-footer-status-online' : 'app-footer-status-offline'">
-        <IconSensors v-if="relayConnected" />
-        <IconError v-else />
-        <span class="app-footer-label">Relay</span>
-        <strong>{{ relayConnected ? 'CONNECTED' : 'DISCONNECTED' }}</strong>
-      </div>
-      <div
-        class="app-footer-status"
-        :class="controllerConnected ? 'app-footer-status-online' : 'app-footer-status-offline'"
-      >
-        <IconSensors v-if="controllerConnected" />
-        <IconError v-else />
-        <span class="app-footer-label">Controller</span>
-        <strong>{{ controllerConnected ? 'CONNECTED' : 'DISCONNECTED' }}</strong>
+      <div class="app-footer-status" :class="footerStatus.className">
+        <span class="app-footer-dot" />
+        <strong>{{ footerStatus.label }}</strong>
       </div>
     </footer>
   </div>
@@ -85,9 +82,9 @@ const { controllerConnected, relayConnected } = relayState;
 
 .app-title {
   font-family: var(--font-body);
-  font-size: 2rem;
+  font-size: 1.44rem;
   line-height: 1;
-  letter-spacing: -0.04em;
+  letter-spacing: 0.08em;
   color: var(--accent);
 }
 
@@ -141,7 +138,6 @@ const { controllerConnected, relayConnected } = relayState;
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 1.25rem;
   padding: 0.45rem 1rem 0.5rem;
   border-top: 1px solid var(--panel-edge);
   background: #0f1010;
@@ -157,16 +153,20 @@ const { controllerConnected, relayConnected } = relayState;
   gap: 0.45rem;
 }
 
+.app-footer-dot {
+  width: 0.52rem;
+  height: 0.52rem;
+  border-radius: 999px;
+  background: currentColor;
+  flex: 0 0 auto;
+}
+
 .app-footer-status-online {
   color: var(--status-online);
 }
 
 .app-footer-status-offline {
   color: var(--status-dropped);
-}
-
-.app-footer-label {
-  color: var(--muted);
 }
 
 @media (max-width: 900px) {
