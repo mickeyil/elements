@@ -61,6 +61,7 @@ _HTTP_TYPES = {
     '.html': 'text/html; charset=utf-8',
     '.js': 'application/javascript; charset=utf-8',
     '.css': 'text/css; charset=utf-8',
+    '.woff2': 'font/woff2',
 }
 
 
@@ -119,6 +120,13 @@ def _make_disconnected_snapshot(snapshot: dict | None) -> dict:
         out['online_count'] = 0
         out['expected_count'] = 0
     return out
+
+
+def _static_cache_control(asset_path: Path) -> str:
+    assets_dir = _STATIC_ROOT / 'assets'
+    if asset_path.parent == assets_dir:
+        return 'public, max-age=31536000, immutable'
+    return 'no-store'
 
 
 def _encode_ws_frame(opcode: int, payload: bytes) -> bytes:
@@ -743,6 +751,7 @@ class WebRelay:
             200,
             body,
             content_type=content_type,
+            cache_control=_static_cache_control(asset_path),
         )
 
     async def _write_json_response(self, writer: asyncio.StreamWriter, status: int, payload: dict) -> None:
@@ -760,6 +769,7 @@ class WebRelay:
         body: bytes,
         *,
         content_type: str = 'text/plain; charset=utf-8',
+        cache_control: str = 'no-store',
     ) -> None:
         reasons = {
             200: 'OK',
@@ -774,7 +784,7 @@ class WebRelay:
             f'HTTP/1.1 {status} {reasons.get(status, "OK")}\r\n'
             f'Content-Type: {content_type}\r\n'
             f'Content-Length: {len(body)}\r\n'
-            'Cache-Control: no-store\r\n'
+            f'Cache-Control: {cache_control}\r\n'
             'Connection: close\r\n'
             '\r\n'
         ).encode('ascii')

@@ -16,7 +16,7 @@ const deviceUidRef = ref<HTMLInputElement | null>(null);
 const deviceType = ref<'sim' | 'esp32'>('sim');
 const deviceUid = ref('');
 const stripId = ref('');
-const length = ref('144');
+const length = ref('');
 const saving = ref(false);
 const error = ref('');
 
@@ -123,17 +123,37 @@ onBeforeUnmount(() => {
 
         <label class="modal-field">
           <span class="modal-label">Device UID</span>
-          <input ref="deviceUidRef" v-model="deviceUid" type="text" autocomplete="off" :disabled="saving" />
+          <input
+            ref="deviceUidRef"
+            v-model="deviceUid"
+            type="text"
+            autocomplete="off"
+            placeholder="unique device identifier"
+            :disabled="saving"
+          />
         </label>
 
         <label class="modal-field">
           <span class="modal-label">Strip ID</span>
-          <input v-model="stripId" type="text" autocomplete="off" :disabled="saving" />
+          <input
+            v-model="stripId"
+            type="text"
+            autocomplete="off"
+            placeholder="strip name used in programs"
+            :disabled="saving"
+          />
         </label>
 
         <label class="modal-field">
           <span class="modal-label">Length</span>
-          <input v-model="length" type="number" min="1" step="1" :disabled="saving" />
+          <input
+            v-model="length"
+            type="number"
+            min="1"
+            step="1"
+            placeholder="number of LEDs"
+            :disabled="saving"
+          />
         </label>
       </div>
 
@@ -228,6 +248,12 @@ onBeforeUnmount(() => {
   padding: 0.7rem 0.8rem;
   background: rgba(255, 255, 255, 0.04);
   color: var(--text);
+}
+
+.modal-field input::placeholder {
+  color: rgba(132, 147, 150, 0.82);
+  font-size: 0.8em;
+  font-style: italic;
 }
 
 .modal-error,

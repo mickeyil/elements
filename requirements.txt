@@ -1,2 +1,4 @@
+fonttools>=4.62
+brotli>=1.2
 prompt_toolkit>=3.0
 pytest>=9.0

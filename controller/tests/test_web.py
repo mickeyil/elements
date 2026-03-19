@@ -11,6 +11,7 @@ from elemctl.web import (
     _layout_device_uid_from_path,
     _make_disconnected_snapshot,
     _resolve_asset_path,
+    _static_cache_control,
 )
 
 
@@ -153,6 +154,31 @@ def test_resolve_asset_path_rejects_traversal(tmp_path, monkeypatch):
 
     assert _resolve_asset_path('/../secret.txt') is None
     assert _resolve_asset_path('/..%2Fsecret.txt') is None
+
+
+def test_static_cache_control_is_immutable_for_hashed_assets(tmp_path, monkeypatch):
+    static_dir = tmp_path / 'web_static'
+    asset_dir = static_dir / 'assets'
+    asset_dir.mkdir(parents=True)
+    asset_path = asset_dir / 'index-abc123.js'
+    asset_path.write_text('console.log("ok")', encoding='utf-8')
+
+    monkeypatch.setattr(web_mod, '_STATIC_DIR', static_dir)
+    monkeypatch.setattr(web_mod, '_STATIC_ROOT', static_dir.resolve())
+
+    assert _static_cache_control(asset_path.resolve()) == 'public, max-age=31536000, immutable'
+
+
+def test_static_cache_control_keeps_html_uncached(tmp_path, monkeypatch):
+    static_dir = tmp_path / 'web_static'
+    static_dir.mkdir()
+    index_path = static_dir / 'index.html'
+    index_path.write_text('<!doctype html>', encoding='utf-8')
+
+    monkeypatch.setattr(web_mod, '_STATIC_DIR', static_dir)
+    monkeypatch.setattr(web_mod, '_STATIC_ROOT', static_dir.resolve())
+
+    assert _static_cache_control(index_path.resolve()) == 'no-store'
 
 
 def test_layout_device_uid_from_path_extracts_device_uid():

@@ -168,13 +168,28 @@ export function useRelayState() {
 
     const connected = Boolean(msg.connected);
     const hasLastSeen = Object.prototype.hasOwnProperty.call(msg, 'last_seen');
-    for (const device of getSnapshotDevices()) {
-      if (device?.device_uid === deviceUid) {
-        device.connected = connected;
-        if (hasLastSeen) {
-          device.last_seen = msg.last_seen ?? null;
+    const currentSnapshot = snapshot.value;
+    const devices = Array.isArray(currentSnapshot?.devices) ? currentSnapshot.devices : [];
+    if (currentSnapshot && devices.length) {
+      let updated = false;
+      const nextDevices = devices.map((device) => {
+        if (device?.device_uid !== deviceUid) {
+          return device;
         }
-        break;
+
+        updated = true;
+        return {
+          ...device,
+          connected,
+          ...(hasLastSeen ? { last_seen: msg.last_seen ?? null } : {}),
+        };
+      });
+
+      if (updated) {
+        snapshot.value = {
+          ...currentSnapshot,
+          devices: nextDevices,
+        };
       }
     }
 
