@@ -66,10 +66,12 @@ class ControllerService:
         discovery_factory=DiscoveryReceiver,
         library_factory=ProgramLibrary,
         clock=time.monotonic_ns,
+        wall_clock=time.time,
     ):
         self._config = config
         self._config_path = config_path
         self._clock = clock
+        self._wall_clock = wall_clock
         self._shutdown = False
         self._device_factory = device_factory
         self._service_events: list[dict] = []
@@ -99,6 +101,7 @@ class ControllerService:
 
         # Baseline connectivity for transition detection
         self._prev_connected: dict[int, bool] = {}
+        self._last_seen: dict[int, float | None] = {}
 
         animations_dir = resolve_runtime_path(
             None,
@@ -401,6 +404,11 @@ class ControllerService:
 
         self._probe_devices(ignore_throttle=False, sync_baseline=False)
 
+        now_wall = self._wall_clock()
+        for dc, dev in self._iter_devices():
+            if self._is_connected(dev):
+                self._last_seen[dc.device_id] = now_wall
+
         # Detect connectivity transitions
         for dc, dev in self._iter_devices():
             connected = self._is_connected(dev)
@@ -414,6 +422,7 @@ class ControllerService:
                     'strip': dc.strip_id,
                     'length': dc.length,
                     'connected': connected,
+                    'last_seen': self._last_seen.get(dc.device_id),
                 }))
 
         # Convert program frames
@@ -453,6 +462,7 @@ class ControllerService:
                 'length': dc.length,
                 'device_type': dc.device_type,
                 'connected': connected,
+                'last_seen': self._last_seen.get(dc.device_id),
             })
 
         return {
@@ -670,6 +680,8 @@ class ControllerService:
         new_devices: list[object] = []
         new_prev_connected: dict[int, bool] = {}
         new_last_probe_ns: dict[int, int] = {}
+        new_last_seen: dict[int, float | None] = {}
+        now_wall = self._wall_clock()
 
         for dc in new_config.devices:
             existing = current_by_uid.pop(dc.device_uid, None)
@@ -679,6 +691,10 @@ class ControllerService:
                 new_prev_connected[dc.device_id] = self._is_connected(dev)
                 if old_dc.device_id in self._last_probe_ns:
                     new_last_probe_ns[dc.device_id] = self._last_probe_ns[old_dc.device_id]
+                preserved_last_seen = self._last_seen.get(old_dc.device_id)
+                if preserved_last_seen is None and self._is_connected(dev):
+                    preserved_last_seen = now_wall
+                new_last_seen[dc.device_id] = preserved_last_seen
                 continue
 
             if existing is not None:
@@ -688,6 +704,7 @@ class ControllerService:
             dev = self._make_device(dc)
             new_devices.append(dev)
             new_prev_connected[dc.device_id] = self._is_connected(dev)
+            new_last_seen[dc.device_id] = now_wall if self._is_connected(dev) else None
 
         for _old_dc, dev in current_by_uid.values():
             dev.close()
@@ -697,6 +714,7 @@ class ControllerService:
         self._devices = new_devices
         self._prev_connected = new_prev_connected
         self._last_probe_ns = new_last_probe_ns
+        self._last_seen = new_last_seen
         if self._discovery is not None:
             self._uid_to_device = {
                 dc.device_uid: (dc, dev)

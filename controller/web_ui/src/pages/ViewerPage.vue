@@ -137,9 +137,9 @@ function hasLayout(target: SimTarget): boolean {
   padding: 0.9rem;
   display: grid;
   gap: 0.8rem;
-  border-radius: 18px;
+  border-radius: var(--radius-panel);
   border: 1px solid var(--panel-edge);
-  background: rgba(255, 255, 255, 0.03);
+  background: rgba(255, 255, 255, 0.025);
 }
 
 .target-panel-offline {
@@ -159,7 +159,7 @@ function hasLayout(target: SimTarget): boolean {
 }
 
 .target-name {
-  font-family: 'IBM Plex Mono', 'SFMono-Regular', monospace;
+  font-family: var(--font-mono);
   font-size: 0.95rem;
 }
 
@@ -170,7 +170,7 @@ function hasLayout(target: SimTarget): boolean {
 }
 
 .target-canvas {
-  border-radius: 14px;
+  border-radius: var(--radius-panel);
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid var(--panel-edge);
 }
@@ -182,7 +182,7 @@ function hasLayout(target: SimTarget): boolean {
 
 .target-no-layout {
   padding: 1rem;
-  border-radius: 14px;
+  border-radius: var(--radius-panel);
   border: 1px dashed rgba(229, 156, 76, 0.35);
   color: var(--muted);
   background: rgba(255, 255, 255, 0.02);

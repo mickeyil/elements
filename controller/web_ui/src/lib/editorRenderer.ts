@@ -104,7 +104,7 @@ function drawCell(
 
   if (viewport.zoom >= 16) {
     ctx.fillStyle = LABEL;
-    ctx.font = `${Math.max(10, viewport.zoom * 0.42)}px "IBM Plex Mono", monospace`;
+    ctx.font = `${Math.max(10, viewport.zoom * 0.42)}px "Elements Mono", monospace`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(String(cell.index), sx + viewport.zoom / 2, sy + viewport.zoom / 2);

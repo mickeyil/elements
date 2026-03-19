@@ -1,13 +1,60 @@
+@font-face {
+  font-family: 'Elements Sans';
+  src: url('./assets/fonts/DejaVuSans.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Elements Sans';
+  src: url('./assets/fonts/DejaVuSans-Bold.ttf') format('truetype');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Elements Mono';
+  src: url('./assets/fonts/DejaVuSansMono.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Elements Mono';
+  src: url('./assets/fonts/DejaVuSansMono-Bold.ttf') format('truetype');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
-  --bg: #10171c;
-  --panel: rgba(19, 27, 33, 0.82);
-  --panel-edge: rgba(255, 255, 255, 0.08);
-  --text: #edf2ef;
-  --muted: #99a7a4;
-  --accent: #e59c4c;
-  --accent-soft: rgba(229, 156, 76, 0.16);
-  --offline: #b65353;
-  --surface: #182229;
+  --font-body: 'Elements Sans', 'Segoe UI', sans-serif;
+  --font-mono: 'Elements Mono', 'SFMono-Regular', monospace;
+  --bg: #111319;
+  --surface: #111319;
+  --surface-raised: #191c21;
+  --surface-strong: #282a30;
+  --surface-recessed: #0c0e14;
+  --panel: rgba(29, 32, 37, 0.96);
+  --panel-edge: rgba(59, 73, 76, 0.15);
+  --panel-edge-strong: rgba(59, 73, 76, 0.3);
+  --text: #e1e2ea;
+  --muted: #849396;
+  --accent: #6ca2ff;
+  --accent-soft: rgba(108, 162, 255, 0.18);
+  --status-online: #22c55e;
+  --status-online-soft: rgba(34, 197, 94, 0.16);
+  --status-dropped: #991b1b;
+  --status-dropped-soft: rgba(153, 27, 27, 0.18);
+  --status-offline: #6b7280;
+  --status-offline-soft: rgba(107, 114, 128, 0.12);
+  --device-badge-bg: #32353b;
+  --device-badge-text: #8c909d;
+  --radius-panel: 6px;
+  --radius-tight: 4px;
 }
 
 * {
@@ -23,11 +70,10 @@ body,
 
 body {
   margin: 0;
-  background:
-    radial-gradient(circle at top, rgba(229, 156, 76, 0.12), transparent 32rem),
-    linear-gradient(160deg, #0c1216, #141d23 55%, #0c1216);
+  background: #111319;
   color: var(--text);
-  font-family: 'IBM Plex Sans', 'Segoe UI', sans-serif;
+  font-family: var(--font-body);
+  letter-spacing: 0.01em;
 }
 
 a {
@@ -64,28 +110,32 @@ select {
 
 .page-title {
   margin: 0;
-  font-family: 'IBM Plex Mono', 'SFMono-Regular', monospace;
-  font-size: clamp(1.6rem, 4vw, 2.4rem);
+  font-family: var(--font-body);
+  font-size: clamp(1.4rem, 2.4vw, 2.1rem);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .page-eyebrow {
   margin: 0 0 0.35rem;
   text-transform: uppercase;
-  letter-spacing: 0.18em;
-  font-size: 0.72rem;
+  letter-spacing: 0.2em;
+  font-size: 0.65rem;
+  font-weight: 700;
   color: var(--accent);
 }
 
 .page-copy {
   margin: 0;
   color: var(--muted);
+  max-width: 64ch;
 }
 
 .panel {
   background: var(--panel);
   border: 1px solid var(--panel-edge);
-  border-radius: 18px;
-  backdrop-filter: blur(10px);
+  border-radius: var(--radius-panel);
 }
 
 .pill {
@@ -93,21 +143,30 @@ select {
   align-items: center;
   padding: 0.45rem 0.8rem;
   border-radius: 999px;
-  font-size: 0.82rem;
-  background: var(--surface);
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  background: var(--surface-raised);
   border: 1px solid var(--panel-edge);
 }
 
 .pill-online {
-  color: #f7f3eb;
-  background: var(--accent-soft);
-  border-color: rgba(229, 156, 76, 0.35);
+  color: var(--status-online);
+  background: var(--status-online-soft);
+  border-color: rgba(34, 197, 94, 0.32);
 }
 
 .pill-offline {
-  color: #f7e5e5;
-  background: rgba(182, 83, 83, 0.16);
-  border-color: rgba(182, 83, 83, 0.35);
+  color: var(--status-dropped);
+  background: var(--status-dropped-soft);
+  border-color: rgba(239, 68, 68, 0.32);
+}
+
+.pill-offline-never {
+  color: var(--status-offline);
+  background: var(--status-offline-soft);
+  border-color: rgba(107, 114, 128, 0.25);
 }
 
 .ghost-button,
@@ -117,28 +176,33 @@ select {
   align-items: center;
   justify-content: center;
   gap: 0.45rem;
-  border-radius: 999px;
-  padding: 0.6rem 1rem;
+  border-radius: var(--radius-panel);
+  padding: 0.58rem 0.95rem;
   text-decoration: none;
   cursor: pointer;
   transition: border-color 120ms ease, background 120ms ease, color 120ms ease;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 0.77rem;
+  font-weight: 700;
 }
 
 .ghost-button,
 .action-button {
   border: 1px solid var(--panel-edge);
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(255, 255, 255, 0.03);
   color: var(--text);
 }
 
 .ghost-button:hover,
 .action-button:hover {
-  border-color: rgba(255, 255, 255, 0.16);
+  border-color: var(--panel-edge-strong);
+  background: rgba(255, 255, 255, 0.05);
 }
 
 .primary-button {
-  border: 1px solid rgba(229, 156, 76, 0.35);
-  background: var(--accent-soft);
+  border: 1px solid rgba(108, 162, 255, 0.35);
+  background: linear-gradient(135deg, rgba(108, 162, 255, 0.2), rgba(108, 162, 255, 0.1));
   color: var(--text);
 }
 
@@ -164,6 +228,18 @@ select {
 
 .empty-state p {
   margin: 0;
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+.status-glow-online {
+  filter: drop-shadow(0 0 5px rgba(34, 197, 94, 0.32));
+}
+
+.status-glow-dropped {
+  filter: drop-shadow(0 0 5px rgba(239, 68, 68, 0.28));
 }
 
 @media (max-width: 900px) {

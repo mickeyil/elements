@@ -44,7 +44,7 @@ interface DeviceMeta {
   deviceUid: string;
   deviceType: string;
   length: number;
-  stripId: string;
+  strip: string;
 }
 
 type Tool = 'single' | 'line';
@@ -110,7 +110,7 @@ const currentDeviceMeta = computed<DeviceMeta | null>(() => {
       deviceUid: matched.device_uid,
       deviceType: String(matched.device_type ?? ''),
       length: Number(matched.length ?? 0),
-      stripId: String(matched.strip_id ?? 'n/a'),
+      strip: String(matched.strip ?? 'n/a'),
     };
   }
   if (resolvedDeviceMeta.value?.deviceUid === routeDeviceUid.value) {
@@ -582,7 +582,7 @@ onBeforeUnmount(() => {
           {{ routeState.kind === 'ready' ? routeState.device.deviceUid : routeDeviceUid || 'Layout' }}
         </h1>
         <p v-if="routeState.kind === 'ready'" class="page-copy">
-          strip {{ routeState.device.stripId }} · {{ routeState.device.length }} px · {{ toolDescription }}
+          strip {{ routeState.device.strip }} · {{ routeState.device.length }} px · {{ toolDescription }}
         </p>
         <p v-else class="page-copy">
           {{ routeState.message }}
@@ -743,9 +743,9 @@ onBeforeUnmount(() => {
 .editor-toolbar {
   flex-wrap: wrap;
   padding: 0.85rem 1rem;
-  border-radius: 16px;
+  border-radius: var(--radius-panel);
   border: 1px solid var(--panel-edge);
-  background: rgba(255, 255, 255, 0.03);
+  background: rgba(255, 255, 255, 0.025);
 }
 
 .toolbar-group {
@@ -776,7 +776,7 @@ onBeforeUnmount(() => {
 .index-controls button,
 .spacing-input {
   border: 1px solid var(--panel-edge);
-  border-radius: 999px;
+  border-radius: var(--radius-tight);
   padding: 0.55rem 0.9rem;
   background: rgba(255, 255, 255, 0.04);
   color: var(--text);
@@ -810,13 +810,13 @@ onBeforeUnmount(() => {
 .editor-saved {
   margin: 0;
   padding: 0.75rem 0.9rem;
-  border-radius: 14px;
+  border-radius: var(--radius-panel);
 }
 
 .editor-error {
-  border: 1px solid rgba(182, 83, 83, 0.35);
-  background: rgba(182, 83, 83, 0.16);
-  color: #f7e5e5;
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  background: var(--status-dropped-soft);
+  color: #ffdede;
 }
 
 .editor-saved {
@@ -828,9 +828,9 @@ onBeforeUnmount(() => {
 .editor-loading,
 .editor-surface {
   min-height: 0;
-  border-radius: 18px;
+  border-radius: var(--radius-panel);
   border: 1px solid var(--panel-edge);
-  background: #05090c;
+  background: #07090d;
 }
 
 .editor-loading {

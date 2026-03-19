@@ -1,140 +1,223 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { RouterLink } from 'vue-router';
 
+import IconError from '../components/icons/IconError.vue';
+import IconPowerOff from '../components/icons/IconPowerOff.vue';
+import IconSensors from '../components/icons/IconSensors.vue';
 import { useInjectedRelayState, type SnapshotDevice } from '../composables/useRelayState';
 
-const { snapshot } = useInjectedRelayState();
+type DeviceStatus = 'online' | 'dropped' | 'offline';
 
-const devices = computed<SnapshotDevice[]>(() => {
-  const items = Array.isArray(snapshot.value?.devices) ? snapshot.value.devices : [];
-  return [...items].sort((left, right) =>
-    String(left?.device_uid ?? '').localeCompare(String(right?.device_uid ?? '')),
-  );
-});
+interface StatusCardDevice extends SnapshotDevice {
+  status: DeviceStatus;
+  hasLayout: boolean;
+}
+
+const { snapshot } = useInjectedRelayState();
+const openMenuUid = ref<string | null>(null);
 
 const layouts = computed<Record<string, unknown>>(() => {
   const value = snapshot.value?.layouts;
   return value && typeof value === 'object' ? value : {};
 });
 
-const deviceCount = computed(() => devices.value.length);
-const onlineCount = computed(() => devices.value.filter((device) => device.connected).length);
-const simCount = computed(() =>
-  devices.value.filter((device) => device.device_type === 'sim').length,
-);
+const devices = computed<SnapshotDevice[]>(() => {
+  const items = Array.isArray(snapshot.value?.devices) ? snapshot.value.devices : [];
+  return [...items];
+});
 
-function pillClass(isOnline: boolean): string {
-  return isOnline ? 'pill-online' : 'pill-offline';
+function deriveStatus(device: SnapshotDevice): DeviceStatus {
+  if (device.connected) {
+    return 'online';
+  }
+  if (device.last_seen != null) {
+    return 'dropped';
+  }
+  return 'offline';
 }
 
 function hasLayout(deviceUid: string | undefined): boolean {
   return Boolean(deviceUid && layouts.value[deviceUid]);
 }
+
+const sortedDevices = computed<StatusCardDevice[]>(() => {
+  const priority: Record<DeviceStatus, number> = {
+    dropped: 0,
+    online: 1,
+    offline: 2,
+  };
+
+  return devices.value
+    .map((device) => ({
+      ...device,
+      status: deriveStatus(device),
+      hasLayout: hasLayout(device.device_uid),
+    }))
+    .sort((left, right) => {
+      const statusDelta = priority[left.status] - priority[right.status];
+      if (statusDelta !== 0) {
+        return statusDelta;
+      }
+      return String(left.strip ?? '').localeCompare(String(right.strip ?? ''));
+    });
+});
+
+const counts = computed(() => {
+  let online = 0;
+  let dropped = 0;
+  let offline = 0;
+  for (const device of sortedDevices.value) {
+    if (device.status === 'online') {
+      online += 1;
+    } else if (device.status === 'dropped') {
+      dropped += 1;
+    } else {
+      offline += 1;
+    }
+  }
+  return { online, dropped, offline };
+});
+
+function statusLabel(status: DeviceStatus): string {
+  if (status === 'online') {
+    return 'Online';
+  }
+  if (status === 'dropped') {
+    return 'Dropped';
+  }
+  return 'Offline';
+}
+
+function statusClass(status: DeviceStatus): string {
+  if (status === 'online') {
+    return 'device-status-online status-glow-online';
+  }
+  if (status === 'dropped') {
+    return 'device-status-dropped status-glow-dropped';
+  }
+  return 'device-status-offline';
+}
+
+function statusTitle(device: StatusCardDevice): string {
+  if (device.status !== 'dropped' || device.last_seen == null) {
+    return statusLabel(device.status);
+  }
+  return `Dropped · last seen ${new Date(device.last_seen * 1000).toLocaleString()}`;
+}
+
+function menuLabel(device: StatusCardDevice): string {
+  return device.hasLayout ? 'Edit layout' : 'Create layout';
+}
+
+function toggleMenu(deviceUid: string): void {
+  openMenuUid.value = openMenuUid.value === deviceUid ? null : deviceUid;
+}
+
+function closeMenu(): void {
+  openMenuUid.value = null;
+}
+
+function handleDocumentPointer(event: MouseEvent): void {
+  const target = event.target;
+  if (!(target instanceof Element) || !target.closest('[data-device-menu]')) {
+    closeMenu();
+  }
+}
+
+function handleKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Escape') {
+    closeMenu();
+  }
+}
+
+onMounted(() => {
+  document.addEventListener('click', handleDocumentPointer);
+  document.addEventListener('keydown', handleKeydown);
+});
+
+onBeforeUnmount(() => {
+  document.removeEventListener('click', handleDocumentPointer);
+  document.removeEventListener('keydown', handleKeydown);
+});
 </script>
 
 <template>
   <main class="status-page page-scroll">
-    <div class="page-shell">
-      <header class="page-header">
-        <div>
-          <p class="page-eyebrow">Overview</p>
-          <h1 class="page-title">Status</h1>
-          <p class="page-copy">
-            Configured devices and layout availability. Layout editing lives here even when no
-            session is active.
-          </p>
+    <div class="status-frame">
+      <div class="status-toolbar">
+        <div class="status-toolbar-label">Device Inventory</div>
+        <div v-if="snapshot && devices.length" class="status-inline-summary" aria-label="Device status summary">
+          <span v-if="counts.dropped" class="status-summary-dropped">{{ counts.dropped }} dropped</span>
+          <span v-if="counts.online" class="status-summary-online">{{ counts.online }} online</span>
+          <span v-if="counts.offline" class="status-summary-offline">{{ counts.offline }} offline</span>
         </div>
-      </header>
+      </div>
 
-      <section class="status-summary">
-        <div class="panel status-card">
-          <span class="status-label">Configured devices</span>
-          <strong>{{ deviceCount }}</strong>
-        </div>
-        <div class="panel status-card">
-          <span class="status-label">Connected now</span>
-          <strong>{{ onlineCount }}</strong>
-        </div>
-        <div class="panel status-card">
-          <span class="status-label">Sim devices</span>
-          <strong>{{ simCount }}</strong>
-        </div>
-      </section>
-
-      <section class="panel devices-panel">
-        <div class="devices-head">
-          <div>
-            <h2>Configured devices</h2>
-            <p>Choose a sim device to create or edit its saved layout.</p>
-          </div>
-        </div>
-
-        <div v-if="!snapshot" class="empty-state">
+      <div v-if="!snapshot" class="panel">
+        <div class="empty-state">
           <h2>Waiting for snapshot</h2>
           <p>The relay has not delivered device metadata yet.</p>
         </div>
+      </div>
 
-        <div v-else-if="!devices.length" class="empty-state">
+      <div v-else-if="!sortedDevices.length" class="panel">
+        <div class="empty-state">
           <h2>No configured devices</h2>
           <p>The current snapshot does not include any configured devices.</p>
         </div>
+      </div>
 
-        <div v-else class="device-list">
-          <article v-for="device in devices" :key="device.device_uid" class="device-card">
-            <div class="device-main">
-              <div class="device-title-row">
-                <strong class="device-uid">{{ device.device_uid }}</strong>
-                <span class="pill" :class="pillClass(Boolean(device.connected))">
-                  {{ device.connected ? 'connected' : 'disconnected' }}
-                </span>
-              </div>
+      <section v-else class="device-grid">
+        <article
+          v-for="device in sortedDevices"
+          :key="device.device_uid"
+          class="device-card"
+          :class="{ 'device-card-offline': device.status === 'offline' }"
+        >
+          <div class="device-card-head">
+            <span class="device-type-badge">
+              {{ device.device_type === 'sim' ? 'SIM' : 'ESP' }}
+            </span>
+            <span class="device-status" :class="statusClass(device.status)" :title="statusTitle(device)">
+              <IconSensors v-if="device.status === 'online'" />
+              <IconError v-else-if="device.status === 'dropped'" />
+              <IconPowerOff v-else />
+              {{ statusLabel(device.status) }}
+            </span>
+          </div>
 
-              <dl class="device-meta">
-                <div>
-                  <dt>Type</dt>
-                  <dd>{{ device.device_type ?? 'unknown' }}</dd>
-                </div>
-                <div>
-                  <dt>Strip</dt>
-                  <dd>{{ device.strip_id ?? 'n/a' }}</dd>
-                </div>
-                <div>
-                  <dt>Length</dt>
-                  <dd>{{ device.length ?? 0 }} px</dd>
-                </div>
-                <div>
-                  <dt>Layout</dt>
-                  <dd>
-                    <span
-                      class="pill"
-                      :class="hasLayout(device.device_uid) ? 'pill-online' : 'pill-offline'"
+          <div class="device-card-body">
+            <h2 class="device-strip" :title="device.strip ?? device.device_uid ?? 'unknown device'">
+              {{ device.strip ?? 'unknown_strip' }}
+            </h2>
+            <div class="device-bottom-row">
+              <p class="device-uid mono">DEVICE: {{ device.device_uid ?? 'unknown-device' }}</p>
+              <div class="device-action-slot">
+                <div v-if="device.device_type === 'sim' && device.device_uid" class="device-menu" data-device-menu>
+                  <button
+                    type="button"
+                    class="device-menu-trigger"
+                    :aria-label="menuLabel(device)"
+                    :title="menuLabel(device)"
+                    @click.stop="toggleMenu(device.device_uid)"
+                  >
+                    ⋮
+                  </button>
+                  <div v-if="openMenuUid === device.device_uid" class="device-menu-list">
+                    <RouterLink
+                      class="device-menu-item"
+                      :to="`/layouts/${encodeURIComponent(device.device_uid)}`"
+                      @click="closeMenu"
                     >
-                      {{
-                        device.device_type === 'sim'
-                          ? hasLayout(device.device_uid)
-                            ? 'saved'
-                            : 'missing'
-                          : 'n/a'
-                      }}
-                    </span>
-                  </dd>
+                      {{ menuLabel(device) }}
+                    </RouterLink>
+                  </div>
                 </div>
-              </dl>
+              </div>
             </div>
-
-            <div class="device-actions">
-              <RouterLink
-                v-if="device.device_type === 'sim' && device.device_uid"
-                class="action-button"
-                :to="`/layouts/${encodeURIComponent(device.device_uid)}`"
-              >
-                {{ hasLayout(device.device_uid) ? 'Edit layout' : 'Create layout' }}
-              </RouterLink>
-              <span v-else class="device-note">Browser editor is available for sim devices only.</span>
-            </div>
-          </article>
-        </div>
+          </div>
+        </article>
       </section>
     </div>
   </main>
@@ -143,128 +226,225 @@ function hasLayout(deviceUid: string | undefined): boolean {
 <style scoped>
 .status-page {
   min-height: 0;
+  padding: 0.75rem 0.75rem 0;
 }
 
-.status-summary {
-  display: flex;
+.status-frame {
+  display: grid;
   gap: 0.75rem;
-  flex-wrap: wrap;
-  margin-bottom: 1.5rem;
+  align-content: start;
 }
 
-.status-card {
-  min-width: 11rem;
-  padding: 0.9rem 1rem;
+.status-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  min-height: 3rem;
+  padding: 0 1rem;
+  background: #131313;
+  border-bottom: 1px solid rgba(59, 73, 76, 0.15);
 }
 
-.status-label {
-  display: block;
-  margin-bottom: 0.3rem;
-  font-size: 0.78rem;
+.status-toolbar-label {
   color: var(--muted);
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.18em;
+  font-size: 0.68rem;
+  font-weight: 700;
 }
 
-.devices-panel {
-  padding: 1rem;
-}
-
-.devices-head {
-  margin-bottom: 1rem;
-}
-
-.devices-head h2 {
-  margin: 0 0 0.35rem;
-  font-size: 1.1rem;
-}
-
-.devices-head p {
-  margin: 0;
-  color: var(--muted);
-}
-
-.device-list {
-  display: grid;
+.status-inline-summary {
+  display: inline-flex;
+  align-items: center;
   gap: 1rem;
+  flex-wrap: wrap;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 0.64rem;
+  font-weight: 700;
+}
+
+.status-summary-online {
+  color: var(--status-online);
+}
+
+.status-summary-dropped {
+  color: var(--status-dropped);
+}
+
+.status-summary-offline {
+  color: var(--status-offline);
+}
+
+.device-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 1px;
+  align-content: start;
 }
 
 .device-card {
-  display: flex;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 1rem;
-  border-radius: 16px;
-  border: 1px solid var(--panel-edge);
-  background: rgba(255, 255, 255, 0.03);
-}
-
-.device-main {
-  min-width: 0;
   display: grid;
-  gap: 0.85rem;
+  gap: 0.7rem;
+  padding: 0.7rem 0.75rem;
+  background: var(--surface-raised);
+  min-width: 0;
+  min-height: 8.25rem;
+  transition: background 120ms ease;
 }
 
-.device-title-row {
+.device-card:hover {
+  background: var(--surface-strong);
+}
+
+.device-card-offline {
+  background: var(--surface-recessed);
+  opacity: 0.52;
+}
+
+.device-card-head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
+  justify-content: space-between;
   gap: 0.75rem;
-  flex-wrap: wrap;
+}
+
+.device-type-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.12rem 0.32rem;
+  background: var(--device-badge-bg);
+  color: var(--device-badge-text);
+  font-size: 0.55rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.device-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  font-size: 0.54rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.device-status-online {
+  color: var(--status-online);
+}
+
+.device-status-dropped {
+  color: var(--status-dropped);
+}
+
+.device-status-offline {
+  color: var(--status-offline);
+}
+
+.device-card-body {
+  display: grid;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.device-strip {
+  margin: 0;
+  color: var(--text);
+  font-size: 1.05rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  line-height: 1.05;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.device-bottom-row {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0.5rem;
 }
 
 .device-uid {
-  font-family: 'IBM Plex Mono', 'SFMono-Regular', monospace;
-  font-size: 0.95rem;
-}
-
-.device-meta {
   margin: 0;
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
-  gap: 0.75rem;
-}
-
-.device-meta div {
-  display: grid;
-  gap: 0.2rem;
-}
-
-.device-meta dt {
-  font-size: 0.72rem;
   color: var(--muted);
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  min-width: 0;
+}
+
+.device-action-slot {
+  min-width: 1.5rem;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.device-menu {
+  position: relative;
+  display: inline-flex;
+}
+
+.device-menu-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.35rem;
+  height: 1.35rem;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0;
+}
+
+.device-menu-trigger:hover,
+.device-menu-trigger:focus-visible {
+  color: var(--text);
+  outline: none;
+}
+
+.device-menu-list {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.25rem);
+  min-width: 9rem;
+  padding: 0.25rem;
+  background: #111319;
+  border: 1px solid rgba(59, 73, 76, 0.3);
+  z-index: 10;
+}
+
+.device-menu-item {
+  display: block;
+  padding: 0.5rem 0.6rem;
+  color: var(--text);
+  text-decoration: none;
   text-transform: uppercase;
   letter-spacing: 0.08em;
+  font-size: 0.64rem;
+  font-weight: 700;
+  white-space: nowrap;
 }
 
-.device-meta dd {
-  margin: 0;
+.device-menu-item:hover {
+  background: #1c1b1b;
 }
 
-.device-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  min-width: 12rem;
-}
-
-.device-note {
-  color: var(--muted);
-  font-size: 0.84rem;
-  text-align: right;
-}
-
-@media (max-width: 760px) {
-  .device-card {
-    flex-direction: column;
+@media (max-width: 900px) {
+  .status-page {
+    padding: 0.5rem 0.5rem 0;
   }
 
-  .device-actions {
-    justify-content: flex-start;
-    min-width: 0;
-  }
-
-  .device-note {
-    text-align: left;
+  .status-toolbar {
+    padding-inline: 0.75rem;
   }
 }
 </style>

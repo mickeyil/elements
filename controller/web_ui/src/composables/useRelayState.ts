@@ -20,9 +20,10 @@ export interface SnapshotDevice {
   device_id?: number;
   device_uid?: string;
   device_type?: string;
-  strip_id?: string;
+  strip?: string;
   length?: number;
   connected?: boolean;
+  last_seen?: number | null;
 }
 
 interface SessionStripTarget {
@@ -155,16 +156,24 @@ export function useRelayState() {
     rebuildTargets();
   }
 
-  function handleDeviceStatus(msg: { device_uid?: string; connected?: boolean }): void {
+  function handleDeviceStatus(msg: {
+    device_uid?: string;
+    connected?: boolean;
+    last_seen?: number | null;
+  }): void {
     const deviceUid = msg.device_uid;
     if (!deviceUid) {
       return;
     }
 
     const connected = Boolean(msg.connected);
+    const hasLastSeen = Object.prototype.hasOwnProperty.call(msg, 'last_seen');
     for (const device of getSnapshotDevices()) {
       if (device?.device_uid === deviceUid) {
         device.connected = connected;
+        if (hasLastSeen) {
+          device.last_seen = msg.last_seen ?? null;
+        }
         break;
       }
     }
@@ -251,7 +260,11 @@ export function useRelayState() {
     }
 
     if (msg.event === 'device_status') {
-      handleDeviceStatus(msg as { device_uid?: string; connected?: boolean });
+      handleDeviceStatus(msg as {
+        device_uid?: string;
+        connected?: boolean;
+        last_seen?: number | null;
+      });
       return;
     }
 

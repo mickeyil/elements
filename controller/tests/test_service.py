@@ -370,7 +370,21 @@ class _FakeClock:
         return self.now
 
 
-def _make_service(n_devices=1, fake_devices=None, clock=None, library_factory=None):
+class _FakeWallClock:
+    def __init__(self, initial: float = 0.0):
+        self.now = initial
+
+    def __call__(self):
+        return self.now
+
+
+def _make_service(
+    n_devices=1,
+    fake_devices=None,
+    clock=None,
+    wall_clock=None,
+    library_factory=None,
+):
     config = _make_config(n_devices)
     if fake_devices is None:
         fake_devices = [_FakeDevice() for _ in range(n_devices)]
@@ -383,6 +397,8 @@ def _make_service(n_devices=1, fake_devices=None, clock=None, library_factory=No
     )
     if clock is not None:
         kwargs['clock'] = clock
+    if wall_clock is not None:
+        kwargs['wall_clock'] = wall_clock
     return ControllerService(config, **kwargs), fake_devices
 
 
@@ -456,6 +472,17 @@ class TestSnapshotIdle:
         assert snap['devices'][0]['strip'] == 'test'
         assert snap['devices'][0]['length'] == 5
         assert snap['devices'][0]['connected'] is True
+
+    def test_snapshot_last_seen_is_none_for_never_connected_device(self):
+        fakes = [_FakeDevice()]
+        fakes[0].is_connected = False
+        wall_clock = _FakeWallClock(123.5)
+        svc, _ = _make_service(fake_devices=fakes, wall_clock=wall_clock)
+
+        snap = svc.build_snapshot()
+
+        assert snap['devices'][0]['connected'] is False
+        assert snap['devices'][0]['last_seen'] is None
 
     def test_snapshot_shows_disconnected(self):
         fakes = [_FakeDevice()]
@@ -2506,7 +2533,8 @@ class TestPresenceEvents:
     def test_offline_to_online_emits_event(self):
         fakes = [_FakeDevice()]
         fakes[0].is_connected = False
-        svc, _ = _make_service(fake_devices=fakes)
+        wall_clock = _FakeWallClock(10.5)
+        svc, _ = _make_service(fake_devices=fakes, wall_clock=wall_clock)
 
         # tick_once probes and reconnects (ensure_connected sets is_connected=True)
         json_msgs, _ = svc.tick_once()
@@ -2520,28 +2548,48 @@ class TestPresenceEvents:
         assert evt['device_uid'] == 'sim-1'
         assert evt['strip'] == 'test'
         assert evt['length'] == 5
+        assert evt['last_seen'] == pytest.approx(10.5)
 
         # Snapshot stays aligned
         snap = svc.build_snapshot()
         assert snap['online_count'] == snap['expected_count']
+        assert snap['devices'][0]['last_seen'] == pytest.approx(10.5)
 
     def test_online_to_offline_emits_event(self):
         fakes = [_FakeDevice()]
         fakes[0].is_connected = True
-        svc, _ = _make_service(fake_devices=fakes)
+        wall_clock = _FakeWallClock(20.0)
+        svc, _ = _make_service(fake_devices=fakes, wall_clock=wall_clock)
+
+        svc.tick_once()
+        assert svc.build_snapshot()['devices'][0]['last_seen'] == pytest.approx(20.0)
 
         # Device goes offline externally; prevent probe from reconnecting
         fakes[0].is_connected = False
         fakes[0].ensure_connected = lambda: False
+        wall_clock.now = 27.0
         json_msgs, _ = svc.tick_once()
         events = _decode_json_msgs(json_msgs)
 
         status_events = [e for e in events if e.get('event') == 'device_status']
         assert len(status_events) == 1
         assert status_events[0]['connected'] is False
+        assert status_events[0]['last_seen'] == pytest.approx(20.0)
 
         snap = svc.build_snapshot()
         assert snap['online_count'] == 0
+        assert snap['devices'][0]['last_seen'] == pytest.approx(20.0)
+
+    def test_last_seen_updates_each_tick_while_connected(self):
+        wall_clock = _FakeWallClock(5.0)
+        svc, _ = _make_service(wall_clock=wall_clock)
+
+        svc.tick_once()
+        assert svc.build_snapshot()['devices'][0]['last_seen'] == pytest.approx(5.0)
+
+        wall_clock.now = 8.25
+        svc.tick_once()
+        assert svc.build_snapshot()['devices'][0]['last_seen'] == pytest.approx(8.25)
 
     def test_no_event_when_stable(self):
         svc, fakes = _make_service()
@@ -2608,6 +2656,42 @@ class TestProbeAllBaseline:
         assert status_events == [], (
             'probe_all() should sync baseline — no spurious transition event'
         )
+
+
+class TestLastSeenReconciliation:
+    def test_reconcile_preserves_last_seen_for_unchanged_devices(self):
+        wall_clock = _FakeWallClock(42.0)
+        svc, _ = _make_service(n_devices=2, wall_clock=wall_clock)
+
+        svc.tick_once()
+        assert svc.build_snapshot()['devices'][0]['last_seen'] == pytest.approx(42.0)
+
+        candidate = copy.deepcopy(svc._config_to_doc(svc._config))
+        new_config = load_config_obj(candidate)
+        wall_clock.now = 100.0
+        svc._reconcile_devices(new_config)
+
+        snap = svc.build_snapshot()
+        assert snap['devices'][0]['last_seen'] == pytest.approx(42.0)
+        assert snap['devices'][1]['last_seen'] == pytest.approx(42.0)
+
+    def test_reconcile_seeds_last_seen_for_already_connected_devices(self):
+        wall_clock = _FakeWallClock(17.0)
+        replacement = _FakeDevice()
+        replacement.is_connected = True
+        svc = ControllerService(
+            Config(frame_port=1, devices=[
+                DeviceConfig(1, 'sim-1', 'sim', '127.0.0.1', 9001, 'test', 5),
+            ]),
+            receiver_factory=_NoopReceiver,
+            device_factory=_make_fake_factory([replacement]),
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir),
+            wall_clock=wall_clock,
+        )
+
+        snap = svc.build_snapshot()
+        assert snap['devices'][0]['connected'] is True
+        assert snap['devices'][0]['last_seen'] == pytest.approx(17.0)
 
 
 class TestTickProducesEvents:
