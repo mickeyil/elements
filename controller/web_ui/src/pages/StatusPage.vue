@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { RouterLink } from 'vue-router';
 
-import NewDeviceModal from '../components/NewDeviceModal.vue';
+import DeviceModal from '../components/DeviceModal.vue';
 import { useInjectedRelayState, type SnapshotDevice } from '../composables/useRelayState';
 
 type DeviceStatus = 'online' | 'dropped' | 'offline';
@@ -15,6 +15,7 @@ interface StatusCardDevice extends SnapshotDevice {
 const { controllerConnected, snapshot } = useInjectedRelayState();
 const openMenuUid = ref<string | null>(null);
 const showNewDeviceModal = ref(false);
+const editingDevice = ref<StatusCardDevice | null>(null);
 
 const layouts = computed<Record<string, unknown>>(() => {
   const value = snapshot.value?.layouts;
@@ -105,8 +106,12 @@ function statusTitle(device: StatusCardDevice): string {
   return `Dropped · last seen ${new Date(device.last_seen * 1000).toLocaleString()}`;
 }
 
-function menuLabel(device: StatusCardDevice): string {
+function layoutMenuLabel(device: StatusCardDevice): string {
   return device.hasLayout ? 'Edit layout' : 'Create layout';
+}
+
+function actionMenuLabel(device: StatusCardDevice): string {
+  return `Actions for ${device.device_uid ?? device.strip ?? 'device'}`;
 }
 
 function toggleMenu(deviceUid: string): void {
@@ -126,6 +131,18 @@ function openNewDeviceModal(): void {
 
 function closeNewDeviceModal(): void {
   showNewDeviceModal.value = false;
+}
+
+function openEditDeviceModal(device: StatusCardDevice): void {
+  if (!device.device_uid || !controllerConnected.value) {
+    return;
+  }
+  editingDevice.value = device;
+  closeMenu();
+}
+
+function closeEditDeviceModal(): void {
+  editingDevice.value = null;
 }
 
 function handleDocumentPointer(event: MouseEvent): void {
@@ -214,23 +231,33 @@ onBeforeUnmount(() => {
             <div class="device-bottom-row">
               <p class="device-uid mono">DEVICE: {{ device.device_uid ?? 'unknown-device' }}</p>
               <div class="device-action-slot">
-                <div v-if="device.device_type === 'sim' && device.device_uid" class="device-menu" data-device-menu>
+                <div v-if="device.device_uid" class="device-menu" data-device-menu>
                   <button
                     type="button"
                     class="device-menu-trigger"
-                    :aria-label="menuLabel(device)"
-                    :title="menuLabel(device)"
+                    aria-label="Device actions"
+                    :title="actionMenuLabel(device)"
                     @click.stop="toggleMenu(device.device_uid)"
                   >
                     ⋮
                   </button>
                   <div v-if="openMenuUid === device.device_uid" class="device-menu-list">
+                    <button
+                      type="button"
+                      class="device-menu-item"
+                      :disabled="!controllerConnected"
+                      :title="controllerConnected ? 'Edit device' : 'Controller offline'"
+                      @click="openEditDeviceModal(device)"
+                    >
+                      Edit device
+                    </button>
                     <RouterLink
+                      v-if="device.device_type === 'sim'"
                       class="device-menu-item"
                       :to="`/layouts/${encodeURIComponent(device.device_uid)}`"
                       @click="closeMenu"
                     >
-                      {{ menuLabel(device) }}
+                      {{ layoutMenuLabel(device) }}
                     </RouterLink>
                   </div>
                 </div>
@@ -241,11 +268,20 @@ onBeforeUnmount(() => {
       </section>
     </div>
 
-    <NewDeviceModal
+    <DeviceModal
       v-if="showNewDeviceModal"
+      mode="create"
       :controller-connected="controllerConnected"
       @close="closeNewDeviceModal"
-      @created="closeNewDeviceModal"
+      @saved="closeNewDeviceModal"
+    />
+    <DeviceModal
+      v-if="editingDevice"
+      mode="edit"
+      :device="editingDevice"
+      :controller-connected="controllerConnected"
+      @close="closeEditDeviceModal"
+      @saved="closeEditDeviceModal"
     />
   </main>
 </template>
@@ -472,6 +508,10 @@ onBeforeUnmount(() => {
 
 .device-menu-item {
   display: block;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: left;
   padding: 0.5rem 0.6rem;
   color: var(--text);
   text-decoration: none;
@@ -480,10 +520,20 @@ onBeforeUnmount(() => {
   font-size: 0.64rem;
   font-weight: 700;
   white-space: nowrap;
+  cursor: pointer;
 }
 
 .device-menu-item:hover {
   background: #1c1b1b;
+}
+
+.device-menu-item:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+.device-menu-item:disabled:hover {
+  background: transparent;
 }
 
 @media (max-width: 900px) {

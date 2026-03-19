@@ -7,6 +7,7 @@ from elemctl.uds_wire import PROTOCOL_VERSION
 from elemctl.web import (
     WebRelay,
     _build_parser,
+    _device_uid_from_path,
     _encode_ws_frame,
     _layout_device_uid_from_path,
     _make_disconnected_snapshot,
@@ -185,6 +186,12 @@ def test_layout_device_uid_from_path_extracts_device_uid():
     assert _layout_device_uid_from_path('/api/layouts/sim-1') == 'sim-1'
     assert _layout_device_uid_from_path('/api/layouts/') is None
     assert _layout_device_uid_from_path('/api/layouts/a/b') is None
+
+
+def test_device_uid_from_path_extracts_device_uid():
+    assert _device_uid_from_path('/api/devices/sim-1') == 'sim-1'
+    assert _device_uid_from_path('/api/devices/') is None
+    assert _device_uid_from_path('/api/devices/a/b') is None
 
 
 def test_tailscale_urls_formats_ipv4_output(monkeypatch):
@@ -459,6 +466,90 @@ def test_create_device_response_returns_503_when_controller_reply_times_out(monk
 
     assert status == 503
     assert payload == {'error': 'controller timed out'}
+
+
+def test_edit_device_response_forwards_edit_device(monkeypatch, tmp_path):
+    relay = WebRelay('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+    commands: list[dict] = []
+
+    class FakeClient:
+        def __init__(self, socket_path: str, timeout: float, role: str) -> None:
+            assert socket_path == '/tmp/elemctl.sock'
+            assert role == web_mod.ROLE_WRITER
+            self._reads = [[
+                (
+                    web_mod.KIND_JSON,
+                    json.dumps({
+                        'type': 'reply',
+                        'id': 1,
+                        'ok': True,
+                        'result': {'message': 'updated device old -> new'},
+                    }).encode('utf-8'),
+                ),
+            ]]
+
+        def next_id(self) -> int:
+            return 1
+
+        def send_cmd(self, cmd: dict) -> None:
+            commands.append(cmd)
+
+        def recv_once(self) -> list[tuple[int, bytes]]:
+            return self._reads.pop(0)
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(web_mod, 'UdsClient', FakeClient)
+
+    status, payload = relay._edit_device_response('old-uid', {
+        'device_uid': 'new-uid',
+        'strip_id': 'main',
+        'length': 90,
+    })
+
+    assert status == 200
+    assert payload == {'ok': True, 'result': {'message': 'updated device old -> new'}}
+    assert commands == [{
+        'id': 1,
+        'cmd': 'edit_device',
+        'target_device_uid': 'old-uid',
+        'device_uid': 'new-uid',
+        'strip_id': 'main',
+        'length': 90,
+    }]
+
+
+def test_edit_device_response_rejects_invalid_payload(tmp_path):
+    relay = WebRelay('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+
+    status, payload = relay._edit_device_response('sim-1', {
+        'device_uid': 'sim-1',
+        'strip_id': '',
+        'length': 60,
+    })
+
+    assert status == 400
+    assert payload == {'error': 'strip_id must be a non-empty string'}
+
+
+def test_edit_device_response_returns_503_when_controller_unavailable(monkeypatch, tmp_path):
+    relay = WebRelay('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+
+    class FailingClient:
+        def __init__(self, socket_path: str, timeout: float, role: str) -> None:
+            raise ConnectionError('hello failed')
+
+    monkeypatch.setattr(web_mod, 'UdsClient', FailingClient)
+
+    status, payload = relay._edit_device_response('sim-1', {
+        'device_uid': 'sim-1',
+        'strip_id': 'main',
+        'length': 60,
+    })
+
+    assert status == 503
+    assert payload == {'error': 'controller unavailable: hello failed'}
 
 
 def test_read_http_body_rejects_oversized_request(tmp_path):

@@ -1,26 +1,51 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 
-import { createDevice } from '../lib/deviceApi';
+import { createDevice, updateDevice } from '../lib/deviceApi';
+
+type DeviceType = 'sim' | 'esp32';
+
+interface EditableDevice {
+  device_uid?: string;
+  device_type?: string;
+  strip?: string;
+  length?: number;
+}
 
 const props = defineProps<{
+  mode: 'create' | 'edit';
   controllerConnected: boolean;
+  device?: EditableDevice | null;
 }>();
 
 const emit = defineEmits<{
   (e: 'close'): void;
-  (e: 'created'): void;
+  (e: 'saved'): void;
 }>();
 
 const deviceUidRef = ref<HTMLInputElement | null>(null);
-const deviceType = ref<'sim' | 'esp32'>('sim');
-const deviceUid = ref('');
-const stripId = ref('');
-const length = ref('');
+const deviceType = ref<DeviceType>((props.mode === 'edit' && props.device?.device_type === 'esp32') ? 'esp32' : 'sim');
+const deviceUid = ref(props.mode === 'edit' ? props.device?.device_uid ?? '' : '');
+const stripId = ref(props.mode === 'edit' ? props.device?.strip ?? '' : '');
+const length = ref(props.mode === 'edit' && props.device?.length != null ? String(props.device.length) : '');
 const saving = ref(false);
 const error = ref('');
 
+const isEditMode = computed(() => props.mode === 'edit');
 const canSubmit = computed(() => props.controllerConnected && !saving.value);
+const title = computed(() => (isEditMode.value ? 'Edit device' : 'New device'));
+const submitLabel = computed(() => {
+  if (saving.value) {
+    return isEditMode.value ? 'Saving…' : 'Creating…';
+  }
+  return isEditMode.value ? 'Save changes' : 'Create device';
+});
+const submitTitle = computed(() => {
+  if (!props.controllerConnected) {
+    return 'Controller offline';
+  }
+  return isEditMode.value ? 'Save device changes' : 'Create device';
+});
 
 function close(): void {
   if (saving.value) {
@@ -29,7 +54,10 @@ function close(): void {
   emit('close');
 }
 
-function validate(): { device_type: 'sim' | 'esp32'; device_uid: string; strip_id: string; length: number } | null {
+function validate():
+  | { device_type: DeviceType; device_uid: string; strip_id: string; length: number }
+  | { device_uid: string; strip_id: string; length: number }
+  | null {
   const trimmedUid = deviceUid.value.trim();
   const trimmedStrip = stripId.value.trim();
   const parsedLength = Number.parseInt(length.value, 10);
@@ -45,6 +73,14 @@ function validate(): { device_type: 'sim' | 'esp32'; device_uid: string; strip_i
   if (!Number.isInteger(parsedLength) || parsedLength < 1) {
     error.value = 'Length must be a positive integer.';
     return null;
+  }
+
+  if (isEditMode.value) {
+    return {
+      device_uid: trimmedUid,
+      strip_id: trimmedStrip,
+      length: parsedLength,
+    };
   }
 
   return {
@@ -69,10 +105,22 @@ async function submit(): Promise<void> {
   try {
     saving.value = true;
     error.value = '';
-    await createDevice(payload);
-    emit('created');
+    if (isEditMode.value) {
+      const targetDeviceUid = props.device?.device_uid;
+      if (!targetDeviceUid) {
+        throw new Error('Missing device uid.');
+      }
+      await updateDevice(targetDeviceUid, payload);
+    } else {
+      await createDevice(payload);
+    }
+    emit('saved');
   } catch (err) {
-    error.value = err instanceof Error ? err.message : 'Failed to create device.';
+    error.value = err instanceof Error
+      ? err.message
+      : isEditMode.value
+        ? 'Failed to update device.'
+        : 'Failed to create device.';
   } finally {
     saving.value = false;
   }
@@ -103,11 +151,11 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="modal-backdrop" @click="handleBackdropClick">
-    <section class="panel modal-card" role="dialog" aria-modal="true" aria-labelledby="new-device-title">
+    <section class="panel modal-card" role="dialog" aria-modal="true" aria-labelledby="device-modal-title">
       <header class="modal-head">
         <div>
           <p class="modal-eyebrow">Devices</p>
-          <h2 id="new-device-title" class="modal-title">New device</h2>
+          <h2 id="device-modal-title" class="modal-title">{{ title }}</h2>
         </div>
         <button type="button" class="ghost-button modal-close" :disabled="saving" @click="close">Close</button>
       </header>
@@ -115,7 +163,7 @@ onBeforeUnmount(() => {
       <div class="modal-fields">
         <label class="modal-field">
           <span class="modal-label">Type</span>
-          <select v-model="deviceType" :disabled="saving">
+          <select v-model="deviceType" :disabled="saving || isEditMode">
             <option value="sim">Simulation</option>
             <option value="esp32">ESP32</option>
           </select>
@@ -166,10 +214,10 @@ onBeforeUnmount(() => {
           type="button"
           class="primary-button"
           :disabled="!canSubmit"
-          :title="controllerConnected ? 'Create device' : 'Controller offline'"
+          :title="submitTitle"
           @click="submit"
         >
-          {{ saving ? 'Creating…' : 'Create device' }}
+          {{ submitLabel }}
         </button>
       </footer>
     </section>
@@ -248,6 +296,13 @@ onBeforeUnmount(() => {
   padding: 0.7rem 0.8rem;
   background: rgba(255, 255, 255, 0.04);
   color: var(--text);
+}
+
+.modal-field input:disabled,
+.modal-field select:disabled {
+  border-color: rgba(59, 73, 76, 0.12);
+  background: rgba(0, 0, 0, 0.28);
+  color: rgba(225, 226, 234, 0.68);
 }
 
 .modal-field input::placeholder {
