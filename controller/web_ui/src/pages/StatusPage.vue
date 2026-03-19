@@ -176,7 +176,10 @@ onBeforeUnmount(() => {
           :class="{ 'device-card-offline': device.status === 'offline' }"
         >
           <div class="device-card-head">
-            <span class="device-type-badge">
+            <span
+              class="device-type-badge"
+              :class="device.device_type === 'sim' ? 'device-type-badge-sim' : 'device-type-badge-esp'"
+            >
               {{ device.device_type === 'sim' ? 'SIM' : 'ESP' }}
             </span>
             <span class="device-status" :class="statusClass(device.status)" :title="statusTitle(device)">
@@ -314,12 +317,20 @@ onBeforeUnmount(() => {
   display: inline-flex;
   align-items: center;
   padding: 0.12rem 0.32rem;
-  background: var(--device-badge-bg);
-  color: var(--device-badge-text);
   font-size: 0.55rem;
   font-weight: 700;
   letter-spacing: 0.14em;
   text-transform: uppercase;
+}
+
+.device-type-badge-esp {
+  background: rgba(96, 126, 187, 0.24);
+  color: #bdd0ff;
+}
+
+.device-type-badge-sim {
+  background: rgba(58, 168, 148, 0.24);
+  color: #8df0dd;
 }
 
 .device-status {
