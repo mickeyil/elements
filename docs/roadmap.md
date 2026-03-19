@@ -294,6 +294,9 @@ All coordinates are bounding-box-relative (adjusted on save when the grid is tri
 
 These are valid future items, but they are not the immediate next implementation target:
 
+- Web UI modal-shell cleanup:
+  - extract shared modal chrome styles used by device/edit/remove modals
+  - keep future modal additions from duplicating the same backdrop/header/footer CSS
 - Cross-device installation view:
   - combine multiple device panels into one shared 2D canvas
   - requires placement/offset metadata beyond per-device CSVs
