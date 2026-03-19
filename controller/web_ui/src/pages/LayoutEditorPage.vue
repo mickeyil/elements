@@ -12,7 +12,6 @@ import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vu
 
 import IconBack from '../components/icons/IconBack.vue';
 import IconLineTool from '../components/icons/IconLineTool.vue';
-import IconReset from '../components/icons/IconReset.vue';
 import IconSave from '../components/icons/IconSave.vue';
 import IconSingle from '../components/icons/IconSingle.vue';
 import IconUndo from '../components/icons/IconUndo.vue';
@@ -24,7 +23,6 @@ import {
   documentCenter,
   documentsEqual,
   GRID_SIZE,
-  incrementCurrentIndex,
   placeLinePrimitive,
   placeSinglePrimitive,
   previewLinePlacement,
@@ -36,8 +34,6 @@ import {
 import {
   centerViewport,
   DEFAULT_ZOOM,
-  MAX_ZOOM,
-  MIN_ZOOM,
   renderEditor,
   screenToCell,
   zoomViewportAt,
@@ -54,17 +50,29 @@ interface DeviceMeta {
 }
 
 type Tool = 'single' | 'line';
+type PlacementBubble = {
+  text: string;
+  x: number;
+  y: number;
+  visible: boolean;
+};
+
+const SAVE_NOTICE_TIMEOUT_MS = 2600;
+const PLACEMENT_BUBBLE_TIMEOUT_MS = 3000;
+const PLACEMENT_BUBBLE_FADE_MS = 180;
 
 const route = useRoute();
 const router = useRouter();
 const { snapshot } = useInjectedRelayState();
 
 const canvasRef = ref<HTMLCanvasElement | null>(null);
+const editorSurfaceRef = ref<HTMLDivElement | null>(null);
 const loadingLayout = ref(false);
 const saving = ref(false);
 const error = ref('');
 const statusNotice = ref('');
 const hoverCell = ref<Point | null>(null);
+const placementBubble = ref<PlacementBubble | null>(null);
 const viewport = ref<EditorViewport>({
   zoom: DEFAULT_ZOOM,
   offsetX: 0,
@@ -82,6 +90,9 @@ let spacePressed = false;
 let renderPending = false;
 let loadToken = 0;
 let suppressClick = false;
+let statusNoticeTimer: number | null = null;
+let placementBubbleHideTimer: number | null = null;
+let placementBubbleClearTimer: number | null = null;
 let panning:
   | {
       startClientX: number;
@@ -169,7 +180,6 @@ const readyDeviceKey = computed(() => {
 const deviceLength = computed(() =>
   routeState.value.kind === 'ready' ? routeState.value.device.length : baselineDocument.value.maxIndex,
 );
-const currentIndex = computed(() => documentRef.value.currentIndex);
 const placedCount = computed(() => documentRef.value.placedCount);
 const canUndo = computed(
   () =>
@@ -183,9 +193,12 @@ const canSave = computed(
 );
 const isDirty = computed(() => !documentsEqual(documentRef.value, baselineDocument.value));
 const currentSpacing = computed(() => Math.max(0, Math.floor(Number(lineSpacing.value) || 0)));
-const toolDescription = computed(() =>
-  activeTool.value === 'single' ? 'single LED tool' : `line tool · spacing ${currentSpacing.value}`,
-);
+const hoverBlocked = computed(() => {
+  if (activeTool.value !== 'single' || !hoverCell.value) {
+    return false;
+  }
+  return documentRef.value.occupied.has(`${hoverCell.value.x},${hoverCell.value.y}`);
+});
 
 const linePreview = computed<EditorPreview | null>(() => {
   if (activeTool.value !== 'line' || !lineStart.value) {
@@ -221,16 +234,101 @@ const linePreview = computed<EditorPreview | null>(() => {
   }
 });
 
-const previewCount = computed(() => linePreview.value?.cells.length ?? 0);
-const previewError = computed(() => linePreview.value?.error ?? '');
-
 function clearLineDraft(): void {
   lineStart.value = null;
 }
 
 function setDocument(nextDocument: EditorDocument): void {
   documentRef.value = nextDocument;
+  clearStatusNotice();
+}
+
+function clearStatusNoticeTimer(): void {
+  if (statusNoticeTimer !== null) {
+    window.clearTimeout(statusNoticeTimer);
+    statusNoticeTimer = null;
+  }
+}
+
+function clearStatusNotice(): void {
+  clearStatusNoticeTimer();
   statusNotice.value = '';
+}
+
+function showStatusNotice(message: string): void {
+  statusNotice.value = message;
+  clearStatusNoticeTimer();
+  statusNoticeTimer = window.setTimeout(() => {
+    statusNotice.value = '';
+    statusNoticeTimer = null;
+  }, SAVE_NOTICE_TIMEOUT_MS);
+}
+
+function clearPlacementBubbleTimers(): void {
+  if (placementBubbleHideTimer !== null) {
+    window.clearTimeout(placementBubbleHideTimer);
+    placementBubbleHideTimer = null;
+  }
+  if (placementBubbleClearTimer !== null) {
+    window.clearTimeout(placementBubbleClearTimer);
+    placementBubbleClearTimer = null;
+  }
+}
+
+function clearPlacementBubble(): void {
+  clearPlacementBubbleTimers();
+  placementBubble.value = null;
+}
+
+function dismissPlacementBubble(): void {
+  if (!placementBubble.value) {
+    return;
+  }
+  clearPlacementBubbleTimers();
+  if (!placementBubble.value.visible) {
+    placementBubble.value = null;
+    return;
+  }
+  placementBubble.value = {
+    ...placementBubble.value,
+    visible: false,
+  };
+  placementBubbleClearTimer = window.setTimeout(() => {
+    placementBubble.value = null;
+    placementBubbleClearTimer = null;
+  }, PLACEMENT_BUBBLE_FADE_MS);
+}
+
+function showPlacementBubble(event: MouseEvent, message: string): void {
+  const surface = editorSurfaceRef.value ?? canvasRef.value;
+  if (!surface) {
+    return;
+  }
+  const rect = surface.getBoundingClientRect();
+  const maxLeft = Math.max(12, rect.width - 228);
+  const maxTop = Math.max(12, rect.height - 52);
+  const left = Math.max(12, Math.min(event.clientX - rect.left + 14, maxLeft));
+  const top = Math.max(12, Math.min(event.clientY - rect.top - 8, maxTop));
+
+  clearPlacementBubbleTimers();
+  placementBubble.value = {
+    text: message,
+    x: left,
+    y: top,
+    visible: false,
+  };
+  window.requestAnimationFrame(() => {
+    if (!placementBubble.value || placementBubble.value.text !== message) {
+      return;
+    }
+    placementBubble.value = {
+      ...placementBubble.value,
+      visible: true,
+    };
+  });
+  placementBubbleHideTimer = window.setTimeout(() => {
+    dismissPlacementBubble();
+  }, PLACEMENT_BUBBLE_TIMEOUT_MS);
 }
 
 function requestRender(): void {
@@ -244,7 +342,14 @@ function requestRender(): void {
     if (!canvas) {
       return;
     }
-    renderEditor(canvas, documentRef.value, viewport.value, hoverCell.value, linePreview.value);
+    renderEditor(
+      canvas,
+      documentRef.value,
+      viewport.value,
+      hoverCell.value,
+      linePreview.value,
+      hoverBlocked.value,
+    );
   });
 }
 
@@ -318,6 +423,7 @@ function updateHover(event: MouseEvent): void {
 }
 
 function handleMouseDown(event: MouseEvent): void {
+  dismissPlacementBubble();
   if (event.button === 1 || (event.button === 0 && spacePressed)) {
     event.preventDefault();
     panning = {
@@ -331,6 +437,7 @@ function handleMouseDown(event: MouseEvent): void {
 }
 
 function handleMouseMove(event: MouseEvent): void {
+  dismissPlacementBubble();
   if (panning) {
     viewport.value = {
       ...viewport.value,
@@ -344,6 +451,7 @@ function handleMouseMove(event: MouseEvent): void {
 }
 
 function handleMouseLeave(): void {
+  dismissPlacementBubble();
   hoverCell.value = null;
   requestRender();
 }
@@ -354,6 +462,7 @@ function handleMouseUp(): void {
 
 function handleWheel(event: WheelEvent): void {
   event.preventDefault();
+  dismissPlacementBubble();
   const point = relativePoint(event);
   if (!point) {
     return;
@@ -368,28 +477,29 @@ function handleWheel(event: WheelEvent): void {
   requestRender();
 }
 
-function beginLineAt(cell: Point): void {
+function beginLineAt(cell: Point, event: MouseEvent): void {
   if (documentRef.value.occupied.has(`${cell.x},${cell.y}`)) {
-    error.value = 'That cell is already occupied.';
+    showPlacementBubble(event, 'That cell is already occupied.');
     return;
   }
   lineStart.value = cell;
-  statusNotice.value = '';
-  error.value = '';
+  clearStatusNotice();
 }
 
-function commitLineAt(cell: Point): void {
+function commitLineAt(cell: Point, event: MouseEvent): void {
   if (!lineStart.value) {
-    beginLineAt(cell);
+    beginLineAt(cell, event);
     return;
   }
 
   try {
     setDocument(placeLinePrimitive(documentRef.value, lineStart.value, cell, currentSpacing.value));
     clearLineDraft();
-    error.value = '';
   } catch (err) {
-    error.value = err instanceof Error ? err.message : 'Failed to place line.';
+    showPlacementBubble(
+      event,
+      err instanceof Error ? err.message : 'Failed to place line.',
+    );
   }
 }
 
@@ -410,32 +520,23 @@ function handleClick(event: MouseEvent): void {
     return;
   }
   if (activeTool.value === 'line') {
-    commitLineAt(cell);
+    commitLineAt(cell, event);
     return;
   }
   try {
     setDocument(placeSinglePrimitive(documentRef.value, cell.x, cell.y));
-    error.value = '';
   } catch (err) {
-    error.value = err instanceof Error ? err.message : 'Failed to place LED.';
+    showPlacementBubble(
+      event,
+      err instanceof Error ? err.message : 'Failed to place LED.',
+    );
   }
-}
-
-function shiftCurrentIndex(delta: number): void {
-  setDocument(incrementCurrentIndex(documentRef.value, delta));
 }
 
 function undo(): void {
   setDocument(undoLastPrimitive(documentRef.value));
-  error.value = '';
   clearLineDraft();
-}
-
-function resetDocument(): void {
-  setDocument(cloneDocument(baselineDocument.value));
-  clearLineDraft();
-  error.value = '';
-  void resetViewport();
+  dismissPlacementBubble();
 }
 
 function backToDevices(): void {
@@ -445,8 +546,8 @@ function backToDevices(): void {
 function selectTool(tool: Tool): void {
   activeTool.value = tool;
   clearLineDraft();
-  error.value = '';
-  statusNotice.value = '';
+  clearStatusNotice();
+  dismissPlacementBubble();
 }
 
 async function save(): Promise<void> {
@@ -464,9 +565,11 @@ async function save(): Promise<void> {
     });
     baselineDocument.value = cloneDocument(documentRef.value);
     baseCsvHash.value = response.editor?.csv_hash ?? null;
-    statusNotice.value = 'Saved.';
+    error.value = '';
+    showStatusNotice('Saved');
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'Failed to save layout.';
+    clearStatusNotice();
   } finally {
     saving.value = false;
   }
@@ -482,8 +585,8 @@ function handleKeyDown(event: KeyboardEvent): void {
   if (event.code === 'Escape' && lineStart.value) {
     event.preventDefault();
     clearLineDraft();
-    statusNotice.value = '';
-    error.value = '';
+    clearStatusNotice();
+    dismissPlacementBubble();
   }
 }
 
@@ -571,6 +674,8 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  clearStatusNoticeTimer();
+  clearPlacementBubble();
   window.removeEventListener('mouseup', handleMouseUp);
   window.removeEventListener('keydown', handleKeyDown);
   window.removeEventListener('keyup', handleKeyUp);
@@ -601,52 +706,66 @@ onBeforeUnmount(() => {
             <IconBack />
             <span>Back</span>
           </button>
-          <div class="editor-device-meta">
-            <p class="editor-device-label">Layout Editor</p>
-            <strong class="editor-device-name">{{ routeState.device.deviceUid }}</strong>
-            <p class="editor-device-copy">
-              strip {{ routeState.device.strip }} · {{ routeState.device.length }} px · {{ toolDescription }}
-            </p>
-          </div>
+          <strong class="editor-device-summary">
+            {{ routeState.device.deviceUid }} · {{ routeState.device.strip }} · {{ routeState.device.length }} px
+          </strong>
         </div>
 
         <div class="editor-command-center">
-          <div class="toolbar-group">
-            <span class="toolbar-label">Tool</span>
-            <div class="tool-buttons">
-              <button
-                type="button"
-                class="tool-button"
-                :class="{ 'tool-button-active': activeTool === 'single' }"
-                :disabled="loadingLayout || saving"
-                @click="selectTool('single')"
-              >
-                <IconSingle />
-                <span>Single</span>
-              </button>
-              <button
-                type="button"
-                class="tool-button"
-                :class="{ 'tool-button-active': activeTool === 'line' }"
-                :disabled="loadingLayout || saving"
-                @click="selectTool('line')"
-              >
-                <IconLineTool />
-                <span>Line</span>
-              </button>
-            </div>
+          <div class="tool-buttons">
+            <button
+              type="button"
+              class="tool-button"
+              :class="{ 'tool-button-active': activeTool === 'single' }"
+              :disabled="loadingLayout || saving"
+              @click="selectTool('single')"
+              title="Single LED tool"
+            >
+              <IconSingle />
+              <span>Single</span>
+            </button>
+            <button
+              type="button"
+              class="tool-button"
+              :class="{ 'tool-button-active': activeTool === 'line' }"
+              :disabled="loadingLayout || saving"
+              @click="selectTool('line')"
+              title="Line tool"
+            >
+              <IconLineTool />
+              <span>Line</span>
+            </button>
           </div>
+          <label v-if="activeTool === 'line'" class="editor-inline-control">
+            <span class="editor-inline-label">Spacing</span>
+            <input
+              v-model.number="lineSpacing"
+              class="spacing-input"
+              min="0"
+              step="1"
+              type="number"
+              :disabled="loadingLayout || saving"
+            />
+          </label>
         </div>
 
         <div class="editor-command-right">
+          <strong class="editor-placed-count">{{ placedCount }} / {{ deviceLength }}</strong>
           <button type="button" class="ghost-button" :disabled="!canUndo" @click="undo">
             <IconUndo />
             <span>Undo</span>
           </button>
-          <button type="button" class="ghost-button" :disabled="loadingLayout || saving" @click="resetDocument">
-            <IconReset />
-            <span>Reset</span>
-          </button>
+          <div
+            class="editor-toolbar-notice"
+            :class="{
+              'editor-toolbar-notice-error': error,
+              'editor-toolbar-notice-saved': !error && statusNotice,
+            }"
+            :title="error || statusNotice || undefined"
+            aria-live="polite"
+          >
+            <span>{{ error || statusNotice }}</span>
+          </div>
           <button
             type="button"
             class="primary-button editor-save-button"
@@ -661,59 +780,8 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <div class="editor-context-bar">
-        <div class="editor-context-group">
-          <span class="editor-context-label">Index</span>
-          <div class="index-controls editor-context-controls">
-            <button type="button" @click="shiftCurrentIndex(-1)" :disabled="loadingLayout || saving">
-              &lt;
-            </button>
-            <strong>{{ currentIndex }}</strong>
-            <span>/ {{ deviceLength }}</span>
-            <button type="button" @click="shiftCurrentIndex(1)" :disabled="loadingLayout || saving">
-              &gt;
-            </button>
-          </div>
-        </div>
-
-        <div class="editor-context-group">
-          <span class="editor-context-label">Placed</span>
-          <strong class="editor-context-value">{{ placedCount }} / {{ deviceLength }}</strong>
-        </div>
-
-        <div v-if="activeTool === 'line'" class="editor-context-group">
-          <span class="editor-context-label">Spacing</span>
-          <input v-model.number="lineSpacing" class="spacing-input" min="0" step="1" type="number" />
-        </div>
-
-        <div v-if="activeTool === 'line'" class="editor-context-group">
-          <span class="editor-context-label">Preview</span>
-          <strong class="editor-context-value" v-if="lineStart">
-            {{ previewCount ? `${previewCount} LEDs` : 'Pick an end point' }}
-          </strong>
-          <strong class="editor-context-value" v-else>Pick a start point</strong>
-        </div>
-
-        <div class="editor-context-group">
-          <span class="editor-context-label">Zoom</span>
-          <strong class="editor-context-value">{{ MIN_ZOOM }}-{{ MAX_ZOOM }}</strong>
-        </div>
-      </div>
-
-      <p v-if="error" class="editor-error">{{ error }}</p>
-      <p v-else-if="activeTool === 'line' && previewError" class="editor-error">{{ previewError }}</p>
-      <p v-else-if="statusNotice" class="editor-saved">{{ statusNotice }}</p>
-      <p v-else class="editor-note">
-        <template v-if="activeTool === 'single'">
-          Click to place the current index. Use the wheel to zoom and hold space while dragging to pan.
-        </template>
-        <template v-else>
-          Click once to set the line start, move to preview, and click again to confirm. Press Escape to cancel the line draft.
-        </template>
-      </p>
-
       <div v-if="loadingLayout" class="editor-loading">Loading layout…</div>
-      <div v-else class="editor-surface">
+      <div v-else ref="editorSurfaceRef" class="editor-surface">
         <canvas
           ref="canvasRef"
           class="editor-canvas"
@@ -723,6 +791,16 @@ onBeforeUnmount(() => {
           @click="handleClick"
           @wheel="handleWheel"
         />
+        <div
+          v-if="placementBubble"
+          class="editor-placement-bubble"
+          :class="{ 'editor-placement-bubble-visible': placementBubble.visible }"
+          :style="{ left: `${placementBubble.x}px`, top: `${placementBubble.y}px` }"
+          role="status"
+          aria-live="polite"
+        >
+          {{ placementBubble.text }}
+        </div>
       </div>
     </section>
   </main>
@@ -733,13 +811,15 @@ onBeforeUnmount(() => {
   height: 100%;
   min-height: 0;
   overflow: hidden;
-  padding: 1.5rem;
+  display: grid;
+  padding: 0.9rem 0.9rem 1.25rem;
 }
 
 .editor-state-panel,
 .editor-page-panel {
   min-height: 0;
-  padding: 1rem;
+  padding: 0.8rem 0.8rem 1rem;
+  height: 100%;
 }
 
 .editor-state-actions {
@@ -750,17 +830,18 @@ onBeforeUnmount(() => {
 
 .editor-page-panel {
   display: grid;
-  grid-template-rows: auto auto auto 1fr;
-  gap: 1rem;
+  grid-template-rows: auto 1fr;
+  gap: 0.75rem;
   min-height: 0;
+  overflow: hidden;
 }
 
 .editor-command-bar {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 1rem;
-  padding: 0.85rem 1rem;
+  align-items: center;
+  gap: 0.8rem;
+  padding: 0.65rem 0.8rem;
   border-radius: var(--radius-panel);
   border: 1px solid var(--panel-edge);
   background: rgba(255, 255, 255, 0.025);
@@ -770,105 +851,48 @@ onBeforeUnmount(() => {
 .editor-command-right {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: 0.55rem;
+  flex-wrap: wrap;
 }
 
 .editor-command-left {
   min-width: 0;
 }
 
+.editor-command-right {
+  justify-content: flex-end;
+}
+
 .editor-command-center {
   display: flex;
-  align-items: start;
+  align-items: center;
   justify-content: center;
-  gap: 1rem;
+  gap: 0.75rem;
   flex-wrap: wrap;
   min-width: 0;
 }
 
-.editor-device-meta {
+.editor-device-summary {
   min-width: 0;
-  display: grid;
-  gap: 0.18rem;
-}
-
-.editor-device-label {
   margin: 0;
-  color: var(--muted);
+  color: var(--text);
+  font-size: 0.82rem;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.16em;
-  font-size: 0.58rem;
-  font-weight: 700;
-}
-
-.editor-device-name {
-  font-size: 0.98rem;
-  font-weight: 700;
   letter-spacing: 0.04em;
-  text-transform: uppercase;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.editor-device-copy {
-  margin: 0;
-  color: var(--muted);
-  font-size: 0.78rem;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.toolbar-group {
-  display: grid;
-  gap: 0.25rem;
-}
-
-.editor-context-bar {
+.tool-buttons {
   display: flex;
   align-items: center;
-  gap: 1rem;
+  gap: 0.4rem;
   flex-wrap: wrap;
-  padding: 0.65rem 1rem;
-  border-radius: var(--radius-panel);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(255, 255, 255, 0.02);
-}
-
-.editor-context-group {
-  display: grid;
-  gap: 0.22rem;
-}
-
-.editor-context-label {
-  font-size: 0.68rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--muted);
-}
-
-.editor-context-value {
-  font-size: 0.84rem;
-  font-weight: 700;
-}
-
-.toolbar-label {
-  font-size: 0.74rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--muted);
-}
-
-.tool-buttons,
-.index-controls {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
 }
 
 .tool-button,
-.index-controls button,
 .spacing-input {
   display: inline-flex;
   align-items: center;
@@ -876,7 +900,7 @@ onBeforeUnmount(() => {
   gap: 0.42rem;
   border: 1px solid var(--panel-edge);
   border-radius: var(--radius-tight);
-  padding: 0.55rem 0.9rem;
+  padding: 0.42rem 0.68rem;
   background: rgba(255, 255, 255, 0.04);
   color: var(--text);
 }
@@ -885,50 +909,33 @@ onBeforeUnmount(() => {
   cursor: pointer;
 }
 
+.editor-inline-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.editor-inline-label {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 .tool-button-active {
   border-color: rgba(108, 162, 255, 0.38);
   background: rgba(108, 162, 255, 0.16);
 }
 
 .spacing-input {
-  width: 6rem;
+  width: 4.6rem;
 }
 
-.editor-context-controls {
-  gap: 0.35rem;
-}
-
-.index-controls button:disabled,
 .tool-button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
-}
-
-.editor-error,
-.editor-saved,
-.editor-note {
-  margin: 0;
-  padding: 0.75rem 0.9rem;
-  border-radius: var(--radius-panel);
-}
-
-.editor-error {
-  border: 1px solid rgba(239, 68, 68, 0.35);
-  background: var(--status-dropped-soft);
-  color: #ffdede;
-}
-
-.editor-saved {
-  border: 1px solid rgba(108, 162, 255, 0.35);
-  background: rgba(108, 162, 255, 0.14);
-  color: #f7f3eb;
-}
-
-.editor-note {
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(255, 255, 255, 0.025);
-  color: var(--muted);
-  font-size: 0.84rem;
 }
 
 .editor-loading,
@@ -947,6 +954,10 @@ onBeforeUnmount(() => {
 
 .editor-surface {
   overflow: hidden;
+  position: relative;
+  box-shadow:
+    inset 0 -1px 0 rgba(255, 255, 255, 0.035),
+    0 10px 22px rgba(0, 0, 0, 0.12);
 }
 
 .editor-canvas {
@@ -960,8 +971,46 @@ onBeforeUnmount(() => {
   flex: 0 0 auto;
 }
 
+.editor-placed-count {
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
 .editor-save-button {
   position: relative;
+}
+
+.editor-toolbar-notice {
+  width: 13rem;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.2;
+  text-align: right;
+}
+
+.editor-toolbar-notice span {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0;
+  transition: opacity 160ms ease;
+}
+
+.editor-toolbar-notice-error span,
+.editor-toolbar-notice-saved span {
+  opacity: 1;
+}
+
+.editor-toolbar-notice-error {
+  color: #ffdede;
+}
+
+.editor-toolbar-notice-saved {
+  color: var(--status-online);
 }
 
 .editor-save-button-dirty {
@@ -976,13 +1025,39 @@ onBeforeUnmount(() => {
   flex: 0 0 auto;
 }
 
+.editor-placement-bubble {
+  position: absolute;
+  z-index: 2;
+  max-width: 13rem;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid rgba(239, 68, 68, 0.42);
+  border-radius: var(--radius-tight);
+  background: rgba(10, 12, 18, 0.96);
+  color: #ffdede;
+  font-size: 0.74rem;
+  line-height: 1.25;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.32);
+  opacity: 0;
+  transform: translateY(-6px);
+  pointer-events: none;
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
+}
+
+.editor-placement-bubble-visible {
+  opacity: 1;
+  transform: translateY(-12px);
+}
+
 @media (max-width: 900px) {
   .editor-page {
-    padding: 1rem;
+    padding: 0.75rem 0.75rem 1rem;
   }
 
   .editor-command-bar {
     grid-template-columns: 1fr;
+    justify-items: stretch;
   }
 
   .editor-command-left,
@@ -995,8 +1070,10 @@ onBeforeUnmount(() => {
     justify-content: flex-start;
   }
 
-  .editor-context-bar {
-    align-items: stretch;
+  .editor-toolbar-notice {
+    width: 100%;
+    text-align: left;
+    order: 3;
   }
 }
 </style>

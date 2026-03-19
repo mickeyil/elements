@@ -19,11 +19,14 @@ export interface EditorPreview {
 const SURFACE = '#081015';
 const GRID_LINE = 'rgba(255, 255, 255, 0.08)';
 const HOVER = 'rgba(108, 162, 255, 0.18)';
+const HOVER_BLOCKED = 'rgba(182, 83, 83, 0.24)';
 const PLACED = '#6ca2ff';
 const PREVIEW = 'rgba(108, 162, 255, 0.42)';
 const PREVIEW_BLOCKED = 'rgba(182, 83, 83, 0.36)';
+const PREVIEW_COLLISION = 'rgba(161, 34, 34, 0.62)';
 const ANCHOR = 'rgba(108, 162, 255, 0.28)';
 const LABEL = '#091015';
+const COLLISION_MARK = '#ffe0e0';
 
 export function clampZoom(nextZoom: number): number {
   return Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, nextZoom));
@@ -89,6 +92,7 @@ function drawCell(
   viewport: EditorViewport,
   cell: { x: number; y: number; index: number },
   color: string,
+  options?: { showIndex?: boolean; marker?: string; markerZoomThreshold?: number },
 ): void {
   const inset = Math.max(1.5, viewport.zoom * 0.14);
   const sx = viewport.offsetX + cell.x * viewport.zoom;
@@ -102,7 +106,16 @@ function drawCell(
     Math.max(1, viewport.zoom - inset * 2),
   );
 
-  if (viewport.zoom >= 16) {
+  if (options?.marker && viewport.zoom >= (options.markerZoomThreshold ?? 10)) {
+    ctx.fillStyle = COLLISION_MARK;
+    ctx.font = `${Math.max(10, viewport.zoom * 0.52)}px "Elements Mono", monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(options.marker, sx + viewport.zoom / 2, sy + viewport.zoom / 2);
+    return;
+  }
+
+  if (options?.showIndex !== false && viewport.zoom >= 16) {
     ctx.fillStyle = LABEL;
     ctx.font = `${Math.max(10, viewport.zoom * 0.42)}px "Elements Mono", monospace`;
     ctx.textAlign = 'center';
@@ -117,6 +130,7 @@ export function renderEditor(
   viewport: EditorViewport,
   hoverCell: Point | null,
   preview: EditorPreview | null,
+  hoverBlocked = false,
 ): void {
   resizeCanvasToDisplaySize(canvas);
   const ctx = canvas.getContext('2d');
@@ -156,7 +170,7 @@ export function renderEditor(
   if (hoverCell) {
     const sx = viewport.offsetX + hoverCell.x * viewport.zoom;
     const sy = viewport.offsetY + hoverCell.y * viewport.zoom;
-    ctx.fillStyle = HOVER;
+    ctx.fillStyle = hoverBlocked ? HOVER_BLOCKED : HOVER;
     ctx.fillRect(sx, sy, viewport.zoom, viewport.zoom);
   }
 
@@ -180,7 +194,14 @@ export function renderEditor(
       if (cell.x < startX - 1 || cell.x > endX || cell.y < startY - 1 || cell.y > endY) {
         continue;
       }
-      drawCell(ctx, viewport, cell, color);
+      const isCollision = document.occupied.has(`${cell.x},${cell.y}`);
+      drawCell(
+        ctx,
+        viewport,
+        cell,
+        isCollision ? PREVIEW_COLLISION : color,
+        isCollision ? { showIndex: false, marker: 'X', markerZoomThreshold: 10 } : undefined,
+      );
     }
   }
 }
