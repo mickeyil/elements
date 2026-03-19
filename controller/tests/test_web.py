@@ -1,4 +1,5 @@
 import asyncio
+import json
 import signal
 import elemctl.web as web_mod
 import pytest
@@ -292,6 +293,101 @@ def test_save_layout_response_rejects_invalid_payload(tmp_path):
 
     assert status == 400
     assert payload == {'error': 'editor primitives do not match rows'}
+
+
+def test_create_device_response_forwards_add_device(monkeypatch, tmp_path):
+    relay = WebRelay('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+    commands: list[dict] = []
+
+    class FakeClient:
+        def __init__(self, socket_path: str, timeout: float, role: str) -> None:
+            assert socket_path == '/tmp/elemctl.sock'
+            assert role == web_mod.ROLE_WRITER
+            self._reads = [
+                [
+                    (
+                        web_mod.KIND_JSON,
+                        json.dumps({'type': 'event', 'event': 'snapshot'}).encode('utf-8'),
+                    ),
+                ],
+                [
+                    (
+                        web_mod.KIND_JSON,
+                        json.dumps({
+                            'type': 'reply',
+                            'id': 1,
+                            'ok': True,
+                            'result': {'message': 'added device sim-1'},
+                        }).encode('utf-8'),
+                    ),
+                ],
+            ]
+
+        def next_id(self) -> int:
+            return 1
+
+        def send_cmd(self, cmd: dict) -> None:
+            commands.append(cmd)
+
+        def recv_once(self) -> list[tuple[int, bytes]]:
+            return self._reads.pop(0)
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(web_mod, 'UdsClient', FakeClient)
+
+    status, payload = relay._create_device_response({
+        'device_type': 'sim',
+        'device_uid': 'sim-1',
+        'strip_id': 'main',
+        'length': 60,
+    })
+
+    assert status == 200
+    assert payload == {'ok': True, 'result': {'message': 'added device sim-1'}}
+    assert commands == [{
+        'id': 1,
+        'cmd': 'add_device',
+        'device_type': 'sim',
+        'device_uid': 'sim-1',
+        'strip_id': 'main',
+        'length': 60,
+    }]
+
+
+def test_create_device_response_rejects_invalid_payload(tmp_path):
+    relay = WebRelay('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+
+    status, payload = relay._create_device_response({
+        'device_type': 'sim',
+        'device_uid': 'sim-1',
+        'strip_id': '',
+        'length': 60,
+    })
+
+    assert status == 400
+    assert payload == {'error': 'strip_id must be a non-empty string'}
+
+
+def test_create_device_response_returns_503_when_controller_unavailable(monkeypatch, tmp_path):
+    relay = WebRelay('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+
+    class FailingClient:
+        def __init__(self, socket_path: str, timeout: float, role: str) -> None:
+            raise ConnectionError('hello failed')
+
+    monkeypatch.setattr(web_mod, 'UdsClient', FailingClient)
+
+    status, payload = relay._create_device_response({
+        'device_type': 'sim',
+        'device_uid': 'sim-1',
+        'strip_id': 'main',
+        'length': 60,
+    })
+
+    assert status == 503
+    assert payload == {'error': 'controller unavailable: hello failed'}
 
 
 def test_read_http_body_rejects_oversized_request(tmp_path):

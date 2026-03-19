@@ -2976,14 +2976,28 @@ class TestUdsReconnect:
 
 
 class TestUdsRoles:
-    def test_second_writer_rejected(self, uds_service):
+    def test_multiple_writers_allowed(self, uds_service):
         socket_path, _, _ = uds_service
-        writer = UdsClient(socket_path)
+        writer1 = UdsClient(socket_path)
+        writer2 = UdsClient(socket_path)
         try:
-            with pytest.raises(ConnectionError, match='writer role already in use'):
-                UdsClient(socket_path)
+            writer1.recv_messages(timeout=0.5)
+            writer2.recv_messages(timeout=0.5)
+
+            writer1.send_cmd({'id': 1, 'cmd': 'status'})
+            writer2.send_cmd({'id': 2, 'cmd': 'status'})
+
+            replies1 = _json_dicts(writer1.recv_messages(timeout=1.0))
+            replies2 = _json_dicts(writer2.recv_messages(timeout=1.0))
+
+            reply1 = next(r for r in replies1 if r.get('type') == 'reply' and r.get('id') == 1)
+            reply2 = next(r for r in replies2 if r.get('type') == 'reply' and r.get('id') == 2)
+
+            assert reply1['ok'] is True
+            assert reply2['ok'] is True
         finally:
-            writer.close()
+            writer2.close()
+            writer1.close()
 
     def test_multiple_observers_allowed(self, uds_service):
         socket_path, _, _ = uds_service
@@ -3015,7 +3029,7 @@ class TestUdsRoles:
         finally:
             observer.close()
 
-    def test_writer_disconnect_frees_slot(self, uds_service):
+    def test_writer_disconnect_does_not_block_new_writer(self, uds_service):
         socket_path, _, _ = uds_service
         writer1 = UdsClient(socket_path)
         writer1.close()

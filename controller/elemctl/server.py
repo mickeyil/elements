@@ -140,7 +140,6 @@ class UdsServer:
 
         self._server_sock: socket.socket | None = None
         self._clients: dict[int, _ClientConn] = {}
-        self._writer_fd: int | None = None
 
     def run(self) -> None:
         """Blocking main loop. Returns when shutdown or stopped."""
@@ -324,19 +323,9 @@ class UdsServer:
             )
             return True
 
-        if role == ROLE_WRITER and self._writer_fd is not None:
-            self._send_reply(
-                client,
-                cmd_id,
-                ok=False,
-                error='writer role already in use',
-            )
-            return True
-
         client.role = role
         client.hello_ok = True
         if role == ROLE_WRITER:
-            self._writer_fd = client.sock.fileno()
             self._service.probe_all()
 
         self._send_reply(client, cmd_id, ok=True, result={'role': role})
@@ -387,8 +376,6 @@ class UdsServer:
 
     def _close_client(self, client: _ClientConn) -> None:
         fd = client.sock.fileno()
-        if fd == self._writer_fd:
-            self._writer_fd = None
         self._clients.pop(fd, None)
         role = client.role
         desc = client.desc

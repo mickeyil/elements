@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { RouterLink } from 'vue-router';
 
+import NewDeviceModal from '../components/NewDeviceModal.vue';
 import { useInjectedRelayState, type SnapshotDevice } from '../composables/useRelayState';
 
 type DeviceStatus = 'online' | 'dropped' | 'offline';
@@ -11,8 +12,9 @@ interface StatusCardDevice extends SnapshotDevice {
   hasLayout: boolean;
 }
 
-const { snapshot } = useInjectedRelayState();
+const { controllerConnected, snapshot } = useInjectedRelayState();
 const openMenuUid = ref<string | null>(null);
+const showNewDeviceModal = ref(false);
 
 const layouts = computed<Record<string, unknown>>(() => {
   const value = snapshot.value?.layouts;
@@ -115,6 +117,17 @@ function closeMenu(): void {
   openMenuUid.value = null;
 }
 
+function openNewDeviceModal(): void {
+  if (!controllerConnected.value) {
+    return;
+  }
+  showNewDeviceModal.value = true;
+}
+
+function closeNewDeviceModal(): void {
+  showNewDeviceModal.value = false;
+}
+
 function handleDocumentPointer(event: MouseEvent): void {
   const target = event.target;
   if (!(target instanceof Element) || !target.closest('[data-device-menu]')) {
@@ -143,18 +156,28 @@ onBeforeUnmount(() => {
   <main class="status-page page-scroll">
     <div class="status-frame">
       <div class="status-toolbar">
-        <div class="status-toolbar-label">Device Inventory</div>
         <div v-if="snapshot && devices.length" class="status-inline-summary" aria-label="Device status summary">
           <span v-if="counts.dropped" class="status-summary-dropped">{{ counts.dropped }} dropped</span>
           <span v-if="counts.online" class="status-summary-online">{{ counts.online }} online</span>
           <span v-if="counts.offline" class="status-summary-offline">{{ counts.offline }} offline</span>
         </div>
+        <div v-else class="status-toolbar-spacer" />
+        <button
+          type="button"
+          class="action-button status-new-device-button"
+          :disabled="!controllerConnected"
+          :title="controllerConnected ? 'Create a configured device' : 'Controller offline'"
+          @click="openNewDeviceModal"
+        >
+          <span class="status-new-device-plus" aria-hidden="true">+</span>
+          <span>New device</span>
+        </button>
       </div>
 
       <div v-if="!snapshot" class="panel">
         <div class="empty-state">
-          <h2>Waiting for snapshot</h2>
-          <p>The relay has not delivered device metadata yet.</p>
+          <h2>Loading devices</h2>
+          <p>Device data is not available yet.</p>
         </div>
       </div>
 
@@ -217,6 +240,13 @@ onBeforeUnmount(() => {
         </article>
       </section>
     </div>
+
+    <NewDeviceModal
+      v-if="showNewDeviceModal"
+      :controller-connected="controllerConnected"
+      @close="closeNewDeviceModal"
+      @created="closeNewDeviceModal"
+    />
   </main>
 </template>
 
@@ -243,14 +273,6 @@ onBeforeUnmount(() => {
   border-bottom: 1px solid rgba(59, 73, 76, 0.15);
 }
 
-.status-toolbar-label {
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.18em;
-  font-size: 0.68rem;
-  font-weight: 700;
-}
-
 .status-inline-summary {
   display: inline-flex;
   align-items: center;
@@ -260,6 +282,19 @@ onBeforeUnmount(() => {
   letter-spacing: 0.14em;
   font-size: 0.64rem;
   font-weight: 700;
+}
+
+.status-toolbar-spacer {
+  flex: 1 1 auto;
+}
+
+.status-new-device-button {
+  flex: 0 0 auto;
+}
+
+.status-new-device-plus {
+  font-size: 1rem;
+  line-height: 1;
 }
 
 .status-summary-online {

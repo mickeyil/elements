@@ -33,7 +33,7 @@ const footerStatus = computed(() => {
       <nav class="app-nav" aria-label="Primary">
         <RouterLink class="app-nav-link" to="/">
           <IconDevices />
-          <span>Status</span>
+          <span>Devices</span>
         </RouterLink>
         <RouterLink class="app-nav-link" to="/viewer">
           <IconSimulation />

@@ -1,4 +1,4 @@
-"""Observer-only web relay for the Elements controller."""
+"""Web relay for the Elements controller."""
 
 from __future__ import annotations
 
@@ -39,7 +39,14 @@ from .sim_layout import (
 )
 from .slogger import configure_logger
 from .uds_client import UdsClient
-from .uds_wire import KIND_FRAME, KIND_JSON, PROTOCOL_VERSION, ROLE_OBSERVER, parse_json_payload
+from .uds_wire import (
+    KIND_FRAME,
+    KIND_JSON,
+    PROTOCOL_VERSION,
+    ROLE_OBSERVER,
+    ROLE_WRITER,
+    parse_json_payload,
+)
 from .version import get_runtime_version
 
 log = logging.getLogger(__name__)
@@ -151,6 +158,10 @@ def _layout_device_uid_from_path(path: str) -> str | None:
     if not device_uid or '/' in device_uid:
         return None
     return device_uid
+
+
+def _is_device_api_path(path: str) -> bool:
+    return path == '/api/devices'
 
 
 def _tailscale_urls(port: int) -> list[str]:
@@ -490,6 +501,10 @@ class WebRelay:
                 await self._handle_layout_api(method, path, headers, reader, writer)
                 return
 
+            if _is_device_api_path(path):
+                await self._handle_device_api(method, headers, reader, writer)
+                return
+
             if method != 'GET':
                 await self._write_http_response(writer, 405, b'method not allowed')
                 return
@@ -536,6 +551,66 @@ class WebRelay:
         await self._write_json_response(writer, status, response)
         if status == 200:
             await self._broadcast_json(self._snapshot)
+
+    async def _handle_device_api(
+        self,
+        method: str,
+        headers: dict[str, str],
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        if method != 'POST':
+            await self._write_http_response(writer, 405, b'method not allowed')
+            return
+
+        try:
+            body = await self._read_http_body(reader, headers)
+            payload = json.loads(body.decode('utf-8'))
+        except _HttpError as e:
+            await self._write_json_response(writer, e.status, {'error': e.message})
+            return
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            await self._write_json_response(writer, 400, {'error': 'invalid json body'})
+            return
+
+        status, response = self._create_device_response(payload)
+        await self._write_json_response(writer, status, response)
+
+    def _create_device_response(self, payload: object) -> tuple[int, dict]:
+        if not isinstance(payload, dict):
+            return 400, {'error': 'request body must be a JSON object'}
+
+        device_type = payload.get('device_type')
+        device_uid = payload.get('device_uid')
+        strip_id = payload.get('strip_id')
+        length = payload.get('length')
+
+        if device_type not in {'sim', 'esp32'}:
+            return 400, {'error': "device_type must be 'sim' or 'esp32'"}
+        if not isinstance(device_uid, str) or not device_uid:
+            return 400, {'error': 'device_uid must be a non-empty string'}
+        if not isinstance(strip_id, str) or not strip_id:
+            return 400, {'error': 'strip_id must be a non-empty string'}
+        if not isinstance(length, int) or isinstance(length, bool) or length < 1:
+            return 400, {'error': 'length must be a positive integer'}
+
+        try:
+            reply = self._send_controller_cmd({
+                'cmd': 'add_device',
+                'device_type': device_type,
+                'device_uid': device_uid,
+                'strip_id': strip_id,
+                'length': length,
+            })
+        except _HttpError as e:
+            return e.status, {'error': e.message}
+
+        if not reply.get('ok'):
+            error = reply.get('error')
+            return 400, {'error': error if isinstance(error, str) else 'controller command failed'}
+
+        result = reply.get('result')
+        return 200, {'ok': True, 'result': result if isinstance(result, dict) else {}}
 
     def _get_layout_response(self, device_uid: str) -> tuple[int, dict]:
         configured_length = self._sim_devices.get(device_uid)
@@ -692,6 +767,7 @@ class WebRelay:
             404: 'Not Found',
             405: 'Method Not Allowed',
             413: 'Payload Too Large',
+            503: 'Service Unavailable',
             500: 'Internal Server Error',
         }
         head = (
@@ -769,6 +845,32 @@ class WebRelay:
         transport = getattr(writer, 'transport', None)
         if transport is not None:
             transport.abort()
+
+    def _send_controller_cmd(self, cmd: dict) -> dict:
+        try:
+            client = UdsClient(self._socket_path, timeout=1.5, role=ROLE_WRITER)
+        except (ConnectionError, OSError) as e:
+            raise _HttpError(503, f'controller unavailable: {e}') from e
+
+        try:
+            cmd_id = client.next_id()
+            client.send_cmd({**cmd, 'id': cmd_id})
+            while True:
+                try:
+                    messages = client.recv_once()
+                except (ConnectionError, OSError) as e:
+                    raise _HttpError(503, f'controller unavailable: {e}') from e
+                for kind, payload in messages:
+                    if kind != KIND_JSON:
+                        continue
+                    try:
+                        msg = parse_json_payload(payload)
+                    except (json.JSONDecodeError, UnicodeDecodeError):
+                        continue
+                    if msg.get('type') == 'reply' and msg.get('id') == cmd_id:
+                        return msg
+        finally:
+            client.close()
 
 
 def _build_parser() -> argparse.ArgumentParser:
