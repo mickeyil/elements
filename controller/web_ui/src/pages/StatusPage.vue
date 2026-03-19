@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { RouterLink } from 'vue-router';
 
 import DeviceModal from '../components/DeviceModal.vue';
+import RemoveDeviceModal from '../components/RemoveDeviceModal.vue';
 import { useInjectedRelayState, type SnapshotDevice } from '../composables/useRelayState';
 
 type DeviceStatus = 'online' | 'dropped' | 'offline';
@@ -16,6 +17,7 @@ const { controllerConnected, snapshot } = useInjectedRelayState();
 const openMenuUid = ref<string | null>(null);
 const showNewDeviceModal = ref(false);
 const editingDevice = ref<StatusCardDevice | null>(null);
+const removingDevice = ref<StatusCardDevice | null>(null);
 
 const layouts = computed<Record<string, unknown>>(() => {
   const value = snapshot.value?.layouts;
@@ -145,6 +147,18 @@ function closeEditDeviceModal(): void {
   editingDevice.value = null;
 }
 
+function openRemoveDeviceModal(device: StatusCardDevice): void {
+  if (!device.device_uid || !controllerConnected.value) {
+    return;
+  }
+  removingDevice.value = device;
+  closeMenu();
+}
+
+function closeRemoveDeviceModal(): void {
+  removingDevice.value = null;
+}
+
 function handleDocumentPointer(event: MouseEvent): void {
   const target = event.target;
   if (!(target instanceof Element) || !target.closest('[data-device-menu]')) {
@@ -251,6 +265,15 @@ onBeforeUnmount(() => {
                     >
                       Edit device
                     </button>
+                    <button
+                      type="button"
+                      class="device-menu-item device-menu-item-danger"
+                      :disabled="!controllerConnected"
+                      :title="controllerConnected ? 'Remove device' : 'Controller offline'"
+                      @click="openRemoveDeviceModal(device)"
+                    >
+                      Remove device
+                    </button>
                     <RouterLink
                       v-if="device.device_type === 'sim'"
                       class="device-menu-item"
@@ -282,6 +305,13 @@ onBeforeUnmount(() => {
       :controller-connected="controllerConnected"
       @close="closeEditDeviceModal"
       @saved="closeEditDeviceModal"
+    />
+    <RemoveDeviceModal
+      v-if="removingDevice && removingDevice.device_uid"
+      :device-uid="removingDevice.device_uid"
+      :controller-connected="controllerConnected"
+      @close="closeRemoveDeviceModal"
+      @removed="closeRemoveDeviceModal"
     />
   </main>
 </template>
@@ -534,6 +564,10 @@ onBeforeUnmount(() => {
 
 .device-menu-item:disabled:hover {
   background: transparent;
+}
+
+.device-menu-item-danger {
+  color: #ffdede;
 }
 
 @media (max-width: 900px) {

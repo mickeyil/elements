@@ -61,3 +61,23 @@ export async function updateDevice(
 
   return data ?? {};
 }
+
+export async function removeDevice(deviceUid: string): Promise<Record<string, unknown>> {
+  const response = await fetch(`/api/devices/${encodeURIComponent(deviceUid)}`, {
+    method: 'DELETE',
+  });
+
+  let data: Record<string, unknown> | null = null;
+  try {
+    data = (await response.json()) as Record<string, unknown>;
+  } catch {
+    data = null;
+  }
+
+  if (!response.ok) {
+    const message = data?.error;
+    throw new Error(typeof message === 'string' ? message : 'Failed to remove device.');
+  }
+
+  return data ?? {};
+}

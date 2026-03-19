@@ -584,32 +584,66 @@ class WebRelay:
             pass
         elif method == 'PATCH' and _device_uid_from_path(path) is not None:
             pass
+        elif method == 'DELETE' and _device_uid_from_path(path) is not None:
+            pass
         else:
             await self._write_http_response(writer, 405, b'method not allowed')
             return
 
-        try:
-            body = await self._read_http_body(reader, headers)
-            payload = json.loads(body.decode('utf-8'))
-        except _HttpError as e:
-            await self._write_json_response(writer, e.status, {'error': e.message})
-            return
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            await self._write_json_response(writer, 400, {'error': 'invalid json body'})
-            return
-
         if method == 'POST' and path == '/api/devices':
+            try:
+                body = await self._read_http_body(reader, headers)
+                payload = json.loads(body.decode('utf-8'))
+            except _HttpError as e:
+                await self._write_json_response(writer, e.status, {'error': e.message})
+                return
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                await self._write_json_response(writer, 400, {'error': 'invalid json body'})
+                return
             status, response = self._create_device_response(payload)
             await self._write_json_response(writer, status, response)
             return
 
         device_uid = _device_uid_from_path(path)
         if method == 'PATCH' and device_uid is not None:
+            try:
+                body = await self._read_http_body(reader, headers)
+                payload = json.loads(body.decode('utf-8'))
+            except _HttpError as e:
+                await self._write_json_response(writer, e.status, {'error': e.message})
+                return
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                await self._write_json_response(writer, 400, {'error': 'invalid json body'})
+                return
             status, response = self._edit_device_response(device_uid, payload)
             await self._write_json_response(writer, status, response)
             return
 
+        if method == 'DELETE' and device_uid is not None:
+            status, response = self._remove_device_response(device_uid)
+            await self._write_json_response(writer, status, response)
+            return
+
         await self._write_http_response(writer, 405, b'method not allowed')
+
+    def _remove_device_response(self, device_uid: str) -> tuple[int, dict]:
+        if not isinstance(device_uid, str) or not device_uid:
+            return 400, {'error': 'device uid must be a non-empty string'}
+
+        try:
+            reply = self._send_controller_cmd({
+                'cmd': 'remove_device',
+                'device_uid': device_uid,
+            })
+        except _HttpError as e:
+            return e.status, {'error': e.message}
+
+        if not reply.get('ok'):
+            error = reply.get('error')
+            return 400, {'error': error if isinstance(error, str) else 'controller command failed'}
+
+        result = reply.get('result')
+        return 200, {'ok': True, 'result': result if isinstance(result, dict) else {}}
 
     def _edit_device_response(self, target_device_uid: str, payload: object) -> tuple[int, dict]:
         if not isinstance(payload, dict):
