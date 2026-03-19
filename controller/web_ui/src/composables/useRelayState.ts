@@ -51,6 +51,7 @@ export interface SessionState {
 export interface SnapshotEvent {
   devices?: SnapshotDevice[];
   layouts?: Record<string, LayoutPayload>;
+  relay_version?: string | null;
   session?: SessionState | null;
 }
 

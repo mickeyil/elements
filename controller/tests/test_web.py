@@ -96,7 +96,7 @@ def test_web_relay_initial_snapshot_includes_layouts():
 
 def test_snapshot_event_reapplies_layouts():
     layouts = {'sim-1': {'rows': [[1, None], [2, 3]]}}
-    relay = WebRelay('/tmp/elemctl.sock', '127.0.0.1', 8080, layouts)
+    relay = WebRelay('/tmp/elemctl.sock', '127.0.0.1', 8080, layouts, relay_version='v-test')
 
     relay._apply_json_message({
         'type': 'event',
@@ -110,6 +110,7 @@ def test_snapshot_event_reapplies_layouts():
     })
 
     assert relay._snapshot['layouts'] == layouts
+    assert relay._snapshot['relay_version'] == 'v-test'
 
 
 def test_make_disconnected_snapshot_preserves_layouts():
@@ -130,6 +131,24 @@ def test_make_disconnected_snapshot_preserves_layouts():
     assert out['layouts'] == {'sim-1': {'rows': [[1], [2]]}}
     assert out['session'] is None
     assert out['devices'][0]['connected'] is False
+
+
+def test_make_disconnected_snapshot_preserves_relay_version():
+    snap = {
+        'type': 'event',
+        'event': 'snapshot',
+        'protocol_version': PROTOCOL_VERSION,
+        'relay_version': 'v-test',
+        'online_count': 1,
+        'expected_count': 1,
+        'session': {'session_id': 7},
+        'devices': [{'device_id': 1, 'connected': True}],
+        'programs': [],
+    }
+
+    out = _make_disconnected_snapshot(snap)
+
+    assert out['relay_version'] == 'v-test'
 
 
 def test_resolve_asset_path_allows_nested_assets(tmp_path, monkeypatch):

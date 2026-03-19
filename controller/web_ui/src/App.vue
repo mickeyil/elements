@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, provide } from 'vue';
+import { computed, onBeforeUnmount, onMounted, provide, ref } from 'vue';
 import { RouterLink, RouterView } from 'vue-router';
 
 import IconDevices from './components/icons/IconDevices.vue';
@@ -9,7 +9,8 @@ import { relayStateKey, useRelayState } from './composables/useRelayState';
 const relayState = useRelayState();
 provide(relayStateKey, relayState);
 
-const { controllerConnected, relayConnected } = relayState;
+const { controllerConnected, relayConnected, snapshot } = relayState;
+const infoOpen = ref(false);
 
 const footerStatus = computed(() => {
   if (!relayConnected.value) {
@@ -20,6 +21,42 @@ const footerStatus = computed(() => {
   }
   return { label: 'Connected', className: 'app-footer-status-online' };
 });
+
+const relayVersion = computed(() => {
+  const value = snapshot.value?.relay_version;
+  return typeof value === 'string' && value ? value : 'unknown';
+});
+
+function toggleInfo(): void {
+  infoOpen.value = !infoOpen.value;
+}
+
+function closeInfo(): void {
+  infoOpen.value = false;
+}
+
+function handleDocumentPointer(event: MouseEvent): void {
+  const target = event.target;
+  if (!(target instanceof Element) || !target.closest('[data-app-info]')) {
+    closeInfo();
+  }
+}
+
+function handleKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Escape') {
+    closeInfo();
+  }
+}
+
+onMounted(() => {
+  document.addEventListener('click', handleDocumentPointer);
+  document.addEventListener('keydown', handleKeydown);
+});
+
+onBeforeUnmount(() => {
+  document.removeEventListener('click', handleDocumentPointer);
+  document.removeEventListener('keydown', handleKeydown);
+});
 </script>
 
 <template>
@@ -27,7 +64,6 @@ const footerStatus = computed(() => {
     <aside class="app-sidebar">
       <div class="app-branding">
         <strong class="app-title">ELEMENTS</strong>
-        <p class="app-eyebrow">Web Console</p>
       </div>
 
       <nav class="app-nav" aria-label="Primary">
@@ -50,6 +86,22 @@ const footerStatus = computed(() => {
       <div class="app-footer-status" :class="footerStatus.className">
         <span class="app-footer-dot" />
         <strong>{{ footerStatus.label }}</strong>
+      </div>
+      <div class="app-footer-spacer" />
+      <div class="app-footer-info" data-app-info>
+        <button
+          type="button"
+          class="app-footer-info-trigger"
+          aria-label="Application information"
+          title="Application information"
+          @click.stop="toggleInfo"
+        >
+          i
+        </button>
+        <div v-if="infoOpen" class="app-footer-info-popover">
+          <p class="app-footer-info-label">Version</p>
+          <p class="app-footer-info-value mono">{{ relayVersion }}</p>
+        </div>
       </div>
     </footer>
 
@@ -90,7 +142,6 @@ const footerStatus = computed(() => {
 
 .app-branding {
   display: grid;
-  gap: 0.3rem;
   padding: 0 1.5rem 1rem;
 }
 
@@ -100,15 +151,6 @@ const footerStatus = computed(() => {
   line-height: 1;
   letter-spacing: 0.08em;
   color: var(--accent);
-}
-
-.app-eyebrow {
-  margin: 0;
-  text-transform: uppercase;
-  letter-spacing: 0.22em;
-  font-size: 0.58rem;
-  font-weight: 700;
-  color: var(--muted);
 }
 
 .app-nav {
@@ -167,6 +209,10 @@ const footerStatus = computed(() => {
   gap: 0.45rem;
 }
 
+.app-footer-spacer {
+  flex: 1 1 auto;
+}
+
 .app-footer-dot {
   width: 0.52rem;
   height: 0.52rem;
@@ -181,6 +227,64 @@ const footerStatus = computed(() => {
 
 .app-footer-status-offline {
   color: var(--status-dropped);
+}
+
+.app-footer-info {
+  position: relative;
+}
+
+.app-footer-info-trigger {
+  width: 1.1rem;
+  height: 1.1rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.app-footer-info-trigger:hover,
+.app-footer-info-trigger:focus-visible {
+  color: var(--text);
+  border-color: rgba(255, 255, 255, 0.22);
+  outline: none;
+}
+
+.app-footer-info-popover {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 0.45rem);
+  min-width: 12rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid rgba(59, 73, 76, 0.3);
+  background: #111319;
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: 400;
+  z-index: 20;
+}
+
+.app-footer-info-label,
+.app-footer-info-value {
+  margin: 0;
+}
+
+.app-footer-info-label {
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 0.58rem;
+  font-weight: 700;
+}
+
+.app-footer-info-value {
+  margin-top: 0.3rem;
+  color: var(--text);
+  font-size: 0.78rem;
+  word-break: break-word;
 }
 
 .app-offline-overlay {

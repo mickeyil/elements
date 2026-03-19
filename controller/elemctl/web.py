@@ -84,6 +84,7 @@ def _empty_snapshot() -> dict:
         'type': 'event',
         'event': 'snapshot',
         'protocol_version': PROTOCOL_VERSION,
+        'relay_version': None,
         'online_count': 0,
         'expected_count': 0,
         'session': None,
@@ -221,6 +222,7 @@ class WebRelay:
         layouts: dict[str, dict] | None = None,
         sim_devices: dict[str, int] | None = None,
         layouts_dir: str = DEFAULT_LAYOUTS_PATH,
+        relay_version: str | None = None,
     ):
         self._socket_path = socket_path
         self._host = host
@@ -232,10 +234,12 @@ class WebRelay:
         self._uds_thread: threading.Thread | None = None
 
         self._controller_connected = False
+        self._relay_version = relay_version
         self._layouts = layouts or {}
         self._sim_devices = sim_devices or {}
         self._layouts_dir = os.path.expanduser(layouts_dir)
         self._snapshot = _empty_snapshot()
+        self._snapshot['relay_version'] = self._relay_version
         self._snapshot['layouts'] = self._layouts
         self._ws_clients: set[_WsClient] = set()
         self._ws_tasks: set[asyncio.Task] = set()
@@ -390,6 +394,7 @@ class WebRelay:
                 await self._broadcast_json(msg)
                 if not connected:
                     self._snapshot = _make_disconnected_snapshot(self._snapshot)
+                    self._snapshot['relay_version'] = self._relay_version
                     self._snapshot['layouts'] = self._layouts
                     await self._broadcast_json(self._snapshot)
                 continue
@@ -417,6 +422,7 @@ class WebRelay:
         event = msg.get('event')
         if event == 'snapshot':
             self._snapshot = copy.deepcopy(msg)
+            self._snapshot['relay_version'] = self._relay_version
             self._snapshot['layouts'] = self._layouts
             return
 
@@ -1040,7 +1046,8 @@ def main() -> None:
         logfile=os.path.join(log_dir, 'web.log'),
         level='INFO',
     )
-    log.info('elements web relay started. version: %s', get_runtime_version())
+    runtime_version = get_runtime_version()
+    log.info('elements web relay started. version: %s', runtime_version)
     log.info('using config %s', config_path)
     Path(log_dir).mkdir(parents=True, exist_ok=True)
 
@@ -1055,6 +1062,7 @@ def main() -> None:
         layouts,
         sim_devices,
         layouts_dir,
+        runtime_version,
     )
 
     try:
