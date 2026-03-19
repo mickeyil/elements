@@ -451,50 +451,54 @@ class WebRelay:
         writer: asyncio.StreamWriter,
     ) -> None:
         try:
-            request = await reader.readuntil(b'\r\n\r\n')
-        except (asyncio.IncompleteReadError, asyncio.LimitOverrunError):
-            writer.close()
-            await writer.wait_closed()
-            return
+            try:
+                request = await reader.readuntil(b'\r\n\r\n')
+            except (asyncio.IncompleteReadError, asyncio.LimitOverrunError):
+                await self._close_http_writer(writer)
+                return
 
-        try:
-            head = request.decode('iso-8859-1')
-        except UnicodeDecodeError:
-            await self._write_http_response(writer, 400, b'bad request')
-            return
+            try:
+                head = request.decode('iso-8859-1')
+            except UnicodeDecodeError:
+                await self._write_http_response(writer, 400, b'bad request')
+                return
 
-        lines = head.split('\r\n')
-        if not lines or len(lines[0].split()) != 3:
-            await self._write_http_response(writer, 400, b'bad request')
-            return
+            lines = head.split('\r\n')
+            if not lines or len(lines[0].split()) != 3:
+                await self._write_http_response(writer, 400, b'bad request')
+                return
 
-        method, target, _version = lines[0].split()
-        headers: dict[str, str] = {}
-        for line in lines[1:]:
-            if not line:
-                continue
-            if ':' not in line:
-                continue
-            name, value = line.split(':', 1)
-            headers[name.strip().lower()] = value.strip()
+            method, target, _version = lines[0].split()
+            headers: dict[str, str] = {}
+            for line in lines[1:]:
+                if not line:
+                    continue
+                if ':' not in line:
+                    continue
+                name, value = line.split(':', 1)
+                headers[name.strip().lower()] = value.strip()
 
-        path = urlsplit(target).path or '/'
-        if path == '/ws':
+            path = urlsplit(target).path or '/'
+            if path == '/ws':
+                if method != 'GET':
+                    await self._write_http_response(writer, 405, b'method not allowed')
+                    return
+                await self._handle_ws(reader, writer, headers)
+                return
+
+            if _layout_device_uid_from_path(path) is not None:
+                await self._handle_layout_api(method, path, headers, reader, writer)
+                return
+
             if method != 'GET':
                 await self._write_http_response(writer, 405, b'method not allowed')
                 return
-            await self._handle_ws(reader, writer, headers)
-            return
 
-        if _layout_device_uid_from_path(path) is not None:
-            await self._handle_layout_api(method, path, headers, reader, writer)
+            await self._serve_asset(path, writer)
+        except asyncio.CancelledError:
+            raise
+        except (ConnectionError, OSError, asyncio.TimeoutError):
             return
-
-        if method != 'GET':
-            await self._write_http_response(writer, 405, b'method not allowed')
-            return
-
-        await self._serve_asset(path, writer)
 
     async def _handle_layout_api(
         self,
@@ -702,8 +706,7 @@ class WebRelay:
         try:
             await writer.drain()
         finally:
-            writer.close()
-            await writer.wait_closed()
+            await self._close_http_writer(writer)
 
     async def _broadcast_json(self, msg: dict) -> None:
         dead: list[_WsClient] = []
@@ -742,6 +745,13 @@ class WebRelay:
         for client in list(self._ws_clients):
             self._ws_clients.discard(client)
             await self._close_ws_writer(client.writer)
+
+    async def _close_http_writer(self, writer: asyncio.StreamWriter) -> None:
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except (ConnectionError, OSError):
+            return
 
     async def _close_ws_writer(self, writer: asyncio.StreamWriter) -> None:
         writer.close()

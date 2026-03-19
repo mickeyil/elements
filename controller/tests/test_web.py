@@ -341,6 +341,68 @@ def test_close_all_ws_clients_aborts_stuck_writer(tmp_path, monkeypatch):
     assert relay._ws_clients == set()
 
 
+def test_write_http_response_ignores_connection_reset_on_close(tmp_path):
+    relay = WebRelay('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+
+    class Writer:
+        def __init__(self) -> None:
+            self.buffer = bytearray()
+            self.closed = False
+
+        def write(self, data: bytes) -> None:
+            self.buffer.extend(data)
+
+        async def drain(self) -> None:
+            return None
+
+        def close(self) -> None:
+            self.closed = True
+
+        async def wait_closed(self) -> None:
+            raise ConnectionResetError(104, 'Connection reset by peer')
+
+    writer = Writer()
+
+    asyncio.run(relay._write_http_response(writer, 200, b'ok'))  # type: ignore[arg-type]
+
+    assert writer.closed is True
+    assert bytes(writer.buffer).startswith(b'HTTP/1.1 200 OK\r\n')
+
+
+def test_handle_http_client_ignores_connection_reset_from_ws_handler(tmp_path):
+    relay = WebRelay('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+
+    async def fail_ws(reader, writer, headers) -> None:
+        raise ConnectionResetError(104, 'Connection reset by peer')
+
+    relay._handle_ws = fail_ws  # type: ignore[method-assign]
+
+    async def run() -> None:
+        reader = asyncio.StreamReader()
+        reader.feed_data(
+            (
+                b'GET /ws HTTP/1.1\r\n'
+                b'Host: localhost\r\n'
+                b'Upgrade: websocket\r\n'
+                b'Connection: Upgrade\r\n'
+                b'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n'
+                b'\r\n'
+            )
+        )
+        reader.feed_eof()
+
+        class Writer:
+            def close(self) -> None:
+                return None
+
+            async def wait_closed(self) -> None:
+                return None
+
+        await relay._handle_http_client(reader, Writer())  # type: ignore[arg-type]
+
+    asyncio.run(run())
+
+
 def test_shutdown_cancels_ws_tasks_before_waiting_for_server_close(tmp_path):
     relay = WebRelay('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
     events: list[str] = []
