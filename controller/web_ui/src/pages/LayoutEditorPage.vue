@@ -636,38 +636,6 @@ onBeforeUnmount(() => {
               </button>
             </div>
           </div>
-          <div v-if="activeTool === 'line'" class="toolbar-group">
-            <span class="toolbar-label">Spacing</span>
-            <input v-model.number="lineSpacing" class="spacing-input" min="0" step="1" type="number" />
-          </div>
-          <div class="toolbar-group">
-            <span class="toolbar-label">Index</span>
-            <div class="index-controls">
-              <button type="button" @click="shiftCurrentIndex(-1)" :disabled="loadingLayout || saving">
-                &lt;
-              </button>
-              <strong>{{ currentIndex }}</strong>
-              <span>/ {{ deviceLength }}</span>
-              <button type="button" @click="shiftCurrentIndex(1)" :disabled="loadingLayout || saving">
-                &gt;
-              </button>
-            </div>
-          </div>
-          <div class="toolbar-group">
-            <span class="toolbar-label">Placed</span>
-            <strong>{{ placedCount }} / {{ deviceLength }}</strong>
-          </div>
-          <div v-if="activeTool === 'line'" class="toolbar-group">
-            <span class="toolbar-label">Preview</span>
-            <strong v-if="lineStart">
-              {{ previewCount ? `${previewCount} LEDs` : 'Pick an end point' }}
-            </strong>
-            <strong v-else>Pick a start point</strong>
-          </div>
-          <div class="toolbar-group">
-            <span class="toolbar-label">Zoom</span>
-            <strong>{{ MIN_ZOOM }}-{{ MAX_ZOOM }}</strong>
-          </div>
         </div>
 
         <div class="editor-command-right">
@@ -690,6 +658,45 @@ onBeforeUnmount(() => {
             <span>{{ saving ? 'Saving…' : 'Save' }}</span>
             <span v-if="isDirty && !saving" class="editor-dirty-dot" aria-hidden="true" />
           </button>
+        </div>
+      </div>
+
+      <div class="editor-context-bar">
+        <div class="editor-context-group">
+          <span class="editor-context-label">Index</span>
+          <div class="index-controls editor-context-controls">
+            <button type="button" @click="shiftCurrentIndex(-1)" :disabled="loadingLayout || saving">
+              &lt;
+            </button>
+            <strong>{{ currentIndex }}</strong>
+            <span>/ {{ deviceLength }}</span>
+            <button type="button" @click="shiftCurrentIndex(1)" :disabled="loadingLayout || saving">
+              &gt;
+            </button>
+          </div>
+        </div>
+
+        <div class="editor-context-group">
+          <span class="editor-context-label">Placed</span>
+          <strong class="editor-context-value">{{ placedCount }} / {{ deviceLength }}</strong>
+        </div>
+
+        <div v-if="activeTool === 'line'" class="editor-context-group">
+          <span class="editor-context-label">Spacing</span>
+          <input v-model.number="lineSpacing" class="spacing-input" min="0" step="1" type="number" />
+        </div>
+
+        <div v-if="activeTool === 'line'" class="editor-context-group">
+          <span class="editor-context-label">Preview</span>
+          <strong class="editor-context-value" v-if="lineStart">
+            {{ previewCount ? `${previewCount} LEDs` : 'Pick an end point' }}
+          </strong>
+          <strong class="editor-context-value" v-else>Pick a start point</strong>
+        </div>
+
+        <div class="editor-context-group">
+          <span class="editor-context-label">Zoom</span>
+          <strong class="editor-context-value">{{ MIN_ZOOM }}-{{ MAX_ZOOM }}</strong>
         </div>
       </div>
 
@@ -743,7 +750,7 @@ onBeforeUnmount(() => {
 
 .editor-page-panel {
   display: grid;
-  grid-template-rows: auto auto 1fr;
+  grid-template-rows: auto auto auto 1fr;
   gap: 1rem;
   min-height: 0;
 }
@@ -772,7 +779,7 @@ onBeforeUnmount(() => {
 
 .editor-command-center {
   display: flex;
-  align-items: end;
+  align-items: start;
   justify-content: center;
   gap: 1rem;
   flex-wrap: wrap;
@@ -818,6 +825,34 @@ onBeforeUnmount(() => {
   gap: 0.25rem;
 }
 
+.editor-context-bar {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  padding: 0.65rem 1rem;
+  border-radius: var(--radius-panel);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.editor-context-group {
+  display: grid;
+  gap: 0.22rem;
+}
+
+.editor-context-label {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.editor-context-value {
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
 .toolbar-label {
   font-size: 0.74rem;
   text-transform: uppercase;
@@ -857,6 +892,10 @@ onBeforeUnmount(() => {
 
 .spacing-input {
   width: 6rem;
+}
+
+.editor-context-controls {
+  gap: 0.35rem;
 }
 
 .index-controls button:disabled,
@@ -954,6 +993,10 @@ onBeforeUnmount(() => {
   .editor-command-center {
     width: 100%;
     justify-content: flex-start;
+  }
+
+  .editor-context-bar {
+    align-items: stretch;
   }
 }
 </style>
