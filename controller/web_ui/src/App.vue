@@ -19,55 +19,51 @@ const controllerStatusClass = computed(() =>
 
 <template>
   <div class="app-shell">
-    <header class="app-topbar">
-      <div class="app-topbar-inner">
-        <div class="app-branding">
-          <p class="app-eyebrow">Elements</p>
-          <strong class="app-title">Web Console</strong>
-        </div>
-
-        <nav class="app-nav" aria-label="Primary">
-          <RouterLink class="app-nav-link" to="/">Status</RouterLink>
-          <RouterLink class="app-nav-link" to="/viewer">Viewer</RouterLink>
-        </nav>
-
-        <div class="statusbox">
-          <span class="pill" :class="relayStatusClass">
-            {{ relayConnected ? 'relay connected' : 'relay disconnected' }}
-          </span>
-          <span class="pill" :class="controllerStatusClass">
-            {{ controllerConnected ? 'controller connected' : 'controller disconnected' }}
-          </span>
-        </div>
+    <aside class="app-sidebar">
+      <div class="app-branding">
+        <p class="app-eyebrow">Elements</p>
+        <strong class="app-title">Web Console</strong>
       </div>
-    </header>
 
-    <RouterView />
+      <nav class="app-nav" aria-label="Primary">
+        <RouterLink class="app-nav-link" to="/">Status</RouterLink>
+        <RouterLink class="app-nav-link" to="/viewer">Viewer</RouterLink>
+      </nav>
+
+      <div class="app-statusbox">
+        <span class="pill app-status-pill" :class="relayStatusClass">
+          {{ relayConnected ? 'relay connected' : 'relay disconnected' }}
+        </span>
+        <span class="pill app-status-pill" :class="controllerStatusClass">
+          {{ controllerConnected ? 'controller connected' : 'controller disconnected' }}
+        </span>
+      </div>
+    </aside>
+
+    <main class="app-content">
+      <RouterView />
+    </main>
   </div>
 </template>
 
 <style scoped>
 .app-shell {
-  min-height: 100vh;
+  height: 100%;
+  display: grid;
+  grid-template-columns: 196px minmax(0, 1fr);
 }
 
-.app-topbar {
-  position: sticky;
-  top: 0;
-  z-index: 10;
-  backdrop-filter: blur(12px);
-  background: rgba(12, 18, 22, 0.82);
-  border-bottom: 1px solid var(--panel-edge);
-}
-
-.app-topbar-inner {
-  width: min(1200px, calc(100vw - 2rem));
-  margin: 0 auto;
-  padding: 0.9rem 0;
+.app-sidebar {
+  min-height: 0;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
+  flex-direction: column;
+  gap: 1.25rem;
+  padding: 1.2rem 1rem;
+  border-right: 1px solid var(--panel-edge);
+  background:
+    radial-gradient(circle at top, rgba(229, 156, 76, 0.08), transparent 18rem),
+    rgba(12, 18, 22, 0.92);
+  backdrop-filter: blur(12px);
 }
 
 .app-branding {
@@ -89,16 +85,15 @@ const controllerStatusClass = computed(() =>
 }
 
 .app-nav {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
+  display: grid;
+  gap: 0.35rem;
 }
 
 .app-nav-link {
   color: var(--muted);
   text-decoration: none;
-  border-radius: 999px;
-  padding: 0.45rem 0.9rem;
+  border-radius: 14px;
+  padding: 0.7rem 0.85rem;
   border: 1px solid transparent;
   transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
 }
@@ -114,20 +109,51 @@ const controllerStatusClass = computed(() =>
   border-color: var(--panel-edge);
 }
 
-.statusbox {
-  display: flex;
-  gap: 0.75rem;
-  flex-wrap: wrap;
-  justify-content: flex-end;
+.app-statusbox {
+  margin-top: auto;
+  display: grid;
+  gap: 0.65rem;
+}
+
+.app-status-pill {
+  justify-content: center;
+  text-align: center;
+}
+
+.app-content {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
 }
 
 @media (max-width: 900px) {
-  .app-topbar-inner {
+  .app-shell {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .app-sidebar {
+    border-right: 0;
+    border-bottom: 1px solid var(--panel-edge);
+    flex-direction: row;
+    align-items: center;
     flex-wrap: wrap;
   }
 
-  .statusbox {
-    width: 100%;
+  .app-nav {
+    display: flex;
+    flex-wrap: wrap;
+  }
+
+  .app-statusbox {
+    margin-top: 0;
+    margin-left: auto;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .app-status-pill {
     justify-content: flex-start;
   }
 }

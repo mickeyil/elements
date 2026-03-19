@@ -574,7 +574,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <main class="page-shell editor-page">
+  <main class="editor-page">
     <header class="page-header editor-page-head">
       <div>
         <p class="page-eyebrow">Layout Editor</p>
@@ -704,11 +704,13 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .editor-page {
-  min-height: calc(100vh - 4.5rem);
-}
-
-.editor-page-head {
-  margin-bottom: 1rem;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 1rem;
+  padding: 1.5rem;
 }
 
 .editor-page-actions {
@@ -719,14 +721,15 @@ onBeforeUnmount(() => {
 
 .editor-state-panel,
 .editor-page-panel {
+  min-height: 0;
   padding: 1rem;
 }
 
 .editor-page-panel {
-  min-height: calc(100vh - 14rem);
   display: grid;
   grid-template-rows: auto auto 1fr auto;
   gap: 1rem;
+  min-height: 0;
 }
 
 .editor-toolbar,
@@ -864,8 +867,8 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 900px) {
-  .editor-page-panel {
-    min-height: calc(100vh - 11rem);
+  .editor-page {
+    padding: 1rem;
   }
 
   .editor-toolbar,
