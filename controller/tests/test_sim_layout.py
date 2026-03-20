@@ -59,6 +59,14 @@ def test_parse_layout_csv_trailing_newline_does_not_add_empty_row():
     ]
 
 
+def test_parse_layout_csv_preserves_single_blank_row():
+    layout = parse_layout_csv("\n", configured_length=4)
+
+    assert layout == {
+        'rows': [[None]],
+    }
+
+
 def test_parse_layout_csv_rejects_duplicate_index():
     with pytest.raises(LayoutError, match='duplicate layout index: 2'):
         parse_layout_csv("1,2,2\n", configured_length=5)
@@ -262,7 +270,7 @@ def test_save_and_load_layout_for_editor_round_trip_with_line_inactive_offsets(t
         'sim-1',
         configured_length=5,
         layouts_dir=str(tmp_path),
-        rows=[[1, None, 2, None, 3]],
+        rows=[[1, None, 3, None, 5]],
         editor_payload={
             'version': 1,
             'primitives': [
@@ -279,7 +287,7 @@ def test_save_and_load_layout_for_editor_round_trip_with_line_inactive_offsets(t
         },
     )
 
-    assert saved['rows'] == [[1, None, 2, None, 3]]
+    assert saved['rows'] == [[1, None, 3, None, 5]]
     assert saved['editor']['primitives'] == [
         {
             'type': 'line',
@@ -335,30 +343,28 @@ def test_save_and_load_layout_for_editor_round_trip_with_fully_inactive_line(tmp
     assert loaded == saved
 
 
-def test_save_and_load_layout_for_editor_round_trip_with_inactive(tmp_path):
+def test_save_and_load_layout_for_editor_round_trip_with_inactive_single(tmp_path):
     saved = save_layout_for_editor(
         'sim-1',
         configured_length=5,
         layouts_dir=str(tmp_path),
-        rows=[[None, 1]],
+        rows=[[None]],
         editor_payload={
             'version': 1,
             'primitives': [
-                {'type': 'inactive', 'position': [0, 0]},
-                {'type': 'single', 'index': 1, 'position': [1, 0]},
+                {'type': 'single', 'index': 1, 'position': [0, 0], 'inactive': True},
             ],
         },
     )
 
-    expected_hash = canonical_csv_hash(",1\n")
+    expected_hash = canonical_csv_hash("\n")
     assert saved == {
-        'rows': [[None, 1]],
+        'rows': [[None]],
         'editor': {
             'version': 1,
             'csv_hash': expected_hash,
             'primitives': [
-                {'type': 'inactive', 'position': [0, 0]},
-                {'type': 'single', 'index': 1, 'position': [1, 0]},
+                {'type': 'single', 'index': 1, 'position': [0, 0], 'inactive': True},
             ],
         },
     }
@@ -396,7 +402,7 @@ def test_save_layout_for_editor_rejects_line_inactive_offsets_out_of_range(tmp_p
             'sim-1',
             configured_length=5,
             layouts_dir=str(tmp_path),
-            rows=[[1, None, 2, None, 3]],
+            rows=[[1, None, 3, None, 5]],
             editor_payload={
                 'version': 1,
                 'primitives': [
@@ -408,6 +414,27 @@ def test_save_layout_for_editor_rejects_line_inactive_offsets_out_of_range(tmp_p
                         'start': [0, 0],
                         'end': [4, 0],
                         'inactiveOffsets': [5],
+                    },
+                ],
+            },
+        )
+
+
+def test_save_layout_for_editor_rejects_non_boolean_single_inactive(tmp_path):
+    with pytest.raises(LayoutError, match='inactive must be a boolean'):
+        save_layout_for_editor(
+            'sim-1',
+            configured_length=5,
+            layouts_dir=str(tmp_path),
+            rows=[[None]],
+            editor_payload={
+                'version': 1,
+                'primitives': [
+                    {
+                        'type': 'single',
+                        'index': 1,
+                        'position': [0, 0],
+                        'inactive': 1,
                     },
                 ],
             },

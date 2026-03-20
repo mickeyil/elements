@@ -19,21 +19,21 @@ import IconUndo from '../components/icons/IconUndo.vue';
 import { useInjectedRelayState, type SnapshotDevice } from '../composables/useRelayState';
 import {
   cloneDocument,
+  clearInactiveIndices,
   createDocumentFromLayout,
   createEmptyDocument,
   documentCenter,
   documentsEqual,
-  expandLineCells,
   GRID_SIZE,
-  placeInactivePrimitive,
+  inactiveIndices,
+  markIndicesInactive,
   placeLinePrimitive,
   placeSinglePrimitive,
+  reactivateIndex,
   previewLinePlacement,
   serializeDocument,
-  toggleLinePrimitiveInactiveOffset,
   undoLastPrimitive,
   type EditorDocument,
-  type LinePrimitive,
   type Point,
 } from '../lib/editorModel';
 import {
@@ -54,7 +54,7 @@ interface DeviceMeta {
   strip: string;
 }
 
-type Tool = 'single' | 'line' | 'inactive';
+type Tool = 'single' | 'line';
 type PlacementBubble = {
   text: string;
   x: number;
@@ -72,10 +72,14 @@ const { snapshot } = useInjectedRelayState();
 
 const canvasRef = ref<HTMLCanvasElement | null>(null);
 const editorSurfaceRef = ref<HTMLDivElement | null>(null);
+const inactivePanelRootRef = ref<HTMLDivElement | null>(null);
 const loadingLayout = ref(false);
 const saving = ref(false);
 const error = ref('');
 const statusNotice = ref('');
+const inactivePanelError = ref('');
+const inactivePanelInput = ref('');
+const inactivePanelOpen = ref(false);
 const hoverCell = ref<Point | null>(null);
 const placementBubble = ref<PlacementBubble | null>(null);
 const viewport = ref<EditorViewport>({
@@ -90,7 +94,6 @@ const resolvedDeviceMeta = shallowRef<DeviceMeta | null>(null);
 const activeTool = ref<Tool>('single');
 const lineSpacing = ref(0);
 const lineStart = ref<Point | null>(null);
-const lineMaskIndex = ref<number | null>(null);
 
 let spacePressed = false;
 let renderPending = false;
@@ -199,28 +202,7 @@ const canSave = computed(
 );
 const isDirty = computed(() => !documentsEqual(documentRef.value, baselineDocument.value));
 const currentSpacing = computed(() => Math.max(0, Math.floor(Number(lineSpacing.value) || 0)));
-const maskedLinePrimitive = computed<LinePrimitive | null>(() => {
-  if (lineMaskIndex.value == null) {
-    return null;
-  }
-  const primitive = documentRef.value.primitives[lineMaskIndex.value];
-  return primitive?.type === 'line' ? primitive : null;
-});
-const maskedLineCellOffsets = computed(() => {
-  const lookup = new Map<string, number>();
-  const primitive = maskedLinePrimitive.value;
-  if (!primitive) {
-    return lookup;
-  }
-  for (const [offset, point] of expandLineCells(
-    { x: primitive.start[0], y: primitive.start[1] },
-    { x: primitive.end[0], y: primitive.end[1] },
-    primitive.spacing,
-  ).entries()) {
-    lookup.set(`${point.x},${point.y}`, offset);
-  }
-  return lookup;
-});
+const inactiveLedNumbers = computed(() => inactiveIndices(documentRef.value));
 const toolbarNotice = computed(() => {
   if (error.value) {
     return error.value;
@@ -228,16 +210,11 @@ const toolbarNotice = computed(() => {
   if (statusNotice.value) {
     return statusNotice.value;
   }
-  if (maskedLinePrimitive.value) {
-    return 'Mask line · click cells to toggle inactive · Enter to finish';
-  }
   return '';
 });
 const toolbarNoticeClass = computed(() => ({
   'editor-toolbar-notice-error': Boolean(error.value),
   'editor-toolbar-notice-saved': !error.value && Boolean(statusNotice.value),
-  'editor-toolbar-notice-hint':
-    !error.value && !statusNotice.value && Boolean(maskedLinePrimitive.value),
 }));
 const hoverBlocked = computed(() => {
   if (activeTool.value === 'line' || !hoverCell.value) {
@@ -284,14 +261,82 @@ function clearLineDraft(): void {
   lineStart.value = null;
 }
 
-function clearLineMask(): void {
-  lineMaskIndex.value = null;
+function closeInactivePanel(): void {
+  inactivePanelOpen.value = false;
+  inactivePanelError.value = '';
 }
 
-function beginLineMask(document: EditorDocument): void {
-  const index = document.primitives.length - 1;
-  const primitive = document.primitives[index];
-  lineMaskIndex.value = primitive?.type === 'line' ? index : null;
+function parseInactiveInput(text: string): number[] {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    throw new Error('Enter one or more LED numbers.');
+  }
+
+  const values = new Set<number>();
+  for (const rawPart of trimmed.split(',')) {
+    const part = rawPart.trim();
+    if (!part) {
+      continue;
+    }
+
+    const rangeMatch = part.match(/^(\d+)\s*-\s*(\d+)$/);
+    if (rangeMatch) {
+      const start = Number(rangeMatch[1]);
+      const end = Number(rangeMatch[2]);
+      if (start > end) {
+        throw new Error(`Invalid range "${part}".`);
+      }
+      for (let value = start; value <= end; value += 1) {
+        values.add(value);
+      }
+      continue;
+    }
+
+    if (!/^\d+$/.test(part)) {
+      throw new Error(`Invalid LED number "${part}".`);
+    }
+    values.add(Number(part));
+  }
+
+  if (!values.size) {
+    throw new Error('Enter one or more LED numbers.');
+  }
+
+  return [...values].sort((left, right) => left - right);
+}
+
+function applyInactivePanel(): void {
+  try {
+    setDocument(markIndicesInactive(documentRef.value, parseInactiveInput(inactivePanelInput.value)));
+    inactivePanelInput.value = '';
+    inactivePanelError.value = '';
+  } catch (err) {
+    inactivePanelError.value = err instanceof Error ? err.message : 'Failed to mark LEDs inactive.';
+  }
+}
+
+function removeInactiveLed(index: number): void {
+  try {
+    setDocument(reactivateIndex(documentRef.value, index));
+    inactivePanelError.value = '';
+  } catch (err) {
+    inactivePanelError.value = err instanceof Error ? err.message : 'Failed to reactivate LED.';
+  }
+}
+
+function resetInactiveLeds(): void {
+  setDocument(clearInactiveIndices(documentRef.value));
+  inactivePanelError.value = '';
+}
+
+function toggleInactivePanel(): void {
+  inactivePanelOpen.value = !inactivePanelOpen.value;
+  if (inactivePanelOpen.value) {
+    clearLineDraft();
+    dismissPlacementBubble();
+  } else {
+    inactivePanelError.value = '';
+  }
 }
 
 function setDocument(nextDocument: EditorDocument): void {
@@ -424,7 +469,7 @@ async function loadInitialDocument(device: DeviceMeta): Promise<void> {
   error.value = '';
   statusNotice.value = '';
   clearLineDraft();
-  clearLineMask();
+  closeInactivePanel();
   activeTool.value = 'single';
   const token = ++loadToken;
 
@@ -553,22 +598,12 @@ function commitLineAt(cell: Point, event: MouseEvent): void {
     const nextDocument = placeLinePrimitive(documentRef.value, lineStart.value, cell, currentSpacing.value);
     setDocument(nextDocument);
     clearLineDraft();
-    beginLineMask(nextDocument);
   } catch (err) {
     showPlacementBubble(
       event,
       err instanceof Error ? err.message : 'Failed to place line.',
     );
   }
-}
-
-function toggleMaskedLineCell(cell: Point): boolean {
-  const offset = maskedLineCellOffsets.value.get(`${cell.x},${cell.y}`);
-  if (offset == null || lineMaskIndex.value == null) {
-    return false;
-  }
-  setDocument(toggleLinePrimitiveInactiveOffset(documentRef.value, lineMaskIndex.value, offset));
-  return true;
 }
 
 function handleClick(event: MouseEvent): void {
@@ -584,16 +619,6 @@ function handleClick(event: MouseEvent): void {
     return;
   }
   const cell = screenToCell(viewport.value, point.x, point.y, GRID_SIZE);
-  if (maskedLinePrimitive.value) {
-    if (!cell) {
-      clearLineMask();
-      return;
-    }
-    if (toggleMaskedLineCell(cell)) {
-      return;
-    }
-    clearLineMask();
-  }
   if (!cell) {
     return;
   }
@@ -602,19 +627,11 @@ function handleClick(event: MouseEvent): void {
     return;
   }
   try {
-    setDocument(
-      activeTool.value === 'inactive'
-        ? placeInactivePrimitive(documentRef.value, cell.x, cell.y)
-        : placeSinglePrimitive(documentRef.value, cell.x, cell.y),
-    );
+    setDocument(placeSinglePrimitive(documentRef.value, cell.x, cell.y));
   } catch (err) {
     showPlacementBubble(
       event,
-      err instanceof Error
-        ? err.message
-        : activeTool.value === 'inactive'
-          ? 'Failed to place inactive cell.'
-          : 'Failed to place LED.',
+      err instanceof Error ? err.message : 'Failed to place LED.',
     );
   }
 }
@@ -622,7 +639,6 @@ function handleClick(event: MouseEvent): void {
 function undo(): void {
   setDocument(undoLastPrimitive(documentRef.value));
   clearLineDraft();
-  clearLineMask();
   dismissPlacementBubble();
 }
 
@@ -633,7 +649,6 @@ function backToDevices(): void {
 function selectTool(tool: Tool): void {
   activeTool.value = tool;
   clearLineDraft();
-  clearLineMask();
   clearStatusNotice();
   dismissPlacementBubble();
 }
@@ -645,7 +660,6 @@ async function save(): Promise<void> {
   try {
     saving.value = true;
     error.value = '';
-    clearLineMask();
     const serialized = serializeDocument(documentRef.value);
     const response = await saveLayout(routeState.value.device.deviceUid, {
       rows: serialized.rows,
@@ -671,19 +685,9 @@ function handleKeyDown(event: KeyboardEvent): void {
     return;
   }
 
-  if (event.code === 'Enter' && maskedLinePrimitive.value) {
+  if (event.code === 'Escape' && inactivePanelOpen.value) {
     event.preventDefault();
-    clearLineMask();
-    return;
-  }
-
-  if (event.code === 'Escape' && maskedLinePrimitive.value) {
-    event.preventDefault();
-    setDocument(undoLastPrimitive(documentRef.value));
-    clearLineMask();
-    clearLineDraft();
-    clearStatusNotice();
-    dismissPlacementBubble();
+    closeInactivePanel();
     return;
   }
 
@@ -706,6 +710,14 @@ function beforeUnloadHandler(event: BeforeUnloadEvent): void {
   event.returnValue = '';
 }
 
+function handleDocumentClick(event: MouseEvent): void {
+  const target = event.target;
+  if (!(target instanceof Element) || target.closest('[data-inactive-panel-root]')) {
+    return;
+  }
+  closeInactivePanel();
+}
+
 function confirmNavigationAway(): boolean {
   if (!isDirty.value) {
     return true;
@@ -721,15 +733,6 @@ watch(
     }
   },
   { immediate: true },
-);
-
-watch(
-  maskedLinePrimitive,
-  (primitive) => {
-    if (!primitive && lineMaskIndex.value !== null) {
-      clearLineMask();
-    }
-  },
 );
 
 watch(
@@ -785,6 +788,7 @@ onMounted(() => {
   window.addEventListener('keydown', handleKeyDown);
   window.addEventListener('keyup', handleKeyUp);
   window.addEventListener('resize', requestRender);
+  document.addEventListener('click', handleDocumentClick);
 });
 
 onBeforeUnmount(() => {
@@ -794,6 +798,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleKeyDown);
   window.removeEventListener('keyup', handleKeyUp);
   window.removeEventListener('resize', requestRender);
+  document.removeEventListener('click', handleDocumentClick);
   window.removeEventListener('beforeunload', beforeUnloadHandler);
 });
 </script>
@@ -849,17 +854,6 @@ onBeforeUnmount(() => {
               <IconLineTool />
               <span>Line</span>
             </button>
-            <button
-              type="button"
-              class="tool-button"
-              :class="{ 'tool-button-active': activeTool === 'inactive' }"
-              :disabled="loadingLayout || saving"
-              @click="selectTool('inactive')"
-              title="Inactive cell tool"
-            >
-              <IconInactiveTool />
-              <span>Inactive</span>
-            </button>
           </div>
           <label v-if="activeTool === 'line'" class="editor-inline-control">
             <span class="editor-inline-label">Spacing</span>
@@ -872,6 +866,82 @@ onBeforeUnmount(() => {
               :disabled="loadingLayout || saving"
             />
           </label>
+          <div
+            ref="inactivePanelRootRef"
+            class="editor-inactive-panel-root"
+            data-inactive-panel-root
+          >
+            <button
+              type="button"
+              class="tool-button"
+              :class="{ 'tool-button-active': inactivePanelOpen }"
+              :disabled="loadingLayout || saving"
+              title="Manage inactive LEDs"
+              @click.stop="toggleInactivePanel"
+            >
+              <IconInactiveTool />
+              <span>Inactive</span>
+            </button>
+            <div
+              v-if="inactivePanelOpen"
+              class="panel editor-inactive-panel"
+              role="dialog"
+              aria-modal="false"
+              aria-label="Inactive LEDs"
+              @click.stop
+            >
+              <p class="editor-inactive-panel-label">Inactive LEDs</p>
+              <p class="editor-inactive-panel-copy">Enter 1-based LED numbers or ranges.</p>
+              <div class="editor-inactive-panel-input-row">
+                <input
+                  v-model="inactivePanelInput"
+                  class="editor-inactive-panel-input mono"
+                  type="text"
+                  placeholder="15,16,40-42"
+                  :disabled="saving"
+                  @keydown.enter.prevent="applyInactivePanel"
+                />
+                <button
+                  type="button"
+                  class="ghost-button editor-inactive-apply"
+                  :disabled="saving"
+                  @click="applyInactivePanel"
+                >
+                  Mark inactive
+                </button>
+              </div>
+              <p v-if="inactivePanelError" class="editor-inactive-panel-error">
+                {{ inactivePanelError }}
+              </p>
+              <div class="editor-inactive-list">
+                <div class="editor-inactive-list-head">
+                  <span class="editor-inline-label">Current inactive</span>
+                  <button
+                    type="button"
+                    class="ghost-button editor-inactive-clear"
+                    :disabled="!inactiveLedNumbers.length || saving"
+                    @click="resetInactiveLeds"
+                  >
+                    Clear inactive
+                  </button>
+                </div>
+                <div v-if="inactiveLedNumbers.length" class="editor-inactive-chip-list">
+                  <button
+                    v-for="index in inactiveLedNumbers"
+                    :key="index"
+                    type="button"
+                    class="editor-inactive-chip"
+                    :disabled="saving"
+                    :title="`Reactivate LED ${index}`"
+                    @click="removeInactiveLed(index)"
+                  >
+                    {{ index }}
+                  </button>
+                </div>
+                <p v-else class="editor-inactive-empty">No inactive LEDs.</p>
+              </div>
+            </div>
+          </div>
         </div>
 
         <div class="editor-command-right">
@@ -1038,6 +1108,10 @@ onBeforeUnmount(() => {
   min-width: 0;
 }
 
+.editor-inactive-panel-root {
+  position: relative;
+}
+
 .editor-inline-label {
   color: var(--muted);
   font-size: 0.68rem;
@@ -1123,8 +1197,7 @@ onBeforeUnmount(() => {
 }
 
 .editor-toolbar-notice-error span,
-.editor-toolbar-notice-saved span,
-.editor-toolbar-notice-hint span {
+.editor-toolbar-notice-saved span {
   opacity: 1;
 }
 
@@ -1134,10 +1207,6 @@ onBeforeUnmount(() => {
 
 .editor-toolbar-notice-saved {
   color: var(--status-online);
-}
-
-.editor-toolbar-notice-hint {
-  color: var(--muted);
 }
 
 .editor-save-button-dirty {
@@ -1177,6 +1246,105 @@ onBeforeUnmount(() => {
   transform: translateY(-12px);
 }
 
+.editor-inactive-panel {
+  position: absolute;
+  top: calc(100% + 0.55rem);
+  right: 0;
+  z-index: 3;
+  width: min(24rem, 72vw);
+  padding: 0.75rem;
+  display: grid;
+  gap: 0.7rem;
+}
+
+.editor-inactive-panel-label {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.editor-inactive-panel-copy {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.editor-inactive-panel-input-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.55rem;
+}
+
+.editor-inactive-panel-input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--panel-edge);
+  border-radius: var(--radius-tight);
+  padding: 0.52rem 0.65rem;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+}
+
+.editor-inactive-panel-input::placeholder {
+  color: rgba(255, 255, 255, 0.28);
+}
+
+.editor-inactive-panel-error {
+  margin: 0;
+  color: #ffdede;
+  font-size: 0.74rem;
+}
+
+.editor-inactive-list {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.editor-inactive-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.editor-inactive-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.editor-inactive-chip {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  padding: 0.3rem 0.58rem;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.editor-inactive-chip:hover:not(:disabled),
+.editor-inactive-chip:focus-visible {
+  border-color: rgba(108, 162, 255, 0.38);
+  color: var(--accent);
+  outline: none;
+}
+
+.editor-inactive-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+
+.editor-inactive-apply,
+.editor-inactive-clear {
+  white-space: nowrap;
+}
+
 @media (max-width: 900px) {
   .editor-page {
     padding: 0.75rem 0.75rem 1rem;
@@ -1201,6 +1369,16 @@ onBeforeUnmount(() => {
     width: 100%;
     text-align: left;
     order: 3;
+  }
+
+  .editor-inactive-panel {
+    right: auto;
+    left: 0;
+    width: min(24rem, calc(100vw - 3rem));
+  }
+
+  .editor-inactive-panel-input-row {
+    grid-template-columns: 1fr;
   }
 }
 </style>

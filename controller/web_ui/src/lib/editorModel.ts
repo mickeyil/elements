@@ -9,6 +9,7 @@ export interface SinglePrimitive {
   type: 'single';
   index: number;
   position: [number, number];
+  inactive?: boolean;
 }
 
 export interface LinePrimitive {
@@ -21,12 +22,7 @@ export interface LinePrimitive {
   inactiveOffsets?: number[];
 }
 
-export interface InactivePrimitive {
-  type: 'inactive';
-  position: [number, number];
-}
-
-export type Primitive = SinglePrimitive | LinePrimitive | InactivePrimitive;
+export type Primitive = SinglePrimitive | LinePrimitive;
 
 export interface EditorPayload {
   version: 1;
@@ -39,22 +35,13 @@ export interface LayoutDocumentPayload {
   editor: EditorPayload | null;
 }
 
-export interface ActiveOccupiedCell {
-  kind: 'active';
+export interface OccupiedCell {
   index: number;
   x: number;
   y: number;
+  inactive: boolean;
   primitive: Primitive;
 }
-
-export interface InactiveOccupiedCell {
-  kind: 'inactive';
-  x: number;
-  y: number;
-  primitive: Primitive;
-}
-
-export type OccupiedCell = ActiveOccupiedCell | InactiveOccupiedCell;
 
 export interface EditorDocument {
   gridSize: number;
@@ -75,7 +62,7 @@ export interface SerializedDocument {
 }
 
 export interface LinePlacementPreview {
-  cells: ActiveOccupiedCell[];
+  cells: OccupiedCell[];
   error: string | null;
   primitive: Primitive;
 }
@@ -90,35 +77,6 @@ function clampIndex(index: number, maxIndex: number): number {
 
 function clonePoint(position: [number, number]): [number, number] {
   return [position[0], position[1]];
-}
-
-function clonePrimitive(primitive: Primitive): Primitive {
-  if (primitive.type === 'single') {
-    return {
-      type: 'single',
-      index: primitive.index,
-      position: clonePoint(primitive.position),
-    };
-  }
-
-  if (primitive.type === 'inactive') {
-    return {
-      type: 'inactive',
-      position: clonePoint(primitive.position),
-    };
-  }
-
-  return {
-    type: 'line',
-    startIndex: primitive.startIndex,
-    count: primitive.count,
-    spacing: primitive.spacing,
-    start: clonePoint(primitive.start),
-    end: clonePoint(primitive.end),
-    ...(primitive.inactiveOffsets?.length
-      ? { inactiveOffsets: [...primitive.inactiveOffsets] }
-      : {}),
-  };
 }
 
 function normalizeInactiveOffsets(inactiveOffsets: number[] | undefined, count: number): number[] {
@@ -142,12 +100,34 @@ function normalizeInactiveOffsets(inactiveOffsets: number[] | undefined, count: 
   return normalized;
 }
 
+function clonePrimitive(primitive: Primitive): Primitive {
+  if (primitive.type === 'single') {
+    return {
+      type: 'single',
+      index: primitive.index,
+      position: clonePoint(primitive.position),
+      ...(primitive.inactive ? { inactive: true } : {}),
+    };
+  }
+
+  return {
+    type: 'line',
+    startIndex: primitive.startIndex,
+    count: primitive.count,
+    spacing: primitive.spacing,
+    start: clonePoint(primitive.start),
+    end: clonePoint(primitive.end),
+    ...(primitive.inactiveOffsets?.length
+      ? { inactiveOffsets: [...primitive.inactiveOffsets] }
+      : {}),
+  };
+}
+
 function computeCurrentIndex(indices: ReadonlySet<number>, maxIndex: number): number {
   if (!indices.size) {
     return 1;
   }
-  const highest = Math.max(...indices);
-  return clampIndex(highest + 1, maxIndex);
+  return clampIndex(Math.max(...indices) + 1, maxIndex);
 }
 
 function normalizeSpacing(spacing: number): number {
@@ -204,8 +184,7 @@ export function expandLineCells(start: Point, end: Point, spacing: number): Poin
   const cells: Point[] = [];
 
   for (let i = 0; i < path.length; i += step) {
-    const point = path[i];
-    cells.push({ x: point.x, y: point.y });
+    cells.push({ x: path[i].x, y: path[i].y });
   }
 
   return cells;
@@ -216,22 +195,10 @@ function expandPrimitive(primitive: Primitive, gridSize: number): OccupiedCell[]
     ensureGridCell(primitive.position, gridSize);
     return [
       {
-        kind: 'active',
         index: primitive.index,
         x: primitive.position[0],
         y: primitive.position[1],
-        primitive,
-      },
-    ];
-  }
-
-  if (primitive.type === 'inactive') {
-    ensureGridCell(primitive.position, gridSize);
-    return [
-      {
-        kind: 'inactive',
-        x: primitive.position[0],
-        y: primitive.position[1],
+        inactive: Boolean(primitive.inactive),
         primitive,
       },
     ];
@@ -250,39 +217,25 @@ function expandPrimitive(primitive: Primitive, gridSize: number): OccupiedCell[]
     { x: primitive.end[0], y: primitive.end[1] },
     primitive.spacing,
   );
-
   if (points.length !== primitive.count) {
     throw new Error('Loaded line primitive count does not match the expanded cells.');
   }
-  const inactiveOffsets = normalizeInactiveOffsets(primitive.inactiveOffsets, primitive.count);
-  const inactiveSet = new Set(inactiveOffsets);
-  let nextIndex = primitive.startIndex;
 
-  return points.map((point, offset) => {
-    if (inactiveSet.has(offset)) {
-      return {
-        kind: 'inactive' as const,
-        x: point.x,
-        y: point.y,
-        primitive,
-      };
-    }
-    const cell: ActiveOccupiedCell = {
-      kind: 'active',
-      index: nextIndex,
-      x: point.x,
-      y: point.y,
-      primitive,
-    };
-    nextIndex += 1;
-    return cell;
-  });
+  const inactiveSet = new Set(normalizeInactiveOffsets(primitive.inactiveOffsets, primitive.count));
+  return points.map((point, offset) => ({
+    index: primitive.startIndex + offset,
+    x: point.x,
+    y: point.y,
+    inactive: inactiveSet.has(offset),
+    primitive,
+  }));
 }
 
 function buildDocument(maxIndex: number, primitives: readonly Primitive[]): EditorDocument {
   const occupied = new Map<string, OccupiedCell>();
   const indices = new Set<number>();
   const normalized: Primitive[] = [];
+  let placedCount = 0;
 
   for (const original of primitives) {
     const primitive = clonePrimitive(original);
@@ -292,15 +245,16 @@ function buildDocument(maxIndex: number, primitives: readonly Primitive[]): Edit
       if (occupied.has(key)) {
         throw new Error(`Duplicate occupied cell at ${cell.x},${cell.y}.`);
       }
-      if (cell.kind === 'active') {
-        if (cell.index < 1 || cell.index > maxIndex) {
-          throw new Error(`Loaded primitive index ${cell.index} is outside 1-${maxIndex}.`);
-        }
-        if (indices.has(cell.index)) {
-          throw new Error(`Duplicate primitive index ${cell.index}.`);
-        }
-        indices.add(cell.index);
+      if (cell.index < 1 || cell.index > maxIndex) {
+        throw new Error(`Loaded primitive index ${cell.index} is outside 1-${maxIndex}.`);
       }
+      if (indices.has(cell.index)) {
+        throw new Error(`Duplicate primitive index ${cell.index}.`);
+      }
+      if (!cell.inactive) {
+        placedCount += 1;
+      }
+      indices.add(cell.index);
       occupied.set(key, cell);
     }
     normalized.push(primitive);
@@ -312,7 +266,7 @@ function buildDocument(maxIndex: number, primitives: readonly Primitive[]): Edit
     primitives: normalized,
     occupied,
     indices,
-    placedCount: indices.size,
+    placedCount,
     currentIndex: computeCurrentIndex(indices, maxIndex),
   };
 }
@@ -398,13 +352,7 @@ function translatePrimitive(primitive: Primitive, offset: Point): Primitive {
       type: 'single',
       index: primitive.index,
       position: [primitive.position[0] + offset.x, primitive.position[1] + offset.y],
-    };
-  }
-
-  if (primitive.type === 'inactive') {
-    return {
-      type: 'inactive',
-      position: [primitive.position[0] + offset.x, primitive.position[1] + offset.y],
+      ...(primitive.inactive ? { inactive: true } : {}),
     };
   }
 
@@ -415,6 +363,9 @@ function translatePrimitive(primitive: Primitive, offset: Point): Primitive {
     spacing: primitive.spacing,
     start: [primitive.start[0] + offset.x, primitive.start[1] + offset.y],
     end: [primitive.end[0] + offset.x, primitive.end[1] + offset.y],
+    ...(primitive.inactiveOffsets?.length
+      ? { inactiveOffsets: [...primitive.inactiveOffsets] }
+      : {}),
   };
 }
 
@@ -438,7 +389,10 @@ export function createDocumentFromLayout(
     ? centeredOriginForPrimitives(basePrimitives)
     : centeredOrigin(rows);
 
-  return buildDocument(maxIndex, basePrimitives.map((primitive) => translatePrimitive(primitive, offset)));
+  return buildDocument(
+    maxIndex,
+    basePrimitives.map((primitive) => translatePrimitive(primitive, offset)),
+  );
 }
 
 export function setCurrentIndex(document: EditorDocument, nextIndex: number): EditorDocument {
@@ -469,9 +423,6 @@ function validatePlacementCells(
     }
     nextPositions.add(key);
 
-    if (cell.kind !== 'active') {
-      continue;
-    }
     if (cell.index < 1 || cell.index > document.maxIndex) {
       return `Placement exceeds the configured length ${document.maxIndex}.`;
     }
@@ -490,11 +441,11 @@ export function previewLinePlacement(
   end: Point,
   spacing: number,
 ): LinePlacementPreview {
-  const cells = expandLineCells(start, end, spacing).map((point, index) => ({
-    kind: 'active' as const,
+  const cells = expandLineCells(start, end, spacing).map((point, offset) => ({
+    index: document.currentIndex + offset,
     x: point.x,
     y: point.y,
-    index: document.currentIndex + index,
+    inactive: false,
     primitive: {
       type: 'single',
       index: document.currentIndex,
@@ -550,24 +501,6 @@ export function placeSinglePrimitive(
   return buildDocument(document.maxIndex, [...document.primitives, nextPrimitive]);
 }
 
-export function placeInactivePrimitive(
-  document: EditorDocument,
-  x: number,
-  y: number,
-): EditorDocument {
-  const nextPrimitive: InactivePrimitive = {
-    type: 'inactive',
-    position: [x, y],
-  };
-
-  const validation = validatePlacementCells(document, expandPrimitive(nextPrimitive, document.gridSize));
-  if (validation) {
-    throw new Error(validation);
-  }
-
-  return buildDocument(document.maxIndex, [...document.primitives, nextPrimitive]);
-}
-
 export function placeLinePrimitive(
   document: EditorDocument,
   start: Point,
@@ -579,6 +512,7 @@ export function placeLinePrimitive(
   if (preview.error) {
     throw new Error(preview.error);
   }
+
   const primitive =
     preview.primitive.type === 'line' && inactiveOffsets?.length
       ? {
@@ -590,45 +524,124 @@ export function placeLinePrimitive(
   return buildDocument(document.maxIndex, [...document.primitives, primitive]);
 }
 
-export function toggleLinePrimitiveInactiveOffset(
-  document: EditorDocument,
-  primitiveIndex: number,
-  offset: number,
-): EditorDocument {
-  const primitive = document.primitives[primitiveIndex];
-  if (!primitive || primitive.type !== 'line') {
-    throw new Error('Line primitive is no longer available.');
-  }
-
-  const inactiveOffsets = normalizeInactiveOffsets(primitive.inactiveOffsets, primitive.count);
-  const nextSet = new Set(inactiveOffsets);
-  if (nextSet.has(offset)) {
-    nextSet.delete(offset);
-  } else {
-    if (!Number.isInteger(offset) || offset < 0 || offset >= primitive.count) {
-      throw new Error('Line inactive offsets must be within the expanded line cell range.');
+function normalizeTargetIndices(document: EditorDocument, indices: readonly number[]): number[] {
+  const normalized = [...new Set(indices)].sort((left, right) => left - right);
+  for (const index of normalized) {
+    if (!Number.isInteger(index)) {
+      throw new Error('LED numbers must be integers.');
     }
-    nextSet.add(offset);
+    if (index < 1 || index > document.maxIndex) {
+      throw new Error(`LED ${index} is outside 1-${document.maxIndex}.`);
+    }
+    if (!document.indices.has(index)) {
+      throw new Error(`LED ${index} is not placed.`);
+    }
+  }
+  return normalized;
+}
+
+function applyInactiveState(
+  document: EditorDocument,
+  indices: readonly number[],
+  inactive: boolean,
+): EditorDocument {
+  const target = new Set(normalizeTargetIndices(document, indices));
+  if (!target.size) {
+    return document;
   }
 
-  const nextPrimitive: LinePrimitive = nextSet.size
-    ? {
-        ...primitive,
-        inactiveOffsets: [...nextSet].sort((left, right) => left - right),
+  const nextPrimitives = document.primitives.map((primitive) => {
+    if (primitive.type === 'single') {
+      if (!target.has(primitive.index)) {
+        return primitive;
       }
-    : {
-        type: 'line',
-        startIndex: primitive.startIndex,
-        count: primitive.count,
-        spacing: primitive.spacing,
-        start: clonePoint(primitive.start),
-        end: clonePoint(primitive.end),
-      };
+      return inactive
+        ? { ...primitive, inactive: true }
+        : {
+            type: 'single',
+            index: primitive.index,
+            position: clonePoint(primitive.position),
+          };
+    }
 
-  const nextPrimitives = document.primitives.map((item, index) =>
-    index === primitiveIndex ? nextPrimitive : item,
-  );
+    const startIndex = primitive.startIndex;
+    const endIndex = primitive.startIndex + primitive.count - 1;
+    if (![...target].some((index) => index >= startIndex && index <= endIndex)) {
+      return primitive;
+    }
+
+    const nextSet = new Set(normalizeInactiveOffsets(primitive.inactiveOffsets, primitive.count));
+    for (const index of target) {
+      if (index < startIndex || index > endIndex) {
+        continue;
+      }
+      const offset = index - startIndex;
+      if (inactive) {
+        nextSet.add(offset);
+      } else {
+        nextSet.delete(offset);
+      }
+    }
+
+    return nextSet.size
+      ? {
+          ...primitive,
+          inactiveOffsets: [...nextSet].sort((left, right) => left - right),
+        }
+      : {
+          type: 'line',
+          startIndex: primitive.startIndex,
+          count: primitive.count,
+          spacing: primitive.spacing,
+          start: clonePoint(primitive.start),
+          end: clonePoint(primitive.end),
+        };
+  });
+
   return buildDocument(document.maxIndex, nextPrimitives);
+}
+
+export function markIndicesInactive(
+  document: EditorDocument,
+  indices: readonly number[],
+): EditorDocument {
+  return applyInactiveState(document, indices, true);
+}
+
+export function reactivateIndex(document: EditorDocument, index: number): EditorDocument {
+  return applyInactiveState(document, [index], false);
+}
+
+export function clearInactiveIndices(document: EditorDocument): EditorDocument {
+  const nextPrimitives = document.primitives.map((primitive) => {
+    if (primitive.type === 'single') {
+      return primitive.inactive
+        ? {
+            type: 'single' as const,
+            index: primitive.index,
+            position: clonePoint(primitive.position),
+          }
+        : primitive;
+    }
+    return primitive.inactiveOffsets?.length
+      ? {
+          type: 'line' as const,
+          startIndex: primitive.startIndex,
+          count: primitive.count,
+          spacing: primitive.spacing,
+          start: clonePoint(primitive.start),
+          end: clonePoint(primitive.end),
+        }
+      : primitive;
+  });
+  return buildDocument(document.maxIndex, nextPrimitives);
+}
+
+export function inactiveIndices(document: EditorDocument): number[] {
+  return Array.from(document.occupied.values())
+    .filter((cell) => cell.inactive)
+    .map((cell) => cell.index)
+    .sort((left, right) => left - right);
 }
 
 export function undoLastPrimitive(document: EditorDocument): EditorDocument {
@@ -661,16 +674,16 @@ function primitivesEqual(left: Primitive, right: Primitive): boolean {
   if (left.type !== right.type) {
     return false;
   }
+
   if (left.type === 'single' && right.type === 'single') {
     return (
       left.index === right.index &&
+      Boolean(left.inactive) === Boolean(right.inactive) &&
       left.position[0] === right.position[0] &&
       left.position[1] === right.position[1]
     );
   }
-  if (left.type === 'inactive' && right.type === 'inactive') {
-    return left.position[0] === right.position[0] && left.position[1] === right.position[1];
-  }
+
   if (left.type === 'line' && right.type === 'line') {
     const leftInactive = normalizeInactiveOffsets(left.inactiveOffsets, left.count);
     const rightInactive = normalizeInactiveOffsets(right.inactiveOffsets, right.count);
@@ -686,6 +699,7 @@ function primitivesEqual(left: Primitive, right: Primitive): boolean {
       left.end[1] === right.end[1]
     );
   }
+
   return false;
 }
 
@@ -723,7 +737,7 @@ export function serializeDocument(document: EditorDocument): SerializedDocument 
 
   const rows = Array.from({ length: height }, () => Array<number | null>(width).fill(null));
   for (const cell of cells) {
-    if (cell.kind === 'active') {
+    if (!cell.inactive) {
       rows[cell.y - minY][cell.x - minX] = cell.index;
     }
   }
@@ -734,13 +748,7 @@ export function serializeDocument(document: EditorDocument): SerializedDocument 
         type: 'single' as const,
         index: primitive.index,
         position: [primitive.position[0] - minX, primitive.position[1] - minY] as [number, number],
-      };
-    }
-
-    if (primitive.type === 'inactive') {
-      return {
-        type: 'inactive' as const,
-        position: [primitive.position[0] - minX, primitive.position[1] - minY] as [number, number],
+        ...(primitive.inactive ? { inactive: true } : {}),
       };
     }
 

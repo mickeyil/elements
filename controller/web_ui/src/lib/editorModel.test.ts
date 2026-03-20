@@ -1,15 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  createEmptyDocument,
+  clearInactiveIndices,
   createDocumentFromLayout,
+  createEmptyDocument,
   expandLineCells,
-  placeInactivePrimitive,
+  markIndicesInactive,
   placeLinePrimitive,
-  previewLinePlacement,
   placeSinglePrimitive,
+  previewLinePlacement,
+  reactivateIndex,
   serializeDocument,
-  toggleLinePrimitiveInactiveOffset,
 } from './editorModel';
 
 describe('expandLineCells', () => {
@@ -24,7 +25,7 @@ describe('expandLineCells', () => {
   });
 });
 
-describe('line placement', () => {
+describe('editorModel inactive LEDs', () => {
   it('creates a line primitive with spacing', () => {
     const document = createEmptyDocument(10);
     const nextDocument = placeLinePrimitive(document, { x: 0, y: 0 }, { x: 4, y: 0 }, 1);
@@ -43,12 +44,13 @@ describe('line placement', () => {
       Array.from(nextDocument.occupied.values()).map((cell) => [
         cell.x,
         cell.y,
-        cell.kind === 'active' ? cell.index : null,
+        cell.index,
+        cell.inactive,
       ]),
     ).toEqual([
-      [0, 0, 1],
-      [2, 0, 2],
-      [4, 0, 3],
+      [0, 0, 1, false],
+      [2, 0, 2, false],
+      [4, 0, 3, false],
     ]);
   });
 
@@ -64,67 +66,42 @@ describe('line placement', () => {
     expect(preview.cells).toHaveLength(1);
   });
 
-  it('places inactive cells without consuming indices', () => {
-    const withInactive = placeInactivePrimitive(createEmptyDocument(10), 1, 2);
+  it('marks a placed single LED inactive without changing its index', () => {
+    const placed = placeSinglePrimitive(createEmptyDocument(10), 1, 2);
+    const inactive = markIndicesInactive(placed, [1]);
 
-    expect(withInactive.placedCount).toBe(0);
-    expect(withInactive.currentIndex).toBe(1);
-    expect(withInactive.primitives).toEqual([
-      {
-        type: 'inactive',
-        position: [1, 2],
-      },
-    ]);
-    expect(Array.from(withInactive.occupied.values())).toEqual([
+    expect(inactive.placedCount).toBe(0);
+    expect(inactive.currentIndex).toBe(2);
+    expect(Array.from(inactive.occupied.values())).toEqual([
       expect.objectContaining({
-        kind: 'inactive',
+        index: 1,
         x: 1,
         y: 2,
+        inactive: true,
       }),
     ]);
+    expect(serializeDocument(inactive)).toEqual({
+      rows: [[null]],
+      editor: {
+        version: 1,
+        primitives: [
+          {
+            type: 'single',
+            index: 1,
+            position: [0, 0],
+            inactive: true,
+          },
+        ],
+      },
+    });
   });
 
-  it('inactive cells block active placement and expand serialized bounds', () => {
-    const active = placeSinglePrimitive(createEmptyDocument(10), 4, 3);
-    const withInactive = placeInactivePrimitive(active, 2, 3);
-
-    expect(() => placeSinglePrimitive(withInactive, 2, 3)).toThrow('occupied cell');
-
-    const serialized = serializeDocument(withInactive);
-    expect(serialized.rows).toEqual([[null, null, 1]]);
-    expect(serialized.editor.primitives).toEqual([
-      {
-        type: 'single',
-        index: 1,
-        position: [2, 0],
-      },
-      {
-        type: 'inactive',
-        position: [0, 0],
-      },
-    ]);
+  it('rejects inactive indices that are not currently placed', () => {
+    expect(() => markIndicesInactive(createEmptyDocument(10), [4])).toThrow('LED 4 is not placed.');
   });
 
-  it('serializes and reloads a line primitive intact', () => {
-    const original = placeLinePrimitive(createEmptyDocument(10), { x: 0, y: 0 }, { x: 4, y: 0 }, 1);
-    const serialized = serializeDocument(original);
-    const loaded = createDocumentFromLayout({ rows: serialized.rows, editor: serialized.editor }, 10);
-
-    expect(serializeDocument(loaded)).toEqual(serialized);
-    expect(loaded.primitives).toEqual([
-      {
-        type: 'line',
-        startIndex: 1,
-        count: 3,
-        spacing: 1,
-        start: [253, 255],
-        end: [257, 255],
-      },
-    ]);
-  });
-
-  it('supports inactive offsets inside line primitives', () => {
-    const original = placeLinePrimitive(
+  it('keeps stable numbering for inactive offsets inside line primitives', () => {
+    const document = placeLinePrimitive(
       createEmptyDocument(10),
       { x: 0, y: 0 },
       { x: 4, y: 0 },
@@ -132,51 +109,44 @@ describe('line placement', () => {
       [1, 3],
     );
 
-    expect(original.primitives).toEqual([
-      {
-        type: 'line',
-        startIndex: 1,
-        count: 5,
-        spacing: 0,
-        start: [0, 0],
-        end: [4, 0],
-        inactiveOffsets: [1, 3],
-      },
-    ]);
-    expect(original.placedCount).toBe(3);
-    expect(original.currentIndex).toBe(4);
+    expect(document.placedCount).toBe(3);
+    expect(document.currentIndex).toBe(6);
     expect(
-      Array.from(original.occupied.values()).map((cell) => [
+      Array.from(document.occupied.values()).map((cell) => [
         cell.x,
         cell.y,
-        cell.kind,
-        cell.kind === 'active' ? cell.index : null,
+        cell.index,
+        cell.inactive,
       ]),
     ).toEqual([
-      [0, 0, 'active', 1],
-      [1, 0, 'inactive', null],
-      [2, 0, 'active', 2],
-      [3, 0, 'inactive', null],
-      [4, 0, 'active', 3],
+      [0, 0, 1, false],
+      [1, 0, 2, true],
+      [2, 0, 3, false],
+      [3, 0, 4, true],
+      [4, 0, 5, false],
     ]);
 
-    const serialized = serializeDocument(original);
-    expect(serialized.rows).toEqual([[1, null, 2, null, 3]]);
-    expect(serialized.editor.primitives).toEqual([
-      {
-        type: 'line',
-        startIndex: 1,
-        count: 5,
-        spacing: 0,
-        start: [0, 0],
-        end: [4, 0],
-        inactiveOffsets: [1, 3],
+    expect(serializeDocument(document)).toEqual({
+      rows: [[1, null, 3, null, 5]],
+      editor: {
+        version: 1,
+        primitives: [
+          {
+            type: 'line',
+            startIndex: 1,
+            count: 5,
+            spacing: 0,
+            start: [0, 0],
+            end: [4, 0],
+            inactiveOffsets: [1, 3],
+          },
+        ],
       },
-    ]);
+    });
   });
 
-  it('allows fully inactive line primitives to serialize', () => {
-    const original = placeLinePrimitive(
+  it('allows fully inactive line primitives without renumbering later LEDs', () => {
+    const document = placeLinePrimitive(
       createEmptyDocument(10),
       { x: 0, y: 0 },
       { x: 2, y: 0 },
@@ -184,9 +154,9 @@ describe('line placement', () => {
       [0, 1, 2],
     );
 
-    expect(original.placedCount).toBe(0);
-    expect(original.currentIndex).toBe(1);
-    expect(serializeDocument(original)).toEqual({
+    expect(document.placedCount).toBe(0);
+    expect(document.currentIndex).toBe(4);
+    expect(serializeDocument(document)).toEqual({
       rows: [[null, null, null]],
       editor: {
         version: 1,
@@ -205,12 +175,12 @@ describe('line placement', () => {
     });
   });
 
-  it('toggles inactive offsets on the last line primitive', () => {
+  it('marks and reactivates indices across an existing line', () => {
     const line = placeLinePrimitive(createEmptyDocument(10), { x: 0, y: 0 }, { x: 2, y: 0 }, 0);
-    const toggled = toggleLinePrimitiveInactiveOffset(line, 0, 1);
-    const untoggled = toggleLinePrimitiveInactiveOffset(toggled, 0, 1);
+    const inactive = markIndicesInactive(line, [2]);
+    const reactivated = reactivateIndex(inactive, 2);
 
-    expect(toggled.primitives).toEqual([
+    expect(inactive.primitives).toEqual([
       {
         type: 'line',
         startIndex: 1,
@@ -221,32 +191,68 @@ describe('line placement', () => {
         inactiveOffsets: [1],
       },
     ]);
-    expect(toggled.placedCount).toBe(2);
-    expect(toggled.currentIndex).toBe(3);
-    expect(untoggled.primitives).toEqual(line.primitives);
-    expect(untoggled.placedCount).toBe(3);
+    expect(inactive.placedCount).toBe(2);
+    expect(inactive.currentIndex).toBe(4);
+    expect(reactivated.primitives).toEqual(line.primitives);
+    expect(reactivated.placedCount).toBe(3);
   });
 
-  it('serializes and reloads inactive primitives intact', () => {
-    const original = placeInactivePrimitive(
-      placeSinglePrimitive(createEmptyDocument(10), 4, 4),
-      2,
-      4,
+  it('clears inactive state across singles and lines', () => {
+    const line = placeLinePrimitive(createEmptyDocument(10), { x: 0, y: 0 }, { x: 2, y: 0 }, 0);
+    const mixed = markIndicesInactive(
+      placeSinglePrimitive(line, 4, 0),
+      [1, 4],
     );
-    const serialized = serializeDocument(original);
-    const loaded = createDocumentFromLayout({ rows: serialized.rows, editor: serialized.editor }, 10);
+    const cleared = clearInactiveIndices(mixed);
 
-    expect(serializeDocument(loaded)).toEqual(serialized);
-    expect(loaded.primitives).toEqual([
+    expect(cleared.placedCount).toBe(4);
+    expect(cleared.currentIndex).toBe(5);
+    expect(cleared.primitives).toEqual([
+      {
+        type: 'line',
+        startIndex: 1,
+        count: 3,
+        spacing: 0,
+        start: [0, 0],
+        end: [2, 0],
+      },
       {
         type: 'single',
-        index: 1,
-        position: [256, 255],
-      },
-      {
-        type: 'inactive',
-        position: [254, 255],
+        index: 4,
+        position: [4, 0],
       },
     ]);
+  });
+
+  it('round-trips inactive metadata through layout loading', () => {
+    const payload = {
+      rows: [[1, null, 3], [null, null, null]],
+      editor: {
+        version: 1 as const,
+        primitives: [
+          {
+            type: 'line' as const,
+            startIndex: 1,
+            count: 3,
+            spacing: 0,
+            start: [0, 0] as [number, number],
+            end: [2, 0] as [number, number],
+            inactiveOffsets: [1],
+          },
+          {
+            type: 'single' as const,
+            index: 4,
+            position: [1, 1] as [number, number],
+            inactive: true,
+          },
+        ],
+      },
+    };
+
+    const loaded = createDocumentFromLayout(payload, 10);
+
+    expect(serializeDocument(loaded)).toEqual(payload);
+    expect(loaded.placedCount).toBe(2);
+    expect(loaded.currentIndex).toBe(5);
   });
 });

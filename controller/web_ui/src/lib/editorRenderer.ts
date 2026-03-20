@@ -1,4 +1,4 @@
-import type { ActiveOccupiedCell, EditorDocument, OccupiedCell, Point } from './editorModel';
+import type { EditorDocument, OccupiedCell, Point } from './editorModel';
 
 export const DEFAULT_ZOOM = 18;
 export const MIN_ZOOM = 4;
@@ -11,7 +11,7 @@ export interface EditorViewport {
 }
 
 export interface EditorPreview {
-  cells: ActiveOccupiedCell[];
+  cells: OccupiedCell[];
   error: string | null;
   anchor: Point | null;
 }
@@ -186,10 +186,10 @@ export function renderEditor(
     if (cell.x < startX - 1 || cell.x > endX || cell.y < startY - 1 || cell.y > endY) {
       continue;
     }
-    if (cell.kind === 'active') {
-      drawCell(ctx, viewport, cell, PLACED);
-    } else {
+    if (cell.inactive) {
       drawCell(ctx, viewport, cell, INACTIVE, { showIndex: false });
+    } else {
+      drawCell(ctx, viewport, cell, PLACED);
     }
   }
 

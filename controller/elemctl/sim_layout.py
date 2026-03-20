@@ -23,7 +23,7 @@ class LayoutError(ValueError):
 
 
 def _strip_trailing_empty_lines(lines: list[str]) -> list[str]:
-    while lines and not lines[-1].strip():
+    while len(lines) > 1 and not lines[-1].strip():
         lines.pop()
     return lines
 
@@ -88,6 +88,8 @@ def parse_layout_csv(text: str, configured_length: int) -> dict:
 
     for line in lines:
         parsed = next(csv.reader([line]))
+        if not parsed:
+            parsed = ['']
         row: list[int | None] = []
         for raw_cell in parsed:
             cell = raw_cell.strip()
@@ -186,7 +188,7 @@ def _expand_line_cells(
 def _expand_editor_primitive_cells(
     primitive: dict,
     configured_length: int,
-) -> tuple[dict, list[dict], list[tuple[int, int]]]:
+) -> tuple[dict, list[dict], list[dict], list[tuple[int, int]]]:
     primitive_type = primitive.get('type')
     if primitive_type == 'single':
         index = primitive.get('index')
@@ -198,31 +200,34 @@ def _expand_editor_primitive_cells(
             )
 
         x, y = _parse_position(primitive.get('position'), 'editor primitive position')
+        inactive = primitive.get('inactive', False)
+        if not isinstance(inactive, bool):
+            raise LayoutError('editor single inactive must be a boolean')
 
         return (
             {
                 'type': 'single',
                 'index': index,
                 'position': [x, y],
+                **({'inactive': True} if inactive else {}),
             },
             [
                 {
                     'type': 'single',
                     'index': index,
                     'position': [x, y],
+                    'inactive': inactive,
                 }
             ],
-            [(x, y)],
-        )
-
-    if primitive_type == 'inactive':
-        x, y = _parse_position(primitive.get('position'), 'editor inactive position')
-        return (
-            {
-                'type': 'inactive',
-                'position': [x, y],
-            },
-            [],
+            []
+            if inactive
+            else [
+                {
+                    'type': 'single',
+                    'index': index,
+                    'position': [x, y],
+                }
+            ],
             [(x, y)],
         )
 
@@ -266,24 +271,28 @@ def _expand_editor_primitive_cells(
                     raise LayoutError('editor line inactiveOffsets must be unique')
                 inactive_offsets.append(offset)
 
-        active_count = count - len(inactive_offsets)
-        if active_count > 0 and start_index + active_count - 1 > configured_length:
+        if start_index + count - 1 > configured_length:
             raise LayoutError(
-                f'editor line indices must be 1-{configured_length}, got {start_index + active_count - 1}'
+                f'editor line indices must be 1-{configured_length}, got {start_index + count - 1}'
             )
 
         inactive_set = set(inactive_offsets)
+        indexed_cells: list[dict] = []
         expanded_cells: list[dict] = []
-        next_index = start_index
         for offset, (x, y) in enumerate(cells):
-            if offset in inactive_set:
-                continue
-            expanded_cells.append({
+            indexed_cell = {
                 'type': 'single',
-                'index': next_index,
+                'index': start_index + offset,
                 'position': [x, y],
-            })
-            next_index += 1
+                'inactive': offset in inactive_set,
+            }
+            indexed_cells.append(indexed_cell)
+            if offset not in inactive_set:
+                expanded_cells.append({
+                    'type': 'single',
+                    'index': start_index + offset,
+                    'position': [x, y],
+                })
 
         return (
             {
@@ -295,6 +304,7 @@ def _expand_editor_primitive_cells(
                 'end': [end[0], end[1]],
                 **({'inactiveOffsets': inactive_offsets} if inactive_offsets else {}),
             },
+            indexed_cells,
             expanded_cells,
             cells,
         )
@@ -330,7 +340,12 @@ def _normalize_editor_primitives(
     for primitive in primitives:
         if not isinstance(primitive, dict):
             raise LayoutError('editor primitive must be an object')
-        normalized, expanded_cells, occupied_positions = _expand_editor_primitive_cells(
+        (
+            normalized,
+            primitive_indexed_cells,
+            expanded_cells,
+            occupied_positions,
+        ) = _expand_editor_primitive_cells(
             primitive,
             configured_length,
         )
@@ -340,7 +355,7 @@ def _normalize_editor_primitives(
                 raise LayoutError(f'duplicate editor primitive position: {(x, y)}')
             seen_positions.add((x, y))
 
-        for cell in expanded_cells:
+        for cell in primitive_indexed_cells:
             index = cell['index']
             if index in seen_indices:
                 raise LayoutError(f'duplicate editor primitive index: {index}')
