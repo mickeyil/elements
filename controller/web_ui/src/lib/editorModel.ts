@@ -18,6 +18,7 @@ export interface LinePrimitive {
   spacing: number;
   start: [number, number];
   end: [number, number];
+  inactiveOffsets?: number[];
 }
 
 export interface InactivePrimitive {
@@ -114,7 +115,31 @@ function clonePrimitive(primitive: Primitive): Primitive {
     spacing: primitive.spacing,
     start: clonePoint(primitive.start),
     end: clonePoint(primitive.end),
+    ...(primitive.inactiveOffsets?.length
+      ? { inactiveOffsets: [...primitive.inactiveOffsets] }
+      : {}),
   };
+}
+
+function normalizeInactiveOffsets(inactiveOffsets: number[] | undefined, count: number): number[] {
+  if (!inactiveOffsets?.length) {
+    return [];
+  }
+  if (!Number.isInteger(count) || count < 1) {
+    throw new Error('Line primitive count must be a positive integer.');
+  }
+
+  const normalized = [...inactiveOffsets].sort((left, right) => left - right);
+  for (let i = 0; i < normalized.length; i += 1) {
+    const offset = normalized[i];
+    if (!Number.isInteger(offset) || offset < 0 || offset >= count) {
+      throw new Error('Line inactive offsets must be within the expanded line cell range.');
+    }
+    if (i > 0 && offset === normalized[i - 1]) {
+      throw new Error('Line inactive offsets must be unique.');
+    }
+  }
+  return normalized;
 }
 
 function computeCurrentIndex(indices: ReadonlySet<number>, maxIndex: number): number {
@@ -229,14 +254,29 @@ function expandPrimitive(primitive: Primitive, gridSize: number): OccupiedCell[]
   if (points.length !== primitive.count) {
     throw new Error('Loaded line primitive count does not match the expanded cells.');
   }
+  const inactiveOffsets = normalizeInactiveOffsets(primitive.inactiveOffsets, primitive.count);
+  const inactiveSet = new Set(inactiveOffsets);
+  let nextIndex = primitive.startIndex;
 
-  return points.map((point, index) => ({
-    kind: 'active' as const,
-    index: primitive.startIndex + index,
-    x: point.x,
-    y: point.y,
-    primitive,
-  }));
+  return points.map((point, offset) => {
+    if (inactiveSet.has(offset)) {
+      return {
+        kind: 'inactive' as const,
+        x: point.x,
+        y: point.y,
+        primitive,
+      };
+    }
+    const cell: ActiveOccupiedCell = {
+      kind: 'active',
+      index: nextIndex,
+      x: point.x,
+      y: point.y,
+      primitive,
+    };
+    nextIndex += 1;
+    return cell;
+  });
 }
 
 function buildDocument(maxIndex: number, primitives: readonly Primitive[]): EditorDocument {
@@ -533,13 +573,62 @@ export function placeLinePrimitive(
   start: Point,
   end: Point,
   spacing: number,
+  inactiveOffsets?: number[],
 ): EditorDocument {
   const preview = previewLinePlacement(document, start, end, spacing);
   if (preview.error) {
     throw new Error(preview.error);
   }
+  const primitive =
+    preview.primitive.type === 'line' && inactiveOffsets?.length
+      ? {
+          ...preview.primitive,
+          inactiveOffsets: normalizeInactiveOffsets(inactiveOffsets, preview.primitive.count),
+        }
+      : preview.primitive;
 
-  return buildDocument(document.maxIndex, [...document.primitives, preview.primitive]);
+  return buildDocument(document.maxIndex, [...document.primitives, primitive]);
+}
+
+export function toggleLinePrimitiveInactiveOffset(
+  document: EditorDocument,
+  primitiveIndex: number,
+  offset: number,
+): EditorDocument {
+  const primitive = document.primitives[primitiveIndex];
+  if (!primitive || primitive.type !== 'line') {
+    throw new Error('Line primitive is no longer available.');
+  }
+
+  const inactiveOffsets = normalizeInactiveOffsets(primitive.inactiveOffsets, primitive.count);
+  const nextSet = new Set(inactiveOffsets);
+  if (nextSet.has(offset)) {
+    nextSet.delete(offset);
+  } else {
+    if (!Number.isInteger(offset) || offset < 0 || offset >= primitive.count) {
+      throw new Error('Line inactive offsets must be within the expanded line cell range.');
+    }
+    nextSet.add(offset);
+  }
+
+  const nextPrimitive: LinePrimitive = nextSet.size
+    ? {
+        ...primitive,
+        inactiveOffsets: [...nextSet].sort((left, right) => left - right),
+      }
+    : {
+        type: 'line',
+        startIndex: primitive.startIndex,
+        count: primitive.count,
+        spacing: primitive.spacing,
+        start: clonePoint(primitive.start),
+        end: clonePoint(primitive.end),
+      };
+
+  const nextPrimitives = document.primitives.map((item, index) =>
+    index === primitiveIndex ? nextPrimitive : item,
+  );
+  return buildDocument(document.maxIndex, nextPrimitives);
 }
 
 export function undoLastPrimitive(document: EditorDocument): EditorDocument {
@@ -583,10 +672,14 @@ function primitivesEqual(left: Primitive, right: Primitive): boolean {
     return left.position[0] === right.position[0] && left.position[1] === right.position[1];
   }
   if (left.type === 'line' && right.type === 'line') {
+    const leftInactive = normalizeInactiveOffsets(left.inactiveOffsets, left.count);
+    const rightInactive = normalizeInactiveOffsets(right.inactiveOffsets, right.count);
     return (
       left.startIndex === right.startIndex &&
       left.count === right.count &&
       left.spacing === right.spacing &&
+      leftInactive.length === rightInactive.length &&
+      leftInactive.every((value, index) => value === rightInactive[index]) &&
       left.start[0] === right.start[0] &&
       left.start[1] === right.start[1] &&
       left.end[0] === right.end[0] &&
@@ -614,8 +707,8 @@ export function documentsEqual(left: EditorDocument, right: EditorDocument): boo
 }
 
 export function serializeDocument(document: EditorDocument): SerializedDocument {
-  if (document.placedCount < 1) {
-    throw new Error('Place at least one LED before saving.');
+  if (!document.primitives.length) {
+    throw new Error('Place at least one cell before saving.');
   }
 
   const cells = Array.from(document.occupied.values());
@@ -658,6 +751,9 @@ export function serializeDocument(document: EditorDocument): SerializedDocument 
       spacing: primitive.spacing,
       start: [primitive.start[0] - minX, primitive.start[1] - minY] as [number, number],
       end: [primitive.end[0] - minX, primitive.end[1] - minY] as [number, number],
+      ...(primitive.inactiveOffsets?.length
+        ? { inactiveOffsets: [...primitive.inactiveOffsets] }
+        : {}),
     };
   });
 

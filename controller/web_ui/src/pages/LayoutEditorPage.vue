@@ -23,14 +23,17 @@ import {
   createEmptyDocument,
   documentCenter,
   documentsEqual,
+  expandLineCells,
   GRID_SIZE,
   placeInactivePrimitive,
   placeLinePrimitive,
   placeSinglePrimitive,
   previewLinePlacement,
   serializeDocument,
+  toggleLinePrimitiveInactiveOffset,
   undoLastPrimitive,
   type EditorDocument,
+  type LinePrimitive,
   type Point,
 } from '../lib/editorModel';
 import {
@@ -87,6 +90,7 @@ const resolvedDeviceMeta = shallowRef<DeviceMeta | null>(null);
 const activeTool = ref<Tool>('single');
 const lineSpacing = ref(0);
 const lineStart = ref<Point | null>(null);
+const lineMaskIndex = ref<number | null>(null);
 
 let spacePressed = false;
 let renderPending = false;
@@ -195,6 +199,46 @@ const canSave = computed(
 );
 const isDirty = computed(() => !documentsEqual(documentRef.value, baselineDocument.value));
 const currentSpacing = computed(() => Math.max(0, Math.floor(Number(lineSpacing.value) || 0)));
+const maskedLinePrimitive = computed<LinePrimitive | null>(() => {
+  if (lineMaskIndex.value == null) {
+    return null;
+  }
+  const primitive = documentRef.value.primitives[lineMaskIndex.value];
+  return primitive?.type === 'line' ? primitive : null;
+});
+const maskedLineCellOffsets = computed(() => {
+  const lookup = new Map<string, number>();
+  const primitive = maskedLinePrimitive.value;
+  if (!primitive) {
+    return lookup;
+  }
+  for (const [offset, point] of expandLineCells(
+    { x: primitive.start[0], y: primitive.start[1] },
+    { x: primitive.end[0], y: primitive.end[1] },
+    primitive.spacing,
+  ).entries()) {
+    lookup.set(`${point.x},${point.y}`, offset);
+  }
+  return lookup;
+});
+const toolbarNotice = computed(() => {
+  if (error.value) {
+    return error.value;
+  }
+  if (statusNotice.value) {
+    return statusNotice.value;
+  }
+  if (maskedLinePrimitive.value) {
+    return 'Mask line · click cells to toggle inactive · Enter to finish';
+  }
+  return '';
+});
+const toolbarNoticeClass = computed(() => ({
+  'editor-toolbar-notice-error': Boolean(error.value),
+  'editor-toolbar-notice-saved': !error.value && Boolean(statusNotice.value),
+  'editor-toolbar-notice-hint':
+    !error.value && !statusNotice.value && Boolean(maskedLinePrimitive.value),
+}));
 const hoverBlocked = computed(() => {
   if (activeTool.value === 'line' || !hoverCell.value) {
     return false;
@@ -238,6 +282,16 @@ const linePreview = computed<EditorPreview | null>(() => {
 
 function clearLineDraft(): void {
   lineStart.value = null;
+}
+
+function clearLineMask(): void {
+  lineMaskIndex.value = null;
+}
+
+function beginLineMask(document: EditorDocument): void {
+  const index = document.primitives.length - 1;
+  const primitive = document.primitives[index];
+  lineMaskIndex.value = primitive?.type === 'line' ? index : null;
 }
 
 function setDocument(nextDocument: EditorDocument): void {
@@ -370,6 +424,7 @@ async function loadInitialDocument(device: DeviceMeta): Promise<void> {
   error.value = '';
   statusNotice.value = '';
   clearLineDraft();
+  clearLineMask();
   activeTool.value = 'single';
   const token = ++loadToken;
 
@@ -495,14 +550,25 @@ function commitLineAt(cell: Point, event: MouseEvent): void {
   }
 
   try {
-    setDocument(placeLinePrimitive(documentRef.value, lineStart.value, cell, currentSpacing.value));
+    const nextDocument = placeLinePrimitive(documentRef.value, lineStart.value, cell, currentSpacing.value);
+    setDocument(nextDocument);
     clearLineDraft();
+    beginLineMask(nextDocument);
   } catch (err) {
     showPlacementBubble(
       event,
       err instanceof Error ? err.message : 'Failed to place line.',
     );
   }
+}
+
+function toggleMaskedLineCell(cell: Point): boolean {
+  const offset = maskedLineCellOffsets.value.get(`${cell.x},${cell.y}`);
+  if (offset == null || lineMaskIndex.value == null) {
+    return false;
+  }
+  setDocument(toggleLinePrimitiveInactiveOffset(documentRef.value, lineMaskIndex.value, offset));
+  return true;
 }
 
 function handleClick(event: MouseEvent): void {
@@ -518,6 +584,16 @@ function handleClick(event: MouseEvent): void {
     return;
   }
   const cell = screenToCell(viewport.value, point.x, point.y, GRID_SIZE);
+  if (maskedLinePrimitive.value) {
+    if (!cell) {
+      clearLineMask();
+      return;
+    }
+    if (toggleMaskedLineCell(cell)) {
+      return;
+    }
+    clearLineMask();
+  }
   if (!cell) {
     return;
   }
@@ -546,6 +622,7 @@ function handleClick(event: MouseEvent): void {
 function undo(): void {
   setDocument(undoLastPrimitive(documentRef.value));
   clearLineDraft();
+  clearLineMask();
   dismissPlacementBubble();
 }
 
@@ -556,6 +633,7 @@ function backToDevices(): void {
 function selectTool(tool: Tool): void {
   activeTool.value = tool;
   clearLineDraft();
+  clearLineMask();
   clearStatusNotice();
   dismissPlacementBubble();
 }
@@ -567,6 +645,7 @@ async function save(): Promise<void> {
   try {
     saving.value = true;
     error.value = '';
+    clearLineMask();
     const serialized = serializeDocument(documentRef.value);
     const response = await saveLayout(routeState.value.device.deviceUid, {
       rows: serialized.rows,
@@ -589,6 +668,22 @@ function handleKeyDown(event: KeyboardEvent): void {
   if (event.code === 'Space') {
     event.preventDefault();
     spacePressed = true;
+    return;
+  }
+
+  if (event.code === 'Enter' && maskedLinePrimitive.value) {
+    event.preventDefault();
+    clearLineMask();
+    return;
+  }
+
+  if (event.code === 'Escape' && maskedLinePrimitive.value) {
+    event.preventDefault();
+    setDocument(undoLastPrimitive(documentRef.value));
+    clearLineMask();
+    clearLineDraft();
+    clearStatusNotice();
+    dismissPlacementBubble();
     return;
   }
 
@@ -626,6 +721,15 @@ watch(
     }
   },
   { immediate: true },
+);
+
+watch(
+  maskedLinePrimitive,
+  (primitive) => {
+    if (!primitive && lineMaskIndex.value !== null) {
+      clearLineMask();
+    }
+  },
 );
 
 watch(
@@ -778,14 +882,11 @@ onBeforeUnmount(() => {
           </button>
           <div
             class="editor-toolbar-notice"
-            :class="{
-              'editor-toolbar-notice-error': error,
-              'editor-toolbar-notice-saved': !error && statusNotice,
-            }"
-            :title="error || statusNotice || undefined"
+            :class="toolbarNoticeClass"
+            :title="toolbarNotice || undefined"
             aria-live="polite"
           >
-            <span>{{ error || statusNotice }}</span>
+            <span>{{ toolbarNotice }}</span>
           </div>
           <button
             type="button"
@@ -1022,7 +1123,8 @@ onBeforeUnmount(() => {
 }
 
 .editor-toolbar-notice-error span,
-.editor-toolbar-notice-saved span {
+.editor-toolbar-notice-saved span,
+.editor-toolbar-notice-hint span {
   opacity: 1;
 }
 
@@ -1032,6 +1134,10 @@ onBeforeUnmount(() => {
 
 .editor-toolbar-notice-saved {
   color: var(--status-online);
+}
+
+.editor-toolbar-notice-hint {
+  color: var(--muted);
 }
 
 .editor-save-button-dirty {

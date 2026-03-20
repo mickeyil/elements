@@ -9,6 +9,7 @@ import {
   previewLinePlacement,
   placeSinglePrimitive,
   serializeDocument,
+  toggleLinePrimitiveInactiveOffset,
 } from './editorModel';
 
 describe('expandLineCells', () => {
@@ -120,6 +121,110 @@ describe('line placement', () => {
         end: [257, 255],
       },
     ]);
+  });
+
+  it('supports inactive offsets inside line primitives', () => {
+    const original = placeLinePrimitive(
+      createEmptyDocument(10),
+      { x: 0, y: 0 },
+      { x: 4, y: 0 },
+      0,
+      [1, 3],
+    );
+
+    expect(original.primitives).toEqual([
+      {
+        type: 'line',
+        startIndex: 1,
+        count: 5,
+        spacing: 0,
+        start: [0, 0],
+        end: [4, 0],
+        inactiveOffsets: [1, 3],
+      },
+    ]);
+    expect(original.placedCount).toBe(3);
+    expect(original.currentIndex).toBe(4);
+    expect(
+      Array.from(original.occupied.values()).map((cell) => [
+        cell.x,
+        cell.y,
+        cell.kind,
+        cell.kind === 'active' ? cell.index : null,
+      ]),
+    ).toEqual([
+      [0, 0, 'active', 1],
+      [1, 0, 'inactive', null],
+      [2, 0, 'active', 2],
+      [3, 0, 'inactive', null],
+      [4, 0, 'active', 3],
+    ]);
+
+    const serialized = serializeDocument(original);
+    expect(serialized.rows).toEqual([[1, null, 2, null, 3]]);
+    expect(serialized.editor.primitives).toEqual([
+      {
+        type: 'line',
+        startIndex: 1,
+        count: 5,
+        spacing: 0,
+        start: [0, 0],
+        end: [4, 0],
+        inactiveOffsets: [1, 3],
+      },
+    ]);
+  });
+
+  it('allows fully inactive line primitives to serialize', () => {
+    const original = placeLinePrimitive(
+      createEmptyDocument(10),
+      { x: 0, y: 0 },
+      { x: 2, y: 0 },
+      0,
+      [0, 1, 2],
+    );
+
+    expect(original.placedCount).toBe(0);
+    expect(original.currentIndex).toBe(1);
+    expect(serializeDocument(original)).toEqual({
+      rows: [[null, null, null]],
+      editor: {
+        version: 1,
+        primitives: [
+          {
+            type: 'line',
+            startIndex: 1,
+            count: 3,
+            spacing: 0,
+            start: [0, 0],
+            end: [2, 0],
+            inactiveOffsets: [0, 1, 2],
+          },
+        ],
+      },
+    });
+  });
+
+  it('toggles inactive offsets on the last line primitive', () => {
+    const line = placeLinePrimitive(createEmptyDocument(10), { x: 0, y: 0 }, { x: 2, y: 0 }, 0);
+    const toggled = toggleLinePrimitiveInactiveOffset(line, 0, 1);
+    const untoggled = toggleLinePrimitiveInactiveOffset(toggled, 0, 1);
+
+    expect(toggled.primitives).toEqual([
+      {
+        type: 'line',
+        startIndex: 1,
+        count: 3,
+        spacing: 0,
+        start: [0, 0],
+        end: [2, 0],
+        inactiveOffsets: [1],
+      },
+    ]);
+    expect(toggled.placedCount).toBe(2);
+    expect(toggled.currentIndex).toBe(3);
+    expect(untoggled.primitives).toEqual(line.primitives);
+    expect(untoggled.placedCount).toBe(3);
   });
 
   it('serializes and reloads inactive primitives intact', () => {

@@ -257,6 +257,84 @@ def test_save_and_load_layout_for_editor_round_trip_with_line(tmp_path):
     assert loaded == saved
 
 
+def test_save_and_load_layout_for_editor_round_trip_with_line_inactive_offsets(tmp_path):
+    saved = save_layout_for_editor(
+        'sim-1',
+        configured_length=5,
+        layouts_dir=str(tmp_path),
+        rows=[[1, None, 2, None, 3]],
+        editor_payload={
+            'version': 1,
+            'primitives': [
+                {
+                    'type': 'line',
+                    'startIndex': 1,
+                    'count': 5,
+                    'spacing': 0,
+                    'start': [0, 0],
+                    'end': [4, 0],
+                    'inactiveOffsets': [1, 3],
+                },
+            ],
+        },
+    )
+
+    assert saved['rows'] == [[1, None, 2, None, 3]]
+    assert saved['editor']['primitives'] == [
+        {
+            'type': 'line',
+            'startIndex': 1,
+            'count': 5,
+            'spacing': 0,
+            'start': [0, 0],
+            'end': [4, 0],
+            'inactiveOffsets': [1, 3],
+        },
+    ]
+
+    loaded = load_layout_for_editor('sim-1', configured_length=5, layouts_dir=str(tmp_path))
+    assert loaded == saved
+
+
+def test_save_and_load_layout_for_editor_round_trip_with_fully_inactive_line(tmp_path):
+    saved = save_layout_for_editor(
+        'sim-1',
+        configured_length=5,
+        layouts_dir=str(tmp_path),
+        rows=[[None, None, None]],
+        editor_payload={
+            'version': 1,
+            'primitives': [
+                {
+                    'type': 'line',
+                    'startIndex': 1,
+                    'count': 3,
+                    'spacing': 0,
+                    'start': [0, 0],
+                    'end': [2, 0],
+                    'inactiveOffsets': [0, 1, 2],
+                },
+            ],
+        },
+    )
+
+    assert saved['rows'] == [[None, None, None]]
+    assert saved['editor']['primitives'] == [
+        {
+            'type': 'line',
+            'startIndex': 1,
+            'count': 3,
+            'spacing': 0,
+            'start': [0, 0],
+            'end': [2, 0],
+            'inactiveOffsets': [0, 1, 2],
+        },
+    ]
+
+    loaded = load_layout_for_editor('sim-1', configured_length=5, layouts_dir=str(tmp_path))
+    assert loaded == saved
+
+
 def test_save_and_load_layout_for_editor_round_trip_with_inactive(tmp_path):
     saved = save_layout_for_editor(
         'sim-1',
@@ -306,6 +384,30 @@ def test_save_layout_for_editor_rejects_line_count_mismatch(tmp_path):
                         'spacing': 1,
                         'start': [0, 0],
                         'end': [4, 0],
+                    },
+                ],
+            },
+        )
+
+
+def test_save_layout_for_editor_rejects_line_inactive_offsets_out_of_range(tmp_path):
+    with pytest.raises(LayoutError, match='inactiveOffsets'):
+        save_layout_for_editor(
+            'sim-1',
+            configured_length=5,
+            layouts_dir=str(tmp_path),
+            rows=[[1, None, 2, None, 3]],
+            editor_payload={
+                'version': 1,
+                'primitives': [
+                    {
+                        'type': 'line',
+                        'startIndex': 1,
+                        'count': 5,
+                        'spacing': 0,
+                        'start': [0, 0],
+                        'end': [4, 0],
+                        'inactiveOffsets': [5],
                     },
                 ],
             },

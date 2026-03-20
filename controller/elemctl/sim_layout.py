@@ -75,9 +75,9 @@ def _normalize_rows_payload(
 
 
 def rows_to_canonical_rows(rows: object, configured_length: int) -> list[list[int | None]]:
-    normalized = _normalize_rows_payload(rows, configured_length, require_nonempty=True)
-    if not normalized:
-        raise LayoutError('layout must include at least one active index')
+    normalized = _normalize_rows_payload(rows, configured_length, require_nonempty=False)
+    if not normalized or not normalized[0]:
+        raise LayoutError('layout must include at least one cell')
     return normalized
 
 
@@ -249,10 +249,41 @@ def _expand_editor_primitive_cells(
         cells = _expand_line_cells(start, end, spacing)
         if len(cells) != count:
             raise LayoutError('editor line count does not match expanded cells')
-        if start_index + count - 1 > configured_length:
+
+        raw_inactive_offsets = primitive.get('inactiveOffsets')
+        if raw_inactive_offsets is None:
+            inactive_offsets: list[int] = []
+        else:
+            if not isinstance(raw_inactive_offsets, list):
+                raise LayoutError('editor line inactiveOffsets must be a list')
+            inactive_offsets = []
+            for offset in raw_inactive_offsets:
+                if isinstance(offset, bool) or not isinstance(offset, int):
+                    raise LayoutError('editor line inactiveOffsets must contain integers')
+                if offset < 0 or offset >= count:
+                    raise LayoutError('editor line inactiveOffsets must be within the expanded line cell range')
+                if offset in inactive_offsets:
+                    raise LayoutError('editor line inactiveOffsets must be unique')
+                inactive_offsets.append(offset)
+
+        active_count = count - len(inactive_offsets)
+        if active_count > 0 and start_index + active_count - 1 > configured_length:
             raise LayoutError(
-                f'editor line indices must be 1-{configured_length}, got {start_index + count - 1}'
+                f'editor line indices must be 1-{configured_length}, got {start_index + active_count - 1}'
             )
+
+        inactive_set = set(inactive_offsets)
+        expanded_cells: list[dict] = []
+        next_index = start_index
+        for offset, (x, y) in enumerate(cells):
+            if offset in inactive_set:
+                continue
+            expanded_cells.append({
+                'type': 'single',
+                'index': next_index,
+                'position': [x, y],
+            })
+            next_index += 1
 
         return (
             {
@@ -262,15 +293,9 @@ def _expand_editor_primitive_cells(
                 'spacing': spacing,
                 'start': [start[0], start[1]],
                 'end': [end[0], end[1]],
+                **({'inactiveOffsets': inactive_offsets} if inactive_offsets else {}),
             },
-            [
-                {
-                    'type': 'single',
-                    'index': start_index + offset,
-                    'position': [x, y],
-                }
-                for offset, (x, y) in enumerate(cells)
-            ],
+            expanded_cells,
             cells,
         )
 
