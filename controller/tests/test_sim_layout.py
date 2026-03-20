@@ -107,7 +107,7 @@ def test_load_layouts_for_devices_skips_missing_and_invalid(tmp_path, caplog):
     assert 'ignoring invalid layout for sim-2' in caplog.text
 
 
-def test_rows_to_canonical_csv_trims_empty_border():
+def test_rows_to_canonical_csv_preserves_explicit_empty_border():
     csv_text = rows_to_canonical_csv(
         [
             [None, None, None, None],
@@ -118,7 +118,7 @@ def test_rows_to_canonical_csv_trims_empty_border():
         configured_length=4,
     )
 
-    assert csv_text == "1,2\n3,4\n"
+    assert csv_text == ",,,\n,1,2,\n,3,4,\n,,,\n"
 
 
 def test_save_and_load_layout_for_editor_round_trip(tmp_path):
@@ -126,11 +126,7 @@ def test_save_and_load_layout_for_editor_round_trip(tmp_path):
         'sim-1',
         configured_length=4,
         layouts_dir=str(tmp_path),
-        rows=[
-            [None, None, None],
-            [None, 1, 2],
-            [None, 3, 4],
-        ],
+        rows=[[1, 2], [3, 4]],
         editor_payload={
             'version': 1,
             'primitives': [
@@ -256,6 +252,38 @@ def test_save_and_load_layout_for_editor_round_trip_with_line(tmp_path):
             'end': [4, 0],
         },
     ]
+
+    loaded = load_layout_for_editor('sim-1', configured_length=5, layouts_dir=str(tmp_path))
+    assert loaded == saved
+
+
+def test_save_and_load_layout_for_editor_round_trip_with_inactive(tmp_path):
+    saved = save_layout_for_editor(
+        'sim-1',
+        configured_length=5,
+        layouts_dir=str(tmp_path),
+        rows=[[None, 1]],
+        editor_payload={
+            'version': 1,
+            'primitives': [
+                {'type': 'inactive', 'position': [0, 0]},
+                {'type': 'single', 'index': 1, 'position': [1, 0]},
+            ],
+        },
+    )
+
+    expected_hash = canonical_csv_hash(",1\n")
+    assert saved == {
+        'rows': [[None, 1]],
+        'editor': {
+            'version': 1,
+            'csv_hash': expected_hash,
+            'primitives': [
+                {'type': 'inactive', 'position': [0, 0]},
+                {'type': 'single', 'index': 1, 'position': [1, 0]},
+            ],
+        },
+    }
 
     loaded = load_layout_for_editor('sim-1', configured_length=5, layouts_dir=str(tmp_path))
     assert loaded == saved

@@ -294,7 +294,7 @@ def test_save_layout_response_updates_layout_cache_and_snapshot(tmp_path):
     status, payload = relay._save_layout_response(
         'sim-1',
         {
-            'rows': [[None, 1, 2], [None, 3, 4]],
+            'rows': [[1, 2], [3, 4]],
             'editor': {
                 'version': 1,
                 'primitives': [

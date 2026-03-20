@@ -11,6 +11,7 @@ import {
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router';
 
 import IconBack from '../components/icons/IconBack.vue';
+import IconInactiveTool from '../components/icons/IconInactiveTool.vue';
 import IconLineTool from '../components/icons/IconLineTool.vue';
 import IconSave from '../components/icons/IconSave.vue';
 import IconSingle from '../components/icons/IconSingle.vue';
@@ -23,6 +24,7 @@ import {
   documentCenter,
   documentsEqual,
   GRID_SIZE,
+  placeInactivePrimitive,
   placeLinePrimitive,
   placeSinglePrimitive,
   previewLinePlacement,
@@ -49,7 +51,7 @@ interface DeviceMeta {
   strip: string;
 }
 
-type Tool = 'single' | 'line';
+type Tool = 'single' | 'line' | 'inactive';
 type PlacementBubble = {
   text: string;
   x: number;
@@ -194,7 +196,7 @@ const canSave = computed(
 const isDirty = computed(() => !documentsEqual(documentRef.value, baselineDocument.value));
 const currentSpacing = computed(() => Math.max(0, Math.floor(Number(lineSpacing.value) || 0)));
 const hoverBlocked = computed(() => {
-  if (activeTool.value !== 'single' || !hoverCell.value) {
+  if (activeTool.value === 'line' || !hoverCell.value) {
     return false;
   }
   return documentRef.value.occupied.has(`${hoverCell.value.x},${hoverCell.value.y}`);
@@ -524,11 +526,19 @@ function handleClick(event: MouseEvent): void {
     return;
   }
   try {
-    setDocument(placeSinglePrimitive(documentRef.value, cell.x, cell.y));
+    setDocument(
+      activeTool.value === 'inactive'
+        ? placeInactivePrimitive(documentRef.value, cell.x, cell.y)
+        : placeSinglePrimitive(documentRef.value, cell.x, cell.y),
+    );
   } catch (err) {
     showPlacementBubble(
       event,
-      err instanceof Error ? err.message : 'Failed to place LED.',
+      err instanceof Error
+        ? err.message
+        : activeTool.value === 'inactive'
+          ? 'Failed to place inactive cell.'
+          : 'Failed to place LED.',
     );
   }
 }
@@ -734,6 +744,17 @@ onBeforeUnmount(() => {
             >
               <IconLineTool />
               <span>Line</span>
+            </button>
+            <button
+              type="button"
+              class="tool-button"
+              :class="{ 'tool-button-active': activeTool === 'inactive' }"
+              :disabled="loadingLayout || saving"
+              @click="selectTool('inactive')"
+              title="Inactive cell tool"
+            >
+              <IconInactiveTool />
+              <span>Inactive</span>
             </button>
           </div>
           <label v-if="activeTool === 'line'" class="editor-inline-control">

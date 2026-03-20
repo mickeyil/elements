@@ -74,33 +74,11 @@ def _normalize_rows_payload(
     return normalized_rows
 
 
-def _trim_rows(rows: list[list[int | None]]) -> list[list[int | None]]:
-    coords: list[tuple[int, int]] = []
-    for y, row in enumerate(rows):
-        for x, cell in enumerate(row):
-            if cell is not None:
-                coords.append((x, y))
-
-    if not coords:
-        return []
-
-    left = min(x for x, _ in coords)
-    right = max(x for x, _ in coords)
-    top = min(y for _, y in coords)
-    bottom = max(y for _, y in coords)
-
-    trimmed: list[list[int | None]] = []
-    for y in range(top, bottom + 1):
-        trimmed.append(rows[y][left:right + 1])
-    return trimmed
-
-
 def rows_to_canonical_rows(rows: object, configured_length: int) -> list[list[int | None]]:
     normalized = _normalize_rows_payload(rows, configured_length, require_nonempty=True)
-    trimmed = _trim_rows(normalized)
-    if not trimmed:
+    if not normalized:
         raise LayoutError('layout must include at least one active index')
-    return trimmed
+    return normalized
 
 
 def parse_layout_csv(text: str, configured_length: int) -> dict:
@@ -208,9 +186,7 @@ def _expand_line_cells(
 def _expand_editor_primitive_cells(
     primitive: dict,
     configured_length: int,
-    max_x: int,
-    max_y: int,
-) -> tuple[dict, list[dict]]:
+) -> tuple[dict, list[dict], list[tuple[int, int]]]:
     primitive_type = primitive.get('type')
     if primitive_type == 'single':
         index = primitive.get('index')
@@ -222,8 +198,6 @@ def _expand_editor_primitive_cells(
             )
 
         x, y = _parse_position(primitive.get('position'), 'editor primitive position')
-        if x >= max_x or y >= max_y:
-            raise LayoutError('editor primitive position is outside the layout grid')
 
         return (
             {
@@ -231,11 +205,25 @@ def _expand_editor_primitive_cells(
                 'index': index,
                 'position': [x, y],
             },
-            [{
-                'type': 'single',
-                'index': index,
+            [
+                {
+                    'type': 'single',
+                    'index': index,
+                    'position': [x, y],
+                }
+            ],
+            [(x, y)],
+        )
+
+    if primitive_type == 'inactive':
+        x, y = _parse_position(primitive.get('position'), 'editor inactive position')
+        return (
+            {
+                'type': 'inactive',
                 'position': [x, y],
-            }],
+            },
+            [],
+            [(x, y)],
         )
 
     if primitive_type == 'line':
@@ -257,8 +245,6 @@ def _expand_editor_primitive_cells(
 
         start = _parse_position(primitive.get('start'), 'editor line start')
         end = _parse_position(primitive.get('end'), 'editor line end')
-        if start[0] >= max_x or start[1] >= max_y or end[0] >= max_x or end[1] >= max_y:
-            raise LayoutError('editor line endpoints are outside the layout grid')
 
         cells = _expand_line_cells(start, end, spacing)
         if len(cells) != count:
@@ -285,6 +271,7 @@ def _expand_editor_primitive_cells(
                 }
                 for offset, (x, y) in enumerate(cells)
             ],
+            cells,
         )
 
     raise LayoutError(f'unsupported editor primitive type: {primitive_type!r}')
@@ -314,28 +301,25 @@ def _normalize_editor_primitives(
     expanded: list[dict] = []
     seen_indices: set[int] = set()
     seen_positions: set[tuple[int, int]] = set()
-    max_y = len(rows)
-    max_x = max((len(row) for row in rows), default=0)
 
     for primitive in primitives:
         if not isinstance(primitive, dict):
             raise LayoutError('editor primitive must be an object')
-        normalized, expanded_cells = _expand_editor_primitive_cells(
+        normalized, expanded_cells, occupied_positions = _expand_editor_primitive_cells(
             primitive,
             configured_length,
-            max_x,
-            max_y,
         )
+
+        for x, y in occupied_positions:
+            if (x, y) in seen_positions:
+                raise LayoutError(f'duplicate editor primitive position: {(x, y)}')
+            seen_positions.add((x, y))
 
         for cell in expanded_cells:
             index = cell['index']
-            x, y = cell['position']
             if index in seen_indices:
                 raise LayoutError(f'duplicate editor primitive index: {index}')
-            if (x, y) in seen_positions:
-                raise LayoutError(f'duplicate editor primitive position: {(x, y)}')
             seen_indices.add(index)
-            seen_positions.add((x, y))
 
         norm.append(normalized)
         expanded.extend(expanded_cells)

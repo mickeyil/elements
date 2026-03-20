@@ -20,7 +20,12 @@ export interface LinePrimitive {
   end: [number, number];
 }
 
-export type Primitive = SinglePrimitive | LinePrimitive;
+export interface InactivePrimitive {
+  type: 'inactive';
+  position: [number, number];
+}
+
+export type Primitive = SinglePrimitive | LinePrimitive | InactivePrimitive;
 
 export interface EditorPayload {
   version: 1;
@@ -33,12 +38,22 @@ export interface LayoutDocumentPayload {
   editor: EditorPayload | null;
 }
 
-export interface OccupiedCell {
+export interface ActiveOccupiedCell {
+  kind: 'active';
   index: number;
   x: number;
   y: number;
   primitive: Primitive;
 }
+
+export interface InactiveOccupiedCell {
+  kind: 'inactive';
+  x: number;
+  y: number;
+  primitive: Primitive;
+}
+
+export type OccupiedCell = ActiveOccupiedCell | InactiveOccupiedCell;
 
 export interface EditorDocument {
   gridSize: number;
@@ -59,7 +74,7 @@ export interface SerializedDocument {
 }
 
 export interface LinePlacementPreview {
-  cells: OccupiedCell[];
+  cells: ActiveOccupiedCell[];
   error: string | null;
   primitive: Primitive;
 }
@@ -85,6 +100,13 @@ function clonePrimitive(primitive: Primitive): Primitive {
     };
   }
 
+  if (primitive.type === 'inactive') {
+    return {
+      type: 'inactive',
+      position: clonePoint(primitive.position),
+    };
+  }
+
   return {
     type: 'line',
     startIndex: primitive.startIndex,
@@ -95,17 +117,11 @@ function clonePrimitive(primitive: Primitive): Primitive {
   };
 }
 
-function primitiveHighestIndex(primitive: Primitive): number {
-  return primitive.type === 'single'
-    ? primitive.index
-    : primitive.startIndex + primitive.count - 1;
-}
-
-function computeCurrentIndex(primitives: readonly Primitive[], maxIndex: number): number {
-  if (!primitives.length) {
+function computeCurrentIndex(indices: ReadonlySet<number>, maxIndex: number): number {
+  if (!indices.size) {
     return 1;
   }
-  const highest = Math.max(...primitives.map((primitive) => primitiveHighestIndex(primitive)));
+  const highest = Math.max(...indices);
   return clampIndex(highest + 1, maxIndex);
 }
 
@@ -175,7 +191,20 @@ function expandPrimitive(primitive: Primitive, gridSize: number): OccupiedCell[]
     ensureGridCell(primitive.position, gridSize);
     return [
       {
+        kind: 'active',
         index: primitive.index,
+        x: primitive.position[0],
+        y: primitive.position[1],
+        primitive,
+      },
+    ];
+  }
+
+  if (primitive.type === 'inactive') {
+    ensureGridCell(primitive.position, gridSize);
+    return [
+      {
+        kind: 'inactive',
         x: primitive.position[0],
         y: primitive.position[1],
         primitive,
@@ -202,6 +231,7 @@ function expandPrimitive(primitive: Primitive, gridSize: number): OccupiedCell[]
   }
 
   return points.map((point, index) => ({
+    kind: 'active' as const,
     index: primitive.startIndex + index,
     x: point.x,
     y: point.y,
@@ -218,17 +248,19 @@ function buildDocument(maxIndex: number, primitives: readonly Primitive[]): Edit
     const primitive = clonePrimitive(original);
     const cells = expandPrimitive(primitive, GRID_SIZE);
     for (const cell of cells) {
-      if (cell.index < 1 || cell.index > maxIndex) {
-        throw new Error(`Loaded primitive index ${cell.index} is outside 1-${maxIndex}.`);
-      }
-      if (indices.has(cell.index)) {
-        throw new Error(`Duplicate primitive index ${cell.index}.`);
-      }
       const key = keyOf(cell.x, cell.y);
       if (occupied.has(key)) {
         throw new Error(`Duplicate occupied cell at ${cell.x},${cell.y}.`);
       }
-      indices.add(cell.index);
+      if (cell.kind === 'active') {
+        if (cell.index < 1 || cell.index > maxIndex) {
+          throw new Error(`Loaded primitive index ${cell.index} is outside 1-${maxIndex}.`);
+        }
+        if (indices.has(cell.index)) {
+          throw new Error(`Duplicate primitive index ${cell.index}.`);
+        }
+        indices.add(cell.index);
+      }
       occupied.set(key, cell);
     }
     normalized.push(primitive);
@@ -240,8 +272,8 @@ function buildDocument(maxIndex: number, primitives: readonly Primitive[]): Edit
     primitives: normalized,
     occupied,
     indices,
-    placedCount: occupied.size,
-    currentIndex: computeCurrentIndex(normalized, maxIndex),
+    placedCount: indices.size,
+    currentIndex: computeCurrentIndex(indices, maxIndex),
   };
 }
 
@@ -268,9 +300,55 @@ function rowsToPrimitives(rows: Array<Array<number | null>>): SinglePrimitive[] 
 function centeredOrigin(rows: Array<Array<number | null>>): Point {
   const width = Math.max(0, ...rows.map((row) => row.length));
   const height = rows.length;
+  return centeredOriginForDimensions(width, height);
+}
+
+function centeredOriginForDimensions(width: number, height: number): Point {
   return {
     x: Math.max(0, Math.floor((GRID_SIZE - width) / 2)),
     y: Math.max(0, Math.floor((GRID_SIZE - height) / 2)),
+  };
+}
+
+function primitiveBounds(primitives: readonly Primitive[]): {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+} | null {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+
+  for (const primitive of primitives) {
+    for (const cell of expandPrimitive(primitive, GRID_SIZE)) {
+      minX = Math.min(minX, cell.x);
+      minY = Math.min(minY, cell.y);
+      maxX = Math.max(maxX, cell.x);
+      maxY = Math.max(maxY, cell.y);
+    }
+  }
+
+  if (!Number.isFinite(minX)) {
+    return null;
+  }
+
+  return { minX, minY, maxX, maxY };
+}
+
+function centeredOriginForPrimitives(primitives: readonly Primitive[]): Point {
+  const bounds = primitiveBounds(primitives);
+  if (!bounds) {
+    return centeredOriginForDimensions(0, 0);
+  }
+
+  const width = bounds.maxX - bounds.minX + 1;
+  const height = bounds.maxY - bounds.minY + 1;
+  const origin = centeredOriginForDimensions(width, height);
+  return {
+    x: origin.x - bounds.minX,
+    y: origin.y - bounds.minY,
   };
 }
 
@@ -279,6 +357,13 @@ function translatePrimitive(primitive: Primitive, offset: Point): Primitive {
     return {
       type: 'single',
       index: primitive.index,
+      position: [primitive.position[0] + offset.x, primitive.position[1] + offset.y],
+    };
+  }
+
+  if (primitive.type === 'inactive') {
+    return {
+      type: 'inactive',
       position: [primitive.position[0] + offset.x, primitive.position[1] + offset.y],
     };
   }
@@ -306,10 +391,12 @@ export function createDocumentFromLayout(
   }
 
   const rows = Array.isArray(payload.rows) ? payload.rows : [];
-  const offset = centeredOrigin(rows);
   const basePrimitives = payload.editor?.primitives?.length
     ? payload.editor.primitives
     : rowsToPrimitives(rows);
+  const offset = payload.editor?.primitives?.length
+    ? centeredOriginForPrimitives(basePrimitives)
+    : centeredOrigin(rows);
 
   return buildDocument(maxIndex, basePrimitives.map((primitive) => translatePrimitive(primitive, offset)));
 }
@@ -333,16 +420,25 @@ function validatePlacementCells(
     return 'Line placement produced no cells.';
   }
 
+  const nextIndices = new Set<number>();
+  const nextPositions = new Set<string>();
   for (const cell of cells) {
+    const key = keyOf(cell.x, cell.y);
+    if (nextPositions.has(key) || document.occupied.has(key)) {
+      return 'That placement overlaps an occupied cell.';
+    }
+    nextPositions.add(key);
+
+    if (cell.kind !== 'active') {
+      continue;
+    }
     if (cell.index < 1 || cell.index > document.maxIndex) {
       return `Placement exceeds the configured length ${document.maxIndex}.`;
     }
-    if (document.indices.has(cell.index)) {
+    if (nextIndices.has(cell.index) || document.indices.has(cell.index)) {
       return `Index ${cell.index} is already placed.`;
     }
-    if (document.occupied.has(keyOf(cell.x, cell.y))) {
-      return 'That placement overlaps an existing LED.';
-    }
+    nextIndices.add(cell.index);
   }
 
   return null;
@@ -355,6 +451,7 @@ export function previewLinePlacement(
   spacing: number,
 ): LinePlacementPreview {
   const cells = expandLineCells(start, end, spacing).map((point, index) => ({
+    kind: 'active' as const,
     x: point.x,
     y: point.y,
     index: document.currentIndex + index,
@@ -402,6 +499,24 @@ export function placeSinglePrimitive(
   const nextPrimitive: SinglePrimitive = {
     type: 'single',
     index: document.currentIndex,
+    position: [x, y],
+  };
+
+  const validation = validatePlacementCells(document, expandPrimitive(nextPrimitive, document.gridSize));
+  if (validation) {
+    throw new Error(validation);
+  }
+
+  return buildDocument(document.maxIndex, [...document.primitives, nextPrimitive]);
+}
+
+export function placeInactivePrimitive(
+  document: EditorDocument,
+  x: number,
+  y: number,
+): EditorDocument {
+  const nextPrimitive: InactivePrimitive = {
+    type: 'inactive',
     position: [x, y],
   };
 
@@ -464,6 +579,9 @@ function primitivesEqual(left: Primitive, right: Primitive): boolean {
       left.position[1] === right.position[1]
     );
   }
+  if (left.type === 'inactive' && right.type === 'inactive') {
+    return left.position[0] === right.position[0] && left.position[1] === right.position[1];
+  }
   if (left.type === 'line' && right.type === 'line') {
     return (
       left.startIndex === right.startIndex &&
@@ -496,7 +614,7 @@ export function documentsEqual(left: EditorDocument, right: EditorDocument): boo
 }
 
 export function serializeDocument(document: EditorDocument): SerializedDocument {
-  if (!document.primitives.length) {
+  if (document.placedCount < 1) {
     throw new Error('Place at least one LED before saving.');
   }
 
@@ -512,7 +630,9 @@ export function serializeDocument(document: EditorDocument): SerializedDocument 
 
   const rows = Array.from({ length: height }, () => Array<number | null>(width).fill(null));
   for (const cell of cells) {
-    rows[cell.y - minY][cell.x - minX] = cell.index;
+    if (cell.kind === 'active') {
+      rows[cell.y - minY][cell.x - minX] = cell.index;
+    }
   }
 
   const primitives = document.primitives.map((primitive) => {
@@ -520,6 +640,13 @@ export function serializeDocument(document: EditorDocument): SerializedDocument 
       return {
         type: 'single' as const,
         index: primitive.index,
+        position: [primitive.position[0] - minX, primitive.position[1] - minY] as [number, number],
+      };
+    }
+
+    if (primitive.type === 'inactive') {
+      return {
+        type: 'inactive' as const,
         position: [primitive.position[0] - minX, primitive.position[1] - minY] as [number, number],
       };
     }

@@ -1,4 +1,4 @@
-import type { EditorDocument, OccupiedCell, Point } from './editorModel';
+import type { ActiveOccupiedCell, EditorDocument, OccupiedCell, Point } from './editorModel';
 
 export const DEFAULT_ZOOM = 18;
 export const MIN_ZOOM = 4;
@@ -11,7 +11,7 @@ export interface EditorViewport {
 }
 
 export interface EditorPreview {
-  cells: OccupiedCell[];
+  cells: ActiveOccupiedCell[];
   error: string | null;
   anchor: Point | null;
 }
@@ -21,6 +21,7 @@ const GRID_LINE = 'rgba(255, 255, 255, 0.08)';
 const HOVER = 'rgba(108, 162, 255, 0.18)';
 const HOVER_BLOCKED = 'rgba(182, 83, 83, 0.24)';
 const PLACED = '#6ca2ff';
+const INACTIVE = 'rgba(116, 123, 132, 0.38)';
 const PREVIEW = 'rgba(108, 162, 255, 0.42)';
 const PREVIEW_BLOCKED = 'rgba(182, 83, 83, 0.36)';
 const PREVIEW_COLLISION = 'rgba(161, 34, 34, 0.62)';
@@ -90,7 +91,7 @@ export function screenToCell(
 function drawCell(
   ctx: CanvasRenderingContext2D,
   viewport: EditorViewport,
-  cell: { x: number; y: number; index: number },
+  cell: { x: number; y: number; index?: number },
   color: string,
   options?: { showIndex?: boolean; marker?: string; markerZoomThreshold?: number },
 ): void {
@@ -115,7 +116,7 @@ function drawCell(
     return;
   }
 
-  if (options?.showIndex !== false && viewport.zoom >= 16) {
+  if (options?.showIndex !== false && cell.index != null && viewport.zoom >= 16) {
     ctx.fillStyle = LABEL;
     ctx.font = `${Math.max(10, viewport.zoom * 0.42)}px "Elements Mono", monospace`;
     ctx.textAlign = 'center';
@@ -185,7 +186,11 @@ export function renderEditor(
     if (cell.x < startX - 1 || cell.x > endX || cell.y < startY - 1 || cell.y > endY) {
       continue;
     }
-    drawCell(ctx, viewport, cell, PLACED);
+    if (cell.kind === 'active') {
+      drawCell(ctx, viewport, cell, PLACED);
+    } else {
+      drawCell(ctx, viewport, cell, INACTIVE, { showIndex: false });
+    }
   }
 
   if (preview) {
