@@ -9,8 +9,8 @@
     stroke-linejoin="miter"
     stroke-width="1.7"
   >
-    <path d="M4 9h10a5 5 0 0 1 0 10H12" />
-    <path d="M7 6 4 9l3 3" />
+    <path d="M17 8a7 7 0 1 1-2.8-3" />
+    <path d="M17 3v5h-5" />
   </svg>
 </template>
 

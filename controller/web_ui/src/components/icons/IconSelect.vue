@@ -3,14 +3,9 @@
     aria-hidden="true"
     class="icon"
     viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-linecap="square"
-    stroke-linejoin="miter"
-    stroke-width="1.7"
+    fill="currentColor"
   >
-    <path d="M4 9h10a5 5 0 0 1 0 10H12" />
-    <path d="M7 6 4 9l3 3" />
+    <path d="M6 3.5v13.2l3.55-3.15 2.7 6.2 2.3-1-2.7-6.15 4.89-.18L6 3.5Z" />
   </svg>
 </template>
 

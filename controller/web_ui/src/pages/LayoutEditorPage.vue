@@ -11,10 +11,14 @@ import {
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router';
 
 import IconBack from '../components/icons/IconBack.vue';
+import IconCCW from '../components/icons/IconCCW.vue';
 import IconCircleTool from '../components/icons/IconCircleTool.vue';
+import IconCW from '../components/icons/IconCW.vue';
 import IconInactiveTool from '../components/icons/IconInactiveTool.vue';
 import IconLineTool from '../components/icons/IconLineTool.vue';
+import IconRecenter from '../components/icons/IconRecenter.vue';
 import IconSave from '../components/icons/IconSave.vue';
+import IconSelect from '../components/icons/IconSelect.vue';
 import IconSingle from '../components/icons/IconSingle.vue';
 import IconUndo from '../components/icons/IconUndo.vue';
 import { useInjectedRelayState, type SnapshotDevice } from '../composables/useRelayState';
@@ -71,7 +75,7 @@ interface DeviceMeta {
   strip: string;
 }
 
-type Tool = 'single' | 'line' | 'circle';
+type Tool = 'select' | 'single' | 'line' | 'circle';
 type PlacementBubble = {
   text: string;
   x: number;
@@ -119,7 +123,7 @@ const documentRef = shallowRef<EditorDocument>(createEmptyDocument(1));
 const baselineDocument = shallowRef<EditorDocument>(createEmptyDocument(1));
 const baseCsvHash = ref<string | null>(null);
 const resolvedDeviceMeta = shallowRef<DeviceMeta | null>(null);
-const activeTool = ref<Tool>('single');
+const activeTool = ref<Tool>('select');
 const toolPopoverOpen = ref<null | 'line' | 'circle'>(null);
 const contextMenu = ref<{ x: number; y: number } | null>(null);
 const lineSpacing = ref(0);
@@ -377,7 +381,10 @@ const canvasCursor = computed(() => {
   if (hoveredHandle.value) {
     return 'grab';
   }
-  return 'crosshair';
+  if (activeTool.value !== 'select') {
+    return 'crosshair';
+  }
+  return 'default';
 });
 const selectedPrimitiveLabel = computed(() => {
   if (!selectedPrimitive.value) {
@@ -944,7 +951,7 @@ async function loadInitialDocument(device: DeviceMeta): Promise<void> {
   clearSelection();
   closeToolPopover();
   closeInactivePanel();
-  activeTool.value = 'single';
+  activeTool.value = 'select';
   const token = ++loadToken;
 
   try {
@@ -1205,6 +1212,14 @@ function handleClick(event: MouseEvent): void {
     commitCircleAt(cell, event);
     return;
   }
+  if (activeTool.value === 'select') {
+    if (documentRef.value.occupied.has(`${cell.x},${cell.y}`)) {
+      selectPrimitiveAtCell(cell);
+      return;
+    }
+    clearSelection();
+    return;
+  }
   if (documentRef.value.occupied.has(`${cell.x},${cell.y}`)) {
     selectPrimitiveAtCell(cell);
     return;
@@ -1291,9 +1306,11 @@ function selectTool(tool: Tool): void {
   clearDrag();
   clearLineDraft();
   clearCircleDraft();
-  clearSelection();
   clearStatusNotice();
   dismissPlacementBubble();
+  if (tool !== 'select') {
+    clearSelection();
+  }
   toolPopoverOpen.value = tool === 'line' || tool === 'circle' ? tool : null;
 }
 
@@ -1372,10 +1389,17 @@ function handleKeyDown(event: KeyboardEvent): void {
     return;
   }
 
-  if (event.code === 'Escape' && selectedPrimitive.value) {
+  if (event.code === 'Escape' && activeTool.value === 'select' && selectedPrimitive.value) {
     event.preventDefault();
     clearSelection();
     dismissPlacementBubble();
+    return;
+  }
+
+  if (event.code === 'Escape' && activeTool.value !== 'select') {
+    event.preventDefault();
+    selectTool('select');
+    requestRender();
     return;
   }
 
@@ -1583,6 +1607,17 @@ onBeforeUnmount(() => {
             <button
               type="button"
               class="tool-button editor-tool-button"
+              :class="{ 'tool-button-active': activeTool === 'select' }"
+              :disabled="loadingLayout || saving"
+              title="Select tool"
+              aria-label="Select tool"
+              @click="selectTool('select')"
+            >
+              <IconSelect />
+            </button>
+            <button
+              type="button"
+              class="tool-button editor-tool-button"
               :class="{ 'tool-button-active': activeTool === 'single' }"
               :disabled="loadingLayout || saving"
               title="Single LED tool"
@@ -1646,18 +1681,22 @@ onBeforeUnmount(() => {
                       class="tool-button editor-direction-button"
                       :class="{ 'tool-button-active': circleDirection === 'cw' }"
                       :disabled="loadingLayout || saving"
+                      title="Clockwise"
+                      aria-label="Clockwise"
                       @click="circleDirection = 'cw'"
                     >
-                      <span>CW</span>
+                      <IconCW />
                     </button>
                     <button
                       type="button"
                       class="tool-button editor-direction-button"
                       :class="{ 'tool-button-active': circleDirection === 'ccw' }"
                       :disabled="loadingLayout || saving"
+                      title="Counter-clockwise"
+                      aria-label="Counter-clockwise"
                       @click="circleDirection = 'ccw'"
                     >
-                      <span>CCW</span>
+                      <IconCCW />
                     </button>
                   </div>
                 </div>
@@ -1744,6 +1783,16 @@ onBeforeUnmount(() => {
 
         <div class="editor-command-right">
           <strong class="editor-placed-count">{{ placedCount }} / {{ deviceLength }}</strong>
+          <button
+            type="button"
+            class="ghost-button editor-icon-button"
+            :disabled="loadingLayout || saving"
+            title="Recenter"
+            aria-label="Recenter"
+            @click="resetViewport"
+          >
+            <IconRecenter />
+          </button>
           <button
             type="button"
             class="ghost-button editor-icon-button"
@@ -1870,18 +1919,22 @@ onBeforeUnmount(() => {
                   class="tool-button editor-direction-button"
                   :class="{ 'tool-button-active': circleEditDirection === 'cw' }"
                   :disabled="saving"
+                  title="Clockwise"
+                  aria-label="Clockwise"
                   @click="circleEditDirection = 'cw'"
                 >
-                  <span>CW</span>
+                  <IconCW />
                 </button>
                 <button
                   type="button"
                   class="tool-button editor-direction-button"
                   :class="{ 'tool-button-active': circleEditDirection === 'ccw' }"
                   :disabled="saving"
+                  title="Counter-clockwise"
+                  aria-label="Counter-clockwise"
                   @click="circleEditDirection = 'ccw'"
                 >
-                  <span>CCW</span>
+                  <IconCCW />
                 </button>
               </div>
             </div>
