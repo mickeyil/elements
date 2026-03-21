@@ -861,6 +861,53 @@ export function removePrimitive(document: EditorDocument, primitiveIndex: number
   );
 }
 
+export function documentWithoutPrimitive(
+  document: EditorDocument,
+  primitiveIndex: number,
+): EditorDocument {
+  if (primitiveIndex < 0 || primitiveIndex >= document.primitives.length) {
+    throw new Error('Primitive is no longer available.');
+  }
+  return setCurrentIndex(
+    buildDocument(
+      document.maxIndex,
+      document.primitives.filter((_, index) => index !== primitiveIndex),
+    ),
+    document.currentIndex,
+  );
+}
+
+export function previewPrimitiveReplacement(
+  document: EditorDocument,
+  primitiveIndex: number,
+  nextPrimitive: Primitive,
+): PlacementPreview {
+  if (primitiveIndex < 0 || primitiveIndex >= document.primitives.length) {
+    throw new Error('Primitive is no longer available.');
+  }
+
+  const nextPrimitives = assignSequentialIndices(
+    document.primitives.map((primitive, index) =>
+      index === primitiveIndex ? nextPrimitive : primitive,
+    ),
+  );
+  const primitive = nextPrimitives[primitiveIndex];
+  const cells = expandPrimitive(primitive, document.gridSize);
+
+  let error: string | null = null;
+  try {
+    buildDocument(document.maxIndex, nextPrimitives);
+  } catch (err) {
+    error = err instanceof Error ? err.message : 'Failed to preview primitive.';
+  }
+
+  return {
+    cells,
+    error,
+    primitive,
+  };
+}
+
 function normalizeTargetIndices(document: EditorDocument, indices: readonly number[]): number[] {
   const normalized = [...new Set(indices)].sort((left, right) => left - right);
   for (const index of normalized) {

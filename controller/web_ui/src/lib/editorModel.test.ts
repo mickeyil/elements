@@ -6,6 +6,7 @@ import {
   circleStartFromAngle,
   createDocumentFromLayout,
   createEmptyDocument,
+  documentWithoutPrimitive,
   expandCircleCells,
   expandLineCells,
   markIndicesInactive,
@@ -13,6 +14,7 @@ import {
   placeLinePrimitive,
   placeSinglePrimitive,
   primitiveIndexAtCell,
+  previewPrimitiveReplacement,
   previewCirclePlacement,
   previewLinePlacement,
   reactivateIndex,
@@ -530,5 +532,52 @@ describe('editorModel inactive LEDs', () => {
       },
     ]);
     expect(removed.currentIndex).toBe(2);
+  });
+
+  it('builds a preview document without reindexing the remaining primitives', () => {
+    const original = placeSinglePrimitive(
+      placeLinePrimitive(createEmptyDocument(20), { x: 0, y: 0 }, { x: 2, y: 0 }, 0),
+      5,
+      0,
+    );
+
+    const reduced = documentWithoutPrimitive(original, 0);
+
+    expect(reduced.primitives).toEqual([
+      {
+        type: 'single',
+        index: 4,
+        position: [5, 0],
+      },
+    ]);
+    expect(reduced.currentIndex).toBe(original.currentIndex);
+  });
+
+  it('previews primitive replacement against full reindexing rules', () => {
+    const original = placeSinglePrimitive(
+      placeLinePrimitive(createEmptyDocument(20), { x: 0, y: 0 }, { x: 2, y: 0 }, 0),
+      5,
+      0,
+    );
+
+    const preview = previewPrimitiveReplacement(original, 0, {
+      type: 'line',
+      startIndex: 999,
+      count: 5,
+      spacing: 0,
+      start: [0, 0],
+      end: [4, 0],
+    });
+
+    expect(preview.error).toBeNull();
+    expect(preview.primitive).toEqual({
+      type: 'line',
+      startIndex: 1,
+      count: 5,
+      spacing: 0,
+      start: [0, 0],
+      end: [4, 0],
+    });
+    expect(preview.cells.map((cell) => cell.index)).toEqual([1, 2, 3, 4, 5]);
   });
 });

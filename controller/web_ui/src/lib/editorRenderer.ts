@@ -16,6 +16,12 @@ export interface EditorPreview {
   anchor: Point | null;
 }
 
+export interface EditorHandle {
+  x: number;
+  y: number;
+  active?: boolean;
+}
+
 const SURFACE = '#081015';
 const GRID_LINE = 'rgba(255, 255, 255, 0.08)';
 const HOVER = 'rgba(108, 162, 255, 0.18)';
@@ -28,6 +34,9 @@ const PREVIEW_COLLISION = 'rgba(161, 34, 34, 0.62)';
 const ANCHOR = 'rgba(108, 162, 255, 0.28)';
 const LABEL = '#091015';
 const COLLISION_MARK = '#ffe0e0';
+const HANDLE_FILL = 'rgba(8, 16, 21, 0.95)';
+const HANDLE_STROKE = '#a6c4ff';
+const HANDLE_ACTIVE_STROKE = '#ffd166';
 
 export function clampZoom(nextZoom: number): number {
   return Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, nextZoom));
@@ -141,6 +150,24 @@ function drawCell(
   }
 }
 
+function drawHandle(
+  ctx: CanvasRenderingContext2D,
+  viewport: EditorViewport,
+  handle: EditorHandle,
+): void {
+  const size = Math.max(6, viewport.zoom * 0.42);
+  const sx = viewport.offsetX + handle.x * viewport.zoom + viewport.zoom / 2;
+  const sy = viewport.offsetY + handle.y * viewport.zoom + viewport.zoom / 2;
+  const left = sx - size / 2;
+  const top = sy - size / 2;
+
+  ctx.fillStyle = HANDLE_FILL;
+  ctx.fillRect(left, top, size, size);
+  ctx.strokeStyle = handle.active ? HANDLE_ACTIVE_STROKE : HANDLE_STROKE;
+  ctx.lineWidth = Math.max(1.25, viewport.zoom * 0.08);
+  ctx.strokeRect(left, top, size, size);
+}
+
 export function renderEditor(
   canvas: HTMLCanvasElement,
   document: EditorDocument,
@@ -149,6 +176,7 @@ export function renderEditor(
   preview: EditorPreview | null,
   hoverBlocked = false,
   selectedCells?: ReadonlySet<string>,
+  handles?: readonly EditorHandle[],
 ): void {
   resizeCanvasToDisplaySize(canvas);
   const ctx = canvas.getContext('2d');
@@ -225,6 +253,15 @@ export function renderEditor(
         isCollision ? PREVIEW_COLLISION : color,
         isCollision ? { showIndex: false, marker: 'X', markerZoomThreshold: 10 } : undefined,
       );
+    }
+  }
+
+  if (handles?.length) {
+    for (const handle of handles) {
+      if (handle.x < startX - 1 || handle.x > endX || handle.y < startY - 1 || handle.y > endY) {
+        continue;
+      }
+      drawHandle(ctx, viewport, handle);
     }
   }
 }
