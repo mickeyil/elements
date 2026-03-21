@@ -227,6 +227,18 @@ function normalizeAngle(angle: number): number {
   return angle < 0 ? angle + Math.PI * 2 : angle;
 }
 
+export function circleRadiusFromPoints(center: Point, start: Point): number {
+  return Math.max(1, Math.round(Math.hypot(start.x - center.x, start.y - center.y)));
+}
+
+export function circleStartFromAngle(center: Point, radius: number, angle: number): Point {
+  const normalizedRadius = Math.max(1, Math.round(radius));
+  return {
+    x: Math.round(center.x + normalizedRadius * Math.cos(angle)),
+    y: Math.round(center.y + normalizedRadius * Math.sin(angle)),
+  };
+}
+
 function buildRawCirclePerimeter(center: Point, radius: number): Point[] {
   const unique = new Map<string, Point>();
   let x = radius;
@@ -281,7 +293,7 @@ export function expandCircleCells(
 ): Point[] {
   const normalizedSpacing = normalizeSpacing(spacing);
   const normalizedDirection = normalizeCircleDirection(direction);
-  const radius = Math.max(1, Math.round(Math.hypot(start.x - center.x, start.y - center.y)));
+  const radius = circleRadiusFromPoints(center, start);
   const raw = buildRawCirclePerimeter(center, radius);
   const ordered = [...raw].sort((left, right) => {
     const leftAngle = normalizeAngle(Math.atan2(left.y - center.y, left.x - center.x));

@@ -20,12 +20,16 @@ import IconUndo from '../components/icons/IconUndo.vue';
 import { useInjectedRelayState, type SnapshotDevice } from '../composables/useRelayState';
 import {
   type CirclePrimitive,
+  circleRadiusFromPoints,
+  circleStartFromAngle,
   cloneDocument,
   clearInactiveIndices,
   createDocumentFromLayout,
   createEmptyDocument,
   documentCenter,
   documentsEqual,
+  expandCircleCells,
+  expandLineCells,
   GRID_SIZE,
   inactiveIndices,
   markIndicesInactive,
@@ -109,6 +113,16 @@ const circleDirection = ref<'cw' | 'ccw'>('cw');
 const selectedPrimitiveIndex = ref<number | null>(null);
 const singleEditX = ref(0);
 const singleEditY = ref(0);
+const lineEditStartX = ref(0);
+const lineEditStartY = ref(0);
+const lineEditEndX = ref(0);
+const lineEditEndY = ref(0);
+const lineEditSpacing = ref(0);
+const circleEditCenterX = ref(0);
+const circleEditCenterY = ref(0);
+const circleEditRadius = ref(1);
+const circleEditDirection = ref<'cw' | 'ccw'>('cw');
+const circleEditSpacing = ref(0);
 const selectionError = ref('');
 
 let spacePressed = false;
@@ -363,6 +377,51 @@ function syncSelectedSingleDraft(): void {
   singleEditY.value = selectedSingle.value.position[1];
 }
 
+function syncSelectedLineDraft(): void {
+  if (!selectedLine.value) {
+    return;
+  }
+  lineEditStartX.value = selectedLine.value.start[0];
+  lineEditStartY.value = selectedLine.value.start[1];
+  lineEditEndX.value = selectedLine.value.end[0];
+  lineEditEndY.value = selectedLine.value.end[1];
+  lineEditSpacing.value = selectedLine.value.spacing;
+}
+
+function syncSelectedCircleDraft(): void {
+  if (!selectedCircle.value) {
+    return;
+  }
+  const center = {
+    x: selectedCircle.value.center[0],
+    y: selectedCircle.value.center[1],
+  };
+  const start = {
+    x: selectedCircle.value.start[0],
+    y: selectedCircle.value.start[1],
+  };
+  circleEditCenterX.value = center.x;
+  circleEditCenterY.value = center.y;
+  circleEditRadius.value = circleRadiusFromPoints(center, start);
+  circleEditDirection.value = selectedCircle.value.direction;
+  circleEditSpacing.value = selectedCircle.value.spacing;
+}
+
+function parsePanelInteger(value: number, message: string): number {
+  const normalized = Math.floor(Number(value));
+  if (!Number.isFinite(normalized)) {
+    throw new Error(message);
+  }
+  return normalized;
+}
+
+function trimInactiveOffsets(inactiveOffsets: number[] | undefined, count: number): number[] | undefined {
+  const trimmed = (inactiveOffsets ?? []).filter(
+    (offset) => Number.isInteger(offset) && offset >= 0 && offset < count,
+  );
+  return trimmed.length ? trimmed : undefined;
+}
+
 function selectPrimitiveAtCell(cell: Point): boolean {
   const primitiveIndex = primitiveIndexAtCell(documentRef.value, cell.x, cell.y);
   if (primitiveIndex == null) {
@@ -370,7 +429,6 @@ function selectPrimitiveAtCell(cell: Point): boolean {
   }
   selectedPrimitiveIndex.value = primitiveIndex;
   selectionError.value = '';
-  syncSelectedSingleDraft();
   return true;
 }
 
@@ -464,14 +522,9 @@ function applySelectedSingleEdit(): void {
     return;
   }
 
-  const x = Math.floor(Number(singleEditX.value));
-  const y = Math.floor(Number(singleEditY.value));
-  if (!Number.isFinite(x) || !Number.isFinite(y)) {
-    selectionError.value = 'Coordinates must be integers.';
-    return;
-  }
-
   try {
+    const x = parsePanelInteger(singleEditX.value, 'Coordinates must be integers.');
+    const y = parsePanelInteger(singleEditY.value, 'Coordinates must be integers.');
     setDocument(
       replacePrimitive(documentRef.value, selectedPrimitiveIndex.value, {
         type: 'single',
@@ -484,6 +537,96 @@ function applySelectedSingleEdit(): void {
     syncSelectedSingleDraft();
   } catch (err) {
     selectionError.value = err instanceof Error ? err.message : 'Failed to update LED.';
+  }
+}
+
+function applySelectedLineEdit(): void {
+  const primitive = selectedLine.value;
+  if (!primitive || selectedPrimitiveIndex.value == null) {
+    return;
+  }
+
+  try {
+    const start = {
+      x: parsePanelInteger(lineEditStartX.value, 'Line coordinates must be integers.'),
+      y: parsePanelInteger(lineEditStartY.value, 'Line coordinates must be integers.'),
+    };
+    const end = {
+      x: parsePanelInteger(lineEditEndX.value, 'Line coordinates must be integers.'),
+      y: parsePanelInteger(lineEditEndY.value, 'Line coordinates must be integers.'),
+    };
+    const spacing = parsePanelInteger(lineEditSpacing.value, 'Spacing must be an integer.');
+    if (spacing < 0) {
+      selectionError.value = 'Spacing must be zero or greater.';
+      return;
+    }
+
+    const count = expandLineCells(start, end, spacing).length;
+    const inactiveOffsets = trimInactiveOffsets(primitive.inactiveOffsets, count);
+    setDocument(
+      replacePrimitive(documentRef.value, selectedPrimitiveIndex.value, {
+        type: 'line',
+        startIndex: primitive.startIndex,
+        count,
+        spacing,
+        start: [start.x, start.y],
+        end: [end.x, end.y],
+        ...(inactiveOffsets ? { inactiveOffsets } : {}),
+      }),
+    );
+    selectionError.value = '';
+    syncSelectedLineDraft();
+  } catch (err) {
+    selectionError.value = err instanceof Error ? err.message : 'Failed to update line.';
+  }
+}
+
+function applySelectedCircleEdit(): void {
+  const primitive = selectedCircle.value;
+  if (!primitive || selectedPrimitiveIndex.value == null) {
+    return;
+  }
+
+  try {
+    const center = {
+      x: parsePanelInteger(circleEditCenterX.value, 'Circle center must use integer coordinates.'),
+      y: parsePanelInteger(circleEditCenterY.value, 'Circle center must use integer coordinates.'),
+    };
+    const radius = parsePanelInteger(circleEditRadius.value, 'Radius must be an integer.');
+    const spacing = parsePanelInteger(circleEditSpacing.value, 'Spacing must be an integer.');
+    if (radius < 1) {
+      selectionError.value = 'Radius must be at least 1.';
+      return;
+    }
+    if (spacing < 0) {
+      selectionError.value = 'Spacing must be zero or greater.';
+      return;
+    }
+
+    const direction = circleEditDirection.value;
+    const previousCenter = { x: primitive.center[0], y: primitive.center[1] };
+    const previousStart = { x: primitive.start[0], y: primitive.start[1] };
+    const angle = Math.atan2(previousStart.y - previousCenter.y, previousStart.x - previousCenter.x);
+    const start = circleStartFromAngle(center, radius, angle);
+    const count = expandCircleCells(center, start, spacing, direction).length;
+    const inactiveOffsets = trimInactiveOffsets(primitive.inactiveOffsets, count);
+
+    setDocument(
+      replacePrimitive(documentRef.value, selectedPrimitiveIndex.value, {
+        type: 'circle',
+        startIndex: primitive.startIndex,
+        count,
+        spacing,
+        center: [center.x, center.y],
+        start: [start.x, start.y],
+        direction,
+        ...(inactiveOffsets ? { inactiveOffsets } : {}),
+      }),
+    );
+    selectionError.value = '';
+    syncSelectedCircleDraft();
+  } catch (err) {
+    selectionError.value = err instanceof Error ? err.message : 'Failed to update circle.';
   }
 }
 
@@ -997,14 +1140,33 @@ watch(
     selectionError.value = '';
     if (primitive.type === 'single') {
       syncSelectedSingleDraft();
+      return;
     }
+    if (primitive.type === 'line') {
+      syncSelectedLineDraft();
+      return;
+    }
+    syncSelectedCircleDraft();
   },
   { immediate: true },
 );
 
-watch([documentRef, viewport, hoverCell, activeTool, lineStart, circleCenter, lineSpacing, circleDirection], () => {
-  requestRender();
-});
+watch(
+  [
+    documentRef,
+    viewport,
+    hoverCell,
+    activeTool,
+    lineStart,
+    circleCenter,
+    lineSpacing,
+    circleDirection,
+    selectedPrimitiveIndex,
+  ],
+  () => {
+    requestRender();
+  },
+);
 
 watch(
   () => canvasRef.value,
@@ -1326,7 +1488,7 @@ onBeforeUnmount(() => {
             </label>
             <button
               type="button"
-              class="ghost-button"
+              class="ghost-button editor-selection-apply"
               :disabled="saving"
               @click="applySelectedSingleEdit"
             >
@@ -1334,18 +1496,132 @@ onBeforeUnmount(() => {
             </button>
           </div>
 
-          <div v-else-if="selectedLine" class="editor-selection-summary">
-            <p>Start {{ selectedLine.start[0] }},{{ selectedLine.start[1] }}</p>
-            <p>End {{ selectedLine.end[0] }},{{ selectedLine.end[1] }}</p>
-            <p>Spacing {{ selectedLine.spacing }} · {{ selectedLine.count }} LEDs</p>
-            <p>Line geometry editing comes next.</p>
+          <div v-else-if="selectedLine" class="editor-selection-fields">
+            <label class="editor-selection-field">
+              <span class="editor-inline-label">Start X</span>
+              <input
+                v-model.number="lineEditStartX"
+                class="spacing-input"
+                type="number"
+                step="1"
+                :disabled="saving"
+              />
+            </label>
+            <label class="editor-selection-field">
+              <span class="editor-inline-label">Start Y</span>
+              <input
+                v-model.number="lineEditStartY"
+                class="spacing-input"
+                type="number"
+                step="1"
+                :disabled="saving"
+              />
+            </label>
+            <label class="editor-selection-field">
+              <span class="editor-inline-label">End X</span>
+              <input
+                v-model.number="lineEditEndX"
+                class="spacing-input"
+                type="number"
+                step="1"
+                :disabled="saving"
+              />
+            </label>
+            <label class="editor-selection-field">
+              <span class="editor-inline-label">End Y</span>
+              <input
+                v-model.number="lineEditEndY"
+                class="spacing-input"
+                type="number"
+                step="1"
+                :disabled="saving"
+              />
+            </label>
+            <label class="editor-selection-field">
+              <span class="editor-inline-label">Spacing</span>
+              <input
+                v-model.number="lineEditSpacing"
+                class="spacing-input"
+                type="number"
+                min="0"
+                step="1"
+                :disabled="saving"
+              />
+            </label>
+            <p class="editor-selection-detail">Current count: {{ selectedLine.count }} LEDs</p>
+            <button
+              type="button"
+              class="ghost-button editor-selection-apply"
+              :disabled="saving"
+              @click="applySelectedLineEdit"
+            >
+              Apply
+            </button>
           </div>
 
-          <div v-else-if="selectedCircle" class="editor-selection-summary">
-            <p>Center {{ selectedCircle.center[0] }},{{ selectedCircle.center[1] }}</p>
-            <p>Start {{ selectedCircle.start[0] }},{{ selectedCircle.start[1] }}</p>
-            <p>{{ selectedCircle.direction.toUpperCase() }} · spacing {{ selectedCircle.spacing }} · {{ selectedCircle.count }} LEDs</p>
-            <p>Circle geometry editing comes next.</p>
+          <div v-else-if="selectedCircle" class="editor-selection-fields">
+            <label class="editor-selection-field">
+              <span class="editor-inline-label">Center X</span>
+              <input
+                v-model.number="circleEditCenterX"
+                class="spacing-input"
+                type="number"
+                step="1"
+                :disabled="saving"
+              />
+            </label>
+            <label class="editor-selection-field">
+              <span class="editor-inline-label">Center Y</span>
+              <input
+                v-model.number="circleEditCenterY"
+                class="spacing-input"
+                type="number"
+                step="1"
+                :disabled="saving"
+              />
+            </label>
+            <label class="editor-selection-field">
+              <span class="editor-inline-label">Radius</span>
+              <input
+                v-model.number="circleEditRadius"
+                class="spacing-input"
+                type="number"
+                min="1"
+                step="1"
+                :disabled="saving"
+              />
+            </label>
+            <label class="editor-selection-field">
+              <span class="editor-inline-label">Direction</span>
+              <select
+                v-model="circleEditDirection"
+                class="spacing-input"
+                :disabled="saving"
+              >
+                <option value="cw">CW</option>
+                <option value="ccw">CCW</option>
+              </select>
+            </label>
+            <label class="editor-selection-field">
+              <span class="editor-inline-label">Spacing</span>
+              <input
+                v-model.number="circleEditSpacing"
+                class="spacing-input"
+                type="number"
+                min="0"
+                step="1"
+                :disabled="saving"
+              />
+            </label>
+            <p class="editor-selection-detail">Current count: {{ selectedCircle.count }} LEDs</p>
+            <button
+              type="button"
+              class="ghost-button editor-selection-apply"
+              :disabled="saving"
+              @click="applySelectedCircleEdit"
+            >
+              Apply
+            </button>
           </div>
 
           <p v-if="selectionError" class="editor-selection-error">{{ selectionError }}</p>
@@ -1639,7 +1915,7 @@ onBeforeUnmount(() => {
 
 .editor-selection-fields {
   display: grid;
-  grid-template-columns: repeat(3, auto);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   align-items: end;
   gap: 0.55rem;
 }
@@ -1647,6 +1923,17 @@ onBeforeUnmount(() => {
 .editor-selection-field {
   display: grid;
   gap: 0.3rem;
+}
+
+.editor-selection-apply,
+.editor-selection-detail {
+  grid-column: 1 / -1;
+}
+
+.editor-selection-detail {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.74rem;
 }
 
 .editor-selection-summary {

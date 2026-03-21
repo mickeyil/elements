@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   clearInactiveIndices,
+  circleRadiusFromPoints,
+  circleStartFromAngle,
   createDocumentFromLayout,
   createEmptyDocument,
   expandCircleCells,
@@ -32,6 +34,11 @@ describe('expandLineCells', () => {
 });
 
 describe('expandCircleCells', () => {
+  it('shares radius rounding with panel editing helpers', () => {
+    expect(circleRadiusFromPoints({ x: 10, y: 10 }, { x: 13, y: 11 })).toBe(3);
+    expect(circleStartFromAngle({ x: 10, y: 10 }, 3, 0)).toEqual({ x: 13, y: 10 });
+  });
+
   it('expands a clockwise circle deterministically', () => {
     expect(expandCircleCells({ x: 0, y: 0 }, { x: 2, y: 0 }, 0, 'cw')).toEqual([
       { x: 2, y: 0 },
