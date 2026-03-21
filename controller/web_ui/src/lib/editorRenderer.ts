@@ -93,7 +93,12 @@ function drawCell(
   viewport: EditorViewport,
   cell: { x: number; y: number; index?: number },
   color: string,
-  options?: { showIndex?: boolean; marker?: string; markerZoomThreshold?: number },
+  options?: {
+    showIndex?: boolean;
+    marker?: string;
+    markerZoomThreshold?: number;
+    selected?: boolean;
+  },
 ): void {
   const inset = Math.max(1.5, viewport.zoom * 0.14);
   const sx = viewport.offsetX + cell.x * viewport.zoom;
@@ -106,6 +111,17 @@ function drawCell(
     Math.max(1, viewport.zoom - inset * 2),
     Math.max(1, viewport.zoom - inset * 2),
   );
+
+  if (options?.selected) {
+    ctx.strokeStyle = '#ffd166';
+    ctx.lineWidth = Math.max(1.25, viewport.zoom * 0.09);
+    ctx.strokeRect(
+      sx + inset * 0.5,
+      sy + inset * 0.5,
+      Math.max(1, viewport.zoom - inset),
+      Math.max(1, viewport.zoom - inset),
+    );
+  }
 
   if (options?.marker && viewport.zoom >= (options.markerZoomThreshold ?? 10)) {
     ctx.fillStyle = COLLISION_MARK;
@@ -132,6 +148,7 @@ export function renderEditor(
   hoverCell: Point | null,
   preview: EditorPreview | null,
   hoverBlocked = false,
+  selectedCells?: ReadonlySet<string>,
 ): void {
   resizeCanvasToDisplaySize(canvas);
   const ctx = canvas.getContext('2d');
@@ -186,10 +203,11 @@ export function renderEditor(
     if (cell.x < startX - 1 || cell.x > endX || cell.y < startY - 1 || cell.y > endY) {
       continue;
     }
+    const selected = Boolean(selectedCells?.has(`${cell.x},${cell.y}`));
     if (cell.inactive) {
-      drawCell(ctx, viewport, cell, INACTIVE, { showIndex: false });
+      drawCell(ctx, viewport, cell, INACTIVE, { showIndex: false, selected });
     } else {
-      drawCell(ctx, viewport, cell, PLACED);
+      drawCell(ctx, viewport, cell, PLACED, { selected });
     }
   }
 

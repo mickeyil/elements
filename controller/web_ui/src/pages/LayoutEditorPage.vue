@@ -19,6 +19,7 @@ import IconSingle from '../components/icons/IconSingle.vue';
 import IconUndo from '../components/icons/IconUndo.vue';
 import { useInjectedRelayState, type SnapshotDevice } from '../composables/useRelayState';
 import {
+  type CirclePrimitive,
   cloneDocument,
   clearInactiveIndices,
   createDocumentFromLayout,
@@ -31,11 +32,17 @@ import {
   placeCirclePrimitive,
   placeLinePrimitive,
   placeSinglePrimitive,
+  primitiveIndexAtCell,
   previewCirclePlacement,
   reactivateIndex,
+  removePrimitive,
+  replacePrimitive,
   previewLinePlacement,
   serializeDocument,
   undoLastPrimitive,
+  type LinePrimitive,
+  type Primitive,
+  type SinglePrimitive,
   type EditorDocument,
   type Point,
 } from '../lib/editorModel';
@@ -99,6 +106,10 @@ const lineSpacing = ref(0);
 const lineStart = ref<Point | null>(null);
 const circleCenter = ref<Point | null>(null);
 const circleDirection = ref<'cw' | 'ccw'>('cw');
+const selectedPrimitiveIndex = ref<number | null>(null);
+const singleEditX = ref(0);
+const singleEditY = ref(0);
+const selectionError = ref('');
 
 let spacePressed = false;
 let renderPending = false;
@@ -208,6 +219,44 @@ const canSave = computed(
 const isDirty = computed(() => !documentsEqual(documentRef.value, baselineDocument.value));
 const currentSpacing = computed(() => Math.max(0, Math.floor(Number(lineSpacing.value) || 0)));
 const inactiveLedNumbers = computed(() => inactiveIndices(documentRef.value));
+const selectedPrimitive = computed<Primitive | null>(() => {
+  if (selectedPrimitiveIndex.value == null) {
+    return null;
+  }
+  return documentRef.value.primitives[selectedPrimitiveIndex.value] ?? null;
+});
+const selectedPrimitiveCells = computed(() => {
+  const cells = new Set<string>();
+  const primitive = selectedPrimitive.value;
+  if (!primitive) {
+    return cells;
+  }
+  for (const [key, cell] of documentRef.value.occupied.entries()) {
+    if (cell.primitive === primitive) {
+      cells.add(key);
+    }
+  }
+  return cells;
+});
+const selectedSingle = computed<SinglePrimitive | null>(() =>
+  selectedPrimitive.value?.type === 'single' ? selectedPrimitive.value : null,
+);
+const selectedLine = computed<LinePrimitive | null>(() =>
+  selectedPrimitive.value?.type === 'line' ? selectedPrimitive.value : null,
+);
+const selectedCircle = computed<CirclePrimitive | null>(() =>
+  selectedPrimitive.value?.type === 'circle' ? selectedPrimitive.value : null,
+);
+const selectedPrimitiveLabel = computed(() => {
+  if (!selectedPrimitive.value) {
+    return '';
+  }
+  return selectedPrimitive.value.type === 'single'
+    ? 'Single LED'
+    : selectedPrimitive.value.type === 'line'
+      ? 'Line'
+      : 'Circle';
+});
 const toolbarNotice = computed(() => {
   if (error.value) {
     return error.value;
@@ -301,6 +350,30 @@ function clearCircleDraft(): void {
   circleCenter.value = null;
 }
 
+function clearSelection(): void {
+  selectedPrimitiveIndex.value = null;
+  selectionError.value = '';
+}
+
+function syncSelectedSingleDraft(): void {
+  if (!selectedSingle.value) {
+    return;
+  }
+  singleEditX.value = selectedSingle.value.position[0];
+  singleEditY.value = selectedSingle.value.position[1];
+}
+
+function selectPrimitiveAtCell(cell: Point): boolean {
+  const primitiveIndex = primitiveIndexAtCell(documentRef.value, cell.x, cell.y);
+  if (primitiveIndex == null) {
+    return false;
+  }
+  selectedPrimitiveIndex.value = primitiveIndex;
+  selectionError.value = '';
+  syncSelectedSingleDraft();
+  return true;
+}
+
 function closeInactivePanel(): void {
   inactivePanelOpen.value = false;
   inactivePanelError.value = '';
@@ -383,6 +456,50 @@ function toggleInactivePanel(): void {
 function setDocument(nextDocument: EditorDocument): void {
   documentRef.value = nextDocument;
   clearStatusNotice();
+}
+
+function applySelectedSingleEdit(): void {
+  const primitive = selectedSingle.value;
+  if (!primitive || selectedPrimitiveIndex.value == null) {
+    return;
+  }
+
+  const x = Math.floor(Number(singleEditX.value));
+  const y = Math.floor(Number(singleEditY.value));
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    selectionError.value = 'Coordinates must be integers.';
+    return;
+  }
+
+  try {
+    setDocument(
+      replacePrimitive(documentRef.value, selectedPrimitiveIndex.value, {
+        type: 'single',
+        index: primitive.index,
+        position: [x, y],
+        ...(primitive.inactive ? { inactive: true } : {}),
+      }),
+    );
+    selectionError.value = '';
+    syncSelectedSingleDraft();
+  } catch (err) {
+    selectionError.value = err instanceof Error ? err.message : 'Failed to update LED.';
+  }
+}
+
+function deleteSelectedPrimitive(): void {
+  if (selectedPrimitiveIndex.value == null) {
+    return;
+  }
+  try {
+    setDocument(removePrimitive(documentRef.value, selectedPrimitiveIndex.value));
+    clearSelection();
+    clearLineDraft();
+    clearCircleDraft();
+    dismissPlacementBubble();
+  } catch (err) {
+    selectionError.value = err instanceof Error ? err.message : 'Failed to delete primitive.';
+  }
 }
 
 function clearStatusNoticeTimer(): void {
@@ -491,6 +608,7 @@ function requestRender(): void {
       hoverCell.value,
       placementPreview.value,
       hoverBlocked.value,
+      selectedPrimitiveCells.value,
     );
   });
 }
@@ -511,6 +629,7 @@ async function loadInitialDocument(device: DeviceMeta): Promise<void> {
   statusNotice.value = '';
   clearLineDraft();
   clearCircleDraft();
+  clearSelection();
   closeInactivePanel();
   activeTool.value = 'single';
   const token = ++loadToken;
@@ -691,8 +810,22 @@ function handleClick(event: MouseEvent): void {
   }
   const cell = screenToCell(viewport.value, point.x, point.y, GRID_SIZE);
   if (!cell) {
+    clearSelection();
     return;
   }
+  if (activeTool.value === 'line' && lineStart.value) {
+    commitLineAt(cell, event);
+    return;
+  }
+  if (activeTool.value === 'circle' && circleCenter.value) {
+    commitCircleAt(cell, event);
+    return;
+  }
+  if (documentRef.value.occupied.has(`${cell.x},${cell.y}`)) {
+    selectPrimitiveAtCell(cell);
+    return;
+  }
+  clearSelection();
   if (activeTool.value === 'line') {
     commitLineAt(cell, event);
     return;
@@ -715,6 +848,7 @@ function undo(): void {
   setDocument(undoLastPrimitive(documentRef.value));
   clearLineDraft();
   clearCircleDraft();
+  clearSelection();
   dismissPlacementBubble();
 }
 
@@ -726,6 +860,7 @@ function selectTool(tool: Tool): void {
   activeTool.value = tool;
   clearLineDraft();
   clearCircleDraft();
+  clearSelection();
   clearStatusNotice();
   dismissPlacementBubble();
 }
@@ -781,6 +916,25 @@ function handleKeyDown(event: KeyboardEvent): void {
     clearCircleDraft();
     clearStatusNotice();
     dismissPlacementBubble();
+    return;
+  }
+
+  if (event.code === 'Escape' && selectedPrimitive.value) {
+    event.preventDefault();
+    clearSelection();
+    dismissPlacementBubble();
+    return;
+  }
+
+  const target = event.target;
+  const inEditableField =
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement ||
+    target instanceof HTMLSelectElement ||
+    (target instanceof HTMLElement && target.isContentEditable);
+  if (!inEditableField && (event.code === 'Delete' || event.code === 'Backspace') && selectedPrimitive.value) {
+    event.preventDefault();
+    deleteSelectedPrimitive();
   }
 }
 
@@ -827,6 +981,23 @@ watch(
       return;
     }
     void loadInitialDocument(routeState.value.device);
+  },
+  { immediate: true },
+);
+
+watch(
+  selectedPrimitive,
+  (primitive) => {
+    if (!primitive) {
+      if (selectedPrimitiveIndex.value != null) {
+        clearSelection();
+      }
+      return;
+    }
+    selectionError.value = '';
+    if (primitive.type === 'single') {
+      syncSelectedSingleDraft();
+    }
   },
   { immediate: true },
 );
@@ -1112,6 +1283,73 @@ onBeforeUnmount(() => {
         >
           {{ placementBubble.text }}
         </div>
+        <section
+          v-if="selectedPrimitive"
+          class="panel editor-selection-panel"
+          aria-live="polite"
+        >
+          <div class="editor-selection-head">
+            <div>
+              <p class="editor-selection-label">Selected</p>
+              <h3 class="editor-selection-title">{{ selectedPrimitiveLabel }}</h3>
+            </div>
+            <button
+              type="button"
+              class="ghost-button editor-selection-delete"
+              :disabled="saving"
+              @click="deleteSelectedPrimitive"
+            >
+              Delete
+            </button>
+          </div>
+
+          <div v-if="selectedSingle" class="editor-selection-fields">
+            <label class="editor-selection-field">
+              <span class="editor-inline-label">X</span>
+              <input
+                v-model.number="singleEditX"
+                class="spacing-input"
+                type="number"
+                step="1"
+                :disabled="saving"
+              />
+            </label>
+            <label class="editor-selection-field">
+              <span class="editor-inline-label">Y</span>
+              <input
+                v-model.number="singleEditY"
+                class="spacing-input"
+                type="number"
+                step="1"
+                :disabled="saving"
+              />
+            </label>
+            <button
+              type="button"
+              class="ghost-button"
+              :disabled="saving"
+              @click="applySelectedSingleEdit"
+            >
+              Apply
+            </button>
+          </div>
+
+          <div v-else-if="selectedLine" class="editor-selection-summary">
+            <p>Start {{ selectedLine.start[0] }},{{ selectedLine.start[1] }}</p>
+            <p>End {{ selectedLine.end[0] }},{{ selectedLine.end[1] }}</p>
+            <p>Spacing {{ selectedLine.spacing }} · {{ selectedLine.count }} LEDs</p>
+            <p>Line geometry editing comes next.</p>
+          </div>
+
+          <div v-else-if="selectedCircle" class="editor-selection-summary">
+            <p>Center {{ selectedCircle.center[0] }},{{ selectedCircle.center[1] }}</p>
+            <p>Start {{ selectedCircle.start[0] }},{{ selectedCircle.start[1] }}</p>
+            <p>{{ selectedCircle.direction.toUpperCase() }} · spacing {{ selectedCircle.spacing }} · {{ selectedCircle.count }} LEDs</p>
+            <p>Circle geometry editing comes next.</p>
+          </div>
+
+          <p v-if="selectionError" class="editor-selection-error">{{ selectionError }}</p>
+        </section>
       </div>
     </section>
   </main>
@@ -1365,6 +1603,69 @@ onBeforeUnmount(() => {
   transform: translateY(-12px);
 }
 
+.editor-selection-panel {
+  position: absolute;
+  top: 0.8rem;
+  right: 0.8rem;
+  z-index: 3;
+  width: min(20rem, calc(100% - 1.6rem));
+  padding: 0.75rem;
+  display: grid;
+  gap: 0.7rem;
+  background: rgba(9, 11, 15, 0.96);
+}
+
+.editor-selection-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.editor-selection-label {
+  margin: 0 0 0.2rem;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.editor-selection-title {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.92rem;
+}
+
+.editor-selection-fields {
+  display: grid;
+  grid-template-columns: repeat(3, auto);
+  align-items: end;
+  gap: 0.55rem;
+}
+
+.editor-selection-field {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.editor-selection-summary {
+  display: grid;
+  gap: 0.28rem;
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.editor-selection-summary p,
+.editor-selection-error {
+  margin: 0;
+}
+
+.editor-selection-error {
+  color: #ffdede;
+  font-size: 0.74rem;
+}
+
 .editor-inactive-panel {
   position: absolute;
   top: calc(100% + 0.55rem);
@@ -1497,6 +1798,16 @@ onBeforeUnmount(() => {
   }
 
   .editor-inactive-panel-input-row {
+    grid-template-columns: 1fr;
+  }
+
+  .editor-selection-panel {
+    left: 0.8rem;
+    right: 0.8rem;
+    width: auto;
+  }
+
+  .editor-selection-fields {
     grid-template-columns: 1fr;
   }
 }

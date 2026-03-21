@@ -10,9 +10,12 @@ import {
   placeCirclePrimitive,
   placeLinePrimitive,
   placeSinglePrimitive,
+  primitiveIndexAtCell,
   previewCirclePlacement,
   previewLinePlacement,
   reactivateIndex,
+  removePrimitive,
+  replacePrimitive,
   serializeDocument,
 } from './editorModel';
 
@@ -425,5 +428,100 @@ describe('editorModel inactive LEDs', () => {
     expect(serializeDocument(loaded)).toEqual(payload);
     expect(loaded.placedCount).toBe(4);
     expect(loaded.currentIndex).toBe(7);
+  });
+
+  it('finds the owning primitive by occupied cell', () => {
+    const document = placeCirclePrimitive(
+      placeLinePrimitive(createEmptyDocument(20), { x: 0, y: 0 }, { x: 2, y: 0 }, 0),
+      { x: 6, y: 0 },
+      { x: 8, y: 0 },
+      1,
+      'cw',
+    );
+
+    expect(primitiveIndexAtCell(document, 1, 0)).toBe(0);
+    expect(primitiveIndexAtCell(document, 8, 0)).toBe(1);
+    expect(primitiveIndexAtCell(document, 20, 20)).toBeNull();
+  });
+
+  it('replaces a single primitive and preserves later indices through reindexing', () => {
+    const original = placeSinglePrimitive(
+      placeLinePrimitive(createEmptyDocument(20), { x: 0, y: 0 }, { x: 2, y: 0 }, 0),
+      5,
+      0,
+    );
+
+    const replaced = replacePrimitive(original, 0, {
+      type: 'single',
+      index: 999,
+      position: [2, 2],
+    });
+
+    expect(replaced.primitives).toEqual([
+      {
+        type: 'single',
+        index: 1,
+        position: [2, 2],
+      },
+      {
+        type: 'single',
+        index: 2,
+        position: [5, 0],
+      },
+    ]);
+    expect(replaced.currentIndex).toBe(3);
+  });
+
+  it('reindexes later primitives when replacing one primitive with a larger primitive', () => {
+    const original = placeSinglePrimitive(
+      placeLinePrimitive(createEmptyDocument(20), { x: 0, y: 0 }, { x: 2, y: 0 }, 0),
+      5,
+      0,
+    );
+
+    const replaced = replacePrimitive(original, 0, {
+      type: 'line',
+      startIndex: 999,
+      count: 2,
+      spacing: 0,
+      start: [2, 2],
+      end: [3, 2],
+    });
+
+    expect(replaced.primitives).toEqual([
+      {
+        type: 'line',
+        startIndex: 1,
+        count: 2,
+        spacing: 0,
+        start: [2, 2],
+        end: [3, 2],
+      },
+      {
+        type: 'single',
+        index: 3,
+        position: [5, 0],
+      },
+    ]);
+    expect(replaced.currentIndex).toBe(4);
+  });
+
+  it('removes a primitive and reindexes later primitives', () => {
+    const original = placeSinglePrimitive(
+      placeCirclePrimitive(createEmptyDocument(20), { x: 6, y: 0 }, { x: 8, y: 0 }, 1, 'cw'),
+      12,
+      0,
+    );
+
+    const removed = removePrimitive(original, 0);
+
+    expect(removed.primitives).toEqual([
+      {
+        type: 'single',
+        index: 1,
+        position: [12, 0],
+      },
+    ]);
+    expect(removed.currentIndex).toBe(2);
   });
 });

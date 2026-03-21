@@ -763,6 +763,92 @@ export function placeCirclePrimitive(
   return buildDocument(document.maxIndex, [...document.primitives, primitive]);
 }
 
+function assignSequentialIndices(primitives: readonly Primitive[]): Primitive[] {
+  let nextIndex = 1;
+  return primitives.map((primitive) => {
+    if (primitive.type === 'single') {
+      const nextPrimitive: SinglePrimitive = {
+        type: 'single',
+        index: nextIndex,
+        position: clonePoint(primitive.position),
+        ...(primitive.inactive ? { inactive: true } : {}),
+      };
+      nextIndex += 1;
+      return nextPrimitive;
+    }
+
+    if (primitive.type === 'circle') {
+      const nextPrimitive: CirclePrimitive = {
+        type: 'circle',
+        startIndex: nextIndex,
+        count: primitive.count,
+        spacing: primitive.spacing,
+        center: clonePoint(primitive.center),
+        start: clonePoint(primitive.start),
+        direction: primitive.direction,
+        ...(primitive.inactiveOffsets?.length
+          ? { inactiveOffsets: [...primitive.inactiveOffsets] }
+          : {}),
+      };
+      nextIndex += primitive.count;
+      return nextPrimitive;
+    }
+
+    const nextPrimitive: LinePrimitive = {
+      type: 'line',
+      startIndex: nextIndex,
+      count: primitive.count,
+      spacing: primitive.spacing,
+      start: clonePoint(primitive.start),
+      end: clonePoint(primitive.end),
+      ...(primitive.inactiveOffsets?.length
+        ? { inactiveOffsets: [...primitive.inactiveOffsets] }
+        : {}),
+    };
+    nextIndex += primitive.count;
+    return nextPrimitive;
+  });
+}
+
+export function primitiveIndexAtCell(
+  document: EditorDocument,
+  x: number,
+  y: number,
+): number | null {
+  const cell = document.occupied.get(keyOf(x, y));
+  if (!cell) {
+    return null;
+  }
+  const primitiveIndex = document.primitives.indexOf(cell.primitive);
+  return primitiveIndex >= 0 ? primitiveIndex : null;
+}
+
+export function replacePrimitive(
+  document: EditorDocument,
+  primitiveIndex: number,
+  nextPrimitive: Primitive,
+): EditorDocument {
+  if (primitiveIndex < 0 || primitiveIndex >= document.primitives.length) {
+    throw new Error('Primitive is no longer available.');
+  }
+  const nextPrimitives = assignSequentialIndices(
+    document.primitives.map((primitive, index) =>
+      index === primitiveIndex ? nextPrimitive : primitive,
+    ),
+  );
+  return buildDocument(document.maxIndex, nextPrimitives);
+}
+
+export function removePrimitive(document: EditorDocument, primitiveIndex: number): EditorDocument {
+  if (primitiveIndex < 0 || primitiveIndex >= document.primitives.length) {
+    throw new Error('Primitive is no longer available.');
+  }
+  return buildDocument(
+    document.maxIndex,
+    assignSequentialIndices(document.primitives.filter((_, index) => index !== primitiveIndex)),
+  );
+}
+
 function normalizeTargetIndices(document: EditorDocument, indices: readonly number[]): number[] {
   const normalized = [...new Set(indices)].sort((left, right) => left - right);
   for (const index of normalized) {
