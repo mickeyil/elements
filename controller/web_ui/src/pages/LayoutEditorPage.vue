@@ -99,6 +99,7 @@ const { snapshot } = useInjectedRelayState();
 
 const canvasRef = ref<HTMLCanvasElement | null>(null);
 const editorSurfaceRef = ref<HTMLDivElement | null>(null);
+const contextMenuRef = ref<HTMLDivElement | null>(null);
 const inactivePanelRootRef = ref<HTMLDivElement | null>(null);
 const loadingLayout = ref(false);
 const saving = ref(false);
@@ -119,22 +120,15 @@ const baselineDocument = shallowRef<EditorDocument>(createEmptyDocument(1));
 const baseCsvHash = ref<string | null>(null);
 const resolvedDeviceMeta = shallowRef<DeviceMeta | null>(null);
 const activeTool = ref<Tool>('single');
+const toolPopoverOpen = ref<null | 'line' | 'circle'>(null);
+const contextMenu = ref<{ x: number; y: number } | null>(null);
 const lineSpacing = ref(0);
 const lineStart = ref<Point | null>(null);
 const circleCenter = ref<Point | null>(null);
 const circleDirection = ref<'cw' | 'ccw'>('cw');
 const selectedPrimitiveIndex = ref<number | null>(null);
 const dragState = shallowRef<DragState | null>(null);
-const singleEditX = ref(0);
-const singleEditY = ref(0);
-const lineEditStartX = ref(0);
-const lineEditStartY = ref(0);
-const lineEditEndX = ref(0);
-const lineEditEndY = ref(0);
 const lineEditSpacing = ref(0);
-const circleEditCenterX = ref(0);
-const circleEditCenterY = ref(0);
-const circleEditRadius = ref(1);
 const circleEditDirection = ref<'cw' | 'ccw'>('cw');
 const circleEditSpacing = ref(0);
 const selectionError = ref('');
@@ -373,6 +367,18 @@ const dragHandles = computed<EditorHandle[]>(() =>
     dragState.value?.handle ?? null,
   ),
 );
+const hoveredHandle = computed<DragHandleKind | null>(() =>
+  hoverCell.value ? handleAtCell(hoverCell.value) : null,
+);
+const canvasCursor = computed(() => {
+  if (dragState.value) {
+    return 'grabbing';
+  }
+  if (hoveredHandle.value) {
+    return 'grab';
+  }
+  return 'crosshair';
+});
 const selectedPrimitiveLabel = computed(() => {
   if (!selectedPrimitive.value) {
     return '';
@@ -479,25 +485,13 @@ function clearCircleDraft(): void {
 function clearSelection(): void {
   clearDrag();
   selectedPrimitiveIndex.value = null;
-  selectionError.value = '';
-}
-
-function syncSelectedSingleDraft(): void {
-  if (!selectedSingle.value) {
-    return;
-  }
-  singleEditX.value = selectedSingle.value.position[0];
-  singleEditY.value = selectedSingle.value.position[1];
+  closeContextMenu();
 }
 
 function syncSelectedLineDraft(): void {
   if (!selectedLine.value) {
     return;
   }
-  lineEditStartX.value = selectedLine.value.start[0];
-  lineEditStartY.value = selectedLine.value.start[1];
-  lineEditEndX.value = selectedLine.value.end[0];
-  lineEditEndY.value = selectedLine.value.end[1];
   lineEditSpacing.value = selectedLine.value.spacing;
 }
 
@@ -505,17 +499,6 @@ function syncSelectedCircleDraft(): void {
   if (!selectedCircle.value) {
     return;
   }
-  const center = {
-    x: selectedCircle.value.center[0],
-    y: selectedCircle.value.center[1],
-  };
-  const start = {
-    x: selectedCircle.value.start[0],
-    y: selectedCircle.value.start[1],
-  };
-  circleEditCenterX.value = center.x;
-  circleEditCenterY.value = center.y;
-  circleEditRadius.value = circleRadiusFromPoints(center, start);
   circleEditDirection.value = selectedCircle.value.direction;
   circleEditSpacing.value = selectedCircle.value.spacing;
 }
@@ -619,9 +602,44 @@ function selectPrimitiveAtCell(cell: Point): boolean {
   return true;
 }
 
+function closeToolPopover(): void {
+  toolPopoverOpen.value = null;
+}
+
+function closeContextMenu(): void {
+  contextMenu.value = null;
+  selectionError.value = '';
+}
+
 function closeInactivePanel(): void {
   inactivePanelOpen.value = false;
   inactivePanelError.value = '';
+}
+
+function setContextMenuPosition(x: number, y: number): void {
+  contextMenu.value = { x, y };
+  void nextTick(() => {
+    const surface = editorSurfaceRef.value;
+    const menu = contextMenuRef.value;
+    if (!surface || !menu || !contextMenu.value) {
+      return;
+    }
+    const maxX = Math.max(12, surface.clientWidth - menu.offsetWidth - 12);
+    const maxY = Math.max(12, surface.clientHeight - menu.offsetHeight - 12);
+    contextMenu.value = {
+      x: Math.max(12, Math.min(contextMenu.value.x, maxX)),
+      y: Math.max(12, Math.min(contextMenu.value.y, maxY)),
+    };
+  });
+}
+
+function openContextMenu(event: MouseEvent): void {
+  const surface = editorSurfaceRef.value;
+  if (!surface) {
+    return;
+  }
+  const rect = surface.getBoundingClientRect();
+  setContextMenuPosition(event.clientX - rect.left + 10, event.clientY - rect.top + 10);
 }
 
 function parseInactiveInput(text: string): number[] {
@@ -690,6 +708,8 @@ function resetInactiveLeds(): void {
 function toggleInactivePanel(): void {
   inactivePanelOpen.value = !inactivePanelOpen.value;
   if (inactivePanelOpen.value) {
+    closeToolPopover();
+    closeContextMenu();
     clearLineDraft();
     clearCircleDraft();
     dismissPlacementBubble();
@@ -703,30 +723,6 @@ function setDocument(nextDocument: EditorDocument): void {
   clearStatusNotice();
 }
 
-function applySelectedSingleEdit(): void {
-  const primitive = selectedSingle.value;
-  if (!primitive || selectedPrimitiveIndex.value == null) {
-    return;
-  }
-
-  try {
-    const x = parsePanelInteger(singleEditX.value, 'Coordinates must be integers.');
-    const y = parsePanelInteger(singleEditY.value, 'Coordinates must be integers.');
-    setDocument(
-      replacePrimitive(documentRef.value, selectedPrimitiveIndex.value, {
-        type: 'single',
-        index: primitive.index,
-        position: [x, y],
-        ...(primitive.inactive ? { inactive: true } : {}),
-      }),
-    );
-    selectionError.value = '';
-    syncSelectedSingleDraft();
-  } catch (err) {
-    selectionError.value = err instanceof Error ? err.message : 'Failed to update LED.';
-  }
-}
-
 function applySelectedLineEdit(): void {
   const primitive = selectedLine.value;
   if (!primitive || selectedPrimitiveIndex.value == null) {
@@ -734,20 +730,14 @@ function applySelectedLineEdit(): void {
   }
 
   try {
-    const start = {
-      x: parsePanelInteger(lineEditStartX.value, 'Line coordinates must be integers.'),
-      y: parsePanelInteger(lineEditStartY.value, 'Line coordinates must be integers.'),
-    };
-    const end = {
-      x: parsePanelInteger(lineEditEndX.value, 'Line coordinates must be integers.'),
-      y: parsePanelInteger(lineEditEndY.value, 'Line coordinates must be integers.'),
-    };
     const spacing = parsePanelInteger(lineEditSpacing.value, 'Spacing must be an integer.');
     if (spacing < 0) {
       selectionError.value = 'Spacing must be zero or greater.';
       return;
     }
 
+    const start = { x: primitive.start[0], y: primitive.start[1] };
+    const end = { x: primitive.end[0], y: primitive.end[1] };
     const count = expandLineCells(start, end, spacing).length;
     const inactiveOffsets = trimInactiveOffsets(primitive.inactiveOffsets, count);
     setDocument(
@@ -775,26 +765,15 @@ function applySelectedCircleEdit(): void {
   }
 
   try {
-    const center = {
-      x: parsePanelInteger(circleEditCenterX.value, 'Circle center must use integer coordinates.'),
-      y: parsePanelInteger(circleEditCenterY.value, 'Circle center must use integer coordinates.'),
-    };
-    const radius = parsePanelInteger(circleEditRadius.value, 'Radius must be an integer.');
     const spacing = parsePanelInteger(circleEditSpacing.value, 'Spacing must be an integer.');
-    if (radius < 1) {
-      selectionError.value = 'Radius must be at least 1.';
-      return;
-    }
     if (spacing < 0) {
       selectionError.value = 'Spacing must be zero or greater.';
       return;
     }
 
     const direction = circleEditDirection.value;
-    const previousCenter = { x: primitive.center[0], y: primitive.center[1] };
-    const previousStart = { x: primitive.start[0], y: primitive.start[1] };
-    const angle = Math.atan2(previousStart.y - previousCenter.y, previousStart.x - previousCenter.x);
-    const start = circleStartFromAngle(center, radius, angle);
+    const center = { x: primitive.center[0], y: primitive.center[1] };
+    const start = { x: primitive.start[0], y: primitive.start[1] };
     const count = expandCircleCells(center, start, spacing, direction).length;
     const inactiveOffsets = trimInactiveOffsets(primitive.inactiveOffsets, count);
 
@@ -963,6 +942,7 @@ async function loadInitialDocument(device: DeviceMeta): Promise<void> {
   clearLineDraft();
   clearCircleDraft();
   clearSelection();
+  closeToolPopover();
   closeInactivePanel();
   activeTool.value = 'single';
   const token = ++loadToken;
@@ -1054,6 +1034,7 @@ function handleMouseDown(event: MouseEvent): void {
     const handle = handleAtCell(cell);
     if (handle) {
       event.preventDefault();
+      closeContextMenu();
       hoverCell.value = cell;
       dragState.value = {
         primitiveIndex: selectedPrimitiveIndex.value,
@@ -1211,9 +1192,11 @@ function handleClick(event: MouseEvent): void {
   }
   const cell = screenToCell(viewport.value, point.x, point.y, GRID_SIZE);
   if (!cell) {
+    closeContextMenu();
     clearSelection();
     return;
   }
+  closeContextMenu();
   if (activeTool.value === 'line' && lineStart.value) {
     commitLineAt(cell, event);
     return;
@@ -1245,6 +1228,44 @@ function handleClick(event: MouseEvent): void {
   }
 }
 
+function handleContextMenu(event: MouseEvent): void {
+  if (routeState.value.kind !== 'ready' || loadingLayout.value || saving.value) {
+    return;
+  }
+
+  dismissPlacementBubble();
+  clearDrag();
+  closeToolPopover();
+  closeInactivePanel();
+
+  const point = relativePoint(event);
+  if (!point) {
+    closeContextMenu();
+    return;
+  }
+  const cell = screenToCell(viewport.value, point.x, point.y, GRID_SIZE);
+
+  if (lineStart.value) {
+    clearLineDraft();
+    clearStatusNotice();
+  }
+  if (circleCenter.value) {
+    clearCircleDraft();
+    clearStatusNotice();
+  }
+
+  if (!cell || !documentRef.value.occupied.has(`${cell.x},${cell.y}`)) {
+    closeContextMenu();
+    clearSelection();
+    requestRender();
+    return;
+  }
+
+  selectPrimitiveAtCell(cell);
+  openContextMenu(event);
+  requestRender();
+}
+
 function undo(): void {
   clearDrag();
   setDocument(undoLastPrimitive(documentRef.value));
@@ -1259,6 +1280,13 @@ function backToDevices(): void {
 }
 
 function selectTool(tool: Tool): void {
+  closeContextMenu();
+  closeInactivePanel();
+  if ((tool === 'line' || tool === 'circle') && activeTool.value === tool) {
+    toolPopoverOpen.value = toolPopoverOpen.value === tool ? null : tool;
+    dismissPlacementBubble();
+    return;
+  }
   activeTool.value = tool;
   clearDrag();
   clearLineDraft();
@@ -1266,6 +1294,7 @@ function selectTool(tool: Tool): void {
   clearSelection();
   clearStatusNotice();
   dismissPlacementBubble();
+  toolPopoverOpen.value = tool === 'line' || tool === 'circle' ? tool : null;
 }
 
 async function save(): Promise<void> {
@@ -1303,14 +1332,27 @@ function handleKeyDown(event: KeyboardEvent): void {
   if (event.code === 'Escape' && dragState.value) {
     event.preventDefault();
     clearDrag();
+    closeContextMenu();
     dismissPlacementBubble();
     requestRender();
+    return;
+  }
+
+  if (event.code === 'Escape' && contextMenu.value) {
+    event.preventDefault();
+    closeContextMenu();
     return;
   }
 
   if (event.code === 'Escape' && inactivePanelOpen.value) {
     event.preventDefault();
     closeInactivePanel();
+    return;
+  }
+
+  if (event.code === 'Escape' && toolPopoverOpen.value) {
+    event.preventDefault();
+    closeToolPopover();
     return;
   }
 
@@ -1362,10 +1404,18 @@ function beforeUnloadHandler(event: BeforeUnloadEvent): void {
 
 function handleDocumentClick(event: MouseEvent): void {
   const target = event.target;
-  if (!(target instanceof Element) || target.closest('[data-inactive-panel-root]')) {
+  if (!(target instanceof Element)) {
     return;
   }
-  closeInactivePanel();
+  if (!target.closest('[data-inactive-panel-root]')) {
+    closeInactivePanel();
+  }
+  if (!target.closest('[data-tool-popover-root]')) {
+    closeToolPopover();
+  }
+  if (!target.closest('[data-context-menu-root]')) {
+    closeContextMenu();
+  }
 }
 
 function confirmNavigationAway(): boolean {
@@ -1406,15 +1456,13 @@ watch(
       return;
     }
     selectionError.value = '';
-    if (primitive.type === 'single') {
-      syncSelectedSingleDraft();
-      return;
-    }
     if (primitive.type === 'line') {
       syncSelectedLineDraft();
       return;
     }
-    syncSelectedCircleDraft();
+    if (primitive.type === 'circle') {
+      syncSelectedCircleDraft();
+    }
   },
   { immediate: true },
 );
@@ -1429,6 +1477,8 @@ watch(
     circleCenter,
     lineSpacing,
     circleDirection,
+    toolPopoverOpen,
+    contextMenu,
     dragState,
     selectedPrimitiveIndex,
   ],
@@ -1510,158 +1560,183 @@ onBeforeUnmount(() => {
     <section v-else class="panel editor-page-panel">
       <div class="editor-command-bar">
         <div class="editor-command-left">
-          <button type="button" class="ghost-button editor-back-button" :disabled="saving" @click="backToDevices">
+          <button
+            type="button"
+            class="ghost-button editor-back-button editor-icon-button"
+            :disabled="saving"
+            title="Back"
+            aria-label="Back"
+            @click="backToDevices"
+          >
             <IconBack />
-            <span>Back</span>
           </button>
-          <strong class="editor-device-summary">
-            {{ routeState.device.deviceUid }} · {{ routeState.device.strip }} · {{ routeState.device.length }} px
-          </strong>
+          <span
+            class="editor-device-summary"
+            :title="`${routeState.device.deviceUid} · ${routeState.device.strip} · ${routeState.device.length} px`"
+          >
+            {{ routeState.device.deviceUid }} · {{ routeState.device.strip }}
+          </span>
         </div>
 
         <div class="editor-command-center">
           <div class="tool-buttons">
             <button
               type="button"
-              class="tool-button"
+              class="tool-button editor-tool-button"
               :class="{ 'tool-button-active': activeTool === 'single' }"
               :disabled="loadingLayout || saving"
-              @click="selectTool('single')"
               title="Single LED tool"
+              aria-label="Single LED tool"
+              @click="selectTool('single')"
             >
               <IconSingle />
-              <span>Single</span>
             </button>
-            <button
-              type="button"
-              class="tool-button"
-              :class="{ 'tool-button-active': activeTool === 'line' }"
-              :disabled="loadingLayout || saving"
-              @click="selectTool('line')"
-              title="Line tool"
-            >
-              <IconLineTool />
-              <span>Line</span>
-            </button>
-            <button
-              type="button"
-              class="tool-button"
-              :class="{ 'tool-button-active': activeTool === 'circle' }"
-              :disabled="loadingLayout || saving"
-              @click="selectTool('circle')"
-              title="Circle tool"
-            >
-              <IconCircleTool />
-              <span>Circle</span>
-            </button>
-          </div>
-          <label v-if="activeTool === 'line' || activeTool === 'circle'" class="editor-inline-control">
-            <span class="editor-inline-label">Spacing</span>
-            <input
-              v-model.number="lineSpacing"
-              class="spacing-input"
-              min="0"
-              step="1"
-              type="number"
-              :disabled="loadingLayout || saving"
-            />
-          </label>
-          <div v-if="activeTool === 'circle'" class="editor-inline-control">
-            <span class="editor-inline-label">Direction</span>
-            <div class="tool-buttons">
-              <button
-                type="button"
-                class="tool-button editor-direction-button"
-                :class="{ 'tool-button-active': circleDirection === 'cw' }"
-                :disabled="loadingLayout || saving"
-                @click="circleDirection = 'cw'"
-              >
-                <span>CW</span>
-              </button>
-              <button
-                type="button"
-                class="tool-button editor-direction-button"
-                :class="{ 'tool-button-active': circleDirection === 'ccw' }"
-                :disabled="loadingLayout || saving"
-                @click="circleDirection = 'ccw'"
-              >
-                <span>CCW</span>
-              </button>
-            </div>
-          </div>
-          <div
-            ref="inactivePanelRootRef"
-            class="editor-inactive-panel-root"
-            data-inactive-panel-root
-          >
-            <button
-              type="button"
-              class="tool-button"
-              :class="{ 'tool-button-active': inactivePanelOpen }"
-              :disabled="loadingLayout || saving"
-              title="Manage inactive LEDs"
-              @click.stop="toggleInactivePanel"
-            >
-              <IconInactiveTool />
-              <span>Inactive</span>
-            </button>
-            <div
-              v-if="inactivePanelOpen"
-              class="panel editor-inactive-panel"
-              role="dialog"
-              aria-modal="false"
-              aria-label="Inactive LEDs"
-              @click.stop
-            >
-              <p class="editor-inactive-panel-label">Inactive LEDs</p>
-              <p class="editor-inactive-panel-copy">Enter 1-based LED numbers or ranges.</p>
-              <div class="editor-inactive-panel-input-row">
-                <input
-                  v-model="inactivePanelInput"
-                  class="editor-inactive-panel-input mono"
-                  type="text"
-                  placeholder="15,16,40-42"
-                  :disabled="saving"
-                  @keydown.enter.prevent="applyInactivePanel"
-                />
+            <div class="editor-tool-popover-root" data-tool-popover-root>
+              <div class="tool-buttons">
                 <button
                   type="button"
-                  class="ghost-button editor-inactive-apply"
-                  :disabled="saving"
-                  @click="applyInactivePanel"
+                  class="tool-button editor-tool-button"
+                  :class="{ 'tool-button-active': activeTool === 'line' }"
+                  :disabled="loadingLayout || saving"
+                  title="Line tool"
+                  aria-label="Line tool"
+                  @click.stop="selectTool('line')"
                 >
-                  Mark inactive
+                  <IconLineTool />
+                </button>
+                <button
+                  type="button"
+                  class="tool-button editor-tool-button"
+                  :class="{ 'tool-button-active': activeTool === 'circle' }"
+                  :disabled="loadingLayout || saving"
+                  title="Circle tool"
+                  aria-label="Circle tool"
+                  @click.stop="selectTool('circle')"
+                >
+                  <IconCircleTool />
                 </button>
               </div>
-              <p v-if="inactivePanelError" class="editor-inactive-panel-error">
-                {{ inactivePanelError }}
-              </p>
-              <div class="editor-inactive-list">
-                <div class="editor-inactive-list-head">
-                  <span class="editor-inline-label">Current inactive</span>
-                  <button
-                    type="button"
-                    class="ghost-button editor-inactive-clear"
-                    :disabled="!inactiveLedNumbers.length || saving"
-                    @click="resetInactiveLeds"
-                  >
-                    Clear inactive
-                  </button>
+              <div
+                v-if="toolPopoverOpen"
+                class="panel editor-tool-popover"
+                role="dialog"
+                aria-modal="false"
+                :aria-label="toolPopoverOpen === 'line' ? 'Line defaults' : 'Circle defaults'"
+                @click.stop
+              >
+                <p class="editor-tool-popover-label">
+                  {{ toolPopoverOpen === 'line' ? 'Line defaults' : 'Circle defaults' }}
+                </p>
+                <label class="editor-context-row">
+                  <span class="editor-inline-label">Spacing</span>
+                  <input
+                    v-model.number="lineSpacing"
+                    class="spacing-input"
+                    min="0"
+                    step="1"
+                    type="number"
+                    :disabled="loadingLayout || saving"
+                  />
+                </label>
+                <div v-if="toolPopoverOpen === 'circle'" class="editor-context-row">
+                  <span class="editor-inline-label">Direction</span>
+                  <div class="tool-buttons">
+                    <button
+                      type="button"
+                      class="tool-button editor-direction-button"
+                      :class="{ 'tool-button-active': circleDirection === 'cw' }"
+                      :disabled="loadingLayout || saving"
+                      @click="circleDirection = 'cw'"
+                    >
+                      <span>CW</span>
+                    </button>
+                    <button
+                      type="button"
+                      class="tool-button editor-direction-button"
+                      :class="{ 'tool-button-active': circleDirection === 'ccw' }"
+                      :disabled="loadingLayout || saving"
+                      @click="circleDirection = 'ccw'"
+                    >
+                      <span>CCW</span>
+                    </button>
+                  </div>
                 </div>
-                <div v-if="inactiveLedNumbers.length" class="editor-inactive-chip-list">
-                  <button
-                    v-for="index in inactiveLedNumbers"
-                    :key="index"
-                    type="button"
-                    class="editor-inactive-chip"
+              </div>
+            </div>
+            <div
+              ref="inactivePanelRootRef"
+              class="editor-inactive-panel-root"
+              data-inactive-panel-root
+            >
+              <button
+                type="button"
+                class="tool-button editor-tool-button"
+                :class="{ 'tool-button-active': inactivePanelOpen }"
+                :disabled="loadingLayout || saving"
+                title="Manage inactive LEDs"
+                aria-label="Manage inactive LEDs"
+                @click.stop="toggleInactivePanel"
+              >
+                <IconInactiveTool />
+              </button>
+              <div
+                v-if="inactivePanelOpen"
+                class="panel editor-inactive-panel"
+                role="dialog"
+                aria-modal="false"
+                aria-label="Inactive LEDs"
+                @click.stop
+              >
+                <p class="editor-inactive-panel-label">Inactive LEDs</p>
+                <p class="editor-inactive-panel-copy">Enter 1-based LED numbers or ranges.</p>
+                <div class="editor-inactive-panel-input-row">
+                  <input
+                    v-model="inactivePanelInput"
+                    class="editor-inactive-panel-input mono"
+                    type="text"
+                    placeholder="15,16,40-42"
                     :disabled="saving"
-                    :title="`Reactivate LED ${index}`"
-                    @click="removeInactiveLed(index)"
+                    @keydown.enter.prevent="applyInactivePanel"
+                  />
+                  <button
+                    type="button"
+                    class="ghost-button editor-inactive-apply"
+                    :disabled="saving"
+                    @click="applyInactivePanel"
                   >
-                    {{ index }}
+                    Mark inactive
                   </button>
                 </div>
-                <p v-else class="editor-inactive-empty">No inactive LEDs.</p>
+                <p v-if="inactivePanelError" class="editor-inactive-panel-error">
+                  {{ inactivePanelError }}
+                </p>
+                <div class="editor-inactive-list">
+                  <div class="editor-inactive-list-head">
+                    <span class="editor-inline-label">Current inactive</span>
+                    <button
+                      type="button"
+                      class="ghost-button editor-inactive-clear"
+                      :disabled="!inactiveLedNumbers.length || saving"
+                      @click="resetInactiveLeds"
+                    >
+                      Clear inactive
+                    </button>
+                  </div>
+                  <div v-if="inactiveLedNumbers.length" class="editor-inactive-chip-list">
+                    <button
+                      v-for="index in inactiveLedNumbers"
+                      :key="index"
+                      type="button"
+                      class="editor-inactive-chip"
+                      :disabled="saving"
+                      :title="`Reactivate LED ${index}`"
+                      @click="removeInactiveLed(index)"
+                    >
+                      {{ index }}
+                    </button>
+                  </div>
+                  <p v-else class="editor-inactive-empty">No inactive LEDs.</p>
+                </div>
               </div>
             </div>
           </div>
@@ -1669,9 +1744,15 @@ onBeforeUnmount(() => {
 
         <div class="editor-command-right">
           <strong class="editor-placed-count">{{ placedCount }} / {{ deviceLength }}</strong>
-          <button type="button" class="ghost-button" :disabled="!canUndo" @click="undo">
+          <button
+            type="button"
+            class="ghost-button editor-icon-button"
+            :disabled="!canUndo"
+            title="Undo"
+            aria-label="Undo"
+            @click="undo"
+          >
             <IconUndo />
-            <span>Undo</span>
           </button>
           <div
             class="editor-toolbar-notice"
@@ -1683,13 +1764,14 @@ onBeforeUnmount(() => {
           </div>
           <button
             type="button"
-            class="primary-button editor-save-button"
+            class="primary-button editor-save-button editor-icon-button"
             :class="{ 'editor-save-button-dirty': isDirty }"
             :disabled="!canSave"
+            :title="saving ? 'Saving layout' : 'Save layout'"
+            aria-label="Save layout"
             @click="save"
           >
             <IconSave />
-            <span>{{ saving ? 'Saving…' : 'Save' }}</span>
             <span v-if="isDirty && !saving" class="editor-dirty-dot" aria-hidden="true" />
           </button>
         </div>
@@ -1700,10 +1782,12 @@ onBeforeUnmount(() => {
         <canvas
           ref="canvasRef"
           class="editor-canvas"
+          :style="{ cursor: canvasCursor }"
           @mousedown="handleMouseDown"
           @mousemove="handleMouseMove"
           @mouseleave="handleMouseLeave"
           @click="handleClick"
+          @contextmenu.prevent="handleContextMenu"
           @wheel="handleWheel"
         />
         <div
@@ -1717,18 +1801,26 @@ onBeforeUnmount(() => {
           {{ placementBubble.text }}
         </div>
         <section
-          v-if="selectedPrimitive"
-          class="panel editor-selection-panel"
+          v-if="contextMenu && selectedPrimitive"
+          ref="contextMenuRef"
+          class="panel editor-context-menu"
+          :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }"
+          data-context-menu-root
+          role="dialog"
+          aria-modal="false"
           aria-live="polite"
+          @click.stop
         >
-          <div class="editor-selection-head">
+          <div class="editor-context-menu-head">
             <div>
-              <p class="editor-selection-label">Selected</p>
-              <h3 class="editor-selection-title">{{ selectedPrimitiveLabel }}</h3>
+              <p class="editor-context-menu-label">{{ selectedPrimitiveLabel }}</p>
+              <p v-if="selectedLine || selectedCircle" class="editor-context-menu-copy">
+                {{ selectedLine?.count ?? selectedCircle?.count }} LEDs
+              </p>
             </div>
             <button
               type="button"
-              class="ghost-button editor-selection-delete"
+              class="ghost-button editor-context-menu-delete"
               :disabled="saving"
               @click="deleteSelectedPrimitive"
             >
@@ -1736,79 +1828,8 @@ onBeforeUnmount(() => {
             </button>
           </div>
 
-          <div v-if="selectedSingle" class="editor-selection-fields">
-            <label class="editor-selection-field">
-              <span class="editor-inline-label">X</span>
-              <input
-                v-model.number="singleEditX"
-                class="spacing-input"
-                type="number"
-                step="1"
-                :disabled="saving"
-              />
-            </label>
-            <label class="editor-selection-field">
-              <span class="editor-inline-label">Y</span>
-              <input
-                v-model.number="singleEditY"
-                class="spacing-input"
-                type="number"
-                step="1"
-                :disabled="saving"
-              />
-            </label>
-            <button
-              type="button"
-              class="ghost-button editor-selection-apply"
-              :disabled="saving"
-              @click="applySelectedSingleEdit"
-            >
-              Apply
-            </button>
-          </div>
-
-          <div v-else-if="selectedLine" class="editor-selection-fields">
-            <label class="editor-selection-field">
-              <span class="editor-inline-label">Start X</span>
-              <input
-                v-model.number="lineEditStartX"
-                class="spacing-input"
-                type="number"
-                step="1"
-                :disabled="saving"
-              />
-            </label>
-            <label class="editor-selection-field">
-              <span class="editor-inline-label">Start Y</span>
-              <input
-                v-model.number="lineEditStartY"
-                class="spacing-input"
-                type="number"
-                step="1"
-                :disabled="saving"
-              />
-            </label>
-            <label class="editor-selection-field">
-              <span class="editor-inline-label">End X</span>
-              <input
-                v-model.number="lineEditEndX"
-                class="spacing-input"
-                type="number"
-                step="1"
-                :disabled="saving"
-              />
-            </label>
-            <label class="editor-selection-field">
-              <span class="editor-inline-label">End Y</span>
-              <input
-                v-model.number="lineEditEndY"
-                class="spacing-input"
-                type="number"
-                step="1"
-                :disabled="saving"
-              />
-            </label>
-            <label class="editor-selection-field">
+          <div v-if="selectedLine" class="editor-context-menu-fields">
+            <label class="editor-context-row">
               <span class="editor-inline-label">Spacing</span>
               <input
                 v-model.number="lineEditSpacing"
@@ -1819,10 +1840,9 @@ onBeforeUnmount(() => {
                 :disabled="saving"
               />
             </label>
-            <p class="editor-selection-detail">Current count: {{ selectedLine.count }} LEDs</p>
             <button
               type="button"
-              class="ghost-button editor-selection-apply"
+              class="ghost-button editor-context-menu-apply"
               :disabled="saving"
               @click="applySelectedLineEdit"
             >
@@ -1830,50 +1850,8 @@ onBeforeUnmount(() => {
             </button>
           </div>
 
-          <div v-else-if="selectedCircle" class="editor-selection-fields">
-            <label class="editor-selection-field">
-              <span class="editor-inline-label">Center X</span>
-              <input
-                v-model.number="circleEditCenterX"
-                class="spacing-input"
-                type="number"
-                step="1"
-                :disabled="saving"
-              />
-            </label>
-            <label class="editor-selection-field">
-              <span class="editor-inline-label">Center Y</span>
-              <input
-                v-model.number="circleEditCenterY"
-                class="spacing-input"
-                type="number"
-                step="1"
-                :disabled="saving"
-              />
-            </label>
-            <label class="editor-selection-field">
-              <span class="editor-inline-label">Radius</span>
-              <input
-                v-model.number="circleEditRadius"
-                class="spacing-input"
-                type="number"
-                min="1"
-                step="1"
-                :disabled="saving"
-              />
-            </label>
-            <label class="editor-selection-field">
-              <span class="editor-inline-label">Direction</span>
-              <select
-                v-model="circleEditDirection"
-                class="spacing-input"
-                :disabled="saving"
-              >
-                <option value="cw">CW</option>
-                <option value="ccw">CCW</option>
-              </select>
-            </label>
-            <label class="editor-selection-field">
+          <div v-else-if="selectedCircle" class="editor-context-menu-fields">
+            <label class="editor-context-row">
               <span class="editor-inline-label">Spacing</span>
               <input
                 v-model.number="circleEditSpacing"
@@ -1884,10 +1862,32 @@ onBeforeUnmount(() => {
                 :disabled="saving"
               />
             </label>
-            <p class="editor-selection-detail">Current count: {{ selectedCircle.count }} LEDs</p>
+            <div class="editor-context-row">
+              <span class="editor-inline-label">Direction</span>
+              <div class="tool-buttons">
+                <button
+                  type="button"
+                  class="tool-button editor-direction-button"
+                  :class="{ 'tool-button-active': circleEditDirection === 'cw' }"
+                  :disabled="saving"
+                  @click="circleEditDirection = 'cw'"
+                >
+                  <span>CW</span>
+                </button>
+                <button
+                  type="button"
+                  class="tool-button editor-direction-button"
+                  :class="{ 'tool-button-active': circleEditDirection === 'ccw' }"
+                  :disabled="saving"
+                  @click="circleEditDirection = 'ccw'"
+                >
+                  <span>CCW</span>
+                </button>
+              </div>
+            </div>
             <button
               type="button"
-              class="ghost-button editor-selection-apply"
+              class="ghost-button editor-context-menu-apply"
               :disabled="saving"
               @click="applySelectedCircleEdit"
             >
@@ -1895,7 +1895,7 @@ onBeforeUnmount(() => {
             </button>
           </div>
 
-          <p v-if="selectionError" class="editor-selection-error">{{ selectionError }}</p>
+          <p v-if="selectionError" class="editor-context-menu-error">{{ selectionError }}</p>
         </section>
       </div>
     </section>
@@ -1971,11 +1971,10 @@ onBeforeUnmount(() => {
 .editor-device-summary {
   min-width: 0;
   margin: 0;
-  color: var(--text);
-  font-size: 0.82rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 400;
+  letter-spacing: 0.02em;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1985,7 +1984,6 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 0.4rem;
-  flex-wrap: wrap;
 }
 
 .tool-button,
@@ -2005,14 +2003,19 @@ onBeforeUnmount(() => {
   cursor: pointer;
 }
 
-.editor-inline-control {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.45rem;
-  min-width: 0;
+.editor-tool-button,
+.editor-icon-button {
+  gap: 0;
+  padding: 0.48rem 0.52rem;
+  min-width: 2.25rem;
+  min-height: 2.25rem;
 }
 
 .editor-inactive-panel-root {
+  position: relative;
+}
+
+.editor-tool-popover-root {
   position: relative;
 }
 
@@ -2036,6 +2039,46 @@ onBeforeUnmount(() => {
 .tool-button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+.editor-tool-popover,
+.editor-context-menu {
+  position: absolute;
+  z-index: 3;
+  width: min(18rem, calc(100vw - 3rem));
+  padding: 0.75rem;
+  display: grid;
+  gap: 0.7rem;
+  background: rgba(9, 11, 15, 0.96);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
+}
+
+.editor-tool-popover {
+  top: calc(100% + 0.55rem);
+  left: 0;
+}
+
+.editor-tool-popover-label,
+.editor-context-menu-label {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.editor-context-menu-copy {
+  margin: 0.18rem 0 0;
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+
+.editor-context-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
 }
 
 .editor-loading,
@@ -2150,76 +2193,24 @@ onBeforeUnmount(() => {
   transform: translateY(-12px);
 }
 
-.editor-selection-panel {
-  position: absolute;
-  top: 0.8rem;
-  right: 0.8rem;
-  z-index: 3;
-  width: min(20rem, calc(100% - 1.6rem));
-  padding: 0.75rem;
-  display: grid;
-  gap: 0.7rem;
-  background: rgba(9, 11, 15, 0.96);
+.editor-context-menu {
+  max-width: min(18rem, calc(100% - 1.6rem));
 }
 
-.editor-selection-head {
+.editor-context-menu-head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 0.75rem;
 }
 
-.editor-selection-label {
-  margin: 0 0 0.2rem;
-  color: var(--muted);
-  font-size: 0.68rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.editor-selection-title {
-  margin: 0;
-  color: var(--text);
-  font-size: 0.92rem;
-}
-
-.editor-selection-fields {
+.editor-context-menu-fields {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  align-items: end;
   gap: 0.55rem;
 }
 
-.editor-selection-field {
-  display: grid;
-  gap: 0.3rem;
-}
-
-.editor-selection-apply,
-.editor-selection-detail {
-  grid-column: 1 / -1;
-}
-
-.editor-selection-detail {
+.editor-context-menu-error {
   margin: 0;
-  color: var(--muted);
-  font-size: 0.74rem;
-}
-
-.editor-selection-summary {
-  display: grid;
-  gap: 0.28rem;
-  color: var(--muted);
-  font-size: 0.76rem;
-}
-
-.editor-selection-summary p,
-.editor-selection-error {
-  margin: 0;
-}
-
-.editor-selection-error {
   color: #ffdede;
   font-size: 0.74rem;
 }
@@ -2359,14 +2350,10 @@ onBeforeUnmount(() => {
     grid-template-columns: 1fr;
   }
 
-  .editor-selection-panel {
+  .editor-tool-popover,
+  .editor-context-menu {
     left: 0.8rem;
-    right: 0.8rem;
     width: auto;
-  }
-
-  .editor-selection-fields {
-    grid-template-columns: 1fr;
   }
 }
 </style>
