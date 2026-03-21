@@ -11,6 +11,7 @@ import {
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router';
 
 import IconBack from '../components/icons/IconBack.vue';
+import IconCircleTool from '../components/icons/IconCircleTool.vue';
 import IconInactiveTool from '../components/icons/IconInactiveTool.vue';
 import IconLineTool from '../components/icons/IconLineTool.vue';
 import IconSave from '../components/icons/IconSave.vue';
@@ -27,8 +28,10 @@ import {
   GRID_SIZE,
   inactiveIndices,
   markIndicesInactive,
+  placeCirclePrimitive,
   placeLinePrimitive,
   placeSinglePrimitive,
+  previewCirclePlacement,
   reactivateIndex,
   previewLinePlacement,
   serializeDocument,
@@ -54,7 +57,7 @@ interface DeviceMeta {
   strip: string;
 }
 
-type Tool = 'single' | 'line';
+type Tool = 'single' | 'line' | 'circle';
 type PlacementBubble = {
   text: string;
   x: number;
@@ -94,6 +97,8 @@ const resolvedDeviceMeta = shallowRef<DeviceMeta | null>(null);
 const activeTool = ref<Tool>('single');
 const lineSpacing = ref(0);
 const lineStart = ref<Point | null>(null);
+const circleCenter = ref<Point | null>(null);
+const circleDirection = ref<'cw' | 'ccw'>('cw');
 
 let spacePressed = false;
 let renderPending = false;
@@ -217,48 +222,83 @@ const toolbarNoticeClass = computed(() => ({
   'editor-toolbar-notice-saved': !error.value && Boolean(statusNotice.value),
 }));
 const hoverBlocked = computed(() => {
-  if (activeTool.value === 'line' || !hoverCell.value) {
+  if (activeTool.value !== 'single' || !hoverCell.value) {
     return false;
   }
   return documentRef.value.occupied.has(`${hoverCell.value.x},${hoverCell.value.y}`);
 });
 
-const linePreview = computed<EditorPreview | null>(() => {
-  if (activeTool.value !== 'line' || !lineStart.value) {
-    return null;
+const placementPreview = computed<EditorPreview | null>(() => {
+  if (activeTool.value === 'line' && lineStart.value) {
+    if (!hoverCell.value) {
+      return {
+        cells: [],
+        error: null,
+        anchor: lineStart.value,
+      };
+    }
+
+    try {
+      const preview = previewLinePlacement(
+        documentRef.value,
+        lineStart.value,
+        hoverCell.value,
+        currentSpacing.value,
+      );
+      return {
+        cells: preview.cells,
+        error: preview.error,
+        anchor: lineStart.value,
+      };
+    } catch (err) {
+      return {
+        cells: [],
+        error: err instanceof Error ? err.message : 'Failed to preview line.',
+        anchor: lineStart.value,
+      };
+    }
   }
 
-  if (!hoverCell.value) {
-    return {
-      cells: [],
-      error: null,
-      anchor: lineStart.value,
-    };
+  if (activeTool.value === 'circle' && circleCenter.value) {
+    if (!hoverCell.value) {
+      return {
+        cells: [],
+        error: null,
+        anchor: circleCenter.value,
+      };
+    }
+
+    try {
+      const preview = previewCirclePlacement(
+        documentRef.value,
+        circleCenter.value,
+        hoverCell.value,
+        currentSpacing.value,
+        circleDirection.value,
+      );
+      return {
+        cells: preview.cells,
+        error: preview.error,
+        anchor: circleCenter.value,
+      };
+    } catch (err) {
+      return {
+        cells: [],
+        error: err instanceof Error ? err.message : 'Failed to preview circle.',
+        anchor: circleCenter.value,
+      };
+    }
   }
 
-  try {
-    const preview = previewLinePlacement(
-      documentRef.value,
-      lineStart.value,
-      hoverCell.value,
-      currentSpacing.value,
-    );
-    return {
-      cells: preview.cells,
-      error: preview.error,
-      anchor: lineStart.value,
-    };
-  } catch (err) {
-    return {
-      cells: [],
-      error: err instanceof Error ? err.message : 'Failed to preview line.',
-      anchor: lineStart.value,
-    };
-  }
+  return null;
 });
 
 function clearLineDraft(): void {
   lineStart.value = null;
+}
+
+function clearCircleDraft(): void {
+  circleCenter.value = null;
 }
 
 function closeInactivePanel(): void {
@@ -333,6 +373,7 @@ function toggleInactivePanel(): void {
   inactivePanelOpen.value = !inactivePanelOpen.value;
   if (inactivePanelOpen.value) {
     clearLineDraft();
+    clearCircleDraft();
     dismissPlacementBubble();
   } else {
     inactivePanelError.value = '';
@@ -448,7 +489,7 @@ function requestRender(): void {
       documentRef.value,
       viewport.value,
       hoverCell.value,
-      linePreview.value,
+      placementPreview.value,
       hoverBlocked.value,
     );
   });
@@ -469,6 +510,7 @@ async function loadInitialDocument(device: DeviceMeta): Promise<void> {
   error.value = '';
   statusNotice.value = '';
   clearLineDraft();
+  clearCircleDraft();
   closeInactivePanel();
   activeTool.value = 'single';
   const token = ++loadToken;
@@ -606,6 +648,35 @@ function commitLineAt(cell: Point, event: MouseEvent): void {
   }
 }
 
+function beginCircleAt(cell: Point): void {
+  circleCenter.value = cell;
+  clearStatusNotice();
+}
+
+function commitCircleAt(cell: Point, event: MouseEvent): void {
+  if (!circleCenter.value) {
+    beginCircleAt(cell);
+    return;
+  }
+
+  try {
+    const nextDocument = placeCirclePrimitive(
+      documentRef.value,
+      circleCenter.value,
+      cell,
+      currentSpacing.value,
+      circleDirection.value,
+    );
+    setDocument(nextDocument);
+    clearCircleDraft();
+  } catch (err) {
+    showPlacementBubble(
+      event,
+      err instanceof Error ? err.message : 'Failed to place circle.',
+    );
+  }
+}
+
 function handleClick(event: MouseEvent): void {
   if (routeState.value.kind !== 'ready' || loadingLayout.value || saving.value) {
     return;
@@ -626,6 +697,10 @@ function handleClick(event: MouseEvent): void {
     commitLineAt(cell, event);
     return;
   }
+  if (activeTool.value === 'circle') {
+    commitCircleAt(cell, event);
+    return;
+  }
   try {
     setDocument(placeSinglePrimitive(documentRef.value, cell.x, cell.y));
   } catch (err) {
@@ -639,6 +714,7 @@ function handleClick(event: MouseEvent): void {
 function undo(): void {
   setDocument(undoLastPrimitive(documentRef.value));
   clearLineDraft();
+  clearCircleDraft();
   dismissPlacementBubble();
 }
 
@@ -649,6 +725,7 @@ function backToDevices(): void {
 function selectTool(tool: Tool): void {
   activeTool.value = tool;
   clearLineDraft();
+  clearCircleDraft();
   clearStatusNotice();
   dismissPlacementBubble();
 }
@@ -694,6 +771,14 @@ function handleKeyDown(event: KeyboardEvent): void {
   if (event.code === 'Escape' && lineStart.value) {
     event.preventDefault();
     clearLineDraft();
+    clearStatusNotice();
+    dismissPlacementBubble();
+    return;
+  }
+
+  if (event.code === 'Escape' && circleCenter.value) {
+    event.preventDefault();
+    clearCircleDraft();
     clearStatusNotice();
     dismissPlacementBubble();
   }
@@ -746,7 +831,7 @@ watch(
   { immediate: true },
 );
 
-watch([documentRef, viewport, hoverCell, activeTool, lineStart, lineSpacing], () => {
+watch([documentRef, viewport, hoverCell, activeTool, lineStart, circleCenter, lineSpacing, circleDirection], () => {
   requestRender();
 });
 
@@ -854,8 +939,19 @@ onBeforeUnmount(() => {
               <IconLineTool />
               <span>Line</span>
             </button>
+            <button
+              type="button"
+              class="tool-button"
+              :class="{ 'tool-button-active': activeTool === 'circle' }"
+              :disabled="loadingLayout || saving"
+              @click="selectTool('circle')"
+              title="Circle tool"
+            >
+              <IconCircleTool />
+              <span>Circle</span>
+            </button>
           </div>
-          <label v-if="activeTool === 'line'" class="editor-inline-control">
+          <label v-if="activeTool === 'line' || activeTool === 'circle'" class="editor-inline-control">
             <span class="editor-inline-label">Spacing</span>
             <input
               v-model.number="lineSpacing"
@@ -866,6 +962,29 @@ onBeforeUnmount(() => {
               :disabled="loadingLayout || saving"
             />
           </label>
+          <div v-if="activeTool === 'circle'" class="editor-inline-control">
+            <span class="editor-inline-label">Direction</span>
+            <div class="tool-buttons">
+              <button
+                type="button"
+                class="tool-button editor-direction-button"
+                :class="{ 'tool-button-active': circleDirection === 'cw' }"
+                :disabled="loadingLayout || saving"
+                @click="circleDirection = 'cw'"
+              >
+                <span>CW</span>
+              </button>
+              <button
+                type="button"
+                class="tool-button editor-direction-button"
+                :class="{ 'tool-button-active': circleDirection === 'ccw' }"
+                :disabled="loadingLayout || saving"
+                @click="circleDirection = 'ccw'"
+              >
+                <span>CCW</span>
+              </button>
+            </div>
+          </div>
           <div
             ref="inactivePanelRootRef"
             class="editor-inactive-panel-root"

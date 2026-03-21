@@ -6,6 +6,7 @@ import csv
 import hashlib
 import json
 import logging
+import math
 import os
 from pathlib import Path
 
@@ -185,6 +186,88 @@ def _expand_line_cells(
     return path[::step]
 
 
+def _normalize_circle_direction(direction: object) -> str:
+    if direction not in ('cw', 'ccw'):
+        raise LayoutError('editor circle direction must be "cw" or "ccw"')
+    return str(direction)
+
+
+def _normalize_angle(angle: float) -> float:
+    return angle + math.tau if angle < 0 else angle
+
+
+def _build_raw_circle_perimeter(
+    center: tuple[int, int],
+    radius: int,
+) -> list[tuple[int, int]]:
+    unique: dict[tuple[int, int], None] = {}
+    cx, cy = center
+    x = radius
+    y = 0
+    decision = 1 - radius
+
+    def add_point(px: int, py: int) -> None:
+        unique[(px, py)] = None
+
+    while y <= x:
+        add_point(cx + x, cy + y)
+        add_point(cx + y, cy + x)
+        add_point(cx - y, cy + x)
+        add_point(cx - x, cy + y)
+        add_point(cx - x, cy - y)
+        add_point(cx - y, cy - x)
+        add_point(cx + y, cy - x)
+        add_point(cx + x, cy - y)
+
+        y += 1
+        if decision <= 0:
+            decision += 2 * y + 1
+        else:
+            x -= 1
+            decision += 2 * (y - x) + 1
+
+    return list(unique.keys())
+
+
+def _expand_circle_cells(
+    center: tuple[int, int],
+    start: tuple[int, int],
+    spacing: int,
+    direction: str,
+) -> list[tuple[int, int]]:
+    if spacing < 0:
+        raise LayoutError('editor circle spacing must be >= 0')
+    normalized_direction = _normalize_circle_direction(direction)
+    radius = max(
+        1,
+        int(math.floor(math.hypot(start[0] - center[0], start[1] - center[1]) + 0.5)),
+    )
+    raw = _build_raw_circle_perimeter(center, radius)
+    ordered = sorted(
+        raw,
+        key=lambda point: (
+            _normalize_angle(math.atan2(point[1] - center[1], point[0] - center[0])),
+            abs(math.hypot(point[0] - center[0], point[1] - center[1]) - radius),
+            point[1],
+            point[0],
+        ),
+    )
+
+    nearest_index = min(
+        range(len(ordered)),
+        key=lambda index: (
+            (ordered[index][0] - start[0]) ** 2 + (ordered[index][1] - start[1]) ** 2,
+            index,
+        ),
+    )
+    rotated = ordered[nearest_index:] + ordered[:nearest_index]
+    if normalized_direction == 'ccw' and len(rotated) > 1:
+        rotated = [rotated[0], *reversed(rotated[1:])]
+
+    step = spacing + 1
+    return rotated[::step]
+
+
 def _expand_editor_primitive_cells(
     primitive: dict,
     configured_length: int,
@@ -302,6 +385,86 @@ def _expand_editor_primitive_cells(
                 'spacing': spacing,
                 'start': [start[0], start[1]],
                 'end': [end[0], end[1]],
+                **({'inactiveOffsets': inactive_offsets} if inactive_offsets else {}),
+            },
+            indexed_cells,
+            expanded_cells,
+            cells,
+        )
+
+    if primitive_type == 'circle':
+        start_index = primitive.get('startIndex')
+        if isinstance(start_index, bool) or not isinstance(start_index, int):
+            raise LayoutError('editor circle startIndex must be an integer')
+        if not (1 <= start_index <= configured_length):
+            raise LayoutError(
+                f'editor circle startIndex must be 1-{configured_length}, got {start_index}'
+            )
+
+        count = primitive.get('count')
+        if isinstance(count, bool) or not isinstance(count, int) or count < 1:
+            raise LayoutError('editor circle count must be a positive integer')
+
+        spacing = primitive.get('spacing')
+        if isinstance(spacing, bool) or not isinstance(spacing, int) or spacing < 0:
+            raise LayoutError('editor circle spacing must be a non-negative integer')
+
+        center = _parse_position(primitive.get('center'), 'editor circle center')
+        start = _parse_position(primitive.get('start'), 'editor circle start')
+        direction = _normalize_circle_direction(primitive.get('direction'))
+
+        cells = _expand_circle_cells(center, start, spacing, direction)
+        if len(cells) != count:
+            raise LayoutError('editor circle count does not match expanded cells')
+
+        raw_inactive_offsets = primitive.get('inactiveOffsets')
+        if raw_inactive_offsets is None:
+            inactive_offsets: list[int] = []
+        else:
+            if not isinstance(raw_inactive_offsets, list):
+                raise LayoutError('editor circle inactiveOffsets must be a list')
+            inactive_offsets = []
+            for offset in raw_inactive_offsets:
+                if isinstance(offset, bool) or not isinstance(offset, int):
+                    raise LayoutError('editor circle inactiveOffsets must contain integers')
+                if offset < 0 or offset >= count:
+                    raise LayoutError('editor circle inactiveOffsets must be within the expanded circle cell range')
+                if offset in inactive_offsets:
+                    raise LayoutError('editor circle inactiveOffsets must be unique')
+                inactive_offsets.append(offset)
+
+        if start_index + count - 1 > configured_length:
+            raise LayoutError(
+                f'editor circle indices must be 1-{configured_length}, got {start_index + count - 1}'
+            )
+
+        inactive_set = set(inactive_offsets)
+        indexed_cells: list[dict] = []
+        expanded_cells: list[dict] = []
+        for offset, (x, y) in enumerate(cells):
+            indexed_cell = {
+                'type': 'single',
+                'index': start_index + offset,
+                'position': [x, y],
+                'inactive': offset in inactive_set,
+            }
+            indexed_cells.append(indexed_cell)
+            if offset not in inactive_set:
+                expanded_cells.append({
+                    'type': 'single',
+                    'index': start_index + offset,
+                    'position': [x, y],
+                })
+
+        return (
+            {
+                'type': 'circle',
+                'startIndex': start_index,
+                'count': count,
+                'spacing': spacing,
+                'center': [center[0], center[1]],
+                'start': [start[0], start[1]],
+                'direction': direction,
                 **({'inactiveOffsets': inactive_offsets} if inactive_offsets else {}),
             },
             indexed_cells,

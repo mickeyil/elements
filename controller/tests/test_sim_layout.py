@@ -5,6 +5,7 @@ import pytest
 from elemctl.config import DeviceConfig
 from elemctl.sim_layout import (
     LayoutError,
+    _expand_circle_cells,
     _expand_line_cells,
     canonical_csv_hash,
     load_layout_for_editor,
@@ -228,6 +229,55 @@ def test_expand_line_cells_matches_expected_points(start, end, spacing, expected
     assert _expand_line_cells(start, end, spacing) == expected
 
 
+def test_expand_circle_cells_matches_expected_points():
+    assert _expand_circle_cells((0, 0), (2, 0), 0, 'cw') == [
+        (2, 0),
+        (2, 1),
+        (1, 2),
+        (0, 2),
+        (-1, 2),
+        (-2, 1),
+        (-2, 0),
+        (-2, -1),
+        (-1, -2),
+        (0, -2),
+        (1, -2),
+        (2, -1),
+    ]
+
+
+def test_expand_circle_cells_respects_spacing_and_direction():
+    assert _expand_circle_cells((0, 0), (2, 0), 1, 'ccw') == [
+        (2, 0),
+        (1, -2),
+        (-1, -2),
+        (-2, 0),
+        (-1, 2),
+        (1, 2),
+    ]
+
+
+def test_expand_circle_cells_rounds_radius_from_start_point():
+    assert _expand_circle_cells((0, 0), (3, 1), 0, 'cw') == [
+        (3, 1),
+        (2, 2),
+        (1, 3),
+        (0, 3),
+        (-1, 3),
+        (-2, 2),
+        (-3, 1),
+        (-3, 0),
+        (-3, -1),
+        (-2, -2),
+        (-1, -3),
+        (0, -3),
+        (1, -3),
+        (2, -2),
+        (3, -1),
+        (3, 0),
+    ]
+
+
 def test_save_and_load_layout_for_editor_round_trip_with_line(tmp_path):
     saved = save_layout_for_editor(
         'sim-1',
@@ -373,6 +423,59 @@ def test_save_and_load_layout_for_editor_round_trip_with_inactive_single(tmp_pat
     assert loaded == saved
 
 
+def test_save_and_load_layout_for_editor_round_trip_with_circle(tmp_path):
+    saved = save_layout_for_editor(
+        'sim-1',
+        configured_length=6,
+        layouts_dir=str(tmp_path),
+        rows=[
+            [None, None, None, 6, None],
+            [None, None, None, None, None],
+            [4, None, None, None, 1],
+            [None, None, None, None, None],
+            [None, 3, None, None, None],
+        ],
+        editor_payload={
+            'version': 1,
+            'primitives': [
+                {
+                    'type': 'circle',
+                    'startIndex': 1,
+                    'count': 6,
+                    'spacing': 1,
+                    'center': [2, 2],
+                    'start': [4, 2],
+                    'direction': 'cw',
+                    'inactiveOffsets': [1, 4],
+                },
+            ],
+        },
+    )
+
+    assert saved['rows'] == [
+        [None, None, None, 6, None],
+        [None, None, None, None, None],
+        [4, None, None, None, 1],
+        [None, None, None, None, None],
+        [None, 3, None, None, None],
+    ]
+    assert saved['editor']['primitives'] == [
+        {
+            'type': 'circle',
+            'startIndex': 1,
+            'count': 6,
+            'spacing': 1,
+            'center': [2, 2],
+            'start': [4, 2],
+            'direction': 'cw',
+            'inactiveOffsets': [1, 4],
+        },
+    ]
+
+    loaded = load_layout_for_editor('sim-1', configured_length=6, layouts_dir=str(tmp_path))
+    assert loaded == saved
+
+
 def test_save_layout_for_editor_rejects_line_count_mismatch(tmp_path):
     with pytest.raises(LayoutError, match='editor line count does not match expanded cells'):
         save_layout_for_editor(
@@ -414,6 +517,55 @@ def test_save_layout_for_editor_rejects_line_inactive_offsets_out_of_range(tmp_p
                         'start': [0, 0],
                         'end': [4, 0],
                         'inactiveOffsets': [5],
+                    },
+                ],
+            },
+        )
+
+
+def test_save_layout_for_editor_rejects_circle_count_mismatch(tmp_path):
+    with pytest.raises(LayoutError, match='editor circle count does not match expanded cells'):
+        save_layout_for_editor(
+            'sim-1',
+            configured_length=10,
+            layouts_dir=str(tmp_path),
+            rows=[[1]],
+            editor_payload={
+                'version': 1,
+                'primitives': [
+                    {
+                        'type': 'circle',
+                        'startIndex': 1,
+                        'count': 5,
+                        'spacing': 1,
+                        'center': [2, 2],
+                        'start': [4, 2],
+                        'direction': 'cw',
+                    },
+                ],
+            },
+        )
+
+
+def test_save_layout_for_editor_rejects_circle_inactive_offsets_out_of_range(tmp_path):
+    with pytest.raises(LayoutError, match='inactiveOffsets'):
+        save_layout_for_editor(
+            'sim-1',
+            configured_length=10,
+            layouts_dir=str(tmp_path),
+            rows=[[1]],
+            editor_payload={
+                'version': 1,
+                'primitives': [
+                    {
+                        'type': 'circle',
+                        'startIndex': 1,
+                        'count': 6,
+                        'spacing': 1,
+                        'center': [2, 2],
+                        'start': [4, 2],
+                        'direction': 'cw',
+                        'inactiveOffsets': [6],
                     },
                 ],
             },

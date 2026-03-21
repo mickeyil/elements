@@ -22,7 +22,18 @@ export interface LinePrimitive {
   inactiveOffsets?: number[];
 }
 
-export type Primitive = SinglePrimitive | LinePrimitive;
+export interface CirclePrimitive {
+  type: 'circle';
+  startIndex: number;
+  count: number;
+  spacing: number;
+  center: [number, number];
+  start: [number, number];
+  direction: 'cw' | 'ccw';
+  inactiveOffsets?: number[];
+}
+
+export type Primitive = SinglePrimitive | LinePrimitive | CirclePrimitive;
 
 export interface EditorPayload {
   version: 1;
@@ -61,7 +72,7 @@ export interface SerializedDocument {
   };
 }
 
-export interface LinePlacementPreview {
+export interface PlacementPreview {
   cells: OccupiedCell[];
   error: string | null;
   primitive: Primitive;
@@ -100,6 +111,13 @@ function normalizeInactiveOffsets(inactiveOffsets: number[] | undefined, count: 
   return normalized;
 }
 
+function normalizeCircleDirection(direction: string): 'cw' | 'ccw' {
+  if (direction !== 'cw' && direction !== 'ccw') {
+    throw new Error('Circle direction must be "cw" or "ccw".');
+  }
+  return direction;
+}
+
 function clonePrimitive(primitive: Primitive): Primitive {
   if (primitive.type === 'single') {
     return {
@@ -107,6 +125,21 @@ function clonePrimitive(primitive: Primitive): Primitive {
       index: primitive.index,
       position: clonePoint(primitive.position),
       ...(primitive.inactive ? { inactive: true } : {}),
+    };
+  }
+
+  if (primitive.type === 'circle') {
+    return {
+      type: 'circle',
+      startIndex: primitive.startIndex,
+      count: primitive.count,
+      spacing: primitive.spacing,
+      center: clonePoint(primitive.center),
+      start: clonePoint(primitive.start),
+      direction: primitive.direction,
+      ...(primitive.inactiveOffsets?.length
+        ? { inactiveOffsets: [...primitive.inactiveOffsets] }
+        : {}),
     };
   }
 
@@ -190,6 +223,106 @@ export function expandLineCells(start: Point, end: Point, spacing: number): Poin
   return cells;
 }
 
+function normalizeAngle(angle: number): number {
+  return angle < 0 ? angle + Math.PI * 2 : angle;
+}
+
+function buildRawCirclePerimeter(center: Point, radius: number): Point[] {
+  const unique = new Map<string, Point>();
+  let x = radius;
+  let y = 0;
+  let decision = 1 - radius;
+
+  const addPoint = (px: number, py: number): void => {
+    const key = keyOf(px, py);
+    if (!unique.has(key)) {
+      unique.set(key, { x: px, y: py });
+    }
+  };
+
+  while (y <= x) {
+    addPoint(center.x + x, center.y + y);
+    addPoint(center.x + y, center.y + x);
+    addPoint(center.x - y, center.y + x);
+    addPoint(center.x - x, center.y + y);
+    addPoint(center.x - x, center.y - y);
+    addPoint(center.x - y, center.y - x);
+    addPoint(center.x + y, center.y - x);
+    addPoint(center.x + x, center.y - y);
+
+    y += 1;
+    if (decision <= 0) {
+      decision += 2 * y + 1;
+    } else {
+      x -= 1;
+      decision += 2 * (y - x) + 1;
+    }
+  }
+
+  return [...unique.values()];
+}
+
+function rotatePoints(points: readonly Point[], startIndex: number): Point[] {
+  return [...points.slice(startIndex), ...points.slice(0, startIndex)];
+}
+
+function orientCirclePath(points: readonly Point[], direction: 'cw' | 'ccw'): Point[] {
+  if (direction === 'cw' || points.length <= 1) {
+    return [...points];
+  }
+  return [points[0], ...points.slice(1).reverse()];
+}
+
+export function expandCircleCells(
+  center: Point,
+  start: Point,
+  spacing: number,
+  direction: 'cw' | 'ccw',
+): Point[] {
+  const normalizedSpacing = normalizeSpacing(spacing);
+  const normalizedDirection = normalizeCircleDirection(direction);
+  const radius = Math.max(1, Math.round(Math.hypot(start.x - center.x, start.y - center.y)));
+  const raw = buildRawCirclePerimeter(center, radius);
+  const ordered = [...raw].sort((left, right) => {
+    const leftAngle = normalizeAngle(Math.atan2(left.y - center.y, left.x - center.x));
+    const rightAngle = normalizeAngle(Math.atan2(right.y - center.y, right.x - center.x));
+    if (leftAngle !== rightAngle) {
+      return leftAngle - rightAngle;
+    }
+
+    const leftError = Math.abs(Math.hypot(left.x - center.x, left.y - center.y) - radius);
+    const rightError = Math.abs(Math.hypot(right.x - center.x, right.y - center.y) - radius);
+    if (leftError !== rightError) {
+      return leftError - rightError;
+    }
+    if (left.y !== right.y) {
+      return left.y - right.y;
+    }
+    return left.x - right.x;
+  });
+
+  let nearestIndex = 0;
+  let nearestDistance = Infinity;
+  for (let i = 0; i < ordered.length; i += 1) {
+    const point = ordered[i];
+    const distance =
+      (point.x - start.x) * (point.x - start.x) + (point.y - start.y) * (point.y - start.y);
+    if (distance < nearestDistance) {
+      nearestDistance = distance;
+      nearestIndex = i;
+    }
+  }
+
+  const rotated = rotatePoints(ordered, nearestIndex);
+  const oriented = orientCirclePath(rotated, normalizedDirection);
+  const step = normalizedSpacing + 1;
+  const cells: Point[] = [];
+  for (let i = 0; i < oriented.length; i += step) {
+    cells.push(oriented[i]);
+  }
+  return cells;
+}
+
 function expandPrimitive(primitive: Primitive, gridSize: number): OccupiedCell[] {
   if (primitive.type === 'single') {
     ensureGridCell(primitive.position, gridSize);
@@ -204,11 +337,39 @@ function expandPrimitive(primitive: Primitive, gridSize: number): OccupiedCell[]
     ];
   }
 
+  if (primitive.type === 'circle') {
+    normalizeSpacing(primitive.spacing);
+    normalizeCircleDirection(primitive.direction);
+    if (!Number.isInteger(primitive.count) || primitive.count < 1) {
+      throw new Error('Circle primitive count must be a positive integer.');
+    }
+    ensureGridCell(primitive.center, gridSize);
+    ensureGridCell(primitive.start, gridSize);
+
+    const points = expandCircleCells(
+      { x: primitive.center[0], y: primitive.center[1] },
+      { x: primitive.start[0], y: primitive.start[1] },
+      primitive.spacing,
+      primitive.direction,
+    );
+    if (points.length !== primitive.count) {
+      throw new Error('Loaded circle primitive count does not match the expanded cells.');
+    }
+
+    const inactiveSet = new Set(normalizeInactiveOffsets(primitive.inactiveOffsets, primitive.count));
+    return points.map((point, offset) => ({
+      index: primitive.startIndex + offset,
+      x: point.x,
+      y: point.y,
+      inactive: inactiveSet.has(offset),
+      primitive,
+    }));
+  }
+
   normalizeSpacing(primitive.spacing);
   if (!Number.isInteger(primitive.count) || primitive.count < 1) {
     throw new Error('Line primitive count must be a positive integer.');
   }
-
   ensureGridCell(primitive.start, gridSize);
   ensureGridCell(primitive.end, gridSize);
 
@@ -356,6 +517,21 @@ function translatePrimitive(primitive: Primitive, offset: Point): Primitive {
     };
   }
 
+  if (primitive.type === 'circle') {
+    return {
+      type: 'circle',
+      startIndex: primitive.startIndex,
+      count: primitive.count,
+      spacing: primitive.spacing,
+      center: [primitive.center[0] + offset.x, primitive.center[1] + offset.y],
+      start: [primitive.start[0] + offset.x, primitive.start[1] + offset.y],
+      direction: primitive.direction,
+      ...(primitive.inactiveOffsets?.length
+        ? { inactiveOffsets: [...primitive.inactiveOffsets] }
+        : {}),
+    };
+  }
+
   return {
     type: 'line',
     startIndex: primitive.startIndex,
@@ -440,7 +616,7 @@ export function previewLinePlacement(
   start: Point,
   end: Point,
   spacing: number,
-): LinePlacementPreview {
+): PlacementPreview {
   const cells = expandLineCells(start, end, spacing).map((point, offset) => ({
     index: document.currentIndex + offset,
     x: point.x,
@@ -473,6 +649,45 @@ export function previewLinePlacement(
     for (const cell of cells) {
       cell.primitive = primitive;
     }
+  }
+
+  return {
+    cells,
+    error: validatePlacementCells(document, cells),
+    primitive,
+  };
+}
+
+export function previewCirclePlacement(
+  document: EditorDocument,
+  center: Point,
+  start: Point,
+  spacing: number,
+  direction: 'cw' | 'ccw',
+): PlacementPreview {
+  const cells = expandCircleCells(center, start, spacing, direction).map((point, offset) => ({
+    index: document.currentIndex + offset,
+    x: point.x,
+    y: point.y,
+    inactive: false,
+    primitive: {
+      type: 'single',
+      index: document.currentIndex,
+      position: [point.x, point.y],
+    } as Primitive,
+  }));
+
+  const primitive: CirclePrimitive = {
+    type: 'circle',
+    startIndex: document.currentIndex,
+    count: cells.length,
+    spacing: normalizeSpacing(spacing),
+    center: [center.x, center.y],
+    start: [start.x, start.y],
+    direction: normalizeCircleDirection(direction),
+  };
+  for (const cell of cells) {
+    cell.primitive = primitive;
   }
 
   return {
@@ -515,6 +730,30 @@ export function placeLinePrimitive(
 
   const primitive =
     preview.primitive.type === 'line' && inactiveOffsets?.length
+      ? {
+          ...preview.primitive,
+          inactiveOffsets: normalizeInactiveOffsets(inactiveOffsets, preview.primitive.count),
+        }
+      : preview.primitive;
+
+  return buildDocument(document.maxIndex, [...document.primitives, primitive]);
+}
+
+export function placeCirclePrimitive(
+  document: EditorDocument,
+  center: Point,
+  start: Point,
+  spacing: number,
+  direction: 'cw' | 'ccw',
+  inactiveOffsets?: number[],
+): EditorDocument {
+  const preview = previewCirclePlacement(document, center, start, spacing, direction);
+  if (preview.error) {
+    throw new Error(preview.error);
+  }
+
+  const primitive =
+    preview.primitive.type === 'circle' && inactiveOffsets?.length
       ? {
           ...preview.primitive,
           inactiveOffsets: normalizeInactiveOffsets(inactiveOffsets, preview.primitive.count),
@@ -588,14 +827,24 @@ function applyInactiveState(
           ...primitive,
           inactiveOffsets: [...nextSet].sort((left, right) => left - right),
         }
-      : {
-          type: 'line',
-          startIndex: primitive.startIndex,
-          count: primitive.count,
-          spacing: primitive.spacing,
-          start: clonePoint(primitive.start),
-          end: clonePoint(primitive.end),
-        };
+      : primitive.type === 'line'
+        ? {
+            type: 'line',
+            startIndex: primitive.startIndex,
+            count: primitive.count,
+            spacing: primitive.spacing,
+            start: clonePoint(primitive.start),
+            end: clonePoint(primitive.end),
+          }
+        : {
+            type: 'circle',
+            startIndex: primitive.startIndex,
+            count: primitive.count,
+            spacing: primitive.spacing,
+            center: clonePoint(primitive.center),
+            start: clonePoint(primitive.start),
+            direction: primitive.direction,
+          };
   });
 
   return buildDocument(document.maxIndex, nextPrimitives);
@@ -623,7 +872,10 @@ export function clearInactiveIndices(document: EditorDocument): EditorDocument {
           }
         : primitive;
     }
-    return primitive.inactiveOffsets?.length
+    if (!primitive.inactiveOffsets?.length) {
+      return primitive;
+    }
+    return primitive.type === 'line'
       ? {
           type: 'line' as const,
           startIndex: primitive.startIndex,
@@ -632,7 +884,15 @@ export function clearInactiveIndices(document: EditorDocument): EditorDocument {
           start: clonePoint(primitive.start),
           end: clonePoint(primitive.end),
         }
-      : primitive;
+      : {
+          type: 'circle' as const,
+          startIndex: primitive.startIndex,
+          count: primitive.count,
+          spacing: primitive.spacing,
+          center: clonePoint(primitive.center),
+          start: clonePoint(primitive.start),
+          direction: primitive.direction,
+        };
   });
   return buildDocument(document.maxIndex, nextPrimitives);
 }
@@ -700,6 +960,23 @@ function primitivesEqual(left: Primitive, right: Primitive): boolean {
     );
   }
 
+  if (left.type === 'circle' && right.type === 'circle') {
+    const leftInactive = normalizeInactiveOffsets(left.inactiveOffsets, left.count);
+    const rightInactive = normalizeInactiveOffsets(right.inactiveOffsets, right.count);
+    return (
+      left.startIndex === right.startIndex &&
+      left.count === right.count &&
+      left.spacing === right.spacing &&
+      left.direction === right.direction &&
+      leftInactive.length === rightInactive.length &&
+      leftInactive.every((value, index) => value === rightInactive[index]) &&
+      left.center[0] === right.center[0] &&
+      left.center[1] === right.center[1] &&
+      left.start[0] === right.start[0] &&
+      left.start[1] === right.start[1]
+    );
+  }
+
   return false;
 }
 
@@ -749,6 +1026,21 @@ export function serializeDocument(document: EditorDocument): SerializedDocument 
         index: primitive.index,
         position: [primitive.position[0] - minX, primitive.position[1] - minY] as [number, number],
         ...(primitive.inactive ? { inactive: true } : {}),
+      };
+    }
+
+    if (primitive.type === 'circle') {
+      return {
+        type: 'circle' as const,
+        startIndex: primitive.startIndex,
+        count: primitive.count,
+        spacing: primitive.spacing,
+        center: [primitive.center[0] - minX, primitive.center[1] - minY] as [number, number],
+        start: [primitive.start[0] - minX, primitive.start[1] - minY] as [number, number],
+        direction: primitive.direction,
+        ...(primitive.inactiveOffsets?.length
+          ? { inactiveOffsets: [...primitive.inactiveOffsets] }
+          : {}),
       };
     }
 
