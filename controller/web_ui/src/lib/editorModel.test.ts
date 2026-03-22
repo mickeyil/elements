@@ -21,6 +21,7 @@ import {
   removePrimitive,
   replacePrimitive,
   serializeDocument,
+  translatePrimitive,
 } from './editorModel';
 
 describe('expandLineCells', () => {
@@ -551,6 +552,56 @@ describe('editorModel inactive LEDs', () => {
       },
     ]);
     expect(reduced.currentIndex).toBe(original.currentIndex);
+  });
+
+  it('translates primitives without changing geometry metadata', () => {
+    expect(
+      translatePrimitive(
+        {
+          type: 'line',
+          startIndex: 1,
+          count: 3,
+          spacing: 1,
+          start: [0, 0],
+          end: [4, 0],
+          inactiveOffsets: [1],
+        },
+        { x: 2, y: 3 },
+      ),
+    ).toEqual({
+      type: 'line',
+      startIndex: 1,
+      count: 3,
+      spacing: 1,
+      start: [2, 3],
+      end: [6, 3],
+      inactiveOffsets: [1],
+    });
+
+    expect(
+      translatePrimitive(
+        {
+          type: 'circle',
+          startIndex: 4,
+          count: 6,
+          spacing: 1,
+          center: [5, 5],
+          start: [7, 5],
+          direction: 'cw',
+          inactiveOffsets: [2],
+        },
+        { x: -2, y: 1 },
+      ),
+    ).toEqual({
+      type: 'circle',
+      startIndex: 4,
+      count: 6,
+      spacing: 1,
+      center: [3, 6],
+      start: [5, 6],
+      direction: 'cw',
+      inactiveOffsets: [2],
+    });
   });
 
   it('previews primitive replacement against full reindexing rules', () => {

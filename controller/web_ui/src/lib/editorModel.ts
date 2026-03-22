@@ -519,7 +519,7 @@ function centeredOriginForPrimitives(primitives: readonly Primitive[]): Point {
   };
 }
 
-function translatePrimitive(primitive: Primitive, offset: Point): Primitive {
+export function translatePrimitive(primitive: Primitive, offset: Point): Primitive {
   if (primitive.type === 'single') {
     return {
       type: 'single',

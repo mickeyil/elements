@@ -55,6 +55,7 @@ import {
   type SinglePrimitive,
   type EditorDocument,
   type Point,
+  translatePrimitive,
 } from '../lib/editorModel';
 import {
   centerViewport,
@@ -88,9 +89,20 @@ type DragHandleKind =
   | 'line-end'
   | 'circle-center'
   | 'circle-start';
-type DragState = {
+type DragState =
+  | {
+      kind: 'handle';
+      primitiveIndex: number;
+      handle: DragHandleKind;
+    }
+  | {
+      kind: 'move';
+      primitiveIndex: number;
+      originCell: Point;
+    };
+type ArmedMoveState = {
   primitiveIndex: number;
-  handle: DragHandleKind;
+  originCell: Point;
 };
 
 const SAVE_NOTICE_TIMEOUT_MS = 2600;
@@ -132,6 +144,7 @@ const circleCenter = ref<Point | null>(null);
 const circleDirection = ref<'cw' | 'ccw'>('cw');
 const selectedPrimitiveIndex = ref<number | null>(null);
 const dragState = shallowRef<DragState | null>(null);
+const armedMoveState = shallowRef<ArmedMoveState | null>(null);
 const lineEditSpacing = ref(0);
 const circleEditDirection = ref<'cw' | 'ccw'>('cw');
 const circleEditSpacing = ref(0);
@@ -291,7 +304,18 @@ const dragPreview = computed(() => {
     return null;
   }
 
-  if (state.handle === 'single-position' && primitive.type === 'single') {
+  if (state.kind === 'move') {
+    return previewPrimitiveReplacement(
+      documentRef.value,
+      state.primitiveIndex,
+      translatePrimitive(primitive, {
+        x: target.x - state.originCell.x,
+        y: target.y - state.originCell.y,
+      }),
+    );
+  }
+
+  if (state.kind === 'handle' && state.handle === 'single-position' && primitive.type === 'single') {
     return previewPrimitiveReplacement(documentRef.value, state.primitiveIndex, {
       type: 'single',
       index: primitive.index,
@@ -301,6 +325,7 @@ const dragPreview = computed(() => {
   }
 
   if (
+    state.kind === 'handle' &&
     (state.handle === 'line-start' || state.handle === 'line-end') &&
     primitive.type === 'line'
   ) {
@@ -326,6 +351,7 @@ const dragPreview = computed(() => {
   }
 
   if (
+    state.kind === 'handle' &&
     (state.handle === 'circle-center' || state.handle === 'circle-start') &&
     primitive.type === 'circle'
   ) {
@@ -365,20 +391,32 @@ const renderSelectedCells = computed<ReadonlySet<string> | undefined>(() =>
   dragState.value ? undefined : selectedPrimitiveCells.value,
 );
 const handlePrimitive = computed<Primitive | null>(() => dragPreview.value?.primitive ?? selectedPrimitive.value);
+const activeHandle = computed<DragHandleKind | null>(() =>
+  dragState.value?.kind === 'handle' ? dragState.value.handle ?? null : null,
+);
 const dragHandles = computed<EditorHandle[]>(() =>
   buildHandlesForPrimitive(
     handlePrimitive.value,
-    dragState.value?.handle ?? null,
+    activeHandle.value,
   ),
 );
 const hoveredHandle = computed<DragHandleKind | null>(() =>
   hoverCell.value ? handleAtCell(hoverCell.value) : null,
 );
+const hoveredSelectedBodyCell = computed(() => {
+  if (activeTool.value !== 'select' || !hoverCell.value) {
+    return false;
+  }
+  return selectedPrimitiveCells.value.has(`${hoverCell.value.x},${hoverCell.value.y}`);
+});
 const canvasCursor = computed(() => {
   if (dragState.value) {
     return 'grabbing';
   }
-  if (hoveredHandle.value) {
+  if (activeTool.value === 'select' && hoveredHandle.value) {
+    return 'grab';
+  }
+  if (hoveredSelectedBodyCell.value) {
     return 'grab';
   }
   if (activeTool.value !== 'select') {
@@ -597,6 +635,7 @@ function handleAtCell(cell: Point): DragHandleKind | null {
 
 function clearDrag(): void {
   dragState.value = null;
+  armedMoveState.value = null;
 }
 
 function selectPrimitiveAtCell(cell: Point): boolean {
@@ -1005,6 +1044,25 @@ function updateHover(event: MouseEvent): void {
   requestRender();
 }
 
+function promoteArmedMove(): void {
+  const state = armedMoveState.value;
+  const target = hoverCell.value;
+  if (!state || !target) {
+    return;
+  }
+  if (target.x === state.originCell.x && target.y === state.originCell.y) {
+    return;
+  }
+  dragState.value = {
+    kind: 'move',
+    primitiveIndex: state.primitiveIndex,
+    originCell: state.originCell,
+  };
+  armedMoveState.value = null;
+  selectionError.value = '';
+  requestRender();
+}
+
 function handleMouseDown(event: MouseEvent): void {
   dismissPlacementBubble();
   if (event.button === 1 || (event.button === 0 && spacePressed)) {
@@ -1027,8 +1085,7 @@ function handleMouseDown(event: MouseEvent): void {
     !loadingLayout.value &&
     !saving.value &&
     !lineStart.value &&
-    !circleCenter.value &&
-    selectedPrimitiveIndex.value != null
+    !circleCenter.value
   ) {
     const point = relativePoint(event);
     if (!point) {
@@ -1038,19 +1095,39 @@ function handleMouseDown(event: MouseEvent): void {
     if (!cell) {
       return;
     }
+
+    if (activeTool.value !== 'select') {
+      return;
+    }
+
+    const primitiveIndex = primitiveIndexAtCell(documentRef.value, cell.x, cell.y);
+    if (primitiveIndex == null) {
+      return;
+    }
+
+    event.preventDefault();
+    closeContextMenu();
+    clearDrag();
+    hoverCell.value = cell;
+    if (selectedPrimitiveIndex.value !== primitiveIndex) {
+      selectedPrimitiveIndex.value = primitiveIndex;
+    }
+    selectionError.value = '';
     const handle = handleAtCell(cell);
     if (handle) {
-      event.preventDefault();
-      closeContextMenu();
-      hoverCell.value = cell;
       dragState.value = {
-        primitiveIndex: selectedPrimitiveIndex.value,
+        kind: 'handle',
+        primitiveIndex,
         handle,
       };
-      suppressClick = true;
-      selectionError.value = '';
-      requestRender();
+    } else {
+      armedMoveState.value = {
+        primitiveIndex,
+        originCell: cell,
+      };
     }
+    suppressClick = true;
+    requestRender();
   }
 }
 
@@ -1066,10 +1143,13 @@ function handleMouseMove(event: MouseEvent): void {
     return;
   }
   updateHover(event);
+  if (armedMoveState.value) {
+    promoteArmedMove();
+  }
 }
 
 function handleMouseLeave(): void {
-  if (panning || dragState.value) {
+  if (panning || dragState.value || armedMoveState.value) {
     return;
   }
   dismissPlacementBubble();
@@ -1084,12 +1164,14 @@ function handleMouseUp(event: MouseEvent): void {
     clearDrag();
     if (!preview) {
       requestRender();
+      panning = null;
       return;
     }
     if (preview.error) {
       selectionError.value = preview.error;
       showPlacementBubble(event, preview.error);
       requestRender();
+      panning = null;
       return;
     }
     try {
@@ -1101,12 +1183,15 @@ function handleMouseUp(event: MouseEvent): void {
       showPlacementBubble(event, message);
     }
     requestRender();
+  } else if (armedMoveState.value) {
+    armedMoveState.value = null;
+    requestRender();
   }
   panning = null;
 }
 
 function handleWindowMouseMove(event: MouseEvent): void {
-  if (!panning && !dragState.value) {
+  if (!panning && !dragState.value && !armedMoveState.value) {
     return;
   }
   handleMouseMove(event);
@@ -1213,10 +1298,6 @@ function handleClick(event: MouseEvent): void {
     return;
   }
   if (activeTool.value === 'select') {
-    if (documentRef.value.occupied.has(`${cell.x},${cell.y}`)) {
-      selectPrimitiveAtCell(cell);
-      return;
-    }
     clearSelection();
     return;
   }
@@ -1346,7 +1427,7 @@ function handleKeyDown(event: KeyboardEvent): void {
     return;
   }
 
-  if (event.code === 'Escape' && dragState.value) {
+  if (event.code === 'Escape' && (dragState.value || armedMoveState.value)) {
     event.preventDefault();
     clearDrag();
     closeContextMenu();
@@ -1504,6 +1585,7 @@ watch(
     toolPopoverOpen,
     contextMenu,
     dragState,
+    armedMoveState,
     selectedPrimitiveIndex,
   ],
   () => {
