@@ -1891,6 +1891,120 @@ class TestHandleStatus:
 
 
 class TestConfigMutations:
+    def test_add_device_accepts_provisional_esp32_short_uid(self, tmp_path):
+        config = _make_config(n_devices=1)
+        config.discovery_port = 6040
+        svc, path = _make_service_with_path(
+            tmp_path,
+            config,
+            device_factory=lambda *args, **kwargs: _FakeDevice(),
+        )
+
+        reply = svc.handle_cmd({
+            'id': 1,
+            'cmd': 'add_device',
+            'device_type': 'esp32',
+            'device_uid': 'B5F190',
+            'strip_id': 'strip_c',
+            'length': 7,
+        })
+
+        assert reply['ok'] is True
+        assert reply['result']['message'] == 'added device b5f190'
+        saved = load_config(str(path))
+        assert [dc.device_uid for dc in saved.devices] == ['sim-1', 'b5f190']
+
+    def test_add_device_canonicalizes_esp32_full_hex_uid(self, tmp_path):
+        config = _make_config(n_devices=1)
+        config.discovery_port = 6040
+        svc, path = _make_service_with_path(
+            tmp_path,
+            config,
+            device_factory=lambda *args, **kwargs: _FakeDevice(),
+        )
+
+        reply = svc.handle_cmd({
+            'id': 1,
+            'cmd': 'add_device',
+            'device_type': 'esp32',
+            'device_uid': '246F28B5F190',
+            'strip_id': 'strip_c',
+            'length': 7,
+        })
+
+        assert reply['ok'] is True
+        assert reply['result']['message'] == 'added device esp32-246f28b5f190'
+        saved = load_config(str(path))
+        assert [dc.device_uid for dc in saved.devices] == ['sim-1', 'esp32-246f28b5f190']
+
+    def test_add_device_rejects_esp32_short_uid_conflicting_with_full_uid(self, tmp_path):
+        config = Config(
+            frame_port=1,
+            discovery_port=6040,
+            devices=[
+                DeviceConfig(
+                    device_id=1,
+                    device_uid='esp32-246f28b5f190',
+                    device_type='esp32',
+                    host='',
+                    tcp_port=0,
+                    strip_id='main',
+                    length=60,
+                ),
+            ],
+        )
+        svc, _path = _make_service_with_path(
+            tmp_path,
+            config,
+            device_factory=lambda *args, **kwargs: _FakeDevice(),
+        )
+
+        reply = svc.handle_cmd({
+            'id': 1,
+            'cmd': 'add_device',
+            'device_type': 'esp32',
+            'device_uid': 'b5f190',
+            'strip_id': 'aux',
+            'length': 30,
+        })
+
+        assert reply['ok'] is False
+        assert reply['error'] == 'device uid already exists: b5f190'
+
+    def test_add_device_rejects_esp32_full_hex_conflicting_with_canonical_uid(self, tmp_path):
+        config = Config(
+            frame_port=1,
+            discovery_port=6040,
+            devices=[
+                DeviceConfig(
+                    device_id=1,
+                    device_uid='esp32-246f28b5f190',
+                    device_type='esp32',
+                    host='',
+                    tcp_port=0,
+                    strip_id='main',
+                    length=60,
+                ),
+            ],
+        )
+        svc, _path = _make_service_with_path(
+            tmp_path,
+            config,
+            device_factory=lambda *args, **kwargs: _FakeDevice(),
+        )
+
+        reply = svc.handle_cmd({
+            'id': 1,
+            'cmd': 'add_device',
+            'device_type': 'esp32',
+            'device_uid': '246f28b5f190',
+            'strip_id': 'aux',
+            'length': 30,
+        })
+
+        assert reply['ok'] is False
+        assert reply['error'] == 'device uid already exists: esp32-246f28b5f190'
+
     def test_add_device_reuses_unchanged_devices_and_saves(self, tmp_path):
         config = _make_config(n_devices=2)
         config.discovery_port = 6040
@@ -3136,6 +3250,142 @@ def _make_discovery_service(n_devices=2, fake_devices=None):
 
 
 class TestDiscoveryIntegration:
+    def test_discovery_promotes_provisional_esp32_short_uid(self, tmp_path):
+        config = Config(
+            frame_port=1,
+            discovery_port=9999,
+            devices=[
+                DeviceConfig(
+                    device_id=1,
+                    device_uid='b5f190',
+                    device_type='esp32',
+                    host='',
+                    tcp_port=0,
+                    strip_id='main',
+                    length=60,
+                ),
+            ],
+        )
+        created: list[_AddressableFakeDevice] = []
+
+        def factory(device_id, host, tcp_port, device_type, strip_length, frame_port, udp_receiver):
+            dev = _AddressableFakeDevice()
+            dev.is_connected = False
+            dev.ensure_connected = lambda: False
+            created.append(dev)
+            return dev
+
+        fake_disc = _FakeDiscovery(9999)
+        svc, path = _make_service_with_path(
+            tmp_path,
+            config,
+            device_factory=factory,
+            discovery_factory=lambda port: fake_disc,
+        )
+
+        fake_disc.inject('esp32-246f28b5f190', '10.0.0.5', 8001)
+        svc.tick_once()
+
+        assert len(created) == 2
+        assert created[0].close_calls == 1
+        assert [dc.device_uid for dc in svc._device_configs] == ['esp32-246f28b5f190']
+        assert svc._devices[0]._host == '10.0.0.5'
+        assert svc._devices[0]._tcp_port == 8001
+
+        saved = load_config(str(path))
+        assert [dc.device_uid for dc in saved.devices] == ['esp32-246f28b5f190']
+
+    def test_discovery_promotes_provisional_esp32_full_hex_uid(self, tmp_path):
+        config = Config(
+            frame_port=1,
+            discovery_port=9999,
+            devices=[
+                DeviceConfig(
+                    device_id=1,
+                    device_uid='246f28b5f190',
+                    device_type='esp32',
+                    host='',
+                    tcp_port=0,
+                    strip_id='main',
+                    length=60,
+                ),
+            ],
+        )
+        created: list[_AddressableFakeDevice] = []
+
+        def factory(device_id, host, tcp_port, device_type, strip_length, frame_port, udp_receiver):
+            dev = _AddressableFakeDevice()
+            dev.is_connected = False
+            dev.ensure_connected = lambda: False
+            created.append(dev)
+            return dev
+
+        fake_disc = _FakeDiscovery(9999)
+        svc, path = _make_service_with_path(
+            tmp_path,
+            config,
+            device_factory=factory,
+            discovery_factory=lambda port: fake_disc,
+        )
+
+        fake_disc.inject('esp32-246f28b5f190', '10.0.0.5', 8001)
+        svc.tick_once()
+
+        assert len(created) == 2
+        assert created[0].close_calls == 1
+        assert [dc.device_uid for dc in svc._device_configs] == ['esp32-246f28b5f190']
+        assert svc._devices[0]._host == '10.0.0.5'
+        assert svc._devices[0]._tcp_port == 8001
+
+        saved = load_config(str(path))
+        assert [dc.device_uid for dc in saved.devices] == ['esp32-246f28b5f190']
+
+    def test_discovery_leaves_ambiguous_provisional_esp32_uid_unpromoted(
+        self,
+        tmp_path,
+        caplog,
+    ):
+        config = Config(
+            frame_port=1,
+            discovery_port=9999,
+            devices=[
+                DeviceConfig(
+                    device_id=1,
+                    device_uid='b5f190',
+                    device_type='esp32',
+                    host='',
+                    tcp_port=0,
+                    strip_id='main',
+                    length=60,
+                ),
+                DeviceConfig(
+                    device_id=2,
+                    device_uid='246f28b5f190',
+                    device_type='esp32',
+                    host='',
+                    tcp_port=0,
+                    strip_id='aux',
+                    length=30,
+                ),
+            ],
+        )
+        fake_disc = _FakeDiscovery(9999)
+        svc, path = _make_service_with_path(
+            tmp_path,
+            config,
+            device_factory=lambda *args, **kwargs: _AddressableFakeDevice(),
+            discovery_factory=lambda port: fake_disc,
+        )
+
+        caplog.set_level(logging.ERROR)
+        fake_disc.inject('esp32-246f28b5f190', '10.0.0.5', 8001)
+        svc.tick_once()
+
+        assert [dc.device_uid for dc in svc._device_configs] == ['b5f190', '246f28b5f190']
+        saved = load_config(str(path))
+        assert [dc.device_uid for dc in saved.devices] == ['b5f190', '246f28b5f190']
+        assert 'ambiguous provisional esp32 uid' in caplog.text
+
     def test_discovery_updates_device_address(self):
         fakes = [_FakeDevice()]
         fakes[0].is_connected = False

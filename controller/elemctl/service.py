@@ -52,6 +52,9 @@ log = logging.getLogger(__name__)
 _PROBE_INTERVAL_NS = 1_000_000_000  # 1 second
 _DEVICE_UID_RE = re.compile(r'^[A-Za-z0-9._:-]+$')
 _STRIP_ID_RE = re.compile(r'^[A-Za-z0-9_-]+$')
+_ESP32_CANONICAL_UID_RE = re.compile(r'^esp32-([0-9a-f]{12})$')
+_ESP32_FULL_HEX_RE = re.compile(r'^[0-9a-f]{12}$')
+_ESP32_SHORT_HEX_RE = re.compile(r'^[0-9a-f]{6}$')
 
 
 class ControllerService:
@@ -308,8 +311,10 @@ class ControllerService:
         length = self._require_length(cmd.get('length'))
 
         self._validate_device_type(device_type)
-        self._validate_device_uid(device_uid)
+        self._validate_device_uid(device_type, device_uid)
+        device_uid = self._normalize_device_uid(device_type, device_uid)
         self._validate_strip_id(strip_id)
+        self._ensure_device_uid_available(device_type, device_uid)
 
         entry = make_device_entry(
             device_uid=device_uid,
@@ -335,16 +340,21 @@ class ControllerService:
 
         if not isinstance(target_device_uid, str) or not target_device_uid:
             raise ValueError("missing 'target_device_uid' field")
-        if not any(dc.device_uid == target_device_uid for dc in self._device_configs):
+        target_dc = next(
+            (dc for dc in self._device_configs if dc.device_uid == target_device_uid),
+            None,
+        )
+        if target_dc is None:
             raise ValueError(f'device not found: {target_device_uid}')
 
-        self._validate_device_uid(device_uid)
+        self._validate_device_uid(target_dc.device_type, device_uid)
+        device_uid = self._normalize_device_uid(target_dc.device_type, device_uid)
         self._validate_strip_id(strip_id)
-        for dc in self._device_configs:
-            if dc.device_uid == target_device_uid:
-                continue
-            if dc.device_uid == device_uid:
-                raise ValueError(f'device uid already exists: {device_uid}')
+        self._ensure_device_uid_available(
+            target_dc.device_type,
+            device_uid,
+            skip_uid=target_device_uid,
+        )
 
         candidate = copy.deepcopy(self._raw_doc)
         edit_device_doc(
@@ -512,6 +522,162 @@ class ControllerService:
     def _iter_devices(self):
         return zip(self._device_configs, self._devices)
 
+    @staticmethod
+    def _normalize_device_uid(device_type: str, device_uid: str) -> str:
+        if device_type == 'esp32':
+            parsed = ControllerService._parse_esp32_uid(device_uid)
+            if parsed is None:
+                return device_uid.lower()
+            if parsed['kind'] == 'full':
+                return f"esp32-{parsed['full_hex']}"
+            return parsed['suffix']
+        return device_uid
+
+    @staticmethod
+    def _parse_esp32_uid(device_uid: str) -> dict | None:
+        if not isinstance(device_uid, str):
+            return None
+        normalized = device_uid.lower()
+        match = _ESP32_CANONICAL_UID_RE.fullmatch(normalized)
+        if match is not None:
+            full_hex = match.group(1)
+            return {
+                'kind': 'full',
+                'full_hex': full_hex,
+                'suffix': full_hex[-6:],
+                'canonical': True,
+            }
+        if _ESP32_FULL_HEX_RE.fullmatch(normalized):
+            return {
+                'kind': 'full',
+                'full_hex': normalized,
+                'suffix': normalized[-6:],
+                'canonical': False,
+            }
+        if _ESP32_SHORT_HEX_RE.fullmatch(normalized):
+            return {
+                'kind': 'short',
+                'full_hex': None,
+                'suffix': normalized,
+                'canonical': False,
+            }
+        return None
+
+    @classmethod
+    def _esp32_uids_conflict(cls, existing_uid: str, proposed_uid: str) -> bool:
+        existing = cls._parse_esp32_uid(existing_uid)
+        proposed = cls._parse_esp32_uid(proposed_uid)
+        if existing is None or proposed is None:
+            return existing_uid == proposed_uid
+        if existing['kind'] == 'full' and proposed['kind'] == 'full':
+            return existing['full_hex'] == proposed['full_hex']
+        return existing['suffix'] == proposed['suffix']
+
+    @classmethod
+    def _esp32_uid_matches_discovered(
+        cls,
+        configured_uid: str,
+        discovered_uid: str,
+    ) -> bool:
+        configured = cls._parse_esp32_uid(configured_uid)
+        discovered = cls._parse_esp32_uid(discovered_uid)
+        if configured is None or discovered is None or discovered['kind'] != 'full':
+            return False
+        if configured['kind'] == 'full':
+            return configured['full_hex'] == discovered['full_hex']
+        return configured['suffix'] == discovered['suffix']
+
+    def _ensure_device_uid_available(
+        self,
+        device_type: str,
+        device_uid: str,
+        *,
+        skip_uid: str | None = None,
+    ) -> None:
+        for dc in self._device_configs:
+            if skip_uid is not None and dc.device_uid == skip_uid:
+                continue
+            if device_type == 'esp32' and dc.device_type == 'esp32':
+                if self._esp32_uids_conflict(dc.device_uid, device_uid):
+                    raise ValueError(f'device uid already exists: {device_uid}')
+                continue
+            if dc.device_uid == device_uid:
+                raise ValueError(f'device uid already exists: {device_uid}')
+
+    def _find_esp32_promotion_candidates(self, discovered_uid: str) -> list[DeviceConfig]:
+        discovered = self._parse_esp32_uid(discovered_uid)
+        if (
+            discovered is None
+            or discovered['kind'] != 'full'
+            or not discovered['canonical']
+        ):
+            return []
+        candidates: list[DeviceConfig] = []
+        for dc in self._device_configs:
+            if dc.device_type != 'esp32':
+                continue
+            if self._esp32_uid_matches_discovered(dc.device_uid, discovered_uid):
+                candidates.append(dc)
+        return candidates
+
+    def _promote_configured_esp32_uid(
+        self,
+        target_dc: DeviceConfig,
+        canonical_uid: str,
+    ) -> bool:
+        canonical_uid = canonical_uid.lower()
+        if target_dc.device_uid == canonical_uid:
+            return True
+        if self._config_path is None:
+            raise ValueError('config path unavailable')
+        self._ensure_device_uid_available(
+            'esp32',
+            canonical_uid,
+            skip_uid=target_dc.device_uid,
+        )
+        candidate = copy.deepcopy(self._raw_doc)
+        edit_device_doc(
+            candidate,
+            target_dc.device_uid,
+            device_uid=canonical_uid,
+            strip_id=target_dc.strip_id,
+            length=target_dc.length,
+        )
+        new_config = self._save_and_validate_candidate(candidate)
+        self._raw_doc = candidate
+        self._reconcile_devices(new_config)
+        self._rebuild_controller()
+        self._queue_snapshot_event()
+        log.info(
+            'discovery: promoted esp32 uid %s -> %s',
+            target_dc.device_uid,
+            canonical_uid,
+        )
+        return True
+
+    def _maybe_promote_discovered_esp32_uid(self, discovered_uid: str) -> bool:
+        candidates = self._find_esp32_promotion_candidates(discovered_uid)
+        if not candidates:
+            return False
+        if len(candidates) != 1:
+            log.error(
+                'discovery: ambiguous provisional esp32 uid for %s: %s',
+                discovered_uid,
+                ', '.join(sorted(dc.device_uid for dc in candidates)),
+            )
+            return False
+        target_dc = candidates[0]
+        try:
+            return self._promote_configured_esp32_uid(target_dc, discovered_uid)
+        except ValueError as e:
+            log.error(
+                'discovery: failed to promote esp32 uid %s -> %s: %s',
+                target_dc.device_uid,
+                discovered_uid,
+                e,
+            )
+            return False
+
     def _poll_discovery(self) -> None:
         if self._discovery is None:
             return
@@ -520,6 +686,9 @@ class ControllerService:
             entry = self._uid_to_device.get(uid)
             if entry is None:
                 self._discovery_cache[uid] = (host, tcp_port)
+                if self._maybe_promote_discovered_esp32_uid(uid):
+                    entry = self._uid_to_device.get(uid)
+            if entry is None:
                 log.debug('discovery: unknown uid %r from %s:%d', uid, host, tcp_port)
                 continue
             dc, dev = entry
@@ -1011,11 +1180,16 @@ class ControllerService:
             raise ValueError("device_type must be 'sim' or 'esp32'")
 
     @staticmethod
-    def _validate_device_uid(device_uid) -> None:
+    def _validate_device_uid(device_type, device_uid) -> None:
         if not isinstance(device_uid, str) or not device_uid:
             raise ValueError("device uid is required")
         if not _DEVICE_UID_RE.fullmatch(device_uid):
             raise ValueError("device uid may only contain letters, numbers, ., _, -, and :")
+        if device_type == 'esp32':
+            if ControllerService._parse_esp32_uid(device_uid) is None:
+                raise ValueError(
+                    "esp32 device uid must be 6 hex, 12 hex, or esp32-<12 hex>"
+                )
 
     @staticmethod
     def _validate_strip_id(strip_id) -> None:
