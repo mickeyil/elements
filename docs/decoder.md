@@ -165,8 +165,9 @@ Program* decode_program(const uint8_t* blob, size_t len) {
         prog->pool.buffers[i] = new hsva_t[sz]();
     }
 
-    // Temp buffer
-    prog->temp_buffer = new hsva_t[max_remap_length];
+    // Temp buffer (only if needed)
+    if (max_remap_length > 0)
+        prog->temp_buffer = new hsva_t[max_remap_length];
 
     // Layers
     prog->layers = new LayerDef[layer_count]();

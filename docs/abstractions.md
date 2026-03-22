@@ -1,6 +1,6 @@
 # Elements — Abstractions
 
-> **Status: Implemented.** Matches current code in `src/decoder.h`, `src/engine.h`, `src/compositor.h`.
+> **Status: Implemented.** Core abstractions match current code. Constructor signatures and the manifest API have been updated below to reflect the current implementation in `src/engine.h`, `src/compositor.h`, and `compiler/elements/dsl.py`.
 
 This document defines the core abstractions for the animation engine. It supersedes the "Rendering Abstractions" and "Animation System" sections in [design.md](design.md) where they conflict.
 
@@ -122,7 +122,9 @@ The engine doesn't distinguish — it just passes the pointer. No separate init 
 The shift animation needs initial pixel values to shift. It declares `source=` in the DSL, which sets the event-level `source_layer` field. When the event activates, the engine passes the source layer's buffer to the `AnimShift` constructor, which copies it into its pre-allocated work buffer. This is a frozen read — the shift operates on the snapshot, not the live source.
 
 The source layer must be rendered before the shift reads it. The compiler enforces
-`source_layer <= shift's layer index`.
+`source_layer <= dependent_layer`. Same-layer dependencies work because events
+within a layer are non-overlapping and sorted by time — the source event has
+already ended (and its buffer contents survive) before the dependent starts.
 
 ```cpp
 struct ShiftParams {
@@ -197,7 +199,7 @@ Multiple physical strips run on separate ESP32 devices. The compiler partitions 
 
 **Synchronization:** All devices receive a `START` command with a shared absolute timestamp `T0`. Because all blobs share the same `duration` and all devices start at the same `t_program`, the animations appear synchronized. Clock sync is part of the transport layer; a custom controller-led scheme is documented in `transport.md` but not yet implemented. See `docs/playback_device.md` for device-side time handling.
 
-**Compiler output:** `build()` returns `dict[str, bytes]` keyed by strip name. The base station routes each blob to the correct device.
+**Compiler output:** `build_manifest()` returns a `CompiledManifest` containing per-strip blobs, duration, and global safe intervals — this is the metadata-carrying public API. `build()` returns `dict[str, bytes]` keyed by strip name for backwards compatibility (blob-only, no metadata). Both are module-level functions in `dsl.py`. The base station routes each blob to the correct device.
 
 **Layer independence:** Layer inference runs per-strip. Events on different strips never share layers, even if they target the same pixel indices or the same time window. This fixes the previous bug where events from two strips with overlapping numeric indices could be silently merged into one layer.
 
@@ -214,9 +216,10 @@ The runtime that plays a program. Owns the lifecycle of animation instances and 
 ```cpp
 class Engine {
 public:
-    Engine(Program* prog, Strip& strip);  // takes ownership of prog
+    Engine(Program* prog, Strip& strip, bool gamma_enabled);  // takes ownership of prog
     ~Engine();                             // frees prog via free_program()
 
+    void reset();                          // reset cursors, instances, buffers
     bool tick(float t);                    // returns false when t >= duration
 };
 ```
@@ -247,7 +250,7 @@ Blends active layers into the Strip, bottom to top.
 ```cpp
 class Compositor {
 public:
-    Compositor(Strip& strip);
+    Compositor(Strip& strip, bool gamma_enabled);
     void composite(LayerDef* layers, uint8_t count, uint32_t active_mask);
 };
 ```
@@ -314,11 +317,12 @@ BPM=120 (1 beat = 500ms). 10 LEDs. 4 beats total (2.0s).
 
 ### Layers
 
+The compiler packs both white and yellow spark groups into one merged layer because they don't overlap in time (white sparks at beat boundaries, yellow at half-beat offsets).
+
 | Index | Pixels | Role |
 |-------|--------|------|
 | 0 | [0-9] | background: wave then shift |
-| 1 | [0,4] | spark white |
-| 2 | [5,9] | spark yellow |
+| 1 | [0,4,5,9] | all sparks (white and yellow interleaved) |
 
 ### Events per layer
 
@@ -328,20 +332,16 @@ BPM=120 (1 beat = 500ms). 10 LEDs. 4 beats total (2.0s).
 [1] SHIFT  t_start=1.000  duration=1.000  source_layer=0  params={...}
 ```
 
-**Layer 1:**
+**Layer 1** (merged index map `[0,4,5,9]`):
 ```
-[0] SPARK  t_start=0.000  duration=0.100  params={white}
-[1] SPARK  t_start=0.500  duration=0.100  params={white}
-[2] SPARK  t_start=1.000  duration=0.100  params={white}
-[3] SPARK  t_start=1.500  duration=0.100  params={white}
-```
-
-**Layer 2:**
-```
-[0] SPARK  t_start=0.250  duration=0.100  params={yellow}
-[1] SPARK  t_start=0.750  duration=0.100  params={yellow}
-[2] SPARK  t_start=1.250  duration=0.100  params={yellow}
-[3] SPARK  t_start=1.750  duration=0.100  params={yellow}
+[0] SPARK  t_start=0.000  duration=0.100  remap=[0,1]  params={white}    — pixels [0,4]
+[1] SPARK  t_start=0.250  duration=0.100  remap=[2,3]  params={yellow}   — pixels [5,9]
+[2] SPARK  t_start=0.500  duration=0.100  remap=[0,1]  params={white}    — pixels [0,4]
+[3] SPARK  t_start=0.750  duration=0.100  remap=[2,3]  params={yellow}   — pixels [5,9]
+[4] SPARK  t_start=1.000  duration=0.100  remap=[0,1]  params={white}    — pixels [0,4]
+[5] SPARK  t_start=1.250  duration=0.100  remap=[2,3]  params={yellow}   — pixels [5,9]
+[6] SPARK  t_start=1.500  duration=0.100  remap=[0,1]  params={white}    — pixels [0,4]
+[7] SPARK  t_start=1.750  duration=0.100  remap=[2,3]  params={yellow}   — pixels [5,9]
 ```
 
 ### Engine Walkthrough
@@ -350,36 +350,35 @@ BPM=120 (1 beat = 500ms). 10 LEDs. 4 beats total (2.0s).
 State at start:
   layer[0]: cursor=0, instance=null
   layer[1]: cursor=0, instance=null
-  layer[2]: cursor=0, instance=null
 ```
 
 **t=0.001:**
 ```
   layer[0]: evt[0] WAVE, 0.0 ≤ 0.001 < 1.0 → CREATE AnimWave, render(t_rel=0.001)
-  layer[1]: evt[0] SPARK, 0.0 ≤ 0.001 < 0.1 → CREATE AnimSpark, render(t_rel=0.001)
-  layer[2]: evt[0] SPARK, 0.25 > 0.001 → idle
+  layer[1]: evt[0] SPARK, 0.0 ≤ 0.001 < 0.1 → CREATE AnimSpark
+            remap=[0,1] → render to temp, scatter to layer buffer positions [0,1]
 
-  active_mask = 0b011  (layers 0,1 active)
-  compositor blends: layer 0 (wave), layer 1 (spark white)
+  active_mask = 0b11  (layers 0,1 active)
+  compositor blends: layer 0 (wave), layer 1 (spark white on pixels [0,4])
 ```
 
 **t=0.105:** (spark white ended)
 ```
   layer[0]: AnimWave still active → render
   layer[1]: evt[0] ended (0.0+0.1=0.1 < 0.105) → DESTROY, advance cursor to 1
-            evt[1] t_start=0.5 > 0.105 → idle
-  layer[2]: evt[0] t_start=0.25 > 0.105 → idle
+            evt[1] t_start=0.25 > 0.105 → idle
 
-  active_mask = 0b001  (layer 0 only)
+  active_mask = 0b01  (layer 0 only)
 ```
 
-**t=0.260:** (spark yellow activates)
+**t=0.260:** (spark yellow activates on same layer)
 ```
   layer[0]: AnimWave → render
-  layer[1]: idle
-  layer[2]: evt[0] SPARK, 0.25 ≤ 0.26 < 0.35 → CREATE AnimSpark, render
+  layer[1]: evt[1] SPARK, 0.25 ≤ 0.26 < 0.35 → CREATE AnimSpark
+            remap=[2,3] → render to temp, scatter to layer buffer positions [2,3]
 
-  active_mask = 0b101  (layers 0,2)
+  active_mask = 0b11  (layers 0,1)
+  compositor blends: layer 0 (wave), layer 1 (spark yellow on pixels [5,9])
 ```
 
 **t=1.001:** (wave→shift transition)
@@ -390,10 +389,10 @@ State at start:
               source_layer=0 → engine passes layer 0 buffer to constructor
               constructor copies it into work_buf (frozen read)
               render(t_rel=0.001)
-  layer[1]: evt[2] SPARK, 1.0 ≤ 1.001 < 1.1 → CREATE AnimSpark, render
-  layer[2]: idle (between sparks)
+  layer[1]: evt[4] SPARK, 1.0 ≤ 1.001 < 1.1 → CREATE AnimSpark
+            remap=[0,1] → scatter to positions [0,1]
 
-  active_mask = 0b011  (layers 0,1)
+  active_mask = 0b11  (layers 0,1)
 ```
 
-Sparks continue alternating on layers 1 and 2 through beats 3-4. Shift runs on layer 0 until t=2.0.
+Sparks continue alternating white/yellow on layer 1 through beats 3-4. Shift runs on layer 0 until t=2.0.

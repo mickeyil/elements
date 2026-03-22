@@ -1,6 +1,6 @@
 # Elements — Design Document
 
-> **Status: Mixed.** Core pipeline (compiler, decoder, engine, compositor, PlaybackDevice base class, ESPSimulated), the Python controller service, UDS control API, simulator transport, TUI workflow, and a minimal observer web relay (`elemctl web`) are implemented. Hardware parity, web-side control parity, and some higher-level transport/design sections are still forward-looking — see `transport.md` and `controller.md`.
+> **Status: Mixed.** Core pipeline (compiler, decoder, engine, compositor, PlaybackDevice base class, ESPSimulated), the Python controller service, UDS control API, simulator transport, TUI workflow, and `elemctl web` (observer relay + layout editing + device management APIs) are implemented. Hardware parity, web-side playback/program-control parity, and some higher-level transport/design sections are still forward-looking — see `transport.md` and `controller.md`.
 
 ## Overview
 
@@ -24,7 +24,8 @@ The core design principle: **tight timing sync over complex rendering**. Simple 
 │  │    Controller     │     │     Web App       │  │
 │  │  (compiles, routes│---->│  (serves browser, │  │
 │  │   blobs, syncs,   │     │   relays snapshots│  │
-│  │   manages sessions│     │   and frames)     │  │
+│  │   manages sessions│     │   frames, layouts,│  │
+│  │                    │     │   device mgmt)    │  │
 │  │   + playback)     │     └────────┬──────────┘  │
 │  └────────┬──────────┘              │             │
 │           │                         │             │
@@ -40,7 +41,7 @@ The core design principle: **tight timing sync over complex rendering**. Simple 
      └─────────────┘
 ```
 
-The controller is the long-running authority. It compiles DSL programs, routes per-strip blobs to devices via the configured inventory, manages playback sessions, and exposes a control/event API over a Unix Domain Socket. This repo now includes a minimal browser viewer (`elemctl web`) that connects as an observer relay; full web-side control parity is still future work. See `controller.md` for the full architecture, config format, and session identity model.
+The controller is the long-running authority. It compiles DSL programs, routes per-strip blobs to devices via the configured inventory, manages playback sessions, and exposes a control/event API over a Unix Domain Socket. The repo also includes `elemctl web`, which connects as an observer relay and additionally provides HTTP APIs for layout editing/persistence and device add/edit/remove. Web-side playback and program-control parity is still future work. See `controller.md` for the full architecture, config format, and session identity model.
 
 ### Network Assumptions
 
@@ -61,8 +62,9 @@ Communication between the base station and devices is minimal by design. The con
 
 | Message | Direction | Description |
 |---------|-----------|-------------|
+| **CONFIGURE(device_id, strip_length, frame_port)** | base → device | Runtime configuration handshake. Must succeed before LOAD. |
 | **LOAD(blob, gen)** | base → device | Upload a compiled blob + generation counter. Clears all device state. Device decodes and enters LOADED. |
-| **ACK** | device → base | Confirms program was received and decoded successfully. |
+| **ACK** | device → base | Confirms CONFIGURE or LOAD was received and processed. |
 | **START(t0)** | base → device | Begin playback at shared absolute timestamp `t0` (int64_t µs). |
 | **JUMP(t0, t_rel, gen)** | base → device | Seek to a reset-safe time. Resets engine, sets shared `t0` and new `gen`. |
 | **PAUSE** | base → device | Stop advancing. Keep displaying last frame. Report paused `t_rel`. |
@@ -110,7 +112,7 @@ LOAD tears down the current program and replaces it — no STOP needed when swit
 
 ### Transport
 
-TCP for commands (LOAD, START, JUMP, PAUSE, RESUME, STOP, debug) and clock sync results. UDP for clock sync probes (latency-sensitive RTT measurement) and streaming (RGB frames, telemetry). See `docs/transport.md` for the full transport architecture.
+TCP for commands (CONFIGURE, LOAD, START, JUMP, PAUSE, RESUME, STOP, debug) and clock sync results. UDP for discovery HELLO and streaming (RGB frames). Clock sync probes are planned but not yet implemented. See `docs/transport.md` for the full transport architecture.
 
 ---
 
@@ -223,7 +225,7 @@ The original phase breakdown is no longer a useful roadmap. The simulator/contro
 Current areas of work:
 
 - **ESP32 parity** — make real hardware follow the same discovery + configure + playback model as `network_sim`
-- **Web control parity** — extend `elemctl web` from observer-only relay to full control (load, play, seek, config mutations)
+- **Web playback/program-control parity** — extend `elemctl web` beyond its current layout editing and device management APIs to support playback control (load, play, seek) from the browser
 - **Clock sync implementation** — move the documented custom sync protocol from design to code
 - **Audio-player integration** — implement the controller ↔ audio contract described in `controller.md`
 

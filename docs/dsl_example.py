@@ -10,7 +10,7 @@ def program(beat, duration):
 
     wave1 = wave(
         channel="V",
-        h=blue_hue, s=1.0,
+        h=blue_hue, s=1.0, v=0.0,
         min_val=0.0, max_val=0.4,
         period=8,
         phase0=-PI/2,

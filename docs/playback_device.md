@@ -94,7 +94,7 @@ protected:
 
 ### handle_load()
 
-Tears down any existing program, decodes the new blob, creates Engine. On decode failure, clears to black, transitions to IDLE, and reports via telemetry. On success, sets state to LOADED and resets `_gen`, `_frame_index`, `_paused_t_rel`.
+Tears down any existing program, decodes the new blob, creates Engine. On decode failure, clears to black, transitions to IDLE, and reports via telemetry. On success, sets state to LOADED, sets `_gen` to the generation counter carried by the LOAD command, and resets `_frame_index` and `_paused_t_rel`.
 
 ### handle_start()
 
@@ -102,7 +102,7 @@ Records the absolute start time `t0`. Valid from LOADED or ENDED (resets engine 
 
 ### handle_jump()
 
-Resets the engine and sets a new time origin + generation counter. If previously PLAYING, stays PLAYING (next tick renders from new timebase). If LOADED/PAUSED/ENDED, renders one frame at the exact target time, then transitions to PAUSED. Ignores if `t_rel >= _duration` or no engine loaded.
+Resets the engine and sets a new time origin + generation counter. Negative `t_rel` is clamped to `0.0`. If previously PLAYING, stays PLAYING (next tick renders from new timebase). If LOADED/PAUSED/ENDED, renders one frame at the exact target time, increments `_frame_index`, then transitions to PAUSED. Ignores if `t_rel >= _duration` or no engine loaded.
 
 ### handle_pause()
 
@@ -118,7 +118,7 @@ Resets the engine, clears rgb buffer to black, outputs the black frame, resets `
 
 ### tick_once()
 
-IDLE/ENDED → returns false. LOADED/PAUSED → returns true (alive but not advancing). PLAYING → computes `t_rel` from `now_mono() + _sync_offset - _t0`, calls `engine.tick()`, outputs frame, increments `_frame_index`. If `t_rel < 0` (future start), returns true without ticking. If engine returns false (program ended), clears to black, outputs the black frame, and transitions to ENDED.
+IDLE/ENDED → returns false. LOADED/PAUSED → returns true (alive but not advancing). PLAYING → computes `t_rel` from `now_mono() + _sync_offset - _t0`, calls `engine.tick()`, outputs frame, increments `_frame_index`. If `t_rel < 0` (future start), returns true without ticking. When the engine reports program end (`t_rel >= duration`), emits a final black frame at `_duration`, sends ENDED telemetry, and transitions to ENDED before returning false.
 
 ---
 

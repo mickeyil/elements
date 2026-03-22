@@ -2,8 +2,8 @@
 
 > **Status: Implemented.** Matches current code in `src/engine.h`, `src/engine.cpp`.
 
-The engine is the runtime loop. It takes a decoded `Program` and a clock,
-and every frame:
+The engine is the runtime loop. It takes a decoded `Program` and a caller-supplied
+`float t` (seconds since program start), and every frame:
 
 1. Advances time
 2. Checks which events should be active (start/stop animations)
@@ -38,7 +38,7 @@ private:
     };
 
     Program* _prog;
-    Compositor _compositor;   // owned, constructed with Strip&
+    Compositor _compositor;   // owned, constructed with Strip& and gamma_enabled
     LayerState* _states;      // heap-allocated, one per layer
 };
 ```
@@ -132,9 +132,12 @@ animation does with that buffer is its own business:
 - **Live read (pointer):** a future animation (e.g., mirror) could store the
   pointer and re-read the source buffer every frame.
 
-**Ordering invariant:** `source_layer < dependent_layer`. The engine renders
+**Ordering invariant:** `source_layer <= dependent_layer`. The engine renders
 layers in order 0, 1, 2, ... so the source layer is always rendered before the
-dependent. The compiler enforces this.
+dependent. Same-layer dependencies work because events within a layer are
+non-overlapping and sorted by time — the source event has already ended (and
+its buffer contents survive) before the dependent event starts. The compiler
+enforces this.
 
 **Buffer clobber edge case:** if the source event has ended and another event on
 the source layer is active, the source buffer may contain unexpected data. The

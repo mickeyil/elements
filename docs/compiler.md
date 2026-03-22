@@ -1,6 +1,6 @@
 # Elements — Compiler Design
 
-> **Status: Fully implemented.** All pipeline steps match current code in `compiler/elements/`.
+> **Status: Implemented.** Pipeline steps match current code in `compiler/elements/`. Some internals below have been updated to reflect the current implementation.
 
 The compiler takes a DSL program and emits one binary blob per strip. It runs on the base station (PC), not the ESP32. All heavy lifting — time resolution, layer inference, buffer packing — happens here.
 
@@ -8,22 +8,23 @@ The compiler takes a DSL program and emits one binary blob per strip. It runs on
 
 ```
 DSL (.py)
-  → 1. Parser              — DSL calls → structured data
-  → 2. Time resolution     — beats/sec → absolute seconds (global, all strips)
-  → 3. Strip partition      — events split by strip_name
+  → 1. Parser               — DSL calls → structured data
+  → 2. Validation (early)   — bounds, params completeness, strip names, paint args
+  → 3. Time resolution      — beats/sec → absolute seconds (global, all strips)
   → [per strip:]
-  → 4. Layer inference      — events → layers (interval graph coloring)
-  → 5. Buffer packing       — stateful animations → shared buffer slots
-  → 6. Source resolution    — resolve source= refs, compute required_start_sec
-  → 7. Validation           — bounds, references, timing checks
+  → 4. Layer inference       — events → layers (bin-packing with index merging)
+  → 5. Buffer packing        — stateful animations → shared buffer slots
+  → 6. Source resolution     — resolve source= refs, compute required_start_sec
+  → 7. Validation (late)     — source references, timing vs duration, buffer sanity
   → 8. Safe interval analysis — dependency-aware per-strip safe intervals
-  → 9. Param resolution + blob emission — serialize to binary
+  → 9. Param resolution      — resolve animation params to binary-ready values
+  → 10. Blob emission        — serialize to binary
   → [across strips:]
-  → 10. Global safe interval intersection
+  → 11. Global safe interval intersection
   → CompiledManifest (per-strip blobs + safe intervals + global safe intervals)
 ```
 
-Steps 1–3 run once across all events. Steps 4–9 run independently per strip. Step 10 intersects per-strip safe intervals. `build_manifest()` returns `CompiledManifest`; `build()` returns `dict[str, bytes]` for backwards compatibility. Safe intervals are metadata (not embedded in the blob).
+Steps 1–3 run once across all events. Steps 4–10 run independently per strip. Step 11 intersects per-strip safe intervals. `build_manifest()` returns `CompiledManifest`; `build()` returns `dict[str, bytes]` for backwards compatibility. Safe intervals are metadata (not embedded in the blob). Events are partitioned by `strip_name` as part of the per-strip loop — there is no separate strip-partition pass.
 
 ### Multi-strip
 
@@ -87,16 +88,19 @@ class _ProgramBuilder:
         self.strips = []
         self.animations = []
         self.events = []
+        self.configured_strip_lengths = {}  # strip_name → length from controller config
 
-    def build(self, beat, duration):
-        blob = self._emit(beat, duration)
-        self.reset()
-        return blob
+    # add_strip(), add_animation(), add_event() accumulate data
 
 _builder = _ProgramBuilder()
 ```
 
-`build()` at the end of the DSL file triggers the whole pipeline and resets the builder.
+`_ProgramBuilder` accumulates DSL data but does not have its own `build()` method. The public entry points are module-level functions:
+
+- **`build(beat, duration)`** — compiles and returns `dict[str, bytes]` (blob-only, backwards compat)
+- **`build_manifest(beat, duration)`** — compiles and returns `CompiledManifest` (blobs + duration + safe intervals)
+
+Both call the internal `compile_program()` / `compile_manifest()` pipeline, then reset the builder.
 
 ---
 
@@ -129,15 +133,9 @@ def resolve_times(events, beat, duration):
         e["at_sec"]       = e["at"] * beat
         e["duration_sec"] = e["duration"] * beat
         e["end_sec"]      = e["at_sec"] + e["duration_sec"]
-
-    # Validate against program duration
-    for e in events:
-        if e["end_sec"] > duration:
-            raise CompileError(
-                f"{e['anim'].anim_type} event ends at {e['end_sec']}s "
-                f"but program duration is {duration}s"
-            )
 ```
+
+Time resolution is pure normalization — it converts units but does not validate timing against program duration. Duration checks happen later in late validation (see § 7).
 
 **Animation params** with time units (e.g. `period`, `fade`) go through the same conversion. The compiler knows which params are time-based per animation type:
 
@@ -145,9 +143,11 @@ def resolve_times(events, beat, duration):
 TIME_PARAMS = {
     "wave":  ["period"],
     "spark": ["fade"],
-    "shift": ["velocity"],  # pixels/beat → pixels/sec
+    "shift": [],  # velocity handled separately
 }
 ```
+
+Shift `velocity` is not a time param — it is pixels/beat, not a duration. The compiler converts it separately: `velocity_pps = velocity / beat` (pixels/beat ÷ seconds/beat = pixels/sec). `SecMarker` velocities are passed through as-is (already in pixels/sec).
 
 **Example** — test animation with `beat=0.5`, `duration=2.0`:
 
@@ -332,42 +332,44 @@ shift_c  [5..9]   2.5-3.0s  (5 pixels)
 
 Result: 2 buffers `[10, 5]`. shift_a and shift_c share slot 0, shift_b gets slot 1. ESP32 allocates `hsva_t[10]` + `hsva_t[5]` at load time.
 
-**Output:** a `BufferPool` spec — array of `{id, size}`. Goes into the Program struct. The engine allocates all buffers once at load, passes the right pointer to each animation's `init()` via its `buffer_id`.
+**Output:** a `BufferPool` spec — array of `{id, size}`. Goes into the Program struct. The decoder allocates all buffers at decode time. The engine's factory function looks up the buffer via `buffer_id` and pre-fills it with source pixels before passing it to the animation's constructor.
 
 ---
 
 ## 5. Validation
 
-Runs after time resolution, layer inference, and buffer packing — has the full picture. Catches errors that would be silent bugs on the ESP32.
+Validation is split into two phases: **early** (before layer inference, on raw events) and **late** (after source resolution, with the full picture).
 
-**Checks:**
+### Early validation (before time resolution)
 
-1. **Pixel bounds** — every index in every pixel group must be `< strip.length`. Error if not.
+Runs on raw DSL events. Catches structural errors before any compilation work.
 
-2. **Event timing vs program duration:**
+1. **Empty program** — no events → hard compile error (`empty program: no events`).
+2. **Duplicate strip names** → error.
+3. **Pixel bounds** — every index in every pixel group must be `< strip.length`. Error if not.
+4. **Animation params completeness** — each animation type has required params. Missing `period` on a wave → compile error, not a runtime mystery.
+5. **Paint-specific argument validation** — paint color arguments are validated for correct structure (solid color or per-pixel array).
+6. **Unknown event-level options** — unrecognized keyword arguments passed to `.schedule()` are rejected.
+
+### Late validation (after source resolution)
+
+Runs after layer inference, buffer packing, and source resolution — has the full picture.
+
+7. **Event timing vs program duration:**
    - Event *starts* after duration → **error** (dead code, definitely a mistake)
    - Event *extends* past duration → **warning**, clamp `end_sec` to `duration` (song ends when it ends, event just gets cut short — no harm)
 
-3. **Source layer ordering** — after layer inference, for each event with a `source` field, verify that the source animation's layer index is less than or equal to the dependent event's layer index. The engine renders layers in order, so the source layer must be ready.
+8. **Source layer ordering** — for each event with a `source` field, verify that the source animation's layer index is `<= dependent_layer`. Same-layer dependencies are valid because events within a layer are non-overlapping and sorted by time.
 
-   ```python
-   def validate_source_ordering(layers):
-       for li, layer in enumerate(layers):
-           for e in layer["events"]:
-               if "source" not in e:
-                   continue
-               source_anim = e["source"]
-               source_li = find_layer_of(source_anim, layers)
-               if source_li > li:
-                   raise CompileError(
-                       f"{e['anim'].anim_type} on layer {li} declares "
-                       f"source={source_anim.anim_type} on layer {source_li}, "
-                       f"but source_layer must be <= dependent layer"
-                   )
-               e["source_layer"] = source_li
-   ```
+9. **Invalid source values** — source must reference a scheduled `AnimDef`. Unscheduled source animations are rejected.
 
-4. **Buffer clobber warning** — if the source event has ended and a *different* event on the source layer is active before the shift starts, the source buffer may have been overwritten. Emit a warning.
+10. **Source on multiple layers** — a source `AnimDef`'s events must all land on a single layer. If the compiler placed them on different layers, the source reference is ambiguous → error.
+
+11. **Source event must have ended before dependent starts** — the source event's `end_sec` must be `<= dependent event's at_sec`. Otherwise the dependent would snapshot a partially-rendered buffer.
+
+12. **Dependent pixels subset of source** — the dependent event's pixel group must be a subset of the source event's pixel group. This ensures the snapshot covers all needed pixels.
+
+13. **Buffer clobber warning** — fires when another event on the source layer overlaps the interval between `source_end` and dependent start, meaning it may overwrite the source buffer before the shift snapshots it.
 
    ```python
    def warn_buffer_clobber(event, source_layer_events):
@@ -378,21 +380,14 @@ Runs after time resolution, layer inference, and buffer packing — has the full
        for se in source_layer_events:
            if se["anim"] is event["source"]:
                continue  # skip the source event itself
-           if se["at_sec"] <= dep_start and se["end_sec"] > source_end:
-               warn(f"event on source layer active between {source_end}s and "
-                    f"{dep_start}s — "
-                    f"buffer may not contain expected snapshot data")
+           if se["at_sec"] < dep_start and se["end_sec"] > source_end:
+               warn(f"event on source layer overlaps [{source_end}s, "
+                    f"{dep_start}s) — buffer may be overwritten before snapshot")
    ```
 
-5. **Animation params completeness** — each animation type has required params. Missing `period` on a wave → compile error, not a runtime mystery.
+14. **Buffer pool sanity** — no `buffer_id` outside pool bounds. Internal assertion.
 
-6. **Layer limit** — already enforced in layer inference (`max_layers=32`), surfaced here with context about which events caused the overflow.
-
-7. **Duplicate strip names** → error.
-
-8. **Empty program** — no strips, no events → error or warning.
-
-9. **Buffer pool sanity** — no `buffer_id` outside pool bounds. Internal assertion.
+15. **Layer limit** — already enforced in layer inference (`max_layers=32`), surfaced here with context about which events caused the overflow.
 
 ---
 
@@ -448,7 +443,7 @@ events:           Event[event_count]
 ### Event
 
 ```
-anim_type:         uint8     (WAVE=0, SHIFT=1, SPARK=2, FILL=3, ...)
+anim_type:         uint8     (WAVE=0, SHIFT=1, SPARK=2, PAINT=3)
 t_start:           float32   (seconds)
 duration:          float32   (seconds)
 source_layer:      uint8     (0xFF = none)
@@ -498,6 +493,22 @@ fill_a:       float32
 buffer_id:    uint8    (index into buffer pool)
 ```
 
+**Paint — solid (17 bytes):**
+```
+mode:       uint8    (0 = solid)
+color_h:    float32
+color_s:    float32
+color_v:    float32
+color_a:    float32
+```
+
+**Paint — per-pixel (2 + N*16 bytes):**
+```
+mode:         uint8    (1 = per_pixel)
+pixel_count:  uint8
+pixels:       [h: float32, s: float32, v: float32, a: float32] × pixel_count
+```
+
 Note: `source_layer` is in the event header, not in shift params. `init_mode`
 has been removed — the animation decides internally whether to freeze or
 live-read the source buffer.
@@ -526,19 +537,19 @@ Buffers are pre-allocated — no per-frame allocation. Animation instances are `
 Header:                           12 bytes
 Buffer pool (1 buffer):            1 byte
 Layer 0 (10 indices, 2 events):
-  index_map:                      1 + 10 = 11
-  event_count:                    2
+  index_map_length + map:         1 + 10 = 11
+  event_count (u16):              2
   wave event:                     1+4+4+1+1+1+10+1+33 = 56
   shift event:                    1+4+4+1+1+1+10+1+23 = 46
 Layer 1 (4 indices, 8 events):
-  index_map:                      1 + 4 = 5
-  event_count:                    2
+  index_map_length + map:         1 + 4 = 5
+  event_count (u16):              2
   8 spark events:                 8 × (1+4+4+1+1+1+2+1+16) = 248
                                   ─────
 Total:                            383 bytes
 ```
 
-Fits in a single UDP packet.
+Note: LOAD is sent over TCP (not UDP), so the blob size is not constrained by MTU.
 
 ---
 

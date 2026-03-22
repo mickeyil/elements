@@ -1,6 +1,6 @@
 # Controller
 
-> **Status: Partially implemented.** The Python controller service, Unix-socket control API, discovery receiver, simulator transport, controller-owned program library, and artifact cache are implemented. The repo also includes a minimal browser viewer (`elemctl web`) that connects as an observer relay. Full web-side control parity and hardware parity are still future work.
+> **Status: Partially implemented.** The Python controller service, Unix-socket control API, discovery receiver, simulator transport, controller-owned program library, and artifact cache are implemented. `elemctl web` connects as an observer relay and also provides HTTP APIs for layout editing/persistence and device add/edit/remove. Web-side playback/program-control parity and hardware parity are still future work.
 
 ## Base-station config
 
@@ -95,21 +95,17 @@ Discovery does not add unknown devices automatically. Unknown `device_uid` value
 
 ### Compiler return type
 
-The compiler produces a **manifest** — not just blobs, but metadata about the compiled program:
+The compiler exposes manifest-producing APIs directly. The controller does not need to wrap blob dicts into its own structure:
 
 ```python
-# What compile_program() currently returns:
-dict[str, bytes]   # strip_name -> blob
+# compile_manifest() / build_manifest() return a CompiledManifest:
+@dataclass
+class CompiledManifest:
+    duration: float                             # seconds
+    strips: list[CompiledStripArtifact]         # ordered: name, length, blob
+    safe_intervals: list[tuple[float, float]]   # global reset-safe intervals
 
-# What the controller wraps it into:
-{
-    "duration": 612.0,                 # seconds
-    "safe_intervals": [(0.0, 0.0), (12.4, 13.0), (28.0, 29.5), (44.5, 46.0), (58.0, 60.0)],  # reset-safe intervals (global)
-    "strips": [                              # ordered list — defines canonical strip order
-        { "name": "main_left",  "length": 150, "blob": b"..." },
-        { "name": "main_right", "length": 150, "blob": b"..." }
-    ]
-}
+# build() / compile_program() still return dict[str, bytes] for backwards compat
 ```
 
 The blob format and decoder are unchanged. The manifest is controller-level metadata — devices never see it. They receive bare blobs via LOAD as before.
@@ -180,7 +176,7 @@ To solve this, LOAD and JUMP commands carry a **generation counter** (`gen`, u16
 
 **When the device starts using the new gen:** synchronously in the command handler, before the next `tick_once()` / `output_frame()` cycle. For `handle_jump()`, this is immediate. For `handle_load()`, `_gen` is set only after successful decode — on decode failure the device clears to black and calls `output_frame()` (so the strip goes dark), then transitions to IDLE. That black frame carries the old gen, not the new one, since `_gen` is only updated on success. The first frame emitted after a successful command carries the new gen; any frames already in the UDP pipeline carry the old gen. This is the invariant that makes controller-side filtering work.
 
-**Telemetry is not gen-filtered.** Gen filtering applies to RGB frames forwarded to the client. Telemetry (health, errors, decode failures) is always accepted by the controller regardless of gen — otherwise the controller would never learn about a failed LOAD.
+**Gen filtering applies only to RGB frames** forwarded to the client. The controller does not currently ingest device telemetry over the network — end-of-program detection and paused-position tracking are controller-local (derived from `current_t_rel()` on device objects). Device-side `send_telemetry()` is a no-op for `ESPSimulated`; telemetry ingestion may be added when real ESP32 hardware is integrated.
 
 ```
 Device outbound UDP frame:
@@ -202,7 +198,6 @@ def assemble_program_frame(self, frame_index, strip_index, t_rel, rgb):
     bucket = self.pending_frames.setdefault(frame_index, {
         "t_rel": t_rel,
         "strips": {},
-        "deadline": time.monotonic() + self.frame_deadline,
     })
     bucket["strips"][strip_index] = rgb
 
@@ -219,16 +214,9 @@ def emit_program_frame(self, frame_index, bucket):
     for i in range(self.strip_count):
         payload += bucket["strips"][i]
     self.send_to_client(kind=0x02, payload=payload)
-
-# Periodic cleanup: drop incomplete frames past their deadline
-def sweep_stale_frames(self):
-    now = time.monotonic()
-    for fid in list(self.pending_frames):
-        if self.pending_frames[fid]["deadline"] < now:
-            del self.pending_frames[fid]  # incomplete — drop entire frame
 ```
 
-**Frame assembly policy: complete-only.** The controller emits a program frame only when all strips for a given `frame_index` are present. If any strip is missing when the deadline expires, the entire frame is dropped. This keeps semantics clean — the client only sees coherent frames. One slow device causes dropped frames, not stale-filled partial renders.
+**Frame assembly policy: complete-only, no deadline sweep.** The controller emits a program frame only when all strips for a given `frame_index` are present. Incomplete buckets are retained until they complete or are cleared by session transitions (`load`, `seek`, `stop`, loop restart). There is no deadline-based stale-bucket sweep — this keeps the implementation simple and avoids timing dependencies.
 
 **Scope:** `gen` filtering applies to LOAD and JUMP only. CMD_DEBUG_SEEK (simulator-only) does not bump `gen`. A stale frame from just before a debug seek could be stamped with the new epoch, but this is at most a single-frame glitch during interactive dev scrubbing — not worth coupling the debug path to the gen protocol.
 
@@ -270,26 +258,28 @@ If the user seeks to 4.7, it falls within `(4.5, 5.0)` — a valid jump target. 
 
 ```python
 def handle_seek(self, requested_t: float):
-    if self.all_devices_are_sim():
-        # Simulators: arbitrary seek via replay (CMD_DEBUG_SEEK)
-        for device in self.devices:
-            self.send_debug_seek(device, requested_t)
-        target = requested_t
-    else:
-        # Production: snap to a safe time (CMD_JUMP) + audio coordination
-        target = self.snap_to_safe_time(requested_t)
-        if target is None:
-            return  # no safe interval available
-        # Compute shared t0 so all devices and audio are synchronized
-        t0 = self.mono_now() - int(target * 1e6)
-        self.gen += 1
-        for device in self.devices:
-            self.expected_gen[device.id] = self.gen
-            self.send_jump(device, t0, target, self.gen)
-        self.audio.seek_and_start_at(target, t0)
+    """Seek always snaps to safe intervals and uses jump()."""
+    target = self.snap_to_safe_time(requested_t)
+    if target is None:
+        return  # no safe interval available
+    # Compute shared t0 so all devices and audio are synchronized
+    t0 = self.mono_now() - int(target * 1e6)
+    self.gen += 1
+    for strip in self.active_strips:
+        strip.device.jump(t0, target, self.gen)
+    # self.audio.seek_and_start_at(target, t0)  # planned
 
     self.epoch += 1
     self.notify_client(epoch=self.epoch, t_rel=target)
+
+def handle_debug_seek(self, requested_t: float):
+    """Separate command — simulator-only arbitrary seek via replay."""
+    if not self.supports_debug_seek():
+        return  # all active session devices must be simulators
+    for strip in self.active_strips:
+        strip.device.debug_seek(requested_t)
+    self.epoch += 1
+    self.notify_client(epoch=self.epoch, t_rel=requested_t)
 
 def snap_to_safe_time(self, t: float) -> float | None:
     """Find a safe jump time for the requested seek position.
@@ -384,16 +374,16 @@ def load_program(self, program_id: str, targets: list[str] | None = None):
 
 ## Controller ↔ Client protocol
 
-The controller exposes a **Unix Domain Socket (UDS)** protocol to local clients. Today the supported topology is **one writer plus any number of observers**:
+The controller exposes a **Unix Domain Socket (UDS)** protocol to local clients. The supported topology is **multiple writers plus any number of observers**:
 
-- **Writer** — exactly one command-capable client (currently the TUI)
+- **Writer** — command-capable client (the TUI, or any client that sends `hello` with `role: "writer"`)
 - **Observer** — read-only clients that receive snapshots, events, and frames (for example `elemctl web`)
 
-All clients share the same ordered event/frame stream from the controller. Replies are point-to-point to the requesting writer connection only.
+Multiple writers are allowed. Every writer `hello` triggers `probe_all()` (attempts to connect/reconnect all known devices). All clients share the same ordered event/frame stream from the controller. Replies are point-to-point to the requesting writer connection only.
 
-### Why one writer + observers
+### Why writers + observers
 
-- **Command arbitration stays simple.** There is still exactly one authority for `load`, `play`, `seek`, and config mutations.
+- **Multiple writers coexist** — the server no longer rejects a second writer.
 - **Observers are cheap.** A browser viewer can subscribe without having to reimplement the TUI.
 - **Reconnect stays simple.** Each client reconnects independently and gets a fresh snapshot.
 - **No external dependencies.** Just a Unix socket with length-prefixed records.
@@ -424,7 +414,7 @@ Every client must send `hello` as its first command:
 {"id": 0, "cmd": "hello", "role": "observer", "protocol_version": 2}
 ```
 
-The controller replies with a normal JSON reply. If the role is accepted, it immediately follows with a snapshot. A second writer is rejected. Observer connections that try to send non-`hello` commands receive an error reply.
+The controller replies with a normal JSON reply. If the role is accepted, it immediately follows with a snapshot. Observer connections that try to send non-`hello` commands receive an error reply.
 
 **Client → Controller (commands):**
 
@@ -435,19 +425,20 @@ Commands carry an `id` (client-assigned, incrementing counter) that the controll
 {"id": 2, "cmd": "play"}
 {"id": 3, "cmd": "pause"}
 {"id": 4, "cmd": "seek", "t_rel": 30.0}
-{"id": 5, "cmd": "stop"}
-{"id": 6, "cmd": "status"}
-{"id": 7, "cmd": "rescan_programs"}
-{"id": 8, "cmd": "load_program", "program_id": "demo_main", "loop": true}
-{"id": 9, "cmd": "load_program", "program_id": "demo_main", "targets": ["sim-144", "esp-144"], "loop": true}
-{"id": 10, "cmd": "load_scene", "loop": true, "entries": [
+{"id": 5, "cmd": "debug_seek", "t_rel": 7.3}
+{"id": 6, "cmd": "stop"}
+{"id": 7, "cmd": "status"}
+{"id": 8, "cmd": "rescan_programs"}
+{"id": 9, "cmd": "load_program", "program_id": "demo_main", "loop": true}
+{"id": 10, "cmd": "load_program", "program_id": "demo_main", "targets": ["sim-144", "esp-144"], "loop": true}
+{"id": 11, "cmd": "load_scene", "loop": true, "entries": [
   {"program_id": "ambient", "targets": ["sim-1"]},
   {"program_id": "spark", "targets": ["sim-2"]}
 ]}
-{"id": 11, "cmd": "publish_program", "program_id": "demo_main", "source": "...python source..."}
-{"id": 12, "cmd": "add_device", "device_type": "sim", "device_uid": "sim-3", "strip_id": "aux", "length": 30}
-{"id": 13, "cmd": "edit_device", "target_device_uid": "sim-3", "device_uid": "sim-3", "strip_id": "aux", "length": 60}
-{"id": 14, "cmd": "remove_device", "device_uid": "sim-3"}
+{"id": 12, "cmd": "publish_program", "program_id": "demo_main", "source": "...python source..."}
+{"id": 13, "cmd": "add_device", "device_type": "sim", "device_uid": "sim-3", "strip_id": "aux", "length": 30}
+{"id": 14, "cmd": "edit_device", "target_device_uid": "sim-3", "device_uid": "sim-3", "strip_id": "aux", "length": 60}
+{"id": 15, "cmd": "remove_device", "device_uid": "sim-3"}
 ```
 
 `play` means both fresh start and resume — the controller decides which device command to send based on current state (CMD_START from LOADED/ENDED, CMD_RESUME from PAUSED). The client does not need to distinguish between them.
@@ -492,24 +483,29 @@ Asynchronous state changes and broadcasts — not tied to a specific command.
 
 ```json
 {"type": "event", "event": "session_start", "session_id": 42,
- "epoch": 1,
+ "epoch": 0,
  "duration": 612.0, "safe_intervals": [[0.0, 0.0], [12.4, 13.0], ...],
  "strips": [
    {"name": "main_left", "length": 150,
-    "targets": [{"device_id": 1, "device_uid": "sim-left", "length": 150}]},
+    "targets": [{"device_id": 1, "device_uid": "sim-left", "device_type": "sim", "length": 150}]},
    {"name": "main_right", "length": 150,
-    "targets": [{"device_id": 2, "device_uid": "sim-right", "length": 150}]}
+    "targets": [{"device_id": 2, "device_uid": "sim-right", "device_type": "sim", "length": 150}]}
  ]}
-{"type": "event", "event": "state", "state": "playing", "epoch": 2, "session_id": 42}
+{"type": "event", "event": "state", "state": "loaded", "epoch": 0, "session_id": 42}
+{"type": "event", "event": "state", "state": "playing", "epoch": 1, "session_id": 42}
 {"type": "event", "event": "loop", "epoch": 3, "session_id": 42}
 {"type": "event", "event": "device_status",
- "device_id": 1, "device_uid": "sim-1", "strip": "main_left", "length": 150, "connected": true}
+ "device_id": 1, "device_uid": "sim-1", "strip": "main_left", "length": 150,
+ "connected": true, "last_seen": 1711123456.789}
 {"type": "event", "event": "device_status",
- "device_id": 1, "device_uid": "sim-1", "strip": "main_left", "length": 150, "connected": false}
+ "device_id": 1, "device_uid": "sim-1", "strip": "main_left", "length": 150,
+ "connected": false, "last_seen": 1711123456.789}
 {"type": "event", "event": "programs_updated",
  "programs": [{"program_id": "demo_main", "beat": 0.5, "duration": 64.0, "error": null, "strips": ["main"]}]}
 {"type": "event", "event": "error", "message": "load failed: device sim-1 rejected blob"}
 ```
+
+Note: `session_start` is emitted with `epoch: 0`. A `state` event with `state: "loaded"` is also queued immediately after load. The epoch increments on play, seek, jump, and loop.
 
 - **`session_start`** — new session loaded, includes all metadata for seek bar and frame slicing
 - **`state`** — playback state change (playing, paused, ended), includes current epoch
@@ -530,7 +526,8 @@ The `strips` array in `session_start` defines the **canonical logical strip orde
 | `publish_program` | Program source validated, then stored under `program_id`, library entry updated, `programs_updated` broadcast queued. Does not load or play the program. Broken source is rejected and not stored. | `{"program": {...}}` |
 | `play` | State updated; sends START (from LOADED/ENDED) or RESUME (from PAUSED) to all devices + audio | `{}` |
 | `pause` | CMD_PAUSE sent to all devices, audio paused, state updated | `{}` |
-| `seek` | Time resolved/snapped, JUMP or DEBUG_SEEK sent, epoch updated | `{}` |
+| `seek` | Time snapped to safe interval, CMD_JUMP sent to all devices, epoch updated | `{}` |
+| `debug_seek` | Simulator-only arbitrary seek via CMD_DEBUG_SEEK. Requires all active session devices to be simulators (`supports_debug_seek()`). Epoch updated. | `{}` |
 | `stop` | CMD_STOP sent to all devices, output cleared to black, state updated | `{}` |
 | `status` | Snapshot built immediately from current runtime state | snapshot object in `result` |
 | `rescan_programs` | Program library rescanned from `animations_dir`, catalog updated, `programs_updated` broadcast queued | `{"programs": [...]}` |
@@ -579,21 +576,21 @@ The snapshot schema matches `build_snapshot()` in `service.py`:
         "name": "main_left",
         "length": 150,
         "targets": [
-          {"device_id": 1, "device_uid": "sim-1", "length": 150}
+          {"device_id": 1, "device_uid": "sim-1", "device_type": "sim", "length": 150}
         ]
       },
       {
         "name": "main_right",
         "length": 150,
         "targets": [
-          {"device_id": 2, "device_uid": "sim-2", "length": 150}
+          {"device_id": 2, "device_uid": "sim-2", "device_type": "sim", "length": 150}
         ]
       }
     ]
   },
   "devices": [
-    {"device_id": 1, "device_uid": "sim-1", "strip": "main_left", "length": 150, "device_type": "sim", "connected": true},
-    {"device_id": 2, "device_uid": "sim-2", "strip": "main_right", "length": 150, "device_type": "sim", "connected": true}
+    {"device_id": 1, "device_uid": "sim-1", "strip": "main_left", "length": 150, "device_type": "sim", "connected": true, "last_seen": 1711123456.789},
+    {"device_id": 2, "device_uid": "sim-2", "strip": "main_right", "length": 150, "device_type": "sim", "connected": true, "last_seen": 1711123456.789}
   ]
 }
 ```
@@ -639,14 +636,23 @@ The UDS socket is **non-blocking**. The controller never blocks on frame deliver
 
 ## Web relay
 
-The repo now includes a minimal browser viewer via `elemctl web`.
+The repo includes `elemctl web`, which has two roles:
 
-- `elemctl web` connects to the controller UDS as an **observer**
-- it serves a local HTTP page and WebSocket endpoint
-- it relays snapshots, events, and binary program frames to the browser
-- it does **not** send controller commands
+**Observer relay** (UDS connection):
+- Connects to the controller UDS as an **observer**
+- Serves a local HTTP page and WebSocket endpoint
+- Relays snapshots, events, and binary program frames to the browser
+- Emits `relay_status` events to the browser indicating controller connection state
+- Enriches browser snapshots with `relay_version` and layout data
 
-This is intentionally narrower than the TUI. Web-side control parity remains future work.
+**HTTP APIs** (direct, not through UDS):
+- `GET /api/layouts/<device_uid>` — read device layout
+- `POST /api/layouts/<device_uid>` — save device layout
+- `POST /api/devices` — add device (sends `add_device` command to controller via UDS writer connection)
+- `PATCH /api/devices/<uid>` — edit device
+- `DELETE /api/devices/<uid>` — remove device
+
+Web-side playback and program-control parity (load, play, seek from the browser) remains future work.
 
 ---
 
@@ -686,8 +692,8 @@ Client                    Controller                     ESPSimulated
    |    ] }                  |                              |
    |<------------------------|                              |
    |                         |                              |
-   | {"type":"cmd","id":2,   |                              |
-   |  "cmd":"play"}          |                              |
+   | {"id":2, "cmd":"play"}  |                              |
+   |                         |                              |
    |------------------------>|                              |
    |                         |  epoch = 1                   |
    |                         |  TCP: START(t0)              |
@@ -796,11 +802,13 @@ Client                    Controller                ESPSimulated
 
 ---
 
-## Audio player coordination
+## Audio player coordination (planned)
 
-The audio player is a separate component on the base station, coordinated by the controller using the same synchronization primitive as device sync: shared absolute `t0` + scheduled start.
+> **Not yet implemented.** The audio player component and its integration with the controller do not exist yet. This section documents the planned contract so that the controller's seek and start flows are specified end-to-end. The LED side (CMD_JUMP, safe intervals, gen filtering) is fully defined; the audio side depends on this interface being implemented.
 
-### Contract
+The audio player would be a separate component on the base station, coordinated by the controller using the same synchronization primitive as device sync: shared absolute `t0` + scheduled start.
+
+### Planned contract
 
 The audio player must support four operations:
 
@@ -823,24 +831,20 @@ All operations using `t0_abs` reference the controller's monotonic clock. The au
 
 **JUMP (looping):** Same as seek — `t_rel=0.0`, audio restarts from the beginning at the new `t0`.
 
-### Scope
-
-The audio player component itself is not yet designed. This section documents the required contract so that the controller's seek and start flows are specified end-to-end. The LED side (CMD_JUMP, safe intervals, gen filtering) is fully defined. The audio side depends on this interface being implemented.
-
-Production seek and pause/resume are supported — seek is restricted to safe intervals on the visual side, pause/resume preserves engine state. Both coordinate with audio via the contract above.
+Production seek and pause/resume are supported on the LED side — seek is restricted to safe intervals, pause/resume preserves engine state. Audio coordination depends on this contract being implemented.
 
 ---
 
 ## Device type and debug coordination
 
-Device type is per-device, not a global mode. Each device in the config has a `device_type` field: `"sim"` (ESPSimulated via `network_sim`) or `"esp32"` (real hardware, planned). Debug commands (CMD_DEBUG_SEEK, CMD_DEBUG_STEP) require an all-simulator topology — the controller checks that every device is `device_type: "sim"` before sending debug commands.
+Device type is per-device, not a global mode. Each device in the config has a `device_type` field: `"sim"` (ESPSimulated via `network_sim`) or `"esp32"` (real hardware, planned). Debug commands (CMD_DEBUG_SEEK, CMD_DEBUG_STEP) are checked against the **active session devices** via `supports_debug_seek()` — which returns true only when all devices in the current session are `device_type: "sim"`.
 
-- **All-sim topology:** Full debug controls (seek/step/jump). Supports both arbitrary scrubbing (via CMD_DEBUG_SEEK) and jump-point navigation (via CMD_JUMP).
+- **All-sim topology:** Full debug controls (`debug_seek`/`debug_step`/jump). Supports both arbitrary scrubbing (via CMD_DEBUG_SEEK) and jump-point navigation (via CMD_JUMP).
 - **All-esp32 topology (planned):** Controller sends LOAD, START, JUMP, PAUSE, RESUME, STOP, and (when implemented) sync. No replay-based debug commands. Seek is restricted to safe intervals only.
 
 Both topologies support CMD_JUMP — it works on any device because it only targets times within reset-safe intervals where `reset()` + forward tick is correct.
 
-When the controller sends a debug command (e.g., seek), it sends it to all simulators via their TCP connections without waiting for acknowledgment (fire-and-forget). Each simulator independently resets, replays, and sends its RGB frame.
+When the controller sends a debug command (e.g., `debug_seek`), it sends it to all simulators via their TCP connections without waiting for acknowledgment (fire-and-forget). Each simulator independently resets, replays, and sends its RGB frame.
 
 ---
 
@@ -855,7 +859,7 @@ When the controller sends a debug command (e.g., seek), it sends it to all simul
 {"id": 1, "cmd": "load", "source": "...", "beat": 0.5, "duration": 300.0, "loop": true}
 ```
 
-**How end-detection works:** When a device's program finishes, it transitions to ENDED and sends telemetry. The controller treats this as a program-level signal — it does not react per-device. Once the controller determines the program has ended (first ENDED telemetry, since all devices share the same t0 and duration), it issues one coordinated JUMP to all devices with a shared t0 and new gen.
+**How end-detection works:** The controller does not rely on ENDED telemetry from devices. Instead, it infers end-of-program locally by checking whether every active strip reports `current_t_rel(now) >= duration`. Once all strips have reached the end, the controller issues `jump(now, 0.0, new_gen)` followed by `resume(now)` — because devices are already in the ENDED state and need both a jump (to reset the engine to t=0) and a resume (to begin advancing again from the new time origin).
 
 **Loop event:** The controller emits a loop event to the client so it can reset its playback position:
 ```json

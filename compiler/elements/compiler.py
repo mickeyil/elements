@@ -145,7 +145,7 @@ def _validate_early(events: list[dict], strips: list[StripDef]):
 # ---------------------------------------------------------------------------
 
 def _resolve_times(events: list[dict], beat: float, duration: float):
-    """Resolve SecMarkers to beats, then convert all times to seconds."""
+    """Convert SecMarker seconds to beats, then convert all beat values to seconds."""
     beat = _ensure_finite_positive(beat, "beat")
     _ensure_finite_positive(duration, "program duration")
 

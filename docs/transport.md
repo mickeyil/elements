@@ -4,16 +4,19 @@
 
 ## Transport architecture
 
-Two active channels per device:
+Three active channels per device:
 
 | Channel | Direction | Purpose | Why this transport |
 |---------|-----------|---------|-------------------|
 | **TCP** | bidirectional | Commands (controller → device) and ACKs (device → controller) | Reliable delivery, arbitrary payload size (blobs can exceed UDP MTU) |
 | **UDP outbound** | device → controller | RGB frames | Fire-and-forget streaming; dropped frame = client skips one update |
+| **UDP discovery** | device → controller | HELLO packets (periodic, even after TCP connect) | Lightweight presence; enables rediscovery after reconnects |
 
-Each device listens on one TCP port. The controller maintains a persistent TCP connection to each device. Devices send UDP frames to the controller's `frame_port`.
+Each device listens on one TCP port. The controller maintains a persistent TCP connection to each device. Devices send UDP frames to the controller's `frame_port`. Discovery HELLO packets are broadcast on `discovery_port` (default 6040) — the controller uses these to resolve live `(host, tcp_port)` for known `device_uid` values. Duplicate UIDs from different addresses are rejected via a discovery reject packet.
 
-> **Design-only (not yet implemented):** A third channel — UDP inbound (controller → device) for SYNC_REQ clock sync probes — is documented below but not implemented. See "Design-only: clock sync protocol" section.
+`network_sim` keeps sending HELLO packets even after a TCP connection is established, so the controller can rediscover the device after reconnects without requiring a restart.
+
+> **Design-only (not yet implemented):** A fourth channel — UDP inbound (controller → device) for SYNC_REQ clock sync probes — is documented below but not implemented. See "Design-only: clock sync protocol" section.
 
 ---
 
@@ -74,10 +77,11 @@ The device sends an ACK (status: 0 = ok, 1 = invalid payload/config, 2 = not con
 The device reads from the TCP socket in its main loop. Commands are length-prefixed, so reading is straightforward and non-blocking:
 
 ```cpp
-// Persistent read buffer — accumulates partial TCP reads across loop iterations.
-// Sized for the largest expected command (LOAD with max blob size).
-static uint8_t tcp_buf[32768];
-static uint32_t tcp_buf_len = 0;
+// Resizable read buffer — accumulates partial TCP reads across loop iterations.
+// Starts at 32 KiB, grows dynamically for large LOAD payloads.
+// Messages exceeding TCP_MSG_MAX are rejected to guard against runaway reads.
+std::vector<uint8_t> tcp_buf(32768);
+uint32_t tcp_buf_len = 0;
 
 // Called each loop iteration. Non-blocking: reads whatever is available,
 // processes complete commands, leaves partial data for next call.
@@ -105,21 +109,23 @@ void poll_tcp_commands(int tcp_fd, /* ... */) {
                 memcpy(&device_id, payload, 2);
                 memcpy(&strip_length, payload + 2, 2);
                 memcpy(&frame_port, payload + 4, 2);
-                // Construct/configure the playback device here.
+                // Creates ESPSimulated with strip_length, stores device_id,
+                // programs controller frame_port for UDP output.
+                // Rejects reconfigure-after-configure with ACK status 1.
+                // Sends ACK status 0 on success.
                 break;
             }
             case 0x10: {  // CMD_LOAD
                 if (!configured) {
-                    // ACK status 2 = not configured
+                    send_ack(tcp_fd, 2);  // ACK status 2 = not configured
                     break;
                 }
                 if (payload_len < 4) break;
                 uint16_t device_id, gen;
                 memcpy(&device_id, payload, 2);
                 memcpy(&gen, payload + 2, 2);
-                bool ok = device.handle_load(payload + 4, payload_len - 4, gen);
-                uint8_t ack[] = {0x80, ok ? (uint8_t)0 : (uint8_t)1};
-                // send_tcp_ack(tcp_fd, ack, sizeof(ack));  // length-prefixed
+                bool ok = device->handle_load(payload + 4, payload_len - 4, gen);
+                send_ack(tcp_fd, ok ? 0 : 1);  // ACK immediately
                 break;
             }
             case 0x11: {  // CMD_START
@@ -160,10 +166,18 @@ void poll_tcp_commands(int tcp_fd, /* ... */) {
             }
             // Design-only (not yet implemented):
             // case 0x03: handle_sync_result(payload, payload_len); break;
-            // Debug commands (ESPSimulated only):
-            // case 0x20: device.debug_pause(); break;
-            // case 0x22: device.debug_seek(read_f32(payload)); break;
-            // etc.
+            // Debug commands (ESPSimulated only, implemented):
+            case 0x22: {  // CMD_DEBUG_SEEK
+                float t_rel;
+                memcpy(&t_rel, payload, 4);
+                device->debug_seek(t_rel);
+                break;
+            }
+            case 0x23: {  // CMD_DEBUG_STEP
+                int8_t direction = (int8_t)payload[0];
+                device->debug_step(direction);
+                break;
+            }
         }
 
         // Shift remaining data to front
@@ -214,21 +228,24 @@ void poll_udp_sync(int udp_fd) {
 ## Device main loop (combined)
 
 ```cpp
-void loop() {              // Arduino (ESPDevice)
+void loop() {              // Arduino (ESPDevice — planned)
     poll_tcp_commands(tcp_fd, device);
-    poll_udp_sync(udp_fd);
+    // poll_udp_sync(udp_fd);  // design-only, not yet implemented
     device.tick_once();
 }
 ```
 
 ```cpp
-while (running) {          // Desktop (ESPSimulated)
+while (running) {          // Desktop (network_sim, implemented)
     poll_tcp_commands(tcp_fd, device);
-    poll_udp_sync(udp_fd);
-    device.tick_once();
+    device->tick_once();
+    send_frames();         // drain queued frames, send UDP to controller
+    broadcast_hello();     // periodic HELLO on discovery port (even after TCP connect)
     pace_loop();           // sleep_until next_tick, overrun detection
 }
 ```
+
+Note: `poll_udp_sync()` is part of the planned clock sync protocol (not yet implemented). The current `network_sim` loop does not poll for sync probes.
 
 ---
 
@@ -236,6 +253,14 @@ while (running) {          // Desktop (ESPSimulated)
 
 ```python
 # Python controller — sending commands over TCP
+
+def send_configure(conn: socket.socket, device_id: int, strip_length: int, frame_port: int):
+    msg = struct.pack('<IB', 7, 0x04)        # length=7, CMD_CONFIGURE
+    msg += struct.pack('<HHH', device_id, strip_length, frame_port)
+    conn.sendall(msg)
+    # Read ACK (status 0 = ok, 1 = already configured)
+    return read_ack(conn)
+
 def send_load(conn: socket.socket, device_id: int, gen: int, blob: bytes):
     msg = struct.pack('<I', 1 + 2 + 2 + len(blob))  # length prefix
     msg += b'\x10'                                    # CMD_LOAD
@@ -272,6 +297,8 @@ def send_stop(conn: socket.socket):
     msg = struct.pack('<IB', 1, 0x15)        # length=1, CMD_STOP
     conn.sendall(msg)
 ```
+
+**Runtime handshake order:** After TCP connect, the controller sends CONFIGURE (assigns `device_id`, `strip_length`, `frame_port`) before any LOAD. Until CONFIGURE succeeds, LOAD is rejected with ACK status 2. The CONFIGURE → LOAD → START sequence is the standard startup path.
 
 ---
 
