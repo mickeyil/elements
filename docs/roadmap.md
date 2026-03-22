@@ -184,6 +184,12 @@ Once Milestone A is complete, the likely next milestones are:
 - better per-device diagnostics
 - clearer status surfaces in TUI/browser
 - targeted smoke-test flows for hardware
+- device registration / provisioning UX
+  - keep the full hardware UID as the canonical internal identity
+  - allow operators to identify and configure devices by a short human-facing suffix label
+    - initial plan: last 3 MAC bytes, e.g. `0A11E3`
+  - resolve short IDs to the full UID only when the suffix is unique
+  - on the rare suffix collision, fall back to a longer/full UID instead of renaming the device
 
 ### Milestone C: Web control parity
 
