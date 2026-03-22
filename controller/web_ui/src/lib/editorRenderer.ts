@@ -20,6 +20,7 @@ export interface EditorHandle {
   x: number;
   y: number;
   active?: boolean;
+  style?: 'box' | 'endpoint';
 }
 
 const SURFACE = '#081015';
@@ -37,6 +38,10 @@ const COLLISION_MARK = '#ffe0e0';
 const HANDLE_FILL = 'rgba(8, 16, 21, 0.95)';
 const HANDLE_STROKE = '#a6c4ff';
 const HANDLE_ACTIVE_STROKE = '#ffd166';
+const ENDPOINT_GLOW = 'rgba(255, 209, 102, 0.2)';
+const ENDPOINT_ACTIVE_GLOW = 'rgba(255, 245, 204, 0.28)';
+const ENDPOINT_STROKE = '#ffe08a';
+const ENDPOINT_ACTIVE_STROKE = '#fff6cc';
 
 export function clampZoom(nextZoom: number): number {
   return Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, nextZoom));
@@ -155,11 +160,42 @@ function drawHandle(
   viewport: EditorViewport,
   handle: EditorHandle,
 ): void {
+  const sx = viewport.offsetX + handle.x * viewport.zoom;
+  const sy = viewport.offsetY + handle.y * viewport.zoom;
+  if (handle.style === 'endpoint') {
+    const outerInset = Math.max(0.5, viewport.zoom * 0.05);
+    const innerInset = Math.max(1.5, viewport.zoom * 0.14);
+    ctx.fillStyle = handle.active ? ENDPOINT_ACTIVE_GLOW : ENDPOINT_GLOW;
+    ctx.fillRect(
+      sx + outerInset,
+      sy + outerInset,
+      Math.max(1, viewport.zoom - outerInset * 2),
+      Math.max(1, viewport.zoom - outerInset * 2),
+    );
+    ctx.strokeStyle = handle.active ? ENDPOINT_ACTIVE_STROKE : ENDPOINT_STROKE;
+    ctx.lineWidth = Math.max(2, viewport.zoom * 0.12);
+    ctx.strokeRect(
+      sx + outerInset,
+      sy + outerInset,
+      Math.max(1, viewport.zoom - outerInset * 2),
+      Math.max(1, viewport.zoom - outerInset * 2),
+    );
+    ctx.strokeStyle = handle.active ? HANDLE_ACTIVE_STROKE : HANDLE_STROKE;
+    ctx.lineWidth = Math.max(1.25, viewport.zoom * 0.08);
+    ctx.strokeRect(
+      sx + innerInset,
+      sy + innerInset,
+      Math.max(1, viewport.zoom - innerInset * 2),
+      Math.max(1, viewport.zoom - innerInset * 2),
+    );
+    return;
+  }
+
   const size = Math.max(6, viewport.zoom * 0.42);
-  const sx = viewport.offsetX + handle.x * viewport.zoom + viewport.zoom / 2;
-  const sy = viewport.offsetY + handle.y * viewport.zoom + viewport.zoom / 2;
-  const left = sx - size / 2;
-  const top = sy - size / 2;
+  const cx = sx + viewport.zoom / 2;
+  const cy = sy + viewport.zoom / 2;
+  const left = cx - size / 2;
+  const top = cy - size / 2;
 
   ctx.fillStyle = HANDLE_FILL;
   ctx.fillRect(left, top, size, size);

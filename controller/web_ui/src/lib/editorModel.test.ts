@@ -10,6 +10,7 @@ import {
   expandCircleCells,
   expandLineCells,
   markIndicesInactive,
+  laterPrimitiveImpact,
   placeCirclePrimitive,
   placeLinePrimitive,
   placeSinglePrimitive,
@@ -22,6 +23,7 @@ import {
   replacePrimitive,
   serializeDocument,
   translatePrimitive,
+  visibleLineEndpoints,
 } from './editorModel';
 
 describe('expandLineCells', () => {
@@ -33,6 +35,24 @@ describe('expandLineCells', () => {
     [{ x: 4, y: 0 }, { x: 0, y: 4 }, 0, [{ x: 4, y: 0 }, { x: 3, y: 1 }, { x: 2, y: 2 }, { x: 1, y: 3 }, { x: 0, y: 4 }]],
   ])('expands %o -> %o with spacing %d', (start, end, spacing, expected) => {
     expect(expandLineCells(start, end, spacing)).toEqual(expected);
+  });
+
+  it('derives visible endpoints from sampled cells instead of raw endpoints', () => {
+    expect(
+      visibleLineEndpoints({ x: 0, y: 0 }, { x: 5, y: 0 }, 1),
+    ).toEqual({
+      start: { x: 0, y: 0 },
+      end: { x: 4, y: 0 },
+    });
+  });
+
+  it('keeps visible endpoints aligned with raw endpoints when spacing is zero', () => {
+    expect(
+      visibleLineEndpoints({ x: 1, y: 2 }, { x: 4, y: 2 }, 0),
+    ).toEqual({
+      start: { x: 1, y: 2 },
+      end: { x: 4, y: 2 },
+    });
   });
 });
 
@@ -514,6 +534,79 @@ describe('editorModel inactive LEDs', () => {
       },
     ]);
     expect(replaced.currentIndex).toBe(4);
+  });
+
+  it('detects when replacing a primitive renumbers later primitives', () => {
+    const original = placeCirclePrimitive(
+      placeLinePrimitive(createEmptyDocument(20), { x: 0, y: 0 }, { x: 2, y: 0 }, 0),
+      { x: 8, y: 0 },
+      { x: 10, y: 0 },
+      1,
+      'cw',
+    );
+
+    const replaced = replacePrimitive(original, 0, {
+      type: 'line',
+      startIndex: 999,
+      count: 5,
+      spacing: 0,
+      start: [0, 0],
+      end: [4, 0],
+    });
+
+    expect(laterPrimitiveImpact(original, replaced, 0)).toEqual({
+      renumbersLaterPrimitives: true,
+      affectedPrimitiveCount: 1,
+      affectedLedCount: 6,
+    });
+  });
+
+  it('ignores edits that only affect the last primitive', () => {
+    const original = placeCirclePrimitive(
+      placeLinePrimitive(createEmptyDocument(20), { x: 0, y: 0 }, { x: 2, y: 0 }, 0),
+      { x: 8, y: 0 },
+      { x: 10, y: 0 },
+      1,
+      'cw',
+    );
+
+    const replaced = replacePrimitive(original, 1, {
+      type: 'circle',
+      startIndex: 999,
+      count: expandCircleCells({ x: 8, y: 0 }, { x: 10, y: 0 }, 0, 'cw').length,
+      spacing: 0,
+      center: [8, 0],
+      start: [10, 0],
+      direction: 'cw',
+    });
+
+    expect(laterPrimitiveImpact(original, replaced, 1)).toEqual({
+      renumbersLaterPrimitives: false,
+      affectedPrimitiveCount: 0,
+      affectedLedCount: 0,
+    });
+  });
+
+  it('ignores pure translations that preserve primitive counts', () => {
+    const original = placeCirclePrimitive(
+      placeLinePrimitive(createEmptyDocument(20), { x: 0, y: 0 }, { x: 2, y: 0 }, 0),
+      { x: 8, y: 0 },
+      { x: 10, y: 0 },
+      1,
+      'cw',
+    );
+
+    const replaced = replacePrimitive(
+      original,
+      0,
+      translatePrimitive(original.primitives[0], { x: 1, y: 2 }),
+    );
+
+    expect(laterPrimitiveImpact(original, replaced, 0)).toEqual({
+      renumbersLaterPrimitives: false,
+      affectedPrimitiveCount: 0,
+      affectedLedCount: 0,
+    });
   });
 
   it('removes a primitive and reindexes later primitives', () => {

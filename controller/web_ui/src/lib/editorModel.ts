@@ -223,6 +223,21 @@ export function expandLineCells(start: Point, end: Point, spacing: number): Poin
   return cells;
 }
 
+export function visibleLineEndpoints(
+  start: Point,
+  end: Point,
+  spacing: number,
+): { start: Point; end: Point } {
+  const cells = expandLineCells(start, end, spacing);
+  if (!cells.length) {
+    throw new Error('Line placement produced no cells.');
+  }
+  return {
+    start: cells[0],
+    end: cells[cells.length - 1],
+  };
+}
+
 function normalizeAngle(angle: number): number {
   return angle < 0 ? angle + Math.PI * 2 : angle;
 }
@@ -849,6 +864,46 @@ export function replacePrimitive(
     ),
   );
   return buildDocument(document.maxIndex, nextPrimitives);
+}
+
+export interface LaterPrimitiveImpact {
+  renumbersLaterPrimitives: boolean;
+  affectedPrimitiveCount: number;
+  affectedLedCount: number;
+}
+
+function primitiveFirstIndex(primitive: Primitive): number {
+  return primitive.type === 'single' ? primitive.index : primitive.startIndex;
+}
+
+function primitiveLedCount(primitive: Primitive): number {
+  return primitive.type === 'single' ? 1 : primitive.count;
+}
+
+export function laterPrimitiveImpact(
+  current: EditorDocument,
+  next: EditorDocument,
+  editedPrimitiveIndex: number,
+): LaterPrimitiveImpact {
+  const limit = Math.min(current.primitives.length, next.primitives.length);
+  let affectedPrimitiveCount = 0;
+  let affectedLedCount = 0;
+
+  for (let index = editedPrimitiveIndex + 1; index < limit; index += 1) {
+    const currentPrimitive = current.primitives[index];
+    const nextPrimitive = next.primitives[index];
+    if (primitiveFirstIndex(currentPrimitive) === primitiveFirstIndex(nextPrimitive)) {
+      continue;
+    }
+    affectedPrimitiveCount += 1;
+    affectedLedCount += primitiveLedCount(nextPrimitive);
+  }
+
+  return {
+    renumbersLaterPrimitives: affectedPrimitiveCount > 0,
+    affectedPrimitiveCount,
+    affectedLedCount,
+  };
 }
 
 export function removePrimitive(document: EditorDocument, primitiveIndex: number): EditorDocument {

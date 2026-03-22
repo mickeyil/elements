@@ -37,6 +37,7 @@ import {
   expandLineCells,
   GRID_SIZE,
   inactiveIndices,
+  laterPrimitiveImpact,
   markIndicesInactive,
   placeCirclePrimitive,
   placeLinePrimitive,
@@ -56,6 +57,7 @@ import {
   type EditorDocument,
   type Point,
   translatePrimitive,
+  visibleLineEndpoints,
 } from '../lib/editorModel';
 import {
   centerViewport,
@@ -82,6 +84,11 @@ type PlacementBubble = {
   x: number;
   y: number;
   visible: boolean;
+};
+type PendingRenumberConfirm = {
+  nextDocument: EditorDocument;
+  affectedPrimitiveCount: number;
+  affectedLedCount: number;
 };
 type DragHandleKind =
   | 'single-position'
@@ -149,6 +156,7 @@ const lineEditSpacing = ref(0);
 const circleEditDirection = ref<'cw' | 'ccw'>('cw');
 const circleEditSpacing = ref(0);
 const selectionError = ref('');
+const pendingRenumberConfirm = shallowRef<PendingRenumberConfirm | null>(null);
 
 let spacePressed = false;
 let renderPending = false;
@@ -409,6 +417,20 @@ const hoveredSelectedBodyCell = computed(() => {
   }
   return selectedPrimitiveCells.value.has(`${hoverCell.value.x},${hoverCell.value.y}`);
 });
+const dragRenumberImpact = computed(() => {
+  const state = dragState.value;
+  const preview = dragPreview.value;
+  if (!state || !preview || preview.error) {
+    return null;
+  }
+  try {
+    const nextDocument = replacePrimitive(documentRef.value, state.primitiveIndex, preview.primitive);
+    const impact = laterPrimitiveImpact(documentRef.value, nextDocument, state.primitiveIndex);
+    return impact.renumbersLaterPrimitives ? impact : null;
+  } catch {
+    return null;
+  }
+});
 const canvasCursor = computed(() => {
   if (dragState.value) {
     return 'grabbing';
@@ -442,6 +464,24 @@ const toolbarNotice = computed(() => {
     return statusNotice.value;
   }
   return '';
+});
+const pendingRenumberMessage = computed(() => {
+  const pending = pendingRenumberConfirm.value;
+  if (!pending) {
+    return '';
+  }
+  const primitiveLabel = pending.affectedPrimitiveCount === 1 ? 'primitive' : 'primitives';
+  const ledLabel = pending.affectedLedCount === 1 ? 'LED' : 'LEDs';
+  return `This change will renumber LEDs in ${pending.affectedPrimitiveCount} later ${primitiveLabel} (${pending.affectedLedCount} ${ledLabel}).`;
+});
+const dragRenumberMessage = computed(() => {
+  const impact = dragRenumberImpact.value;
+  if (!impact) {
+    return '';
+  }
+  const primitiveLabel = impact.affectedPrimitiveCount === 1 ? 'primitive' : 'primitives';
+  const ledLabel = impact.affectedLedCount === 1 ? 'LED' : 'LEDs';
+  return `Release will renumber ${impact.affectedLedCount} ${ledLabel} in ${impact.affectedPrimitiveCount} later ${primitiveLabel}.`;
 });
 const toolbarNoticeClass = computed(() => ({
   'editor-toolbar-notice-error': Boolean(error.value),
@@ -531,6 +571,7 @@ function clearSelection(): void {
   clearDrag();
   selectedPrimitiveIndex.value = null;
   closeContextMenu();
+  pendingRenumberConfirm.value = null;
 }
 
 function syncSelectedLineDraft(): void {
@@ -580,16 +621,23 @@ function buildHandlesForPrimitive(
     ];
   }
   if (primitive.type === 'line') {
+    const visible = visibleLineEndpoints(
+      { x: primitive.start[0], y: primitive.start[1] },
+      { x: primitive.end[0], y: primitive.end[1] },
+      primitive.spacing,
+    );
     return [
       {
-        x: primitive.start[0],
-        y: primitive.start[1],
+        x: visible.start.x,
+        y: visible.start.y,
         active: activeHandle === 'line-start',
+        style: 'endpoint',
       },
       {
-        x: primitive.end[0],
-        y: primitive.end[1],
+        x: visible.end.x,
+        y: visible.end.y,
         active: activeHandle === 'line-end',
+        style: 'endpoint',
       },
     ];
   }
@@ -614,10 +662,15 @@ function handleAtCell(cell: Point): DragHandleKind | null {
       : null;
   }
   if (selectedLine.value) {
-    if (selectedLine.value.start[0] === cell.x && selectedLine.value.start[1] === cell.y) {
+    const visible = visibleLineEndpoints(
+      { x: selectedLine.value.start[0], y: selectedLine.value.start[1] },
+      { x: selectedLine.value.end[0], y: selectedLine.value.end[1] },
+      selectedLine.value.spacing,
+    );
+    if (visible.start.x === cell.x && visible.start.y === cell.y) {
       return 'line-start';
     }
-    if (selectedLine.value.end[0] === cell.x && selectedLine.value.end[1] === cell.y) {
+    if (visible.end.x === cell.x && visible.end.y === cell.y) {
       return 'line-end';
     }
     return null;
@@ -655,6 +708,10 @@ function closeToolPopover(): void {
 function closeContextMenu(): void {
   contextMenu.value = null;
   selectionError.value = '';
+}
+
+function clearPendingRenumberConfirm(): void {
+  pendingRenumberConfirm.value = null;
 }
 
 function closeInactivePanel(): void {
@@ -728,6 +785,9 @@ function parseInactiveInput(text: string): number[] {
 }
 
 function applyInactivePanel(): void {
+  if (pendingRenumberConfirm.value) {
+    return;
+  }
   try {
     setDocument(markIndicesInactive(documentRef.value, parseInactiveInput(inactivePanelInput.value)));
     inactivePanelInput.value = '';
@@ -738,6 +798,9 @@ function applyInactivePanel(): void {
 }
 
 function removeInactiveLed(index: number): void {
+  if (pendingRenumberConfirm.value) {
+    return;
+  }
   try {
     setDocument(reactivateIndex(documentRef.value, index));
     inactivePanelError.value = '';
@@ -747,11 +810,17 @@ function removeInactiveLed(index: number): void {
 }
 
 function resetInactiveLeds(): void {
+  if (pendingRenumberConfirm.value) {
+    return;
+  }
   setDocument(clearInactiveIndices(documentRef.value));
   inactivePanelError.value = '';
 }
 
 function toggleInactivePanel(): void {
+  if (pendingRenumberConfirm.value) {
+    return;
+  }
   inactivePanelOpen.value = !inactivePanelOpen.value;
   if (inactivePanelOpen.value) {
     closeToolPopover();
@@ -767,6 +836,50 @@ function toggleInactivePanel(): void {
 function setDocument(nextDocument: EditorDocument): void {
   documentRef.value = nextDocument;
   clearStatusNotice();
+}
+
+function computePrimitiveReplacement(
+  primitiveIndex: number,
+  replacement: Primitive,
+): { nextDocument: EditorDocument; impact: ReturnType<typeof laterPrimitiveImpact> } {
+  const nextDocument = replacePrimitive(documentRef.value, primitiveIndex, replacement);
+  return {
+    nextDocument,
+    impact: laterPrimitiveImpact(documentRef.value, nextDocument, primitiveIndex),
+  };
+}
+
+function commitPrimitiveReplacement(primitiveIndex: number, replacement: Primitive): 'committed' | 'pending' {
+  const { nextDocument, impact } = computePrimitiveReplacement(primitiveIndex, replacement);
+  if (impact.renumbersLaterPrimitives) {
+    pendingRenumberConfirm.value = {
+      nextDocument,
+      affectedPrimitiveCount: impact.affectedPrimitiveCount,
+      affectedLedCount: impact.affectedLedCount,
+    };
+    selectionError.value = '';
+    return 'pending';
+  }
+  clearPendingRenumberConfirm();
+  setDocument(nextDocument);
+  selectionError.value = '';
+  return 'committed';
+}
+
+function confirmPendingRenumber(): void {
+  const pending = pendingRenumberConfirm.value;
+  if (!pending) {
+    return;
+  }
+  clearPendingRenumberConfirm();
+  setDocument(pending.nextDocument);
+  selectionError.value = '';
+  requestRender();
+}
+
+function cancelPendingRenumber(): void {
+  clearPendingRenumberConfirm();
+  requestRender();
 }
 
 function applySelectedLineEdit(): void {
@@ -786,19 +899,18 @@ function applySelectedLineEdit(): void {
     const end = { x: primitive.end[0], y: primitive.end[1] };
     const count = expandLineCells(start, end, spacing).length;
     const inactiveOffsets = trimInactiveOffsets(primitive.inactiveOffsets, count);
-    setDocument(
-      replacePrimitive(documentRef.value, selectedPrimitiveIndex.value, {
-        type: 'line',
-        startIndex: primitive.startIndex,
-        count,
-        spacing,
-        start: [start.x, start.y],
-        end: [end.x, end.y],
-        ...(inactiveOffsets ? { inactiveOffsets } : {}),
-      }),
-    );
-    selectionError.value = '';
-    syncSelectedLineDraft();
+    const outcome = commitPrimitiveReplacement(selectedPrimitiveIndex.value, {
+      type: 'line',
+      startIndex: primitive.startIndex,
+      count,
+      spacing,
+      start: [start.x, start.y],
+      end: [end.x, end.y],
+      ...(inactiveOffsets ? { inactiveOffsets } : {}),
+    });
+    if (outcome === 'committed') {
+      syncSelectedLineDraft();
+    }
   } catch (err) {
     selectionError.value = err instanceof Error ? err.message : 'Failed to update line.';
   }
@@ -823,26 +935,28 @@ function applySelectedCircleEdit(): void {
     const count = expandCircleCells(center, start, spacing, direction).length;
     const inactiveOffsets = trimInactiveOffsets(primitive.inactiveOffsets, count);
 
-    setDocument(
-      replacePrimitive(documentRef.value, selectedPrimitiveIndex.value, {
-        type: 'circle',
-        startIndex: primitive.startIndex,
-        count,
-        spacing,
-        center: [center.x, center.y],
-        start: [start.x, start.y],
-        direction,
-        ...(inactiveOffsets ? { inactiveOffsets } : {}),
-      }),
-    );
-    selectionError.value = '';
-    syncSelectedCircleDraft();
+    const outcome = commitPrimitiveReplacement(selectedPrimitiveIndex.value, {
+      type: 'circle',
+      startIndex: primitive.startIndex,
+      count,
+      spacing,
+      center: [center.x, center.y],
+      start: [start.x, start.y],
+      direction,
+      ...(inactiveOffsets ? { inactiveOffsets } : {}),
+    });
+    if (outcome === 'committed') {
+      syncSelectedCircleDraft();
+    }
   } catch (err) {
     selectionError.value = err instanceof Error ? err.message : 'Failed to update circle.';
   }
 }
 
 function deleteSelectedPrimitive(): void {
+  if (pendingRenumberConfirm.value) {
+    return;
+  }
   if (selectedPrimitiveIndex.value == null) {
     return;
   }
@@ -988,6 +1102,7 @@ async function loadInitialDocument(device: DeviceMeta): Promise<void> {
   clearLineDraft();
   clearCircleDraft();
   clearSelection();
+  clearPendingRenumberConfirm();
   closeToolPopover();
   closeInactivePanel();
   activeTool.value = 'select';
@@ -1064,6 +1179,9 @@ function promoteArmedMove(): void {
 }
 
 function handleMouseDown(event: MouseEvent): void {
+  if (pendingRenumberConfirm.value) {
+    return;
+  }
   dismissPlacementBubble();
   if (event.button === 1 || (event.button === 0 && spacePressed)) {
     event.preventDefault();
@@ -1132,6 +1250,9 @@ function handleMouseDown(event: MouseEvent): void {
 }
 
 function handleMouseMove(event: MouseEvent): void {
+  if (pendingRenumberConfirm.value) {
+    return;
+  }
   dismissPlacementBubble();
   if (panning) {
     viewport.value = {
@@ -1149,6 +1270,9 @@ function handleMouseMove(event: MouseEvent): void {
 }
 
 function handleMouseLeave(): void {
+  if (pendingRenumberConfirm.value) {
+    return;
+  }
   if (panning || dragState.value || armedMoveState.value) {
     return;
   }
@@ -1158,6 +1282,10 @@ function handleMouseLeave(): void {
 }
 
 function handleMouseUp(event: MouseEvent): void {
+  if (pendingRenumberConfirm.value) {
+    panning = null;
+    return;
+  }
   if (dragState.value) {
     const preview = dragPreview.value;
     const primitiveIndex = dragState.value.primitiveIndex;
@@ -1175,8 +1303,7 @@ function handleMouseUp(event: MouseEvent): void {
       return;
     }
     try {
-      setDocument(replacePrimitive(documentRef.value, primitiveIndex, preview.primitive));
-      selectionError.value = '';
+      commitPrimitiveReplacement(primitiveIndex, preview.primitive);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to update primitive.';
       selectionError.value = message;
@@ -1191,6 +1318,9 @@ function handleMouseUp(event: MouseEvent): void {
 }
 
 function handleWindowMouseMove(event: MouseEvent): void {
+  if (pendingRenumberConfirm.value) {
+    return;
+  }
   if (!panning && !dragState.value && !armedMoveState.value) {
     return;
   }
@@ -1198,6 +1328,9 @@ function handleWindowMouseMove(event: MouseEvent): void {
 }
 
 function handleWheel(event: WheelEvent): void {
+  if (pendingRenumberConfirm.value) {
+    return;
+  }
   event.preventDefault();
   dismissPlacementBubble();
   const point = relativePoint(event);
@@ -1271,6 +1404,9 @@ function commitCircleAt(cell: Point, event: MouseEvent): void {
 }
 
 function handleClick(event: MouseEvent): void {
+  if (pendingRenumberConfirm.value) {
+    return;
+  }
   if (routeState.value.kind !== 'ready' || loadingLayout.value || saving.value) {
     return;
   }
@@ -1325,6 +1461,9 @@ function handleClick(event: MouseEvent): void {
 }
 
 function handleContextMenu(event: MouseEvent): void {
+  if (pendingRenumberConfirm.value) {
+    return;
+  }
   if (routeState.value.kind !== 'ready' || loadingLayout.value || saving.value) {
     return;
   }
@@ -1363,7 +1502,11 @@ function handleContextMenu(event: MouseEvent): void {
 }
 
 function undo(): void {
+  if (pendingRenumberConfirm.value) {
+    return;
+  }
   clearDrag();
+  clearPendingRenumberConfirm();
   setDocument(undoLastPrimitive(documentRef.value));
   clearLineDraft();
   clearCircleDraft();
@@ -1376,6 +1519,9 @@ function backToDevices(): void {
 }
 
 function selectTool(tool: Tool): void {
+  if (pendingRenumberConfirm.value) {
+    return;
+  }
   closeContextMenu();
   closeInactivePanel();
   if ((tool === 'line' || tool === 'circle') && activeTool.value === tool) {
@@ -1396,6 +1542,9 @@ function selectTool(tool: Tool): void {
 }
 
 async function save(): Promise<void> {
+  if (pendingRenumberConfirm.value) {
+    return;
+  }
   if (routeState.value.kind !== 'ready') {
     return;
   }
@@ -1421,6 +1570,17 @@ async function save(): Promise<void> {
 }
 
 function handleKeyDown(event: KeyboardEvent): void {
+  if (pendingRenumberConfirm.value) {
+    if (event.code === 'Escape') {
+      event.preventDefault();
+      cancelPendingRenumber();
+    } else if (event.code === 'Enter') {
+      event.preventDefault();
+      confirmPendingRenumber();
+    }
+    return;
+  }
+
   if (event.code === 'Space') {
     event.preventDefault();
     spacePressed = true;
@@ -1508,6 +1668,9 @@ function beforeUnloadHandler(event: BeforeUnloadEvent): void {
 }
 
 function handleDocumentClick(event: MouseEvent): void {
+  if (pendingRenumberConfirm.value) {
+    return;
+  }
   const target = event.target;
   if (!(target instanceof Element)) {
     return;
@@ -1931,6 +2094,14 @@ onBeforeUnmount(() => {
         >
           {{ placementBubble.text }}
         </div>
+        <div
+          v-if="dragRenumberImpact"
+          class="editor-drag-warning"
+          role="status"
+          aria-live="polite"
+        >
+          {{ dragRenumberMessage }}
+        </div>
         <section
           v-if="contextMenu && selectedPrimitive"
           ref="contextMenuRef"
@@ -2031,6 +2202,37 @@ onBeforeUnmount(() => {
           </div>
 
           <p v-if="selectionError" class="editor-context-menu-error">{{ selectionError }}</p>
+        </section>
+      </div>
+      <div
+        v-if="pendingRenumberConfirm"
+        class="editor-confirm-overlay"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="renumber-confirm-title"
+        @click.self="cancelPendingRenumber"
+      >
+        <section class="panel editor-confirm-dialog" @click.stop>
+          <p id="renumber-confirm-title" class="editor-confirm-title">Renumber later LEDs?</p>
+          <p class="editor-confirm-copy">{{ pendingRenumberMessage }}</p>
+          <div class="editor-confirm-actions">
+            <button
+              type="button"
+              class="ghost-button"
+              :disabled="saving"
+              @click="cancelPendingRenumber"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              class="primary-button"
+              :disabled="saving"
+              @click="confirmPendingRenumber"
+            >
+              Apply
+            </button>
+          </div>
         </section>
       </div>
     </section>
@@ -2328,6 +2530,23 @@ onBeforeUnmount(() => {
   transform: translateY(-12px);
 }
 
+.editor-drag-warning {
+  position: absolute;
+  top: 0.85rem;
+  right: 0.85rem;
+  z-index: 2;
+  max-width: min(22rem, calc(100% - 1.7rem));
+  padding: 0.48rem 0.7rem;
+  border: 1px solid rgba(255, 209, 102, 0.45);
+  border-radius: var(--radius-tight);
+  background: rgba(18, 14, 8, 0.95);
+  color: #ffe7b0;
+  font-size: 0.74rem;
+  line-height: 1.3;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.24);
+  pointer-events: none;
+}
+
 .editor-context-menu {
   max-width: min(18rem, calc(100% - 1.6rem));
 }
@@ -2348,6 +2567,48 @@ onBeforeUnmount(() => {
   margin: 0;
   color: #ffdede;
   font-size: 0.74rem;
+}
+
+.editor-confirm-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 1.25rem;
+  background: rgba(4, 6, 10, 0.42);
+  backdrop-filter: blur(4px);
+}
+
+.editor-confirm-dialog {
+  width: min(24rem, calc(100vw - 2rem));
+  display: grid;
+  gap: 0.8rem;
+  padding: 0.9rem;
+  background: rgba(9, 11, 15, 0.98);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.34);
+}
+
+.editor-confirm-title {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.84rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.editor-confirm-copy {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.editor-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.6rem;
 }
 
 .editor-inactive-panel {
