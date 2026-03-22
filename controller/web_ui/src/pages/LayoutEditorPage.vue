@@ -50,7 +50,6 @@ import {
   replacePrimitive,
   previewLinePlacement,
   serializeDocument,
-  undoLastPrimitive,
   type LinePrimitive,
   type Primitive,
   type SinglePrimitive,
@@ -140,6 +139,7 @@ const viewport = ref<EditorViewport>({
 });
 const documentRef = shallowRef<EditorDocument>(createEmptyDocument(1));
 const baselineDocument = shallowRef<EditorDocument>(createEmptyDocument(1));
+const undoHistory = shallowRef<EditorDocument[]>([]);
 const baseCsvHash = ref<string | null>(null);
 const resolvedDeviceMeta = shallowRef<DeviceMeta | null>(null);
 const activeTool = ref<Tool>('select');
@@ -258,7 +258,7 @@ const canUndo = computed(
     routeState.value.kind === 'ready' &&
     !loadingLayout.value &&
     !saving.value &&
-    documentRef.value.primitives.length > 0,
+    undoHistory.value.length > 0,
 );
 const canSave = computed(
   () => routeState.value.kind === 'ready' && !loadingLayout.value && !saving.value,
@@ -789,7 +789,7 @@ function applyInactivePanel(): void {
     return;
   }
   try {
-    setDocument(markIndicesInactive(documentRef.value, parseInactiveInput(inactivePanelInput.value)));
+    commitDocument(markIndicesInactive(documentRef.value, parseInactiveInput(inactivePanelInput.value)));
     inactivePanelInput.value = '';
     inactivePanelError.value = '';
   } catch (err) {
@@ -802,7 +802,7 @@ function removeInactiveLed(index: number): void {
     return;
   }
   try {
-    setDocument(reactivateIndex(documentRef.value, index));
+    commitDocument(reactivateIndex(documentRef.value, index));
     inactivePanelError.value = '';
   } catch (err) {
     inactivePanelError.value = err instanceof Error ? err.message : 'Failed to reactivate LED.';
@@ -813,7 +813,7 @@ function resetInactiveLeds(): void {
   if (pendingRenumberConfirm.value) {
     return;
   }
-  setDocument(clearInactiveIndices(documentRef.value));
+  commitDocument(clearInactiveIndices(documentRef.value));
   inactivePanelError.value = '';
 }
 
@@ -833,9 +833,17 @@ function toggleInactivePanel(): void {
   }
 }
 
-function setDocument(nextDocument: EditorDocument): void {
+function replaceDocumentWithoutHistory(nextDocument: EditorDocument): void {
   documentRef.value = nextDocument;
   clearStatusNotice();
+}
+
+function commitDocument(nextDocument: EditorDocument): void {
+  if (documentsEqual(documentRef.value, nextDocument)) {
+    return;
+  }
+  undoHistory.value = [...undoHistory.value, cloneDocument(documentRef.value)];
+  replaceDocumentWithoutHistory(nextDocument);
 }
 
 function computePrimitiveReplacement(
@@ -861,7 +869,7 @@ function commitPrimitiveReplacement(primitiveIndex: number, replacement: Primiti
     return 'pending';
   }
   clearPendingRenumberConfirm();
-  setDocument(nextDocument);
+  commitDocument(nextDocument);
   selectionError.value = '';
   return 'committed';
 }
@@ -872,7 +880,7 @@ function confirmPendingRenumber(): void {
     return;
   }
   clearPendingRenumberConfirm();
-  setDocument(pending.nextDocument);
+  commitDocument(pending.nextDocument);
   selectionError.value = '';
   requestRender();
 }
@@ -961,7 +969,7 @@ function deleteSelectedPrimitive(): void {
     return;
   }
   try {
-    setDocument(removePrimitive(documentRef.value, selectedPrimitiveIndex.value));
+    commitDocument(removePrimitive(documentRef.value, selectedPrimitiveIndex.value));
     clearDrag();
     clearSelection();
     clearLineDraft();
@@ -1114,7 +1122,8 @@ async function loadInitialDocument(device: DeviceMeta): Promise<void> {
       return;
     }
     const nextDocument = createDocumentFromLayout(payload, device.length);
-    documentRef.value = nextDocument;
+    undoHistory.value = [];
+    replaceDocumentWithoutHistory(nextDocument);
     baselineDocument.value = cloneDocument(nextDocument);
     baseCsvHash.value = payload?.editor?.csv_hash ?? null;
     await resetViewport();
@@ -1123,7 +1132,8 @@ async function loadInitialDocument(device: DeviceMeta): Promise<void> {
       return;
     }
     const nextDocument = createEmptyDocument(device.length);
-    documentRef.value = nextDocument;
+    undoHistory.value = [];
+    replaceDocumentWithoutHistory(nextDocument);
     baselineDocument.value = cloneDocument(nextDocument);
     baseCsvHash.value = null;
     error.value = err instanceof Error ? err.message : 'Failed to load layout.';
@@ -1364,7 +1374,7 @@ function commitLineAt(cell: Point, event: MouseEvent): void {
 
   try {
     const nextDocument = placeLinePrimitive(documentRef.value, lineStart.value, cell, currentSpacing.value);
-    setDocument(nextDocument);
+    commitDocument(nextDocument);
     clearLineDraft();
   } catch (err) {
     showPlacementBubble(
@@ -1393,7 +1403,7 @@ function commitCircleAt(cell: Point, event: MouseEvent): void {
       currentSpacing.value,
       circleDirection.value,
     );
-    setDocument(nextDocument);
+    commitDocument(nextDocument);
     clearCircleDraft();
   } catch (err) {
     showPlacementBubble(
@@ -1451,7 +1461,7 @@ function handleClick(event: MouseEvent): void {
     return;
   }
   try {
-    setDocument(placeSinglePrimitive(documentRef.value, cell.x, cell.y));
+    commitDocument(placeSinglePrimitive(documentRef.value, cell.x, cell.y));
   } catch (err) {
     showPlacementBubble(
       event,
@@ -1505,9 +1515,13 @@ function undo(): void {
   if (pendingRenumberConfirm.value) {
     return;
   }
+  const previous = undoHistory.value[undoHistory.value.length - 1];
+  if (!previous) {
+    return;
+  }
   clearDrag();
-  clearPendingRenumberConfirm();
-  setDocument(undoLastPrimitive(documentRef.value));
+  undoHistory.value = undoHistory.value.slice(0, -1);
+  replaceDocumentWithoutHistory(cloneDocument(previous));
   clearLineDraft();
   clearCircleDraft();
   clearSelection();

@@ -1104,13 +1104,6 @@ export function inactiveIndices(document: EditorDocument): number[] {
     .sort((left, right) => left - right);
 }
 
-export function undoLastPrimitive(document: EditorDocument): EditorDocument {
-  if (!document.primitives.length) {
-    return document;
-  }
-  return buildDocument(document.maxIndex, document.primitives.slice(0, -1));
-}
-
 export function documentCenter(document: EditorDocument): Point {
   if (!document.occupied.size) {
     const center = GRID_SIZE / 2;
