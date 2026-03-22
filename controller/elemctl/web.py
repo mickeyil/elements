@@ -321,12 +321,14 @@ class WebRelay:
                     )
                 except (ConnectionError, OSError):
                     if last_connected:
+                        log.info('controller disconnected: %s', self._socket_path)
                         last_connected = False
                         self._enqueue_status(False)
                     self._stop.wait(1.0)
                     continue
 
                 if not last_connected:
+                    log.info('controller connected: %s', self._socket_path)
                     last_connected = True
                     self._enqueue_status(True)
                 try:
@@ -335,6 +337,7 @@ class WebRelay:
                     client.close()
                     client = None
                     if last_connected:
+                        log.info('controller disconnected: %s', self._socket_path)
                         last_connected = False
                         self._enqueue_status(False)
                     continue
@@ -355,6 +358,7 @@ class WebRelay:
                 client.close()
                 client = None
                 if last_connected:
+                    log.info('controller disconnected: %s', self._socket_path)
                     last_connected = False
                     self._enqueue_status(False)
 

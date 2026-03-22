@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import signal
 import elemctl.web as web_mod
 import pytest
@@ -806,6 +807,45 @@ def test_shutdown_cancels_ws_tasks_before_waiting_for_server_close(tmp_path):
     assert events.index('ws-task-cancelled') < events.index('server-wait-closed')
     assert events.index('broadcast-task-cancelled') < events.index('server-wait-closed')
     assert events[-1] == 'close-ws-clients'
+
+
+def test_uds_reader_loop_logs_controller_connect_and_disconnect(monkeypatch, tmp_path, caplog):
+    relay = WebRelay('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.recv_calls = 0
+
+        def fileno(self) -> int:
+            return 123
+
+        def recv_once(self) -> list[tuple[int, bytes]]:
+            self.recv_calls += 1
+            if self.recv_calls == 1:
+                return []
+            raise ConnectionError('server closed connection')
+
+        def close(self) -> None:
+            return None
+
+    created = {'count': 0}
+
+    def fake_client(socket_path: str, timeout: float, role: str):
+        created['count'] += 1
+        if created['count'] == 1:
+            return FakeClient()
+        relay._stop.set()
+        raise ConnectionError('controller unavailable')
+
+    monkeypatch.setattr(web_mod, 'UdsClient', fake_client)
+    monkeypatch.setattr(web_mod.select, 'select', lambda *args, **kwargs: ([123], [], []))
+
+    with caplog.at_level(logging.INFO, logger='elemctl.web'):
+        relay._uds_reader_loop()
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert 'controller connected: /tmp/elemctl.sock' in messages
+    assert 'controller disconnected: /tmp/elemctl.sock' in messages
 
 
 def test_web_parser_defaults_bind_all_interfaces():
