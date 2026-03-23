@@ -137,6 +137,7 @@ class ControllerService:
             'play': self._cmd_play,
             'pause': self._cmd_pause,
             'publish_program': self._cmd_publish_program,
+            'reboot_device': self._cmd_reboot_device,
             'rescan_programs': self._cmd_rescan_programs,
             'seek': self._cmd_seek,
             'debug_seek': self._cmd_debug_seek,
@@ -290,6 +291,26 @@ class ControllerService:
     def _cmd_shutdown(self, cmd: dict) -> dict:
         self._shutdown = True
         return {}
+
+    def _cmd_reboot_device(self, cmd: dict) -> dict:
+        device_uid = cmd.get('device_uid')
+        if not isinstance(device_uid, str) or not device_uid:
+            raise ValueError("missing 'device_uid' field")
+
+        entry = self._uid_to_device.get(device_uid)
+        if entry is None:
+            raise ValueError(f'device not found: {device_uid}')
+
+        dc, dev = entry
+        if dc.device_type != 'esp32':
+            raise ValueError('device reboot is only supported for esp32 devices')
+        if not self._is_connected(dev):
+            raise ValueError('device is not currently connected')
+
+        if not dev.reboot():
+            raise ValueError(f'device reboot failed: {device_uid}')
+
+        return {'message': f'reboot requested for {device_uid}'}
 
     def _cmd_rescan_programs(self, cmd: dict) -> dict:
         self._library.rescan()
@@ -884,13 +905,10 @@ class ControllerService:
         self._prev_connected = new_prev_connected
         self._last_probe_ns = new_last_probe_ns
         self._last_seen = new_last_seen
-        if self._discovery is not None:
-            self._uid_to_device = {
-                dc.device_uid: (dc, dev)
-                for dc, dev in zip(self._device_configs, self._devices)
-            }
-        else:
-            self._uid_to_device = {}
+        self._uid_to_device = {
+            dc.device_uid: (dc, dev)
+            for dc, dev in zip(self._device_configs, self._devices)
+        }
 
     def _rebuild_controller(self) -> None:
         self._strips = [

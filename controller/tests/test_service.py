@@ -73,6 +73,7 @@ class _FakeDevice:
         self.pause_calls = 0
         self.resume_calls = 0
         self.stop_calls = 0
+        self.reboot_calls = 0
 
     def load(self, blob, gen):
         self.load_calls += 1
@@ -105,6 +106,10 @@ class _FakeDevice:
     def stop(self):
         self.stop_calls += 1
         self._state = DeviceState.LOADED
+
+    def reboot(self):
+        self.reboot_calls += 1
+        return True
 
     def tick_once(self, now_ns):
         pass
@@ -1888,6 +1893,100 @@ class TestHandleStatus:
         assert reply['ok'] is True
         assert reply['result']['event'] == 'snapshot'
         assert reply['result']['session'] is None
+
+
+class TestRebootDevice:
+    def test_reboot_device_calls_connected_esp32_runtime(self):
+        fake = _FakeDevice()
+        config = Config(
+            frame_port=1,
+            devices=[
+                DeviceConfig(
+                    device_id=1,
+                    device_uid='esp32-246f28b5f190',
+                    device_type='esp32',
+                    host='127.0.0.1',
+                    tcp_port=9001,
+                    strip_id='test',
+                    length=5,
+                ),
+            ],
+        )
+        svc = ControllerService(
+            config,
+            receiver_factory=_NoopReceiver,
+            device_factory=_make_fake_factory([fake]),
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir),
+        )
+
+        reply = svc.handle_cmd({
+            'id': 1,
+            'cmd': 'reboot_device',
+            'device_uid': 'esp32-246f28b5f190',
+        })
+
+        assert reply['ok'] is True
+        assert reply['result']['message'] == 'reboot requested for esp32-246f28b5f190'
+        assert fake.reboot_calls == 1
+
+    def test_reboot_device_rejects_unknown_uid(self):
+        svc, _ = _make_service()
+
+        reply = svc.handle_cmd({
+            'id': 1,
+            'cmd': 'reboot_device',
+            'device_uid': 'missing',
+        })
+
+        assert reply['ok'] is False
+        assert reply['error'] == 'device not found: missing'
+
+    def test_reboot_device_rejects_non_esp32(self):
+        svc, fakes = _make_service()
+
+        reply = svc.handle_cmd({
+            'id': 1,
+            'cmd': 'reboot_device',
+            'device_uid': 'sim-1',
+        })
+
+        assert reply['ok'] is False
+        assert reply['error'] == 'device reboot is only supported for esp32 devices'
+        assert fakes[0].reboot_calls == 0
+
+    def test_reboot_device_requires_connected_device(self):
+        fake = _FakeDevice()
+        fake.is_connected = False
+        config = Config(
+            frame_port=1,
+            devices=[
+                DeviceConfig(
+                    device_id=1,
+                    device_uid='esp32-246f28b5f190',
+                    device_type='esp32',
+                    host='127.0.0.1',
+                    tcp_port=9001,
+                    strip_id='test',
+                    length=5,
+                ),
+            ],
+        )
+        svc = ControllerService(
+            config,
+            receiver_factory=_NoopReceiver,
+            device_factory=_make_fake_factory([fake]),
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir),
+        )
+
+        reply = svc.handle_cmd({
+            'id': 1,
+            'cmd': 'reboot_device',
+            'device_uid': 'esp32-246f28b5f190',
+        })
+
+        assert reply['ok'] is False
+        assert reply['error'] == 'device is not currently connected'
+        assert fake.reboot_calls == 0
 
 
 class TestConfigMutations:

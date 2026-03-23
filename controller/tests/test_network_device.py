@@ -17,12 +17,14 @@ from elemctl.wire import (
     CMD_JUMP,
     CMD_LOAD,
     CMD_PAUSE,
+    CMD_REBOOT,
     CMD_RESUME,
     CMD_START,
     CMD_STOP,
     UDP_FRAME_HEADER,
     encode_configure,
     encode_load,
+    encode_reboot,
     encode_start,
     parse_ack,
     parse_udp_frame,
@@ -231,6 +233,12 @@ class TestWireEncoding:
         data = struct.pack('<IBB', 2, CMD_ACK, 1)
         assert parse_ack(data) == 1
 
+    def test_encode_reboot(self):
+        msg = encode_reboot()
+        length = struct.unpack_from('<I', msg, 0)[0]
+        assert length == 1
+        assert msg[4] == CMD_REBOOT
+
     def test_parse_ack_too_short(self):
         assert parse_ack(b'\x00') is None
 
@@ -416,6 +424,34 @@ class TestLoad:
         t.join(timeout=3.0)
 
         assert dev.state() == DeviceState.IDLE
+
+
+# =========================================================================
+# 4. Reboot
+# =========================================================================
+
+
+class TestReboot:
+    def test_reboot_sends_wire_command_and_waits_for_ack(self, endpoint, receiver):
+        dev = _make_device(endpoint, receiver, device_type='esp32')
+
+        def server_side():
+            endpoint.accept()
+            _expect_configure(
+                endpoint,
+                device_id=dev._device_id,
+                strip_length=dev._strip_length,
+                frame_port=dev._frame_port,
+            )
+            cmd_type, payload = endpoint.read_command()
+            assert cmd_type == CMD_REBOOT
+            assert payload == b''
+            endpoint.send_ack(0)
+
+        t = threading.Thread(target=server_side, daemon=True)
+        t.start()
+        assert dev.reboot() is True
+        t.join(timeout=3.0)
 
     def test_reload_ack_failure_resets_state(self, endpoint, receiver):
         """After a successful load, a rejected reload should reset to IDLE."""

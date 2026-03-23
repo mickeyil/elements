@@ -29,6 +29,7 @@ constexpr uint8_t CMD_JUMP = 0x12;
 constexpr uint8_t CMD_PAUSE = 0x13;
 constexpr uint8_t CMD_RESUME = 0x14;
 constexpr uint8_t CMD_STOP = 0x15;
+constexpr uint8_t CMD_REBOOT = 0x30;
 constexpr uint8_t CMD_DEBUG_SEEK = 0x22;
 constexpr uint8_t CMD_DEBUG_STEP = 0x23;
 constexpr uint8_t CMD_ACK = 0x80;
@@ -45,6 +46,7 @@ constexpr uint32_t STATUS_INTERVAL_MS = 5000;
 constexpr uint32_t WIFI_RETRY_INTERVAL_MS = 5000;
 constexpr uint32_t WIFI_CONNECT_TIMEOUT_MS = 12000;
 constexpr uint32_t LOOP_DELAY_MS = 1;
+constexpr uint32_t REBOOT_DELAY_MS = 100;
 
 struct TransportState {
     uint16_t device_id = 0;
@@ -68,9 +70,11 @@ bool g_server_started = false;
 bool g_duplicate_uid_rejected = false;
 bool g_configured = false;
 bool g_controller_connected = false;
+bool g_reboot_pending = false;
 uint32_t g_last_hello_ms = 0;
 uint32_t g_last_status_ms = 0;
 uint32_t g_last_wifi_retry_ms = 0;
+uint32_t g_reboot_deadline_ms = 0;
 uint32_t g_wifi_connect_attempts = 0;
 uint32_t g_wifi_connect_successes = 0;
 uint32_t g_hello_count = 0;
@@ -379,6 +383,27 @@ void handle_disconnect()
     disconnect_controller();
 }
 
+void maybe_reboot()
+{
+    if (!g_reboot_pending) {
+        return;
+    }
+
+    const uint32_t now = millis();
+    if (static_cast<int32_t>(now - g_reboot_deadline_ms) < 0) {
+        return;
+    }
+
+    log_line("[sys] rebooting now");
+    if (g_tcp_client) {
+        g_tcp_client.flush();
+        delay(20);
+    }
+    disconnect_controller("reboot");
+    delay(20);
+    ESP.restart();
+}
+
 int poll_tcp_commands()
 {
     if (!(g_tcp_client && g_tcp_client.connected())) {
@@ -551,6 +576,14 @@ int poll_tcp_commands()
                 }
                 break;
 
+            case CMD_REBOOT:
+                log_line("[tcp] reboot requested");
+                send_ack(g_tcp_client, 0);
+                g_reboot_pending = true;
+                g_reboot_deadline_ms = millis() + REBOOT_DELAY_MS;
+                log_line("[sys] reboot scheduled");
+                break;
+
             case CMD_DEBUG_SEEK:
             case CMD_DEBUG_STEP:
                 log_line("[tcp] ignored debug-only command 0x%02x", cmd_type);
@@ -693,5 +726,6 @@ void loop()
 
     maybe_send_hello();
     maybe_log_status();
+    maybe_reboot();
     delay(LOOP_DELAY_MS);
 }

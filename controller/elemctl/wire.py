@@ -19,6 +19,7 @@ CMD_JUMP = 0x12
 CMD_PAUSE = 0x13
 CMD_RESUME = 0x14
 CMD_STOP = 0x15
+CMD_REBOOT = 0x30
 CMD_DEBUG_SEEK = 0x22
 CMD_ACK = 0x80
 
@@ -53,6 +54,10 @@ def encode_resume(t0_us: int) -> bytes:
 
 def encode_stop() -> bytes:
     return struct.pack('<IB', 1, CMD_STOP)
+
+
+def encode_reboot() -> bytes:
+    return struct.pack('<IB', 1, CMD_REBOOT)
 
 
 def encode_debug_seek(t_rel: float) -> bytes:

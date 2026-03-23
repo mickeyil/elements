@@ -19,6 +19,7 @@ from .wire import (
     encode_jump,
     encode_load,
     encode_pause,
+    encode_reboot,
     encode_resume,
     encode_start,
     encode_stop,
@@ -137,6 +138,22 @@ class NetworkDevice:
             self._state = DeviceState.LOADED
             self._last_t_rel = 0.0
             self._log_next_frame = False
+
+    def reboot(self) -> bool:
+        if not self._connected and not self._connect():
+            return False
+        if not self._send(encode_reboot()):
+            return False
+
+        status = self._recv_ack()
+        if status is None:
+            self._disconnect()
+            return False
+        if status != 0:
+            return False
+
+        log.info('device %d reboot acknowledged', self._device_id)
+        return True
 
     def tick_once(self, now_ns: int) -> None:
         frames = self._udp_receiver.drain(self._device_id)
