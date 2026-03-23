@@ -465,7 +465,18 @@ class WebRelay:
                         isinstance(dev, dict)
                         and dev.get('device_id') == msg.get('device_id')
                     ):
-                        dev['connected'] = bool(msg.get('connected'))
+                        if 'connected' in msg:
+                            dev['connected'] = bool(msg.get('connected'))
+                        if 'last_seen' in msg:
+                            dev['last_seen'] = msg.get('last_seen')
+                        for key in (
+                            'clock_state',
+                            'clock_drift_ms',
+                            'clock_rtt_ms',
+                            'clock_last_sync_age_s',
+                        ):
+                            if key in msg:
+                                dev[key] = msg.get(key)
                         break
                 self._snapshot['online_count'] = sum(
                     1 for dev in devices if isinstance(dev, dict) and dev.get('connected')

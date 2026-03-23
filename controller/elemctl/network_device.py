@@ -21,6 +21,7 @@ from .wire import (
     encode_pause,
     encode_reboot,
     encode_resume,
+    encode_sync_result,
     encode_start,
     encode_stop,
     parse_ack,
@@ -153,6 +154,20 @@ class NetworkDevice:
             return False
 
         log.info('device %d reboot acknowledged', self._device_id)
+        return True
+
+    def send_sync_result(self, seq: int, boot_token: int, offset_us: int) -> bool:
+        if not self._connected and not self._connect():
+            return False
+        if not self._send(encode_sync_result(seq, boot_token, offset_us)):
+            return False
+        log.info(
+            'device %d sync result sent seq=%d boot_token=%u offset_us=%d',
+            self._device_id,
+            seq,
+            boot_token,
+            offset_us,
+        )
         return True
 
     def tick_once(self, now_ns: int) -> None:

@@ -18,6 +18,7 @@ from elements.types import CompiledManifest, CompiledStripArtifact
 
 from .config import (
     DEFAULT_ANIMATIONS_PATH,
+    DEFAULT_DISCOVERY_PORT,
     Config,
     ConfigError,
     DeviceConfig,
@@ -25,6 +26,7 @@ from .config import (
     load_config_obj,
     resolve_runtime_path,
 )
+from .clock_sync import ClockSyncManager
 from .config_edit import (
     add_device as add_device_doc,
     edit_device as edit_device_doc,
@@ -68,6 +70,7 @@ class ControllerService:
         device_factory=NetworkDevice,
         discovery_factory=DiscoveryReceiver,
         library_factory=ProgramLibrary,
+        clock_sync_factory=ClockSyncManager,
         clock=time.monotonic_ns,
         wall_clock=time.time,
     ):
@@ -96,8 +99,13 @@ class ControllerService:
         # Discovery (optional)
         self._discovery = None
         self._uid_to_device: dict[str, tuple[DeviceConfig, object]] = {}
+        self._device_id_to_device: dict[int, tuple[DeviceConfig, object]] = {}
         if self._config.discovery_port is not None:
             self._discovery = discovery_factory(self._config.discovery_port)
+        self._clock_sync = clock_sync_factory(
+            self._config.discovery_port or DEFAULT_DISCOVERY_PORT,
+            self._clock,
+        )
 
         # Probe throttle: device_id → last probe time (monotonic_ns)
         self._last_probe_ns: dict[int, int] = {}
@@ -420,10 +428,10 @@ class ControllerService:
         """
         self._receiver.poll()
         self._poll_discovery()
+        now_ns = self._clock()
         if self._controller.state == ControllerState.IDLE:
-            now = self._clock()
             for dev in self._devices:
-                dev.tick_once(now)
+                dev.tick_once(now_ns)
         self._controller.tick_once()
 
         # Drain controller events first (before probing mutates connectivity)
@@ -445,16 +453,31 @@ class ControllerService:
             connected = self._is_connected(dev)
             if connected != self._prev_connected[dc.device_id]:
                 self._prev_connected[dc.device_id] = connected
-                json_msgs.append(encode_json({
-                    'type': 'event',
-                    'event': 'device_status',
-                    'device_id': dc.device_id,
-                    'device_uid': dc.device_uid,
-                    'strip': dc.strip_id,
-                    'length': dc.length,
-                    'connected': connected,
-                    'last_seen': self._last_seen.get(dc.device_id),
-                }))
+                self._handle_clock_connectivity_transition(dc, connected)
+                json_msgs.append(encode_json(self._device_status_event(dc, dev, now_ns)))
+
+        for update in self._clock_sync.poll():
+            entry = self._device_id_to_device.get(update.device_id)
+            if entry is None:
+                continue
+            dc, dev = entry
+            if dc.device_type != 'esp32':
+                continue
+            send_sync_result = getattr(dev, 'send_sync_result', None)
+            if callable(send_sync_result):
+                send_sync_result(update.seq, update.boot_token, update.applied_offset_us)
+            log.info(
+                'sync: device %d drift=%.1fms applied=%.1fms rtt=%.1fms boot_token=%u seq=%u',
+                dc.device_id,
+                update.display_offset_us / 1000.0,
+                update.applied_offset_us / 1000.0,
+                update.rtt_us / 1000.0,
+                update.boot_token,
+                update.seq,
+            )
+            json_msgs.append(encode_json(self._device_status_event(dc, dev, now_ns)))
+
+        self._clock_sync.send_due_probes(self._sync_targets(), now_ns)
 
         # Convert program frames
         frame_msgs: list[bytes] = []
@@ -470,6 +493,7 @@ class ControllerService:
     def build_snapshot(self) -> dict:
         """Build current-state snapshot dict."""
         ctrl = self._controller
+        now_ns = self._clock()
 
         session = None
         if ctrl.state != ControllerState.IDLE:
@@ -485,17 +509,7 @@ class ControllerService:
 
         devices = []
         for dc, dev in self._iter_devices():
-            connected = self._is_connected(dev)
-            devices.append({
-                'device_id': dc.device_id,
-                'device_uid': dc.device_uid,
-                'strip': dc.strip_id,
-                'length': dc.length,
-                'device_type': dc.device_type,
-                'connected': connected,
-                'last_seen': self._last_seen.get(dc.device_id),
-                **self._clock_status_for_device(dc),
-            })
+            devices.append(self._device_status_payload(dc, dev, now_ns))
 
         return {
             'type': 'event',
@@ -508,20 +522,15 @@ class ControllerService:
             'programs': self._programs_to_wire(),
         }
 
-    def _clock_status_for_device(self, dc: DeviceConfig) -> dict[str, object]:
+    def _clock_status_for_device(self, dc: DeviceConfig, now_ns: int) -> dict[str, object]:
         if dc.device_type == 'sim':
             return {
                 'clock_state': 'host',
-                'clock_offset_ms': 0.0,
+                'clock_drift_ms': 0.0,
                 'clock_rtt_ms': 0.0,
                 'clock_last_sync_age_s': 0.0,
             }
-        return {
-            'clock_state': 'pending',
-            'clock_offset_ms': None,
-            'clock_rtt_ms': None,
-            'clock_last_sync_age_s': None,
-        }
+        return self._clock_sync.clock_status(dc.device_id, now_ns)
 
     def probe_all(self) -> None:
         """Probe all disconnected devices immediately (ignores throttle)."""
@@ -546,6 +555,7 @@ class ControllerService:
         self._receiver.close()
         if self._discovery is not None:
             self._discovery.close()
+        self._clock_sync.close()
         self._discovery_cache.clear()
 
     # ------------------------------------------------------------------
@@ -558,6 +568,44 @@ class ControllerService:
 
     def _iter_devices(self):
         return zip(self._device_configs, self._devices)
+
+    def _device_status_payload(self, dc: DeviceConfig, dev, now_ns: int) -> dict[str, object]:
+        return {
+            'device_id': dc.device_id,
+            'device_uid': dc.device_uid,
+            'strip': dc.strip_id,
+            'length': dc.length,
+            'device_type': dc.device_type,
+            'connected': self._is_connected(dev),
+            'last_seen': self._last_seen.get(dc.device_id),
+            **self._clock_status_for_device(dc, now_ns),
+        }
+
+    def _device_status_event(self, dc: DeviceConfig, dev, now_ns: int) -> dict[str, object]:
+        return {
+            'type': 'event',
+            'event': 'device_status',
+            **self._device_status_payload(dc, dev, now_ns),
+        }
+
+    def _handle_clock_connectivity_transition(self, dc: DeviceConfig, connected: bool) -> None:
+        if dc.device_type != 'esp32':
+            return
+        if connected:
+            self._clock_sync.on_connected(dc.device_id)
+            return
+        self._clock_sync.on_disconnected(dc.device_id)
+
+    def _sync_targets(self) -> list[tuple[int, str]]:
+        targets: list[tuple[int, str]] = []
+        for dc, dev in self._iter_devices():
+            if dc.device_type != 'esp32' or not self._is_connected(dev):
+                continue
+            host = getattr(dev, '_host', None) or dc.host
+            if not host:
+                continue
+            targets.append((dc.device_id, host))
+        return targets
 
     @staticmethod
     def _normalize_device_uid(device_type: str, device_uid: str) -> str:
@@ -766,8 +814,10 @@ class ControllerService:
                     continue
                 self._last_probe_ns[dc.device_id] = now
             dev.ensure_connected()
+            connected = self._is_connected(dev)
             if sync_baseline:
-                self._prev_connected[dc.device_id] = self._is_connected(dev)
+                self._prev_connected[dc.device_id] = connected
+                self._handle_clock_connectivity_transition(dc, connected)
 
     def _compile(self, source: str, beat: float, duration: float):
         from elements.dsl import _builder, build_manifest
@@ -925,6 +975,15 @@ class ControllerService:
             dc.device_uid: (dc, dev)
             for dc, dev in zip(self._device_configs, self._devices)
         }
+        self._device_id_to_device = {
+            dc.device_id: (dc, dev)
+            for dc, dev in zip(self._device_configs, self._devices)
+        }
+        valid_ids = {dc.device_id for dc in self._device_configs}
+        self._clock_sync.prune_device_ids(valid_ids)
+        for dc, dev in zip(self._device_configs, self._devices):
+            if dc.device_type == 'esp32' and not self._is_connected(dev):
+                self._clock_sync.on_disconnected(dc.device_id)
 
     def _rebuild_controller(self) -> None:
         self._strips = [

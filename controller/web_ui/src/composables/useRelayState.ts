@@ -25,7 +25,7 @@ export interface SnapshotDevice {
   connected?: boolean;
   last_seen?: number | null;
   clock_state?: string;
-  clock_offset_ms?: number | null;
+  clock_drift_ms?: number | null;
   clock_rtt_ms?: number | null;
   clock_last_sync_age_s?: number | null;
 }
@@ -165,6 +165,10 @@ export function useRelayState() {
     device_uid?: string;
     connected?: boolean;
     last_seen?: number | null;
+    clock_state?: string;
+    clock_drift_ms?: number | null;
+    clock_rtt_ms?: number | null;
+    clock_last_sync_age_s?: number | null;
   }): void {
     const deviceUid = msg.device_uid;
     if (!deviceUid) {
@@ -173,6 +177,11 @@ export function useRelayState() {
 
     const connected = Boolean(msg.connected);
     const hasLastSeen = Object.prototype.hasOwnProperty.call(msg, 'last_seen');
+    const hasConnected = Object.prototype.hasOwnProperty.call(msg, 'connected');
+    const hasClockState = Object.prototype.hasOwnProperty.call(msg, 'clock_state');
+    const hasClockDrift = Object.prototype.hasOwnProperty.call(msg, 'clock_drift_ms');
+    const hasClockRtt = Object.prototype.hasOwnProperty.call(msg, 'clock_rtt_ms');
+    const hasClockAge = Object.prototype.hasOwnProperty.call(msg, 'clock_last_sync_age_s');
     const currentSnapshot = snapshot.value;
     const devices = Array.isArray(currentSnapshot?.devices) ? currentSnapshot.devices : [];
     if (currentSnapshot && devices.length) {
@@ -185,8 +194,12 @@ export function useRelayState() {
         updated = true;
         return {
           ...device,
-          connected,
+          ...(hasConnected ? { connected } : {}),
           ...(hasLastSeen ? { last_seen: msg.last_seen ?? null } : {}),
+          ...(hasClockState ? { clock_state: msg.clock_state } : {}),
+          ...(hasClockDrift ? { clock_drift_ms: msg.clock_drift_ms ?? null } : {}),
+          ...(hasClockRtt ? { clock_rtt_ms: msg.clock_rtt_ms ?? null } : {}),
+          ...(hasClockAge ? { clock_last_sync_age_s: msg.clock_last_sync_age_s ?? null } : {}),
         };
       });
 
@@ -199,7 +212,7 @@ export function useRelayState() {
     }
 
     for (const target of simTargets.value) {
-      if (target.deviceUid === deviceUid) {
+      if (target.deviceUid === deviceUid && hasConnected) {
         target.connected = connected;
         break;
       }

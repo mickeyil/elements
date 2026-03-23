@@ -19,14 +19,20 @@ from elemctl.wire import (
     CMD_PAUSE,
     CMD_REBOOT,
     CMD_RESUME,
+    CMD_SYNC_RESULT,
     CMD_START,
     CMD_STOP,
+    SYNC_REQ,
+    SYNC_REQ_STRUCT,
+    SYNC_RESP,
     UDP_FRAME_HEADER,
     encode_configure,
     encode_load,
     encode_reboot,
+    encode_sync_req,
     encode_start,
     parse_ack,
+    parse_sync_resp,
     parse_udp_frame,
 )
 
@@ -238,6 +244,18 @@ class TestWireEncoding:
         length = struct.unpack_from('<I', msg, 0)[0]
         assert length == 1
         assert msg[4] == CMD_REBOOT
+
+    def test_encode_sync_req(self):
+        msg = encode_sync_req(seq=7, boot_token=1234, t1_us=5678)
+        pkt_type, seq, boot_token, t1_us = SYNC_REQ_STRUCT.unpack(msg)
+        assert pkt_type == SYNC_REQ
+        assert seq == 7
+        assert boot_token == 1234
+        assert t1_us == 5678
+
+    def test_parse_sync_resp(self):
+        data = struct.pack('<BHIqqq', SYNC_RESP, 9, 44, 1000, 1200, 1300)
+        assert parse_sync_resp(data) == (9, 44, 1000, 1200, 1300)
 
     def test_parse_ack_too_short(self):
         assert parse_ack(b'\x00') is None
@@ -451,6 +469,29 @@ class TestReboot:
         t = threading.Thread(target=server_side, daemon=True)
         t.start()
         assert dev.reboot() is True
+        t.join(timeout=3.0)
+
+    def test_send_sync_result_writes_tcp_command(self, endpoint, receiver):
+        dev = _make_device(endpoint, receiver, device_type='esp32')
+
+        def server_side():
+            endpoint.accept()
+            _expect_configure(
+                endpoint,
+                device_id=dev._device_id,
+                strip_length=dev._strip_length,
+                frame_port=dev._frame_port,
+            )
+            cmd_type, payload = endpoint.read_command()
+            assert cmd_type == CMD_SYNC_RESULT
+            seq, boot_token, offset_us = struct.unpack('<HIq', payload)
+            assert seq == 5
+            assert boot_token == 1234
+            assert offset_us == -2200
+
+        t = threading.Thread(target=server_side, daemon=True)
+        t.start()
+        assert dev.send_sync_result(5, 1234, -2200) is True
         t.join(timeout=3.0)
 
     def test_reload_ack_failure_resets_state(self, endpoint, receiver):

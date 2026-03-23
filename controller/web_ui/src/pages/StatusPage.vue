@@ -110,16 +110,16 @@ function statusTitle(device: StatusCardDevice): string {
 
 function clockLabel(device: SnapshotDevice): string {
   if (device.clock_state === 'host') {
-    return 'Clock: 0.0 ms';
+    return 'Drift: 0.0 ms';
   }
-  if (typeof device.clock_offset_ms === 'number' && Number.isFinite(device.clock_offset_ms)) {
-    const sign = device.clock_offset_ms >= 0 ? '+' : '';
-    return `Clock: ${sign}${device.clock_offset_ms.toFixed(1)} ms`;
+  if (typeof device.clock_drift_ms === 'number' && Number.isFinite(device.clock_drift_ms)) {
+    const sign = device.clock_drift_ms >= 0 ? '+' : '';
+    return `Drift: ${sign}${device.clock_drift_ms.toFixed(1)} ms`;
   }
   if (device.clock_state === 'pending') {
-    return 'Clock: syncing';
+    return 'Drift: syncing';
   }
-  return 'Clock: —';
+  return 'Drift: —';
 }
 
 function layoutMenuLabel(device: StatusCardDevice): string {

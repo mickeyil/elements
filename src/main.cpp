@@ -2,6 +2,7 @@
 #include <Esp.h>
 #include <WiFi.h>
 #include <WiFiUdp.h>
+#include <esp_system.h>
 
 #include <cstdarg>
 #include <memory>
@@ -23,6 +24,9 @@ constexpr uint16_t DISCOVERY_PORT = 6040;
 constexpr uint16_t MAX_DEVICE_PIXELS = 250;
 
 constexpr uint8_t CMD_CONFIGURE = 0x04;
+constexpr uint8_t SYNC_REQ = 0x01;
+constexpr uint8_t SYNC_RESP = 0x02;
+constexpr uint8_t CMD_SYNC_RESULT = 0x03;
 constexpr uint8_t CMD_LOAD = 0x10;
 constexpr uint8_t CMD_START = 0x11;
 constexpr uint8_t CMD_JUMP = 0x12;
@@ -71,6 +75,8 @@ bool g_duplicate_uid_rejected = false;
 bool g_configured = false;
 bool g_controller_connected = false;
 bool g_reboot_pending = false;
+uint32_t g_boot_token = 0;
+uint16_t g_last_sync_seq = 0;
 uint32_t g_last_hello_ms = 0;
 uint32_t g_last_status_ms = 0;
 uint32_t g_last_wifi_retry_ms = 0;
@@ -96,6 +102,15 @@ float g_last_frame_t_rel = 0.0f;
 const char* yes_no(bool value)
 {
     return value ? "yes" : "no";
+}
+
+uint32_t make_boot_token()
+{
+    uint32_t token = esp_random();
+    if (token == 0) {
+        token = 1;
+    }
+    return token;
 }
 
 void log_line(const char* fmt, ...)
@@ -162,6 +177,7 @@ void clear_runtime_connection_state()
     g_transport.frame_port = 0;
     g_transport.controller_ip = IPAddress();
     g_tcp_buf_used = 0;
+    g_last_sync_seq = 0;
 }
 
 void disconnect_controller(const char* reason = nullptr)
@@ -300,7 +316,34 @@ void send_discovery_hello()
     }
 }
 
-void poll_discovery_reject()
+void handle_sync_request(const uint8_t* packet, size_t packet_size, IPAddress sender_ip, uint16_t sender_port)
+{
+    if (packet_size != 15 || packet[0] != SYNC_REQ) {
+        return;
+    }
+
+    uint16_t seq = 0;
+    int64_t t1_us = 0;
+    memcpy(&seq, packet + 1, 2);
+    memcpy(&t1_us, packet + 7, 8);
+
+    const int64_t t2_us = esp_timer_get_time();
+    uint8_t resp[31];
+    resp[0] = SYNC_RESP;
+    memcpy(resp + 1, &seq, 2);
+    memcpy(resp + 3, &g_boot_token, 4);
+    memcpy(resp + 7, &t1_us, 8);
+    memcpy(resp + 15, &t2_us, 8);
+    const int64_t t3_us = esp_timer_get_time();
+    memcpy(resp + 23, &t3_us, 8);
+
+    if (g_discovery_udp.beginPacket(sender_ip, sender_port)) {
+        g_discovery_udp.write(resp, sizeof(resp));
+        g_discovery_udp.endPacket();
+    }
+}
+
+void poll_discovery_udp()
 {
     while (true) {
         const int packet_size = g_discovery_udp.parsePacket();
@@ -308,8 +351,20 @@ void poll_discovery_reject()
             return;
         }
 
-        uint8_t buf[16];
+        uint8_t buf[64];
         const int n = g_discovery_udp.read(buf, sizeof(buf));
+        if (n <= 0) {
+            continue;
+        }
+
+        const IPAddress sender_ip = g_discovery_udp.remoteIP();
+        const uint16_t sender_port = g_discovery_udp.remotePort();
+
+        if (buf[0] == SYNC_REQ && n >= 15) {
+            handle_sync_request(buf, static_cast<size_t>(n), sender_ip, sender_port);
+            continue;
+        }
+
         if (n != 4) {
             continue;
         }
@@ -344,7 +399,6 @@ void maybe_send_hello()
         g_last_hello_ms = now;
     }
 
-    poll_discovery_reject();
 }
 
 void accept_controller()
@@ -485,6 +539,7 @@ int poll_tcp_commands()
                 g_transport.frame_port = frame_port;
                 g_transport.controller_ip = g_tcp_client.remoteIP();
                 g_configured = true;
+                g_last_sync_seq = 0;
                 g_configure_count += 1;
 
                 log_line(
@@ -495,6 +550,43 @@ int poll_tcp_commands()
                     g_transport.controller_ip.toString().c_str()
                 );
                 send_ack(g_tcp_client, 0);
+                break;
+            }
+
+            case CMD_SYNC_RESULT: {
+                if (!g_configured || !g_device || payload_len < 14) {
+                    break;
+                }
+                uint16_t seq = 0;
+                uint32_t boot_token = 0;
+                int64_t offset_us = 0;
+                memcpy(&seq, payload, 2);
+                memcpy(&boot_token, payload + 2, 4);
+                memcpy(&offset_us, payload + 6, 8);
+                if (boot_token != g_boot_token) {
+                    log_line(
+                        "[sync] stale result ignored seq=%u token=%lu current=%lu",
+                        static_cast<unsigned>(seq),
+                        static_cast<unsigned long>(boot_token),
+                        static_cast<unsigned long>(g_boot_token)
+                    );
+                    break;
+                }
+                if (seq < g_last_sync_seq) {
+                    log_line(
+                        "[sync] old result ignored seq=%u last=%u",
+                        static_cast<unsigned>(seq),
+                        static_cast<unsigned>(g_last_sync_seq)
+                    );
+                    break;
+                }
+                g_last_sync_seq = seq;
+                g_device->handle_sync_result(offset_us);
+                log_line(
+                    "[sync] result applied seq=%u offset_us=%lld",
+                    static_cast<unsigned>(seq),
+                    static_cast<long long>(offset_us)
+                );
                 break;
             }
 
@@ -696,10 +788,12 @@ void setup()
 
     esp_device_init_leds();
     g_device_uid = make_device_uid();
+    g_boot_token = make_boot_token();
 
     log_line("[boot] elements esp32 runtime starting");
     log_line("[boot] build=%s %s", __DATE__, __TIME__);
     log_line("[boot] uid=%s", g_device_uid.c_str());
+    log_line("[boot] boot_token=%lu", static_cast<unsigned long>(g_boot_token));
 
     connect_to_dev_wifi();
     ensure_network_services_started();
@@ -725,6 +819,9 @@ void loop()
     }
 
     maybe_send_hello();
+    if (g_server_started) {
+        poll_discovery_udp();
+    }
     maybe_log_status();
     maybe_reboot();
     delay(LOOP_DELAY_MS);

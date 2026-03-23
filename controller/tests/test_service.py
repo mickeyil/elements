@@ -9,6 +9,7 @@ import struct
 import sys
 import threading
 import time
+import types
 from pathlib import Path
 
 import pytest
@@ -74,6 +75,7 @@ class _FakeDevice:
         self.resume_calls = 0
         self.stop_calls = 0
         self.reboot_calls = 0
+        self.sync_results: list[tuple[int, int, int]] = []
 
     def load(self, blob, gen):
         self.load_calls += 1
@@ -109,6 +111,10 @@ class _FakeDevice:
 
     def reboot(self):
         self.reboot_calls += 1
+        return True
+
+    def send_sync_result(self, seq: int, boot_token: int, offset_us: int):
+        self.sync_results.append((seq, boot_token, offset_us))
         return True
 
     def tick_once(self, now_ns):
@@ -259,6 +265,47 @@ class _FakeLibrary:
         return entry
 
 
+class _FakeClockSyncManager:
+    def __init__(self):
+        self.connected_ids: list[int] = []
+        self.disconnected_ids: list[int] = []
+        self.pruned_to: set[int] | None = None
+        self.targets_sent: list[list[tuple[int, str]]] = []
+        self.status_by_device: dict[int, dict[str, object]] = {}
+        self.pending_updates: list = []
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+    def prune_device_ids(self, valid_ids: set[int]):
+        self.pruned_to = set(valid_ids)
+
+    def on_connected(self, device_id: int):
+        self.connected_ids.append(device_id)
+
+    def on_disconnected(self, device_id: int):
+        self.disconnected_ids.append(device_id)
+
+    def clock_status(self, device_id: int, now_ns: int):
+        _ = now_ns
+        return self.status_by_device.get(device_id, {
+            'clock_state': 'pending',
+            'clock_drift_ms': None,
+            'clock_rtt_ms': None,
+            'clock_last_sync_age_s': None,
+        })
+
+    def poll(self):
+        out = list(self.pending_updates)
+        self.pending_updates.clear()
+        return out
+
+    def send_due_probes(self, targets, now_ns):
+        _ = now_ns
+        self.targets_sent.append(list(targets))
+
+
 def _make_fake_factory(fake_devices: list[_FakeDevice]):
     """Return a factory that yields pre-created _FakeDevice instances in order."""
     idx = iter(range(len(fake_devices)))
@@ -389,6 +436,7 @@ def _make_service(
     clock=None,
     wall_clock=None,
     library_factory=None,
+    clock_sync_factory=None,
 ):
     config = _make_config(n_devices)
     if fake_devices is None:
@@ -400,6 +448,8 @@ def _make_service(
         device_factory=_make_fake_factory(fake_devices),
         library_factory=library_factory,
     )
+    if clock_sync_factory is not None:
+        kwargs['clock_sync_factory'] = clock_sync_factory
     if clock is not None:
         kwargs['clock'] = clock
     if wall_clock is not None:
@@ -512,14 +562,40 @@ class TestSnapshotIdle:
         snap = svc.build_snapshot()
 
         assert snap['devices'][0]['clock_state'] == 'host'
-        assert snap['devices'][0]['clock_offset_ms'] == pytest.approx(0.0)
+        assert snap['devices'][0]['clock_drift_ms'] == pytest.approx(0.0)
         assert snap['devices'][0]['clock_rtt_ms'] == pytest.approx(0.0)
         assert snap['devices'][0]['clock_last_sync_age_s'] == pytest.approx(0.0)
 
         assert snap['devices'][1]['clock_state'] == 'pending'
-        assert snap['devices'][1]['clock_offset_ms'] is None
+        assert snap['devices'][1]['clock_drift_ms'] is None
         assert snap['devices'][1]['clock_rtt_ms'] is None
         assert snap['devices'][1]['clock_last_sync_age_s'] is None
+
+    def test_snapshot_uses_sync_manager_state_for_esp32(self):
+        config = Config(frame_port=1, devices=[
+            DeviceConfig(1, 'esp-left', 'esp32', '127.0.0.1', 9001, 'left', 5),
+        ])
+        fake_sync = _FakeClockSyncManager()
+        fake_sync.status_by_device[1] = {
+            'clock_state': 'synced',
+            'clock_drift_ms': 2.25,
+            'clock_rtt_ms': 1.5,
+            'clock_last_sync_age_s': 0.75,
+        }
+        svc = ControllerService(
+            config,
+            receiver_factory=_NoopReceiver,
+            device_factory=_make_fake_factory([_FakeDevice()]),
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir),
+            clock_sync_factory=lambda port, clock_ns: fake_sync,
+        )
+
+        snap = svc.build_snapshot()
+
+        assert snap['devices'][0]['clock_state'] == 'synced'
+        assert snap['devices'][0]['clock_drift_ms'] == pytest.approx(2.25)
+        assert snap['devices'][0]['clock_rtt_ms'] == pytest.approx(1.5)
+        assert snap['devices'][0]['clock_last_sync_age_s'] == pytest.approx(0.75)
 
     def test_idle_tick_once_still_ticks_devices(self):
         fake = _TickCountingDevice()
@@ -2817,6 +2893,55 @@ class TestPresenceEvents:
         snap = svc.build_snapshot()
         assert snap['online_count'] == 0
         assert snap['devices'][0]['last_seen'] == pytest.approx(20.0)
+
+    def test_sync_update_emits_device_status_and_sends_result(self):
+        fake_device = _FakeDevice()
+        fake_sync = _FakeClockSyncManager()
+        fake_sync.status_by_device[1] = {
+            'clock_state': 'synced',
+            'clock_drift_ms': 2.3,
+            'clock_rtt_ms': 1.1,
+            'clock_last_sync_age_s': 0.0,
+        }
+        fake_sync.pending_updates.append(types.SimpleNamespace(
+            device_id=1,
+            seq=7,
+            boot_token=1234,
+            applied_offset_us=2300,
+            display_offset_us=400,
+            rtt_us=1100,
+        ))
+        config = Config(
+            frame_port=1,
+            devices=[
+                DeviceConfig(
+                    device_id=1,
+                    device_uid='esp32-246f28b5f190',
+                    device_type='esp32',
+                    host='127.0.0.1',
+                    tcp_port=9001,
+                    strip_id='test',
+                    length=5,
+                ),
+            ],
+        )
+        svc = ControllerService(
+            config,
+            receiver_factory=_NoopReceiver,
+            device_factory=_make_fake_factory([fake_device]),
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir),
+            clock_sync_factory=lambda port, clock_ns: fake_sync,
+        )
+
+        json_msgs, _ = svc.tick_once()
+        events = _decode_json_msgs(json_msgs)
+
+        status_events = [e for e in events if e.get('event') == 'device_status']
+        assert len(status_events) == 1
+        assert status_events[0]['clock_state'] == 'synced'
+        assert status_events[0]['clock_drift_ms'] == pytest.approx(2.3)
+        assert status_events[0]['clock_rtt_ms'] == pytest.approx(1.1)
+        assert fake_device.sync_results == [(7, 1234, 2300)]
 
     def test_last_seen_updates_each_tick_while_connected(self):
         wall_clock = _FakeWallClock(5.0)

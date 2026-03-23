@@ -12,6 +12,9 @@ import struct
 from .device import DeviceFrame
 
 # Command type constants
+SYNC_REQ = 0x01
+SYNC_RESP = 0x02
+CMD_SYNC_RESULT = 0x03
 CMD_CONFIGURE = 0x04
 CMD_LOAD = 0x10
 CMD_START = 0x11
@@ -25,6 +28,8 @@ CMD_ACK = 0x80
 
 # UDP frame header: device_id(u16) + gen(u16) + frame_index(u32) + t_rel(f32)
 UDP_FRAME_HEADER = struct.Struct('<HHIf')
+SYNC_REQ_STRUCT = struct.Struct('<BHIq')
+SYNC_RESP_STRUCT = struct.Struct('<BHIqqq')
 
 
 def encode_load(device_id: int, gen: int, blob: bytes) -> bytes:
@@ -34,6 +39,14 @@ def encode_load(device_id: int, gen: int, blob: bytes) -> bytes:
 
 def encode_configure(device_id: int, strip_length: int, frame_port: int) -> bytes:
     return struct.pack('<IBHHH', 7, CMD_CONFIGURE, device_id, strip_length, frame_port)
+
+
+def encode_sync_req(seq: int, boot_token: int, t1_us: int) -> bytes:
+    return SYNC_REQ_STRUCT.pack(SYNC_REQ, seq, boot_token, t1_us)
+
+
+def encode_sync_result(seq: int, boot_token: int, offset_us: int) -> bytes:
+    return struct.pack('<IBHIq', 15, CMD_SYNC_RESULT, seq, boot_token, offset_us)
 
 
 def encode_start(t0_us: int) -> bytes:
@@ -74,6 +87,19 @@ def parse_ack(data: bytes) -> int | None:
     if data[4] != CMD_ACK:
         return None
     return data[5]
+
+
+def parse_sync_resp(data: bytes) -> tuple[int, int, int, int, int] | None:
+    """Parse a SYNC_RESP datagram.
+
+    Returns (seq, boot_token, t1_us, t2_us, t3_us) or None.
+    """
+    if len(data) != SYNC_RESP_STRUCT.size:
+        return None
+    pkt_type, seq, boot_token, t1_us, t2_us, t3_us = SYNC_RESP_STRUCT.unpack(data)
+    if pkt_type != SYNC_RESP:
+        return None
+    return seq, boot_token, t1_us, t2_us, t3_us
 
 
 def parse_udp_frame(data: bytes) -> tuple[int, DeviceFrame] | None:
