@@ -83,8 +83,24 @@ void log_line(const char* fmt, ...)
 String make_device_uid()
 {
     const uint64_t chip_id = ESP.getEfuseMac();
+    const uint8_t mac0 = static_cast<uint8_t>((chip_id >> 0) & 0xff);
+    const uint8_t mac1 = static_cast<uint8_t>((chip_id >> 8) & 0xff);
+    const uint8_t mac2 = static_cast<uint8_t>((chip_id >> 16) & 0xff);
+    const uint8_t mac3 = static_cast<uint8_t>((chip_id >> 24) & 0xff);
+    const uint8_t mac4 = static_cast<uint8_t>((chip_id >> 32) & 0xff);
+    const uint8_t mac5 = static_cast<uint8_t>((chip_id >> 40) & 0xff);
     char buf[32];
-    snprintf(buf, sizeof(buf), "esp32-%012llx", chip_id);
+    snprintf(
+        buf,
+        sizeof(buf),
+        "esp32-%02x%02x%02x%02x%02x%02x",
+        mac0,
+        mac1,
+        mac2,
+        mac3,
+        mac4,
+        mac5
+    );
     return String(buf);
 }
 
