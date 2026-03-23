@@ -19,6 +19,12 @@ PlaybackDevice::~PlaybackDevice()
     delete[] _rgb_buf;
 }
 
+int64_t PlaybackDevice::playback_t0(int64_t controller_t0, float target_t_rel) const
+{
+    (void)target_t_rel;
+    return controller_t0;
+}
+
 bool PlaybackDevice::handle_load(const uint8_t* blob, size_t blob_len, uint16_t gen)
 {
     delete _engine;
@@ -53,7 +59,7 @@ void PlaybackDevice::handle_start(int64_t t0)
     if (_state == DeviceState::ENDED)
         _engine->reset();
 
-    _t0 = t0;
+    _t0 = playback_t0(t0, 0.0f);
     _paused_t_rel = 0.0f;
     _frame_index = 0;
     _state = DeviceState::PLAYING;
@@ -72,7 +78,7 @@ void PlaybackDevice::handle_jump(int64_t t0, float t_rel, uint16_t gen)
 
     DeviceState prev = _state;
     _engine->reset();
-    _t0 = t0;
+    _t0 = playback_t0(t0, t_rel);
     _gen = gen;
     _frame_index = 0;
 
@@ -103,7 +109,7 @@ void PlaybackDevice::handle_resume(int64_t t0)
     if (_state != DeviceState::PAUSED)
         return;
 
-    _t0 = t0;
+    _t0 = playback_t0(t0, _paused_t_rel);
     _state = DeviceState::PLAYING;
     send_telemetry(DeviceState::PLAYING, _paused_t_rel);
 }

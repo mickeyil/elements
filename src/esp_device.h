@@ -26,6 +26,7 @@ public:
 protected:
     void output_frame(float t_rel) override;
     void send_telemetry(DeviceState s, float t, const char* err = nullptr) override;
+    int64_t playback_t0(int64_t controller_t0, float target_t_rel) const override;
 
 private:
     std::vector<EspRgbFrame> _frames;

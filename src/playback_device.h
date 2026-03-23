@@ -39,6 +39,7 @@ public:
 protected:
     virtual void output_frame(float t_rel) = 0;
     virtual void send_telemetry(DeviceState s, float t, const char* err = nullptr) {}
+    virtual int64_t playback_t0(int64_t controller_t0, float target_t_rel) const;
 
     uint16_t _strip_length;
     uint8_t* _rgb_buf;

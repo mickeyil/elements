@@ -41,6 +41,7 @@ constexpr size_t TCP_BUF_INITIAL = 4096;
 constexpr size_t TCP_MSG_MAX = 256 * 1024;
 
 constexpr uint32_t HELLO_INTERVAL_MS = 500;
+constexpr uint32_t STATUS_INTERVAL_MS = 5000;
 constexpr uint32_t WIFI_RETRY_INTERVAL_MS = 5000;
 constexpr uint32_t WIFI_CONNECT_TIMEOUT_MS = 12000;
 constexpr uint32_t LOOP_DELAY_MS = 1;
@@ -68,7 +69,30 @@ bool g_duplicate_uid_rejected = false;
 bool g_configured = false;
 bool g_controller_connected = false;
 uint32_t g_last_hello_ms = 0;
+uint32_t g_last_status_ms = 0;
 uint32_t g_last_wifi_retry_ms = 0;
+uint32_t g_wifi_connect_attempts = 0;
+uint32_t g_wifi_connect_successes = 0;
+uint32_t g_hello_count = 0;
+uint32_t g_tcp_accept_count = 0;
+uint32_t g_tcp_disconnect_count = 0;
+uint32_t g_configure_count = 0;
+uint32_t g_load_count = 0;
+uint32_t g_start_count = 0;
+uint32_t g_jump_count = 0;
+uint32_t g_pause_count = 0;
+uint32_t g_resume_count = 0;
+uint32_t g_stop_count = 0;
+uint64_t g_frames_sent = 0;
+bool g_have_frame_stats = false;
+uint16_t g_last_frame_gen = 0;
+uint32_t g_last_frame_index = 0;
+float g_last_frame_t_rel = 0.0f;
+
+const char* yes_no(bool value)
+{
+    return value ? "yes" : "no";
+}
 
 void log_line(const char* fmt, ...)
 {
@@ -139,6 +163,7 @@ void clear_runtime_connection_state()
 void disconnect_controller(const char* reason = nullptr)
 {
     if (g_controller_connected) {
+        g_tcp_disconnect_count += 1;
         if (reason && reason[0] != '\0') {
             log_line("[tcp] controller disconnected: %s", reason);
         } else {
@@ -195,6 +220,7 @@ bool connect_to_dev_wifi()
 
     for (size_t i = 0; i < DEV_WIFI_CREDENTIAL_COUNT; ++i) {
         const auto& cred = DEV_WIFI_CREDENTIALS[i];
+        g_wifi_connect_attempts += 1;
         log_line("[wifi] connecting to %s", cred.ssid);
 
         WiFi.disconnect(true, true);
@@ -204,6 +230,7 @@ bool connect_to_dev_wifi()
         const uint32_t started = millis();
         while (millis() - started < WIFI_CONNECT_TIMEOUT_MS) {
             if (WiFi.status() == WL_CONNECTED) {
+                g_wifi_connect_successes += 1;
                 log_line(
                     "[wifi] connected to %s ip=%s",
                     cred.ssid,
@@ -263,7 +290,9 @@ void send_discovery_hello()
     const IPAddress broadcast_ip(255, 255, 255, 255);
     if (g_discovery_udp.beginPacket(broadcast_ip, DISCOVERY_PORT)) {
         g_discovery_udp.write(pkt, 5 + uid_len);
-        g_discovery_udp.endPacket();
+        if (g_discovery_udp.endPacket() != 0) {
+            g_hello_count += 1;
+        }
     }
 }
 
@@ -338,6 +367,7 @@ void accept_controller()
     g_tcp_client.setNoDelay(true);
     clear_runtime_connection_state();
     g_controller_connected = true;
+    g_tcp_accept_count += 1;
     log_line("[tcp] controller connected: %s", g_tcp_client.remoteIP().toString().c_str());
 }
 
@@ -430,12 +460,14 @@ int poll_tcp_commands()
                 g_transport.frame_port = frame_port;
                 g_transport.controller_ip = g_tcp_client.remoteIP();
                 g_configured = true;
+                g_configure_count += 1;
 
                 log_line(
-                    "[tcp] configure ok device_id=%u strip_length=%u frame_port=%u",
+                    "[tcp] configure ok device_id=%u strip_length=%u frame_port=%u controller=%s",
                     device_id,
                     strip_length,
-                    frame_port
+                    frame_port,
+                    g_transport.controller_ip.toString().c_str()
                 );
                 send_ack(g_tcp_client, 0);
                 break;
@@ -460,6 +492,7 @@ int poll_tcp_commands()
                 const uint8_t* blob = payload + 4;
                 const size_t blob_len = payload_len - 4;
                 const bool ok = g_device->handle_load(blob, blob_len, gen);
+                g_load_count += 1;
                 log_line("[tcp] load gen=%u bytes=%lu status=%s", gen, static_cast<unsigned long>(blob_len), ok ? "ok" : "decode-failed");
                 send_ack(g_tcp_client, ok ? 0 : 1);
                 break;
@@ -470,6 +503,7 @@ int poll_tcp_commands()
                     int64_t t0 = 0;
                     memcpy(&t0, payload, 8);
                     g_device->handle_start(t0);
+                    g_start_count += 1;
                     log_line("[tcp] start");
                 }
                 break;
@@ -484,6 +518,7 @@ int poll_tcp_commands()
                     memcpy(&t_rel, payload + 8, 4);
                     memcpy(&gen, payload + 12, 2);
                     g_device->handle_jump(t0, t_rel, gen);
+                    g_jump_count += 1;
                     log_line("[tcp] jump t_rel=%.3f gen=%u", t_rel, gen);
                 }
                 break;
@@ -492,6 +527,7 @@ int poll_tcp_commands()
             case CMD_PAUSE:
                 if (g_configured && g_device) {
                     g_device->handle_pause();
+                    g_pause_count += 1;
                     log_line("[tcp] pause");
                 }
                 break;
@@ -501,6 +537,7 @@ int poll_tcp_commands()
                     int64_t t0 = 0;
                     memcpy(&t0, payload, 8);
                     g_device->handle_resume(t0);
+                    g_resume_count += 1;
                     log_line("[tcp] resume");
                 }
                 break;
@@ -509,6 +546,7 @@ int poll_tcp_commands()
             case CMD_STOP:
                 if (g_configured && g_device) {
                     g_device->handle_stop();
+                    g_stop_count += 1;
                     log_line("[tcp] stop");
                 }
                 break;
@@ -553,8 +591,67 @@ void send_frames()
         if (!frame.rgb.empty()) {
             g_frame_udp.write(frame.rgb.data(), frame.rgb.size());
         }
-        g_frame_udp.endPacket();
+        if (g_frame_udp.endPacket() != 0) {
+            g_frames_sent += 1;
+            g_have_frame_stats = true;
+            g_last_frame_gen = frame.gen;
+            g_last_frame_index = frame.frame_index;
+            g_last_frame_t_rel = frame.t_rel;
+        }
     }
+}
+
+void maybe_log_status()
+{
+    const uint32_t now = millis();
+    if (g_last_status_ms != 0 && now - g_last_status_ms < STATUS_INTERVAL_MS) {
+        return;
+    }
+    g_last_status_ms = now;
+
+    const String ip = g_wifi_ready ? WiFi.localIP().toString() : String("-");
+    const unsigned long uptime_s = now / 1000;
+    if (g_have_frame_stats) {
+        log_line(
+            "[status] up=%lus wifi=%s ip=%s ctrl=%s cfg=%s tries=%lu ok=%lu hellos=%lu tcp=%lu/%lu frames=%llu last=%u/%lu/%.3f load=%lu start=%lu stop=%lu",
+            uptime_s,
+            g_wifi_ready ? "up" : "down",
+            ip.c_str(),
+            yes_no(g_controller_connected),
+            yes_no(g_configured),
+            static_cast<unsigned long>(g_wifi_connect_attempts),
+            static_cast<unsigned long>(g_wifi_connect_successes),
+            static_cast<unsigned long>(g_hello_count),
+            static_cast<unsigned long>(g_tcp_accept_count),
+            static_cast<unsigned long>(g_tcp_disconnect_count),
+            static_cast<unsigned long long>(g_frames_sent),
+            static_cast<unsigned>(g_last_frame_gen),
+            static_cast<unsigned long>(g_last_frame_index),
+            static_cast<double>(g_last_frame_t_rel),
+            static_cast<unsigned long>(g_load_count),
+            static_cast<unsigned long>(g_start_count),
+            static_cast<unsigned long>(g_stop_count)
+        );
+        return;
+    }
+
+    log_line(
+        "[status] up=%lus wifi=%s ip=%s ctrl=%s cfg=%s tries=%lu ok=%lu hellos=%lu tcp=%lu/%lu frames=%llu load=%lu start=%lu stop=%lu",
+        uptime_s,
+        g_wifi_ready ? "up" : "down",
+        ip.c_str(),
+        yes_no(g_controller_connected),
+        yes_no(g_configured),
+        static_cast<unsigned long>(g_wifi_connect_attempts),
+        static_cast<unsigned long>(g_wifi_connect_successes),
+        static_cast<unsigned long>(g_hello_count),
+        static_cast<unsigned long>(g_tcp_accept_count),
+        static_cast<unsigned long>(g_tcp_disconnect_count),
+        static_cast<unsigned long long>(g_frames_sent),
+        static_cast<unsigned long>(g_load_count),
+        static_cast<unsigned long>(g_start_count),
+        static_cast<unsigned long>(g_stop_count)
+    );
 }
 
 }  // namespace
@@ -568,6 +665,7 @@ void setup()
     g_device_uid = make_device_uid();
 
     log_line("[boot] elements esp32 runtime starting");
+    log_line("[boot] build=%s %s", __DATE__, __TIME__);
     log_line("[boot] uid=%s", g_device_uid.c_str());
 
     connect_to_dev_wifi();
@@ -594,5 +692,6 @@ void loop()
     }
 
     maybe_send_hello();
+    maybe_log_status();
     delay(LOOP_DELAY_MS);
 }

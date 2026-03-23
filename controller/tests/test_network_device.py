@@ -674,6 +674,27 @@ class TestCurrentTRel:
 
 
 class TestFrames:
+    def test_esp32_logs_first_frame_received_after_start(self, endpoint, receiver, caplog):
+        dev = _make_device(endpoint, receiver, device_type='esp32')
+        assert _load_device(dev, endpoint)
+
+        dev.start(_sec(0.0))
+        endpoint.read_command()
+
+        rgb = b'\xFF\x00\x00' * 5
+        endpoint.send_udp_frame(device_id=1, gen=1, frame_index=0, t_rel=0.5, rgb=rgb)
+
+        import time
+        time.sleep(0.05)
+
+        receiver.poll()
+        caplog.set_level(logging.INFO)
+        dev.tick_once(_sec(1.0))
+
+        assert 'first frame received' in caplog.text
+        assert 'device 1' in caplog.text
+        assert 'frame_index=0' in caplog.text
+
     def test_frames_routed_by_device_id(self, endpoint, receiver):
         dev = _make_device(endpoint, receiver, device_id=5)
         assert _load_device(dev, endpoint)

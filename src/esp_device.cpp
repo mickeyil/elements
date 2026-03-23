@@ -63,6 +63,12 @@ int64_t ESPDevice::now_mono() const
     return esp_timer_get_time();
 }
 
+int64_t ESPDevice::playback_t0(int64_t controller_t0, float target_t_rel) const
+{
+    (void)controller_t0;
+    return now_mono() + _sync_offset - static_cast<int64_t>(target_t_rel * 1e6f);
+}
+
 void ESPDevice::output_frame(float t_rel)
 {
     memcpy(g_leds, _rgb_buf, _strip_length * 3);
