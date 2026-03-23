@@ -24,6 +24,10 @@ export interface SnapshotDevice {
   length?: number;
   connected?: boolean;
   last_seen?: number | null;
+  clock_state?: string;
+  clock_offset_ms?: number | null;
+  clock_rtt_ms?: number | null;
+  clock_last_sync_age_s?: number | null;
 }
 
 interface SessionStripTarget {

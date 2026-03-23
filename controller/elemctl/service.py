@@ -494,6 +494,7 @@ class ControllerService:
                 'device_type': dc.device_type,
                 'connected': connected,
                 'last_seen': self._last_seen.get(dc.device_id),
+                **self._clock_status_for_device(dc),
             })
 
         return {
@@ -505,6 +506,21 @@ class ControllerService:
             'session': session,
             'devices': devices,
             'programs': self._programs_to_wire(),
+        }
+
+    def _clock_status_for_device(self, dc: DeviceConfig) -> dict[str, object]:
+        if dc.device_type == 'sim':
+            return {
+                'clock_state': 'host',
+                'clock_offset_ms': 0.0,
+                'clock_rtt_ms': 0.0,
+                'clock_last_sync_age_s': 0.0,
+            }
+        return {
+            'clock_state': 'pending',
+            'clock_offset_ms': None,
+            'clock_rtt_ms': None,
+            'clock_last_sync_age_s': None,
         }
 
     def probe_all(self) -> None:

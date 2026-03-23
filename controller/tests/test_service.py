@@ -496,6 +496,31 @@ class TestSnapshotIdle:
         snap = svc.build_snapshot()
         assert snap['devices'][0]['connected'] is False
 
+    def test_snapshot_includes_clock_status_defaults(self):
+        config = Config(frame_port=1, devices=[
+            DeviceConfig(1, 'sim-left', 'sim', '127.0.0.1', 9001, 'left', 5),
+            DeviceConfig(2, 'esp-left', 'esp32', '127.0.0.1', 9002, 'left', 5),
+        ])
+        fake_devices = [_FakeDevice(), _FakeDevice()]
+        svc = ControllerService(
+            config,
+            receiver_factory=_NoopReceiver,
+            device_factory=_make_fake_factory(fake_devices),
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir),
+        )
+
+        snap = svc.build_snapshot()
+
+        assert snap['devices'][0]['clock_state'] == 'host'
+        assert snap['devices'][0]['clock_offset_ms'] == pytest.approx(0.0)
+        assert snap['devices'][0]['clock_rtt_ms'] == pytest.approx(0.0)
+        assert snap['devices'][0]['clock_last_sync_age_s'] == pytest.approx(0.0)
+
+        assert snap['devices'][1]['clock_state'] == 'pending'
+        assert snap['devices'][1]['clock_offset_ms'] is None
+        assert snap['devices'][1]['clock_rtt_ms'] is None
+        assert snap['devices'][1]['clock_last_sync_age_s'] is None
+
     def test_idle_tick_once_still_ticks_devices(self):
         fake = _TickCountingDevice()
         svc, _ = _make_service(fake_devices=[fake])

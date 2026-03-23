@@ -108,6 +108,20 @@ function statusTitle(device: StatusCardDevice): string {
   return `Dropped · last seen ${new Date(device.last_seen * 1000).toLocaleString()}`;
 }
 
+function clockLabel(device: SnapshotDevice): string {
+  if (device.clock_state === 'host') {
+    return 'Clock: 0.0 ms';
+  }
+  if (typeof device.clock_offset_ms === 'number' && Number.isFinite(device.clock_offset_ms)) {
+    const sign = device.clock_offset_ms >= 0 ? '+' : '';
+    return `Clock: ${sign}${device.clock_offset_ms.toFixed(1)} ms`;
+  }
+  if (device.clock_state === 'pending') {
+    return 'Clock: syncing';
+  }
+  return 'Clock: —';
+}
+
 function layoutMenuLabel(device: StatusCardDevice): string {
   return device.hasLayout ? 'Edit layout' : 'Create layout';
 }
@@ -242,6 +256,7 @@ onBeforeUnmount(() => {
             <h2 class="device-strip" :title="device.strip ?? device.device_uid ?? 'unknown device'">
               {{ device.strip ?? 'unknown_strip' }}
             </h2>
+            <p class="device-clock">{{ clockLabel(device) }}</p>
             <div class="device-bottom-row">
               <p class="device-uid mono">DEVICE: {{ device.device_uid ?? 'unknown-device' }}</p>
               <div class="device-action-slot">
@@ -482,6 +497,14 @@ onBeforeUnmount(() => {
   align-items: flex-end;
   justify-content: space-between;
   gap: 0.5rem;
+}
+
+.device-clock {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.76rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
 }
 
 .device-uid {
