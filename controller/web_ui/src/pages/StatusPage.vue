@@ -110,19 +110,19 @@ function statusTitle(device: StatusCardDevice): string {
 
 function clockLabel(device: SnapshotDevice): string {
   if (device.clock_state === 'host') {
-    return 'Offset: 0.0 ms';
+    return '0.0 ms';
   }
   if (typeof device.clock_offset_ms === 'number' && Number.isFinite(device.clock_offset_ms)) {
     const sign = device.clock_offset_ms >= 0 ? '+' : '';
-    return `Offset: ${sign}${device.clock_offset_ms.toFixed(1)} ms`;
+    return `${sign}${device.clock_offset_ms.toFixed(1)} ms`;
   }
   if (device.clock_state === 'settling') {
-    return 'Offset: settling';
+    return 'settling';
   }
   if (device.clock_state === 'pending') {
-    return 'Offset: syncing';
+    return 'syncing';
   }
-  return 'Offset: —';
+  return '—';
 }
 
 function layoutMenuLabel(device: StatusCardDevice): string {
@@ -249,6 +249,9 @@ onBeforeUnmount(() => {
             >
               {{ device.device_type === 'sim' ? 'SIM' : 'ESP' }}
             </span>
+            <span class="device-head-offset mono">
+              {{ clockLabel(device) }}
+            </span>
             <span class="device-status" :class="statusClass(device.status)" :title="statusTitle(device)">
               <span class="device-status-dot" />
               {{ statusLabel(device.status) }}
@@ -259,7 +262,6 @@ onBeforeUnmount(() => {
             <h2 class="device-strip" :title="device.strip ?? device.device_uid ?? 'unknown device'">
               {{ device.strip ?? 'unknown_strip' }}
             </h2>
-            <p class="device-clock">{{ clockLabel(device) }}</p>
             <div class="device-bottom-row">
               <p class="device-uid mono">DEVICE: {{ device.device_uid ?? 'unknown-device' }}</p>
               <div class="device-action-slot">
@@ -420,10 +422,21 @@ onBeforeUnmount(() => {
 }
 
 .device-card-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
   gap: 0.75rem;
+}
+
+.device-head-offset {
+  justify-self: center;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 0.64rem;
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  text-align: center;
 }
 
 .device-type-badge {
@@ -500,14 +513,6 @@ onBeforeUnmount(() => {
   align-items: flex-end;
   justify-content: space-between;
   gap: 0.5rem;
-}
-
-.device-clock {
-  margin: 0;
-  color: var(--text);
-  font-size: 0.76rem;
-  font-weight: 600;
-  letter-spacing: 0.02em;
 }
 
 .device-uid {
