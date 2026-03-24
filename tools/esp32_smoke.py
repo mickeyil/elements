@@ -24,6 +24,7 @@ from elemctl.uds_wire import KIND_JSON, parse_json_payload
 
 
 PROGRAM_DURATION_S = 4.0
+REBOOT_MIN_WAIT_TIMEOUT_S = 90.0
 
 
 def _program_source(strip_id: str) -> str:
@@ -144,13 +145,14 @@ def wait_for_stopped(client: UdsClient, timeout_s: float) -> dict:
 
 
 def reboot_and_wait(client: UdsClient, device_uid: str, timeout_s: float) -> None:
+    reconnect_timeout_s = max(timeout_s, REBOOT_MIN_WAIT_TIMEOUT_S)
     log_step(f"requesting reboot for {device_uid}")
     require_ok(
         send_cmd(client, {"cmd": "reboot_device", "device_uid": device_uid}),
         "reboot_device",
     )
     time.sleep(1.0)
-    wait_for_connected(client, device_uid, timeout_s)
+    wait_for_connected(client, device_uid, reconnect_timeout_s)
     log_step("device reconnected after reboot")
 
 
