@@ -112,6 +112,9 @@ function clockLabel(device: SnapshotDevice): string {
   if (device.clock_state === 'host') {
     return '0.0 ms';
   }
+  if (device.clock_state === 'stale') {
+    return 'stale';
+  }
   if (typeof device.clock_offset_ms === 'number' && Number.isFinite(device.clock_offset_ms)) {
     const sign = device.clock_offset_ms >= 0 ? '+' : '';
     return `${sign}${device.clock_offset_ms.toFixed(1)} ms`;
