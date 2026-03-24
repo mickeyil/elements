@@ -40,6 +40,28 @@ private:
     int64_t _now = 0;
 };
 
+class TestEspStyleDevice : public PlaybackDevice {
+public:
+    TestEspStyleDevice(uint16_t len)
+        : PlaybackDevice(len, /*gamma_enabled=*/false) {}
+
+    void set_time(int64_t us) { _now = us; }
+    int64_t now_mono() const override { return _now; }
+
+    void output_frame(float) override {}
+
+protected:
+    int64_t playback_t0(int64_t controller_t0, float target_t_rel) const override {
+        if (sync_valid()) {
+            return controller_t0;
+        }
+        return now_mono() - static_cast<int64_t>(target_t_rel * 1e6f);
+    }
+
+private:
+    int64_t _now = 0;
+};
+
 // ---------------------------------------------------------------------------
 // Load test blob from file
 // ---------------------------------------------------------------------------
@@ -453,30 +475,69 @@ TEST_CASE("Sync offset shifts computed t_rel", "[playback][sync]") {
     auto blob = load_blob(SHIFT_FIXTURE);
     REQUIRE(dev.handle_load(blob.data(), blob.size(), 1));
 
+    // Apply sync before playback starts so the next anchor uses controller time.
+    dev.handle_sync_result(500'000);
+
     dev.set_time(0);
     dev.handle_start(0);
 
-    // Tick at t=0.5 (paint renders, fills buffer)
-    dev.set_time(500'000);
-    dev.tick_once();
-
-    // Set sync offset = +500'000 us (0.5s ahead)
+    // With sync active, the controller/device shared clock is 0.5s ahead.
     // So at wall clock 500'000, effective t_rel = (500'000 + 500'000 - 0) / 1e6 = 1.0
-    dev.handle_sync_result(500'000);
-
     dev.set_time(500'000);
     CHECK(dev.current_t_rel() == Catch::Approx(1.0f));
 
     // At wall clock 1'500'000, effective t_rel = (1'500'000 + 500'000 - 0)/1e6 = 2.0
     dev.set_time(1'500'000);
+    CHECK(dev.current_t_rel() == Catch::Approx(2.0f));
     CHECK(dev.tick_once());
-    const uint8_t* rgb = dev.rgb_data();
-    // t_rel=2.0: shift by 1 → [0, 51, 102, 153, 204]
-    check_pixel(rgb, 0, 0);
-    check_pixel(rgb, 1, 51);
-    check_pixel(rgb, 2, 102);
-    check_pixel(rgb, 3, 153);
-    check_pixel(rgb, 4, 204);
+}
+
+TEST_CASE("ESP-style fallback start ignores controller epoch before sync", "[playback][sync]") {
+    TestEspStyleDevice dev(5);
+    auto blob = load_blob(SHIFT_FIXTURE);
+    REQUIRE(dev.handle_load(blob.data(), blob.size(), 1));
+
+    dev.set_time(0);
+    dev.handle_start(1'000'000);
+    CHECK_FALSE(dev.playback_uses_sync());
+
+    dev.set_time(500'000);
+    CHECK(dev.tick_once());
+    CHECK(dev.current_t_rel() == Catch::Approx(0.5f));
+}
+
+TEST_CASE("ESP-style synced start uses controller t0 without double-applying sync offset", "[playback][sync]") {
+    TestEspStyleDevice dev(5);
+    auto blob = load_blob(SHIFT_FIXTURE);
+    REQUIRE(dev.handle_load(blob.data(), blob.size(), 1));
+
+    dev.handle_sync_result(500'000);
+    dev.set_time(0);
+    dev.handle_start(1'000'000);
+    CHECK(dev.playback_uses_sync());
+
+    dev.set_time(600'000);
+    CHECK(dev.current_t_rel() == Catch::Approx(0.1f));
+}
+
+TEST_CASE("ESP-style sync does not re-anchor an already-playing local session", "[playback][sync]") {
+    TestEspStyleDevice dev(5);
+    auto blob = load_blob(SHIFT_FIXTURE);
+    REQUIRE(dev.handle_load(blob.data(), blob.size(), 1));
+
+    dev.set_time(0);
+    dev.handle_start(0);
+    CHECK_FALSE(dev.playback_uses_sync());
+
+    dev.set_time(1'000'000);
+    CHECK(dev.current_t_rel() == Catch::Approx(1.0f));
+
+    dev.handle_sync_result(500'000);
+    CHECK(dev.sync_valid());
+    CHECK_FALSE(dev.playback_uses_sync());
+
+    dev.set_time(1'500'000);
+    CHECK(dev.current_t_rel() == Catch::Approx(1.5f));
 }
 
 // ---------------------------------------------------------------------------

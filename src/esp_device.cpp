@@ -65,8 +65,10 @@ int64_t ESPDevice::now_mono() const
 
 int64_t ESPDevice::playback_t0(int64_t controller_t0, float target_t_rel) const
 {
-    (void)controller_t0;
-    return now_mono() + _sync_offset - static_cast<int64_t>(target_t_rel * 1e6f);
+    if (sync_valid()) {
+        return controller_t0;
+    }
+    return now_mono() - static_cast<int64_t>(target_t_rel * 1e6f);
 }
 
 void ESPDevice::output_frame(float t_rel)

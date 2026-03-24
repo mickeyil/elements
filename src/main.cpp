@@ -178,6 +178,9 @@ void clear_runtime_connection_state()
     g_transport.controller_ip = IPAddress();
     g_tcp_buf_used = 0;
     g_last_sync_seq = 0;
+    if (g_device) {
+        g_device->clear_sync();
+    }
 }
 
 void disconnect_controller(const char* reason = nullptr)
@@ -587,6 +590,7 @@ int poll_tcp_commands()
                     static_cast<unsigned>(seq),
                     static_cast<long long>(offset_us)
                 );
+                log_line("[sync] ready for playback");
                 break;
             }
 
@@ -621,7 +625,7 @@ int poll_tcp_commands()
                     memcpy(&t0, payload, 8);
                     g_device->handle_start(t0);
                     g_start_count += 1;
-                    log_line("[tcp] start");
+                    log_line("[tcp] start clock=%s", g_device->playback_uses_sync() ? "synced" : "local");
                 }
                 break;
             }
@@ -636,7 +640,12 @@ int poll_tcp_commands()
                     memcpy(&gen, payload + 12, 2);
                     g_device->handle_jump(t0, t_rel, gen);
                     g_jump_count += 1;
-                    log_line("[tcp] jump t_rel=%.3f gen=%u", t_rel, gen);
+                    log_line(
+                        "[tcp] jump t_rel=%.3f gen=%u clock=%s",
+                        t_rel,
+                        gen,
+                        g_device->playback_uses_sync() ? "synced" : "local"
+                    );
                 }
                 break;
             }
@@ -655,7 +664,7 @@ int poll_tcp_commands()
                     memcpy(&t0, payload, 8);
                     g_device->handle_resume(t0);
                     g_resume_count += 1;
-                    log_line("[tcp] resume");
+                    log_line("[tcp] resume clock=%s", g_device->playback_uses_sync() ? "synced" : "local");
                 }
                 break;
             }

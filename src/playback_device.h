@@ -21,6 +21,7 @@ public:
     void handle_resume(int64_t t0);
     void handle_stop();
     void handle_sync_result(int64_t offset);
+    void clear_sync();
 
     // Per-frame tick — call in main loop
     bool tick_once();
@@ -32,6 +33,8 @@ public:
     const uint8_t* rgb_data() const;
     uint8_t* rgb_buf();
     uint16_t strip_length() const;
+    bool sync_valid() const;
+    bool playback_uses_sync() const;
 
     // Platform-specific — subclasses override
     virtual int64_t now_mono() const = 0;
@@ -49,6 +52,8 @@ protected:
     float _duration = 0.0f;
     int64_t _t0 = 0;
     int64_t _sync_offset = 0;
+    bool _sync_valid = false;
+    bool _playback_uses_sync = false;
     uint16_t _gen = 0;
     uint32_t _frame_index = 0;
     float _paused_t_rel = 0.0f;

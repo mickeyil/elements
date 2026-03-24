@@ -45,6 +45,7 @@ bool PlaybackDevice::handle_load(const uint8_t* blob, size_t blob_len, uint16_t 
     _gen = gen;
     _frame_index = 0;
     _paused_t_rel = 0.0f;
+    _playback_uses_sync = false;
     memset(_rgb_buf, 0, _strip_length * 3);
     _state = DeviceState::LOADED;
     send_telemetry(DeviceState::LOADED, 0.0f);
@@ -59,6 +60,7 @@ void PlaybackDevice::handle_start(int64_t t0)
     if (_state == DeviceState::ENDED)
         _engine->reset();
 
+    _playback_uses_sync = _sync_valid;
     _t0 = playback_t0(t0, 0.0f);
     _paused_t_rel = 0.0f;
     _frame_index = 0;
@@ -78,6 +80,7 @@ void PlaybackDevice::handle_jump(int64_t t0, float t_rel, uint16_t gen)
 
     DeviceState prev = _state;
     _engine->reset();
+    _playback_uses_sync = _sync_valid;
     _t0 = playback_t0(t0, t_rel);
     _gen = gen;
     _frame_index = 0;
@@ -109,6 +112,7 @@ void PlaybackDevice::handle_resume(int64_t t0)
     if (_state != DeviceState::PAUSED)
         return;
 
+    _playback_uses_sync = _sync_valid;
     _t0 = playback_t0(t0, _paused_t_rel);
     _state = DeviceState::PLAYING;
     send_telemetry(DeviceState::PLAYING, _paused_t_rel);
@@ -124,6 +128,7 @@ void PlaybackDevice::handle_stop()
     output_frame(0.0f);
     _frame_index = 0;
     _paused_t_rel = 0.0f;
+    _playback_uses_sync = false;
     _state = DeviceState::LOADED;
     send_telemetry(DeviceState::LOADED, 0.0f);
 }
@@ -131,6 +136,14 @@ void PlaybackDevice::handle_stop()
 void PlaybackDevice::handle_sync_result(int64_t offset)
 {
     _sync_offset = offset;
+    _sync_valid = true;
+}
+
+void PlaybackDevice::clear_sync()
+{
+    _sync_offset = 0;
+    _sync_valid = false;
+    _playback_uses_sync = false;
 }
 
 bool PlaybackDevice::tick_once()
@@ -141,7 +154,8 @@ bool PlaybackDevice::tick_once()
         return true;
 
     // PLAYING
-    float t_rel = (float)(now_mono() + _sync_offset - _t0) / 1e6f;
+    const int64_t effective_offset = _playback_uses_sync ? _sync_offset : 0;
+    float t_rel = (float)(now_mono() + effective_offset - _t0) / 1e6f;
     if (t_rel < 0.0f)
         return true;
 
@@ -177,7 +191,8 @@ float PlaybackDevice::current_t_rel() const
         case DeviceState::PAUSED:
             return _paused_t_rel;
         case DeviceState::PLAYING: {
-            float t = (float)(now_mono() + _sync_offset - _t0) / 1e6f;
+            const int64_t effective_offset = _playback_uses_sync ? _sync_offset : 0;
+            float t = (float)(now_mono() + effective_offset - _t0) / 1e6f;
             if (t < 0.0f) return 0.0f;
             if (t > _duration) return _duration;
             return t;
@@ -201,4 +216,14 @@ uint8_t* PlaybackDevice::rgb_buf()
 uint16_t PlaybackDevice::strip_length() const
 {
     return _strip_length;
+}
+
+bool PlaybackDevice::sync_valid() const
+{
+    return _sync_valid;
+}
+
+bool PlaybackDevice::playback_uses_sync() const
+{
+    return _playback_uses_sync;
 }
