@@ -488,7 +488,7 @@ class ControllerService:
                 and update.boot_token is not None
                 and update.seq is not None
             ):
-                log.info(
+                log.debug(
                     'sync: device %d state=%s offset=%s correction=%s rtt=%s boot_token=%u seq=%u',
                     dc.device_id,
                     update.clock_state,
@@ -499,7 +499,7 @@ class ControllerService:
                     update.seq,
                 )
             else:
-                log.info(
+                log.debug(
                     'sync: device %d state=%s offset=%s rtt=%s',
                     dc.device_id,
                     update.clock_state,

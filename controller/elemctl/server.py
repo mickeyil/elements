@@ -413,9 +413,15 @@ def main() -> None:
         '--log-dir', default=None,
         help='logs directory (default: controller.logs_dir or <repo>/logs)',
     )
+    parser.add_argument(
+        '--debug',
+        action='store_true',
+        help='enable debug logging',
+    )
 
     args = parser.parse_args()
-    configure_logger(level="INFO")
+    log_level = "DEBUG" if args.debug else "INFO"
+    configure_logger(level=log_level)
 
     try:
         config_path = resolve_config_path(args.config)
@@ -427,7 +433,7 @@ def main() -> None:
     log_dir = resolve_runtime_path(args.log_dir, config.logs_dir, DEFAULT_LOGS_PATH)
     configure_logger(
         logfile=os.path.join(log_dir, 'server.log'),
-        level="INFO",
+        level=log_level,
     )
     log.info('elements controller started. version: %s', get_runtime_version())
     log.info('using config %s', config_path)

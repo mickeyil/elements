@@ -161,7 +161,7 @@ class NetworkDevice:
             return False
         if not self._send(encode_sync_result(seq, boot_token, offset_us)):
             return False
-        log.info(
+        log.debug(
             'device %d sync result sent seq=%d boot_token=%u offset_us=%d',
             self._device_id,
             seq,
