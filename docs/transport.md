@@ -1,22 +1,22 @@
 # Transport & Clock Sync
 
-> **Status: Mixed.** The TCP command transport (CONFIGURE, LOAD, START, JUMP, PAUSE, RESUME, STOP, DEBUG_SEEK, ACK), UDP frame return path, and discovery HELLO flow are implemented for the controller and `network_sim`. The custom clock sync protocol (SYNC_REQ/SYNC_RESP/SYNC_RESULT) described below is **design-only — not yet implemented**.
+> **Status: Mixed.** The TCP command transport (CONFIGURE, LOAD, START, JUMP, PAUSE, RESUME, STOP, DEBUG_SEEK, ACK), UDP frame return path, discovery HELLO flow, and controller-led clock sync protocol (SYNC_REQ/SYNC_RESP/SYNC_RESULT) are implemented. Browser playback/program-control parity and audio integration are still future work.
 
 ## Transport architecture
 
-Three active channels per device:
+Three active transport paths per device:
 
 | Channel | Direction | Purpose | Why this transport |
 |---------|-----------|---------|-------------------|
-| **TCP** | bidirectional | Commands (controller → device) and ACKs (device → controller) | Reliable delivery, arbitrary payload size (blobs can exceed UDP MTU) |
+| **TCP** | bidirectional | Commands (controller → device), ACKs (device → controller), and SYNC_RESULT (controller → device) | Reliable delivery, arbitrary payload size (blobs can exceed UDP MTU) |
 | **UDP outbound** | device → controller | RGB frames | Fire-and-forget streaming; dropped frame = client skips one update |
-| **UDP discovery** | device → controller | HELLO packets (periodic, even after TCP connect) | Lightweight presence; enables rediscovery after reconnects |
+| **UDP discovery / sync** | bidirectional | HELLO packets, discovery rejects, SYNC_REQ, SYNC_RESP | Lightweight presence plus low-latency sync probes on one known UDP port |
 
 Each device listens on one TCP port. The controller maintains a persistent TCP connection to each device. Devices send UDP frames to the controller's `frame_port`. Discovery HELLO packets are broadcast on `discovery_port` (default 6040) — the controller uses these to resolve live `(host, tcp_port)` for known `device_uid` values. Duplicate UIDs from different addresses are rejected via a discovery reject packet.
 
-`network_sim` keeps sending HELLO packets even after a TCP connection is established, so the controller can rediscover the device after reconnects without requiring a restart.
+Clock sync probes reuse that same discovery UDP port. The controller sends `SYNC_REQ` to the device's discovery port, and the device replies with `SYNC_RESP` from the same socket. There is no separate advertised sync port in the current implementation.
 
-> **Design-only (not yet implemented):** A fourth channel — UDP inbound (controller → device) for SYNC_REQ clock sync probes — is documented below but not implemented. See "Design-only: clock sync protocol" section.
+`network_sim` keeps sending HELLO packets even after a TCP connection is established, so the controller can rediscover the device after reconnects without requiring a restart.
 
 ---
 
@@ -50,10 +50,15 @@ Device-side extensions (implemented in `network_sim` only):
 CMD_DEBUG_STEP:   type = 0x23, payload = [direction: i8]               -> 2 bytes total
 ```
 
+Implemented:
+
+```
+CMD_SYNC_RESULT:  type = 0x03, payload = [seq: u16] [boot_token: u32] [offset: i64] -> 15 bytes total
+```
+
 Design-only (not yet implemented):
 
 ```
-CMD_SYNC_RESULT:  type = 0x03, payload = [seq: u16] [boot_seq: u32] [offset: i64] -> 15 bytes total
 CMD_DEBUG_PAUSE:  type = 0x20, no payload                              -> 1 byte total
 CMD_DEBUG_RESUME: type = 0x21, no payload                              -> 1 byte total
 ```
@@ -164,8 +169,16 @@ void poll_tcp_commands(int tcp_fd, /* ... */) {
                 device.handle_stop();
                 break;
             }
-            // Design-only (not yet implemented):
-            // case 0x03: handle_sync_result(payload, payload_len); break;
+            case 0x03: {  // CMD_SYNC_RESULT
+                uint16_t seq;
+                uint32_t boot_token;
+                int64_t offset;
+                memcpy(&seq, payload, 2);
+                memcpy(&boot_token, payload + 2, 4);
+                memcpy(&offset, payload + 6, 8);
+                device->handle_sync_result(offset);
+                break;
+            }
             // Debug commands (ESPSimulated only, implemented):
             case 0x22: {  // CMD_DEBUG_SEEK
                 float t_rel;
@@ -191,11 +204,11 @@ void poll_tcp_commands(int tcp_fd, /* ... */) {
 
 ---
 
-## Design-only: UDP sync probes (device side)
+## UDP sync probes (device side)
 
-> **Not yet implemented.** The following describes the planned sync probe exchange. See "Design-only: clock sync protocol" below for the full protocol.
+The sync probe exchange is implemented on the same UDP socket used for discovery. Devices inspect incoming packets on the discovery port and respond to `SYNC_REQ` without blocking the main loop.
 
-Sync probes would use a separate UDP socket. The device listens for SYNC_REQ and replies with SYNC_RESP on the same socket:
+Sync probes use the discovery UDP socket:
 
 ```cpp
 void poll_udp_sync(int udp_fd) {
@@ -212,7 +225,9 @@ void poll_udp_sync(int udp_fd) {
 
         uint8_t resp[31];
         resp[0] = 0x02;  // SYNC_RESP
-        memcpy(resp + 1, buf + 1, 14);  // echo seq + boot_seq + t1
+        memcpy(resp + 1, buf + 1, 2);   // echo seq
+        memcpy(resp + 3, &_boot_token, 4);
+        memcpy(resp + 7, buf + 7, 8);   // echo t1
         memcpy(resp + 15, &t2, 8);
         int64_t t3 = now_mono();
         memcpy(resp + 23, &t3, 8);
@@ -228,9 +243,9 @@ void poll_udp_sync(int udp_fd) {
 ## Device main loop (combined)
 
 ```cpp
-void loop() {              // Arduino (ESPDevice — planned)
+void loop() {              // Arduino (ESPDevice, implemented)
     poll_tcp_commands(tcp_fd, device);
-    // poll_udp_sync(udp_fd);  // design-only, not yet implemented
+    poll_udp_sync(discovery_udp_fd);
     device.tick_once();
 }
 ```
@@ -245,7 +260,7 @@ while (running) {          // Desktop (network_sim, implemented)
 }
 ```
 
-Note: `poll_udp_sync()` is part of the planned clock sync protocol (not yet implemented). The current `network_sim` loop does not poll for sync probes.
+`network_sim` does not implement active sync probing; simulators are treated as host-locked and use `sync_offset = 0`.
 
 ---
 
@@ -329,11 +344,9 @@ t_rel = (now_epoch_approx - t0) / 1e6        (microseconds -> float seconds)
 
 All protocol timestamps are **int64_t microseconds** — avoids float byte-order issues and keeps deterministic precision.
 
-### Design-only: custom sync protocol (replaces NTP on ESP)
+### Custom sync protocol (replaces NTP on ESP)
 
-> **Not yet implemented.** The sync exchange, filter model, and correction behavior described in this section and all subsections below through "Correction behavior during playback" are design-level only. None of this code exists in the codebase.
-
-Instead of each ESP running an NTP client, the controller would perform a lightweight sync exchange over a dedicated UDP channel. Sync probes use UDP (not the TCP command channel) because RTT measurement requires minimal, predictable latency — TCP's head-of-line blocking and Nagle's algorithm would add jitter that corrupts offset calculations. The computed offset (SYNC_RESULT) would be delivered over the TCP command connection since it's a one-shot value, not latency-sensitive.
+Instead of each ESP running an NTP client, the controller performs a lightweight sync exchange over the device's discovery UDP socket. Sync probes use UDP (not the TCP command channel) because RTT measurement requires minimal, predictable latency — TCP's head-of-line blocking and Nagle's algorithm would add jitter that corrupt offset calculations. The computed offset (`SYNC_RESULT`) is delivered over the TCP command connection since it's a one-shot value, not latency-sensitive.
 
 **Why not NTP:**
 - NTPClient on ESP is fragile: `forceUpdate()` blocks up to 1s, `getEpochTime()` loses sub-second precision via integer division, managing the library is unnecessary complexity.
@@ -358,14 +371,14 @@ Controller                           ESP
 - **T1, T4:** controller monotonic timestamps (int64_t us).
 - **T2, T3:** ESP monotonic timestamps (int64_t us) — both from `esp_timer_get_time()`, same clock source.
 - **seq:** uint16_t sequence number — controller ignores stale/mismatched replies.
-- **boot_seq:** uint32_t boot counter — ensures offsets from a pre-reboot timer are not reused.
+- **boot_token:** uint32_t per-boot token — ensures offsets from a pre-reboot timer are not reused.
 
 Packet format (all fields little-endian):
 
 ```
-SYNC_REQ:    [type: u8 = 0x01] [seq: u16] [boot_seq: u32] [t1: i64]                      -> 15 bytes (UDP)
-SYNC_RESP:   [type: u8 = 0x02] [seq: u16] [boot_seq: u32] [t1: i64] [t2: i64] [t3: i64]  -> 31 bytes (UDP)
-SYNC_RESULT: [type: u8 = 0x03] [seq: u16] [boot_seq: u32] [offset: i64]                   -> 15 bytes (TCP, length-prefixed)
+SYNC_REQ:    [type: u8 = 0x01] [seq: u16] [boot_token: u32] [t1: i64]                      -> 15 bytes (UDP)
+SYNC_RESP:   [type: u8 = 0x02] [seq: u16] [boot_token: u32] [t1: i64] [t2: i64] [t3: i64]  -> 31 bytes (UDP)
+SYNC_RESULT: [type: u8 = 0x03] [seq: u16] [boot_token: u32] [offset: i64]                   -> 15 bytes (TCP, length-prefixed)
 ```
 
 #### ESP implementation (minimal, non-blocking)
@@ -374,20 +387,22 @@ The sync probe exchange (SYNC_REQ/SYNC_RESP) runs on UDP for latency accuracy. T
 
 ```cpp
 int64_t _sync_offset = 0;    // set by controller via SYNC_RESULT (TCP)
-uint32_t _boot_seq = 0;     // incremented on each boot
+uint32_t _boot_token = 0;    // regenerated on each boot
 uint16_t _last_sync_seq = 0; // last applied SYNC_RESULT seq
 
-// Called from poll_udp_sync() — UDP path
+// Called from poll_udp_sync() — UDP path on the discovery socket
 void handle_sync_req(const uint8_t* pkt, const struct sockaddr_in& sender) {
     int64_t t2 = esp_timer_get_time();
 
     uint8_t resp[31];
     resp[0] = 0x02;  // SYNC_RESP
-    memcpy(resp + 1, pkt + 1, 14);  // echo seq + boot_seq + t1
+    memcpy(resp + 1, pkt + 1, 2);   // echo seq
+    memcpy(resp + 3, &_boot_token, 4);
+    memcpy(resp + 7, pkt + 7, 8);   // echo t1
     memcpy(resp + 15, &t2, 8);
     int64_t t3 = esp_timer_get_time();
     memcpy(resp + 23, &t3, 8);
-    sendto(udp_fd, resp, 31, 0, (struct sockaddr*)&sender, sizeof(sender));
+    sendto(discovery_udp_fd, resp, 31, 0, (struct sockaddr*)&sender, sizeof(sender));
 }
 
 // Called from poll_tcp_commands() — TCP path
@@ -395,12 +410,12 @@ void handle_sync_result(const uint8_t* payload, uint32_t len) {
     if (len < 14) return;
 
     uint16_t seq;
-    uint32_t boot_seq;
+    uint32_t boot_token;
     memcpy(&seq, payload, 2);
-    memcpy(&boot_seq, payload + 2, 4);
+    memcpy(&boot_token, payload + 2, 4);
 
     // Drop stale: wrong boot epoch or old/reordered sequence
-    if (boot_seq != _boot_seq || seq < _last_sync_seq)
+    if (boot_token != _boot_token || seq < _last_sync_seq)
         return;
 
     _last_sync_seq = seq;
@@ -416,14 +431,13 @@ No NTP library. No blocking. No state machine. The ESP is a passive responder fo
 
 #### Controller sync policy
 
-**Startup (before first LOAD):**
+**Startup / reconnect calibration:**
 
 1. Send 8 SYNC_REQ rounds at 1-second intervals.
-2. For each round, compute RTT and offset.
-3. Filter: discard samples where `rtt > rtt_max` or `rtt < 0`.
-4. Sort remaining by RTT, keep lowest K (e.g., K=3-4) — low RTT means less asymmetric jitter.
-5. Compute median offset of those K candidates.
-6. Send SYNC_RESULT to ESP.
+2. For each accepted round, compute RTT and offset.
+3. Build a per-round candidate from the lowest-RTT replies.
+4. Feed candidates into a sliding median window.
+5. When enough window data exists, compute a smoothed offset and decide whether to send SYNC_RESULT.
 
 **Steady-state (during and between playback):**
 
@@ -432,9 +446,9 @@ Periodic probes at an adaptive interval:
 | Condition | Probe interval |
 |-----------|---------------|
 | Startup calibration | 1s (8 rounds) |
-| Steady, good confidence | 15s |
-| Poor confidence or high variance | 5-10s |
-| Idle (no playback, low priority) | 20-30s |
+| Healthy synced | 15s |
+| Settling / stale recovery | 5s |
+| Post-correction confirm probes | 250ms (2 probes) |
 
 At ~10 ESP devices, even 10s intervals are negligible network load (~31 bytes per probe).
 
@@ -445,7 +459,7 @@ class DeviceSync:
     WINDOW_SIZE = 5
 
     def __init__(self):
-        self.window = []            # median window of filtered offsets
+        self.window = []            # sliding median window of round candidates
         self.applied_offset = 0     # currently sent to ESP
         self.prev_delta_sign = 0    # for sustained-move guard
 
@@ -487,7 +501,7 @@ class DeviceSync:
             self.prev_delta_sign = sign
             return  # first move in this direction — wait for confirmation
 
-        # 7. Apply
+        # 7. Apply and schedule fast confirm probes
         self.applied_offset = smoothed
         send_sync_result(device, smoothed)
         self.prev_delta_sign = 0
@@ -497,20 +511,22 @@ class DeviceSync:
         ...
 ```
 
-Key properties of this filter:
+Key properties of the implemented filter:
 - **Low-RTT selection** removes WiFi retransmit noise.
 - **Median window** (N=5) makes a single outlier unable to move the output.
 - **Sustained-move guard** requires two consecutive deltas in the same direction before applying — prevents toggling from a jitter spike that happens to survive the median.
-- **Staleness timeout** triggers a full re-sync if samples are consistently bad.
+- **Staleness timeout** triggers a full re-sync burst if samples are consistently bad.
 
 #### Correction behavior during playback
 
-When the ESP receives a SYNC_RESULT (over TCP) with an updated offset:
+When the ESP receives a `SYNC_RESULT` (over TCP) with an updated offset:
 
 - **ESP clock is early** (offset correction makes `t_rel` smaller -> animation was ahead): next `tick_once()` produces a smaller `t_rel` than expected. The engine effectively stalls for one frame (renders the same visual position twice). Invisible at 20ms frame intervals.
 - **ESP clock is late** (offset correction makes `t_rel` larger -> animation was behind): next `tick_once()` produces a larger `t_rel` jump. The engine's cursor naturally skips past finished events — this is a single `tick()` call, no replay needed.
 
 Both directions are handled gracefully by the existing engine design. Corrections filtered through the median window + sustained-move guard are small (a few ms), so the frame-to-frame timing perturbation is imperceptible.
+
+One important implementation detail: receiving sync does **not** re-anchor an already-playing local-fallback session mid-flight. Sync affects the next timing anchor (`START`, `RESUME`, or playing `JUMP`). Until then, an unsynced session keeps using its existing local anchor.
 
 ### Simulator clock
 
@@ -518,7 +534,7 @@ ESPSimulated uses `steady_clock` (monotonic) for its tick loop. This is immune t
 
 For local-only use (no real ESPs): `sync_offset = 0`. The controller and simulator share the same clock domain, so no sync exchange is needed.
 
-For mixed real+simulated setups: the controller can derive a trivial offset for the simulator from the identity relationship (same machine = same monotonic base). Real ESPs go through the full sync protocol.
+For mixed real+simulated setups: the controller treats the simulator as host-locked and reports `0.0 ms` offset in the UI. Real ESPs go through the full sync protocol.
 
 ### Seek and virtual time
 

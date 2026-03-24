@@ -329,13 +329,13 @@ The controller is the long-running authority on the base station.
 
 7. **Manages sessions** — assigns `session_id` on each load, tracks `epoch` (incremented on seek/jump/restart), and exposes current playback state to clients.
 
-8. **Assembles program frames** — receives per-strip RGB frames from simulators, filters by `gen` (drops stale), groups by `frame_index`, and emits complete multi-strip program frames over UDS.
+8. **Assembles program frames** — receives per-strip RGB frames from simulators and real ESP devices, filters by `gen` (drops stale), groups by `frame_index`, and emits complete multi-strip program frames over UDS.
 
 9. **Owns config mutations** — handles `add_device` / `edit_device` / `remove_device` requests from the TUI, validates them transactionally, atomically rewrites the config file, incrementally reconciles device objects, and rebuilds the controller while idle.
 
 10. **Exposes a control/event API over UDS** — a client (currently the TUI) connects to a Unix Domain Socket to send commands and receive replies, events, snapshots, and program frames. See "Controller ↔ Client protocol" below.
 
-11. **May sync clocks later** — the custom clock sync protocol (SYNC_REQ/SYNC_RESP/SYNC_RESULT) is documented in `transport.md` but not yet implemented.
+11. **Owns device clock sync** — probes ESP devices over UDP, filters samples, sends `SYNC_RESULT` over TCP, and exposes sync state/offset in device status and snapshots.
 
 ### Compilation flow
 
@@ -702,10 +702,10 @@ Client                    Controller                     ESPSimulated
    |                         |                              |  state = PLAYING
 ```
 
-### 2. Playback (ESPSimulated main loop, autonomous)
+### 2. Playback (device main loop, autonomous)
 
 ```
-ESPSimulated loop iteration:
+Device loop iteration (synced session):
    |
    |  now = now_mono() + _sync_offset
    |  t_rel = (now - _t0) / 1e6 -> 0.3
@@ -721,6 +721,8 @@ ESPSimulated loop iteration:
    |
    |  sleep until next frame (20ms cadence)
 ```
+
+For an unsynced ESP session, playback uses a local fallback anchor instead of `_sync_offset`. Sync does not re-anchor an already-playing local-fallback session mid-flight; it takes effect on the next `START`, `RESUME`, or playing `JUMP`.
 
 ### 3. Controller assembles program frame and forwards to client
 
@@ -837,10 +839,10 @@ Production seek and pause/resume are supported on the LED side — seek is restr
 
 ## Device type and debug coordination
 
-Device type is per-device, not a global mode. Each device in the config has a `device_type` field: `"sim"` (ESPSimulated via `network_sim`) or `"esp32"` (real hardware, planned). Debug commands (CMD_DEBUG_SEEK, CMD_DEBUG_STEP) are checked against the **active session devices** via `supports_debug_seek()` — which returns true only when all devices in the current session are `device_type: "sim"`.
+Device type is per-device, not a global mode. Each device in the config has a `device_type` field: `"sim"` (ESPSimulated via `network_sim`) or `"esp32"` (real hardware). Debug commands (CMD_DEBUG_SEEK, CMD_DEBUG_STEP) are checked against the **active session devices** via `supports_debug_seek()` — which returns true only when all devices in the current session are `device_type: "sim"`.
 
 - **All-sim topology:** Full debug controls (`debug_seek`/`debug_step`/jump). Supports both arbitrary scrubbing (via CMD_DEBUG_SEEK) and jump-point navigation (via CMD_JUMP).
-- **All-esp32 topology (planned):** Controller sends LOAD, START, JUMP, PAUSE, RESUME, STOP, and (when implemented) sync. No replay-based debug commands. Seek is restricted to safe intervals only.
+- **All-esp32 topology:** Controller sends LOAD, START, JUMP, PAUSE, RESUME, STOP, and active sync. No replay-based debug commands. Seek is restricted to safe intervals only.
 
 Both topologies support CMD_JUMP — it works on any device because it only targets times within reset-safe intervals where `reset()` + forward tick is correct.
 

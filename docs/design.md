@@ -112,7 +112,7 @@ LOAD tears down the current program and replaces it — no STOP needed when swit
 
 ### Transport
 
-TCP for commands (CONFIGURE, LOAD, START, JUMP, PAUSE, RESUME, STOP, debug) and clock sync results. UDP for discovery HELLO and streaming (RGB frames). Clock sync probes are planned but not yet implemented. See `docs/transport.md` for the full transport architecture.
+TCP for commands (CONFIGURE, LOAD, START, JUMP, PAUSE, RESUME, STOP, debug) and clock sync results. UDP for discovery HELLO, sync probes, and streaming (RGB frames). The controller-led sync protocol is implemented; see `docs/transport.md` for the full transport architecture.
 
 ---
 
@@ -145,7 +145,7 @@ TCP for commands (CONFIGURE, LOAD, START, JUMP, PAUSE, RESUME, STOP, debug) and 
 
 ### Solution: Custom controller-led sync protocol
 
-The planned design has the controller performing a lightweight SYNC_REQ/SYNC_RESP exchange with each ESP over a dedicated UDP channel. ESPs would be passive responders (timestamp and echo); all filtering, quality tracking, and correction logic would live on the controller. This protocol is documented in `transport.md` but not yet implemented.
+The controller performs a lightweight SYNC_REQ/SYNC_RESP exchange with each ESP over the discovery UDP socket. ESPs are passive responders (timestamp and echo); all filtering, quality tracking, and correction logic lives on the controller. The controller then delivers `SYNC_RESULT` over the existing TCP command connection. This protocol is documented in `transport.md`.
 
 **Why not NTP:** A generic NTP client on ESP is fragile — `forceUpdate()` blocks for up to 1s, `getEpochTime()` loses sub-second precision via integer division, and each ESP must manage its own NTP state. The custom protocol is simpler on the ESP side (~15 lines), non-blocking by design, and gives the controller full visibility into sync quality per device.
 
@@ -177,9 +177,9 @@ Detailed design documents:
 
 **→ [compiler.md](compiler.md)** — Python compiler pipeline: parser, time resolution, layer inference, buffer packing, blob emission, safe interval analysis
 
-**→ [playback_device.md](playback_device.md)** — PlaybackDevice base class: state machine, method contracts, ESPSimulated implementation, ESPDevice sketch *(base class and ESPSimulated implemented, ESPDevice planned)*
+**→ [playback_device.md](playback_device.md)** — PlaybackDevice base class: state machine, method contracts, ESPSimulated implementation, and ESPDevice behavior *(implemented)*
 
-**→ [transport.md](transport.md)** — Device communication protocol: TCP commands, UDP frames, wire formats, custom clock sync *(TCP commands and UDP frames implemented; clock sync design-only)*
+**→ [transport.md](transport.md)** — Device communication protocol: TCP commands, UDP frames, wire formats, and controller-led clock sync *(implemented)*
 
 **→ [controller.md](controller.md)** — Controller architecture: config, identity model, frame assembly, reset-safe intervals, UDS client protocol, end-to-end flows *(partially implemented)*
 
@@ -224,10 +224,9 @@ The original phase breakdown is no longer a useful roadmap. The simulator/contro
 
 Current areas of work:
 
-- **ESP32 parity** — make real hardware follow the same discovery + configure + playback model as `network_sim`
 - **Web playback/program-control parity** — extend `elemctl web` beyond its current layout editing and device management APIs to support playback control (load, play, seek) from the browser
-- **Clock sync implementation** — move the documented custom sync protocol from design to code
 - **Audio-player integration** — implement the controller ↔ audio contract described in `controller.md`
+- **Physical validation and operator UX** — verify final strip output on real hardware and continue improving diagnostics / provisioning UX
 
 ---
 
