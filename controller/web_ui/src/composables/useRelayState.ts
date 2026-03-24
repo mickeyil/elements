@@ -25,7 +25,7 @@ export interface SnapshotDevice {
   connected?: boolean;
   last_seen?: number | null;
   clock_state?: string;
-  clock_drift_ms?: number | null;
+  clock_offset_ms?: number | null;
   clock_rtt_ms?: number | null;
   clock_last_sync_age_s?: number | null;
 }
@@ -166,7 +166,7 @@ export function useRelayState() {
     connected?: boolean;
     last_seen?: number | null;
     clock_state?: string;
-    clock_drift_ms?: number | null;
+    clock_offset_ms?: number | null;
     clock_rtt_ms?: number | null;
     clock_last_sync_age_s?: number | null;
   }): void {
@@ -179,7 +179,7 @@ export function useRelayState() {
     const hasLastSeen = Object.prototype.hasOwnProperty.call(msg, 'last_seen');
     const hasConnected = Object.prototype.hasOwnProperty.call(msg, 'connected');
     const hasClockState = Object.prototype.hasOwnProperty.call(msg, 'clock_state');
-    const hasClockDrift = Object.prototype.hasOwnProperty.call(msg, 'clock_drift_ms');
+    const hasClockOffset = Object.prototype.hasOwnProperty.call(msg, 'clock_offset_ms');
     const hasClockRtt = Object.prototype.hasOwnProperty.call(msg, 'clock_rtt_ms');
     const hasClockAge = Object.prototype.hasOwnProperty.call(msg, 'clock_last_sync_age_s');
     const currentSnapshot = snapshot.value;
@@ -197,7 +197,7 @@ export function useRelayState() {
           ...(hasConnected ? { connected } : {}),
           ...(hasLastSeen ? { last_seen: msg.last_seen ?? null } : {}),
           ...(hasClockState ? { clock_state: msg.clock_state } : {}),
-          ...(hasClockDrift ? { clock_drift_ms: msg.clock_drift_ms ?? null } : {}),
+          ...(hasClockOffset ? { clock_offset_ms: msg.clock_offset_ms ?? null } : {}),
           ...(hasClockRtt ? { clock_rtt_ms: msg.clock_rtt_ms ?? null } : {}),
           ...(hasClockAge ? { clock_last_sync_age_s: msg.clock_last_sync_age_s ?? null } : {}),
         };

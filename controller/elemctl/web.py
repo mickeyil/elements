@@ -471,7 +471,7 @@ class WebRelay:
                             dev['last_seen'] = msg.get('last_seen')
                         for key in (
                             'clock_state',
-                            'clock_drift_ms',
+                            'clock_offset_ms',
                             'clock_rtt_ms',
                             'clock_last_sync_age_s',
                         ):

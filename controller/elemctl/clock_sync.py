@@ -13,10 +13,13 @@ log = logging.getLogger(__name__)
 
 _STARTUP_PROBE_COUNT = 8
 _STARTUP_INTERVAL_NS = 1_000_000_000
-_STEADY_INTERVAL_NS = 15_000_000_000
+_STEADY_INTERVAL_NS = 5_000_000_000
+_CONFIRM_PROBE_COUNT = 2
+_CONFIRM_INTERVAL_NS = 250_000_000
 _RTT_MAX_US = 200_000
 _BEST_SAMPLE_COUNT = 3
 _SAMPLE_WINDOW = 8
+_CORRECTION_DEADBAND_US = 2_000
 
 
 @dataclass
@@ -37,23 +40,28 @@ class _SyncState:
     clock_state: str = 'pending'
     boot_token: int | None = None
     applied_offset_us: int | None = None
-    display_offset_us: int | None = None
+    latest_filtered_offset_us: int | None = None
+    residual_offset_us: int | None = None
     rtt_us: int | None = None
-    last_sync_ns: int | None = None
+    last_sample_ns: int | None = None
+    last_correction_ns: int | None = None
     next_probe_ns: int = 0
     startup_probes_remaining: int = _STARTUP_PROBE_COUNT
+    confirm_probes_remaining: int = 0
     samples: list[_SyncSample] = field(default_factory=list)
-    last_applied_seq: int = 0
+    last_emitted_status: tuple[object, ...] | None = None
 
 
 @dataclass
 class SyncUpdate:
     device_id: int
-    seq: int
-    boot_token: int
-    applied_offset_us: int
-    display_offset_us: int
-    rtt_us: int
+    clock_state: str
+    clock_offset_us: int | None
+    rtt_us: int | None
+    send_correction: bool
+    seq: int | None = None
+    boot_token: int | None = None
+    correction_offset_us: int | None = None
 
 
 class ClockSyncManager:
@@ -97,18 +105,30 @@ class ClockSyncManager:
 
     def clock_status(self, device_id: int, now_ns: int) -> dict[str, object]:
         state = self._states.get(device_id)
-        if state is None or state.applied_offset_us is None or state.last_sync_ns is None:
+        if state is None or state.clock_state == 'pending':
             return {
                 'clock_state': 'pending',
-                'clock_drift_ms': None,
+                'clock_offset_ms': None,
                 'clock_rtt_ms': None,
                 'clock_last_sync_age_s': None,
             }
+
+        clock_offset_ms = None
+        if (
+            state.clock_state == 'synced'
+            and state.residual_offset_us is not None
+        ):
+            clock_offset_ms = state.residual_offset_us / 1000.0
+
         return {
             'clock_state': state.clock_state,
-            'clock_drift_ms': (state.display_offset_us or 0) / 1000.0,
+            'clock_offset_ms': clock_offset_ms,
             'clock_rtt_ms': state.rtt_us / 1000.0 if state.rtt_us is not None else None,
-            'clock_last_sync_age_s': max(0.0, (now_ns - state.last_sync_ns) / 1e9),
+            'clock_last_sync_age_s': (
+                max(0.0, (now_ns - state.last_sample_ns) / 1e9)
+                if state.last_sample_ns is not None
+                else None
+            ),
         }
 
     def send_due_probes(self, targets: list[tuple[int, str]], now_ns: int | None = None) -> None:
@@ -138,7 +158,16 @@ class ClockSyncManager:
                 )
                 continue
             self._pending[seq] = _PendingProbe(device_id=device_id, t1_us=t1_us)
-            if state.startup_probes_remaining > 0:
+
+            if state.confirm_probes_remaining > 0:
+                state.confirm_probes_remaining -= 1
+                if state.confirm_probes_remaining > 0:
+                    state.next_probe_ns = now_ns + _CONFIRM_INTERVAL_NS
+                elif state.startup_probes_remaining > 0:
+                    state.next_probe_ns = now_ns + _STARTUP_INTERVAL_NS
+                else:
+                    state.next_probe_ns = now_ns + _STEADY_INTERVAL_NS
+            elif state.startup_probes_remaining > 0:
                 state.startup_probes_remaining -= 1
                 if state.startup_probes_remaining > 0:
                     state.next_probe_ns = now_ns + _STARTUP_INTERVAL_NS
@@ -172,13 +201,7 @@ class ClockSyncManager:
 
             if state.boot_token != boot_token:
                 state.boot_token = boot_token
-                state.applied_offset_us = None
-                state.display_offset_us = None
-                state.rtt_us = None
-                state.last_sync_ns = None
-                state.samples.clear()
-                state.last_applied_seq = 0
-                state.clock_state = 'pending'
+                self._reset_state_for_new_boot(state)
 
             t4_us = self._clock_ns() // 1000
             rtt_us = (t4_us - t1_us) - (t3_us - t2_us)
@@ -194,27 +217,49 @@ class ClockSyncManager:
             if filtered is None:
                 continue
             filtered_offset_us, filtered_rtt_us = filtered
-            state.last_sync_ns = self._clock_ns()
-            display_offset_us = 0 if state.applied_offset_us is None else filtered_offset_us - state.applied_offset_us
+            now_ns = self._clock_ns()
+            state.latest_filtered_offset_us = filtered_offset_us
+            state.rtt_us = filtered_rtt_us
+            state.last_sample_ns = now_ns
 
-            if (
-                state.clock_state != 'synced'
-                or state.applied_offset_us != filtered_offset_us
-                or state.rtt_us != filtered_rtt_us
-            ):
-                state.clock_state = 'synced'
-                state.applied_offset_us = filtered_offset_us
-                state.display_offset_us = display_offset_us
-                state.rtt_us = filtered_rtt_us
-                state.last_applied_seq = seq
-                updates.append(SyncUpdate(
-                    device_id=pending.device_id,
-                    seq=seq,
-                    boot_token=boot_token,
-                    applied_offset_us=filtered_offset_us,
-                    display_offset_us=display_offset_us,
-                    rtt_us=filtered_rtt_us,
-                ))
+            send_correction = False
+            correction_offset_us: int | None = None
+
+            if state.applied_offset_us is None:
+                send_correction = True
+                correction_offset_us = filtered_offset_us
+                state.applied_offset_us = correction_offset_us
+                state.residual_offset_us = None
+                state.clock_state = 'settling'
+                state.last_correction_ns = now_ns
+                self._schedule_confirm_probes(state, now_ns)
+            else:
+                residual_offset_us = filtered_offset_us - state.applied_offset_us
+                state.residual_offset_us = residual_offset_us
+                if abs(residual_offset_us) >= _CORRECTION_DEADBAND_US:
+                    send_correction = True
+                    correction_offset_us = filtered_offset_us
+                    state.applied_offset_us = correction_offset_us
+                    state.clock_state = 'settling'
+                    state.last_correction_ns = now_ns
+                    self._schedule_confirm_probes(state, now_ns)
+                else:
+                    state.clock_state = 'synced'
+
+            update = SyncUpdate(
+                device_id=pending.device_id,
+                clock_state=state.clock_state,
+                clock_offset_us=(
+                    state.residual_offset_us if state.clock_state == 'synced' else None
+                ),
+                rtt_us=state.rtt_us,
+                send_correction=send_correction,
+                seq=seq if send_correction else None,
+                boot_token=boot_token if send_correction else None,
+                correction_offset_us=correction_offset_us,
+            )
+            if self._should_emit_status_update(state, update):
+                updates.append(update)
 
         return updates
 
@@ -244,3 +289,40 @@ class ClockSyncManager:
         offsets = sorted(sample.offset_us for sample in best)
         rtts = sorted(sample.rtt_us for sample in best)
         return offsets[len(offsets) // 2], rtts[len(rtts) // 2]
+
+    @staticmethod
+    def _reset_state_for_new_boot(state: _SyncState) -> None:
+        state.applied_offset_us = None
+        state.latest_filtered_offset_us = None
+        state.residual_offset_us = None
+        state.rtt_us = None
+        state.last_sample_ns = None
+        state.last_correction_ns = None
+        state.next_probe_ns = 0
+        state.startup_probes_remaining = _STARTUP_PROBE_COUNT
+        state.confirm_probes_remaining = 0
+        state.samples.clear()
+        state.clock_state = 'pending'
+        state.last_emitted_status = None
+
+    @staticmethod
+    def _schedule_confirm_probes(state: _SyncState, now_ns: int) -> None:
+        state.confirm_probes_remaining = _CONFIRM_PROBE_COUNT
+        state.next_probe_ns = now_ns + _CONFIRM_INTERVAL_NS
+
+    @staticmethod
+    def _status_signature(update: SyncUpdate) -> tuple[object, ...]:
+        offset_bucket = None
+        if update.clock_offset_us is not None:
+            offset_bucket = int(round(update.clock_offset_us / 100.0))
+        rtt_bucket = None
+        if update.rtt_us is not None:
+            rtt_bucket = int(round(update.rtt_us / 100.0))
+        return (update.clock_state, offset_bucket, rtt_bucket)
+
+    def _should_emit_status_update(self, state: _SyncState, update: SyncUpdate) -> bool:
+        signature = self._status_signature(update)
+        if update.send_correction or signature != state.last_emitted_status:
+            state.last_emitted_status = signature
+            return True
+        return False

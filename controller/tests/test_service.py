@@ -291,7 +291,7 @@ class _FakeClockSyncManager:
         _ = now_ns
         return self.status_by_device.get(device_id, {
             'clock_state': 'pending',
-            'clock_drift_ms': None,
+            'clock_offset_ms': None,
             'clock_rtt_ms': None,
             'clock_last_sync_age_s': None,
         })
@@ -562,12 +562,12 @@ class TestSnapshotIdle:
         snap = svc.build_snapshot()
 
         assert snap['devices'][0]['clock_state'] == 'host'
-        assert snap['devices'][0]['clock_drift_ms'] == pytest.approx(0.0)
+        assert snap['devices'][0]['clock_offset_ms'] == pytest.approx(0.0)
         assert snap['devices'][0]['clock_rtt_ms'] == pytest.approx(0.0)
         assert snap['devices'][0]['clock_last_sync_age_s'] == pytest.approx(0.0)
 
         assert snap['devices'][1]['clock_state'] == 'pending'
-        assert snap['devices'][1]['clock_drift_ms'] is None
+        assert snap['devices'][1]['clock_offset_ms'] is None
         assert snap['devices'][1]['clock_rtt_ms'] is None
         assert snap['devices'][1]['clock_last_sync_age_s'] is None
 
@@ -578,7 +578,7 @@ class TestSnapshotIdle:
         fake_sync = _FakeClockSyncManager()
         fake_sync.status_by_device[1] = {
             'clock_state': 'synced',
-            'clock_drift_ms': 2.25,
+            'clock_offset_ms': 2.25,
             'clock_rtt_ms': 1.5,
             'clock_last_sync_age_s': 0.75,
         }
@@ -593,7 +593,7 @@ class TestSnapshotIdle:
         snap = svc.build_snapshot()
 
         assert snap['devices'][0]['clock_state'] == 'synced'
-        assert snap['devices'][0]['clock_drift_ms'] == pytest.approx(2.25)
+        assert snap['devices'][0]['clock_offset_ms'] == pytest.approx(2.25)
         assert snap['devices'][0]['clock_rtt_ms'] == pytest.approx(1.5)
         assert snap['devices'][0]['clock_last_sync_age_s'] == pytest.approx(0.75)
 
@@ -2899,16 +2899,18 @@ class TestPresenceEvents:
         fake_sync = _FakeClockSyncManager()
         fake_sync.status_by_device[1] = {
             'clock_state': 'synced',
-            'clock_drift_ms': 2.3,
+            'clock_offset_ms': 2.3,
             'clock_rtt_ms': 1.1,
             'clock_last_sync_age_s': 0.0,
         }
         fake_sync.pending_updates.append(types.SimpleNamespace(
             device_id=1,
+            clock_state='synced',
+            clock_offset_us=2300,
+            send_correction=True,
             seq=7,
             boot_token=1234,
-            applied_offset_us=2300,
-            display_offset_us=400,
+            correction_offset_us=2300,
             rtt_us=1100,
         ))
         config = Config(
@@ -2939,7 +2941,7 @@ class TestPresenceEvents:
         status_events = [e for e in events if e.get('event') == 'device_status']
         assert len(status_events) == 1
         assert status_events[0]['clock_state'] == 'synced'
-        assert status_events[0]['clock_drift_ms'] == pytest.approx(2.3)
+        assert status_events[0]['clock_offset_ms'] == pytest.approx(2.3)
         assert status_events[0]['clock_rtt_ms'] == pytest.approx(1.1)
         assert fake_device.sync_results == [(7, 1234, 2300)]
 

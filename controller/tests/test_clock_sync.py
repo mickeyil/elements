@@ -70,15 +70,46 @@ class TestClockSyncManager:
             updates = manager.poll()
             assert len(updates) == 1
             assert updates[0].device_id == 1
+            assert updates[0].clock_state == 'settling'
+            assert updates[0].clock_offset_us is None
+            assert updates[0].send_correction is True
             assert updates[0].boot_token == 55
-            assert updates[0].applied_offset_us == 100
-            assert updates[0].display_offset_us == 0
+            assert updates[0].correction_offset_us == 100
             assert updates[0].rtt_us == 1800
 
             status = manager.clock_status(1, fake_clock.now_ns)
-            assert status['clock_state'] == 'synced'
-            assert status['clock_drift_ms'] == pytest.approx(0.0)
+            assert status['clock_state'] == 'settling'
+            assert status['clock_offset_ms'] is None
             assert status['clock_rtt_ms'] == pytest.approx(1.8)
+
+            fake_clock.now_ns += 250_000_000
+            manager.send_due_probes([(1, '127.0.0.1')], fake_clock.now_ns)
+            seq, _boot_hint, t1_us = _recv_sync_req(udp)
+
+            t2_us = t1_us + 1_200
+            t3_us = t2_us + 200
+            t4_us = t1_us + 2_200
+            fake_clock.now_ns = t4_us * 1000
+            _send_sync_resp(
+                udp,
+                manager,
+                seq=seq,
+                boot_token=55,
+                t1_us=t1_us,
+                t2_us=t2_us,
+                t3_us=t3_us,
+            )
+
+            updates = manager.poll()
+            assert len(updates) == 1
+            assert updates[0].clock_state == 'synced'
+            assert updates[0].clock_offset_us == 100
+            assert updates[0].send_correction is False
+
+            status = manager.clock_status(1, fake_clock.now_ns)
+            assert status['clock_state'] == 'synced'
+            assert status['clock_offset_ms'] == pytest.approx(0.1)
+            assert status['clock_rtt_ms'] == pytest.approx(2.0)
         finally:
             manager.close()
             udp.close()
@@ -122,7 +153,7 @@ class TestClockSyncManager:
 
             status = manager.clock_status(1, fake_clock.now_ns)
             assert status['clock_state'] == 'synced'
-            assert status['clock_drift_ms'] == pytest.approx(0.2)
+            assert status['clock_offset_ms'] == pytest.approx(0.2)
         finally:
             manager.close()
             udp.close()

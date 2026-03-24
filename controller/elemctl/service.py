@@ -464,16 +464,35 @@ class ControllerService:
             if dc.device_type != 'esp32':
                 continue
             send_sync_result = getattr(dev, 'send_sync_result', None)
-            if callable(send_sync_result):
-                send_sync_result(update.seq, update.boot_token, update.applied_offset_us)
+            if (
+                callable(send_sync_result)
+                and update.send_correction
+                and update.seq is not None
+                and update.boot_token is not None
+                and update.correction_offset_us is not None
+            ):
+                send_sync_result(update.seq, update.boot_token, update.correction_offset_us)
             log.info(
-                'sync: device %d drift=%.1fms applied=%.1fms rtt=%.1fms boot_token=%u seq=%u',
+                'sync: device %d state=%s offset=%s correction=%s rtt=%s boot_token=%s seq=%s',
                 dc.device_id,
-                update.display_offset_us / 1000.0,
-                update.applied_offset_us / 1000.0,
-                update.rtt_us / 1000.0,
-                update.boot_token,
-                update.seq,
+                update.clock_state,
+                (
+                    f'{update.clock_offset_us / 1000.0:.1f}ms'
+                    if update.clock_offset_us is not None
+                    else 'n/a'
+                ),
+                (
+                    f'{update.correction_offset_us / 1000.0:.1f}ms'
+                    if update.correction_offset_us is not None
+                    else 'none'
+                ),
+                (
+                    f'{update.rtt_us / 1000.0:.1f}ms'
+                    if update.rtt_us is not None
+                    else 'n/a'
+                ),
+                update.boot_token if update.boot_token is not None else 'n/a',
+                update.seq if update.seq is not None else 'n/a',
             )
             json_msgs.append(encode_json(self._device_status_event(dc, dev, now_ns)))
 
@@ -526,7 +545,7 @@ class ControllerService:
         if dc.device_type == 'sim':
             return {
                 'clock_state': 'host',
-                'clock_drift_ms': 0.0,
+                'clock_offset_ms': 0.0,
                 'clock_rtt_ms': 0.0,
                 'clock_last_sync_age_s': 0.0,
             }
