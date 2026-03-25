@@ -4,7 +4,7 @@
 .travis.yml
 *__pycache__*
 *.swp
-src/secrets.h
+src/firmware/secrets.h
 *.vscode*
 bin/*
 .pio/

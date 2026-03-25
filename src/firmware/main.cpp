@@ -15,7 +15,7 @@
 #if __has_include("secrets.h")
 #include "secrets.h"
 #else
-#error "Missing src/secrets.h. Copy src/secrets.example.h and fill in local Wi-Fi credentials."
+#error "Missing src/firmware/secrets.h. Copy src/firmware/secrets.example.h and fill in local Wi-Fi credentials."
 #endif
 
 namespace {
