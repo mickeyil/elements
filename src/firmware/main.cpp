@@ -11,6 +11,7 @@
 #include "diagnostics.h"
 #include "esp_device.h"
 #include "runtime_state.h"
+#include "tcp_commands.h"
 #include "wire_constants.h"
 
 #if __has_include("secrets.h")
@@ -93,29 +94,6 @@ String make_device_uid()
         mac5
     );
     return String(buf);
-}
-
-bool send_all(WiFiClient& client, const uint8_t* data, size_t len)
-{
-    size_t offset = 0;
-    while (offset < len) {
-        const size_t written = client.write(data + offset, len - offset);
-        if (written == 0) {
-            return false;
-        }
-        offset += written;
-    }
-    return true;
-}
-
-void send_ack(WiFiClient& client, uint8_t status)
-{
-    uint8_t buf[6];
-    const uint32_t len = 2;
-    memcpy(buf, &len, sizeof(len));
-    buf[4] = kCmdAck;
-    buf[5] = status;
-    send_all(client, buf, sizeof(buf));
 }
 
 void clear_runtime_connection_state()
@@ -435,190 +413,13 @@ void maybe_reboot()
     ESP.restart();
 }
 
-void handle_cmd_configure(WiFiClient& client, const uint8_t* payload, uint32_t payload_len)
-{
-    if (g_link.configured) {
-        send_ack(client, 1);
-        return;
-    }
-    if (payload_len < 6) {
-        send_ack(client, 1);
-        return;
-    }
-
-    uint16_t device_id = 0;
-    uint16_t strip_length = 0;
-    uint16_t frame_port = 0;
-    memcpy(&device_id, payload, 2);
-    memcpy(&strip_length, payload + 2, 2);
-    memcpy(&frame_port, payload + 4, 2);
-
-    if (strip_length < 1 || strip_length > kMaxDevicePixels || frame_port < 1) {
-        send_ack(client, 1);
-        return;
-    }
-
-    g_device.reset(new ESPDevice(strip_length));
-    g_transport.device_id = device_id;
-    g_transport.frame_port = frame_port;
-    g_transport.controller_ip = client.remoteIP();
-    g_link.configured = true;
-    g_link.last_sync_seq = 0;
-    g_diag.configure_count += 1;
-
-    log_line(
-        "[tcp] configure ok device_id=%u strip_length=%u frame_port=%u controller=%s",
-        device_id,
-        strip_length,
-        frame_port,
-        g_transport.controller_ip.toString().c_str()
-    );
-    send_ack(client, 0);
-}
-
-void handle_cmd_sync_result(const uint8_t* payload, uint32_t payload_len)
-{
-    if (!g_link.configured || !g_device || payload_len < 14) {
-        return;
-    }
-
-    uint16_t seq = 0;
-    uint32_t boot_token = 0;
-    int64_t offset_us = 0;
-    memcpy(&seq, payload, 2);
-    memcpy(&boot_token, payload + 2, 4);
-    memcpy(&offset_us, payload + 6, 8);
-    if (boot_token != g_runtime.boot_token) {
-        log_line(
-            "[sync] stale result ignored seq=%u token=%lu current=%lu",
-            static_cast<unsigned>(seq),
-            static_cast<unsigned long>(boot_token),
-            static_cast<unsigned long>(g_runtime.boot_token)
-        );
-        return;
-    }
-    if (seq < g_link.last_sync_seq) {
-        log_line(
-            "[sync] old result ignored seq=%u last=%u",
-            static_cast<unsigned>(seq),
-            static_cast<unsigned>(g_link.last_sync_seq)
-        );
-        return;
-    }
-    g_link.last_sync_seq = seq;
-    g_device->handle_sync_result(offset_us);
-    log_line(
-        "[sync] result applied seq=%u offset_us=%lld",
-        static_cast<unsigned>(seq),
-        static_cast<long long>(offset_us)
-    );
-    log_line("[sync] ready for playback");
-}
-
-void handle_cmd_load(WiFiClient& client, const uint8_t* payload, uint32_t payload_len)
-{
-    if (!g_link.configured || !g_device) {
-        send_ack(client, 2);
-        return;
-    }
-    if (payload_len < 4) {
-        send_ack(client, 1);
-        return;
-    }
-
-    uint16_t device_id = 0;
-    uint16_t gen = 0;
-    memcpy(&device_id, payload, 2);
-    memcpy(&gen, payload + 2, 2);
-    g_transport.device_id = device_id;
-
-    const uint8_t* blob = payload + 4;
-    const size_t blob_len = payload_len - 4;
-    const bool ok = g_device->handle_load(blob, blob_len, gen);
-    g_diag.load_count += 1;
-    log_line(
-        "[tcp] load gen=%u bytes=%lu status=%s",
-        gen,
-        static_cast<unsigned long>(blob_len),
-        ok ? "ok" : "decode-failed"
-    );
-    send_ack(client, ok ? 0 : 1);
-}
-
-void handle_cmd_start(const uint8_t* payload, uint32_t payload_len)
-{
-    if (g_link.configured && g_device && payload_len >= 8) {
-        int64_t t0 = 0;
-        memcpy(&t0, payload, 8);
-        g_device->handle_start(t0);
-        g_diag.start_count += 1;
-        log_line("[tcp] start clock=%s", g_device->playback_uses_sync() ? "synced" : "local");
-    }
-}
-
-void handle_cmd_jump(const uint8_t* payload, uint32_t payload_len)
-{
-    if (g_link.configured && g_device && payload_len >= 14) {
-        int64_t t0 = 0;
-        float t_rel = 0.0f;
-        uint16_t gen = 0;
-        memcpy(&t0, payload, 8);
-        memcpy(&t_rel, payload + 8, 4);
-        memcpy(&gen, payload + 12, 2);
-        g_device->handle_jump(t0, t_rel, gen);
-        g_diag.jump_count += 1;
-        log_line(
-            "[tcp] jump t_rel=%.3f gen=%u clock=%s",
-            t_rel,
-            gen,
-            g_device->playback_uses_sync() ? "synced" : "local"
-        );
-    }
-}
-
-void handle_cmd_pause()
-{
-    if (g_link.configured && g_device) {
-        g_device->handle_pause();
-        g_diag.pause_count += 1;
-        log_line("[tcp] pause");
-    }
-}
-
-void handle_cmd_resume(const uint8_t* payload, uint32_t payload_len)
-{
-    if (g_link.configured && g_device && payload_len >= 8) {
-        int64_t t0 = 0;
-        memcpy(&t0, payload, 8);
-        g_device->handle_resume(t0);
-        g_diag.resume_count += 1;
-        log_line("[tcp] resume clock=%s", g_device->playback_uses_sync() ? "synced" : "local");
-    }
-}
-
-void handle_cmd_stop()
-{
-    if (g_link.configured && g_device) {
-        g_device->handle_stop();
-        g_diag.stop_count += 1;
-        log_line("[tcp] stop");
-    }
-}
-
-void handle_cmd_reboot(WiFiClient& client)
-{
-    log_line("[tcp] reboot requested");
-    send_ack(client, 0);
-    g_runtime.reboot_pending = true;
-    g_runtime.reboot_deadline_ms = millis() + kRebootDelayMs;
-    log_line("[sys] reboot scheduled");
-}
-
 int poll_tcp_commands()
 {
     if (!(g_tcp_client && g_tcp_client.connected())) {
         return -1;
     }
+
+    TcpCommandContext ctx{g_device, g_transport, g_link, g_diag, g_runtime};
 
     while (g_tcp_client.available() > 0) {
         if (g_link.tcp_buf.size() - g_link.tcp_buf_used < 512) {
@@ -669,39 +470,39 @@ int poll_tcp_commands()
 
         switch (cmd_type) {
             case kCmdConfigure:
-                handle_cmd_configure(g_tcp_client, payload, payload_len);
+                handle_cmd_configure(ctx, g_tcp_client, payload, payload_len);
                 break;
 
             case kCmdSyncResult:
-                handle_cmd_sync_result(payload, payload_len);
+                handle_cmd_sync_result(ctx, payload, payload_len);
                 break;
 
             case kCmdLoad:
-                handle_cmd_load(g_tcp_client, payload, payload_len);
+                handle_cmd_load(ctx, g_tcp_client, payload, payload_len);
                 break;
 
             case kCmdStart:
-                handle_cmd_start(payload, payload_len);
+                handle_cmd_start(ctx, payload, payload_len);
                 break;
 
             case kCmdJump:
-                handle_cmd_jump(payload, payload_len);
+                handle_cmd_jump(ctx, payload, payload_len);
                 break;
 
             case kCmdPause:
-                handle_cmd_pause();
+                handle_cmd_pause(ctx);
                 break;
 
             case kCmdResume:
-                handle_cmd_resume(payload, payload_len);
+                handle_cmd_resume(ctx, payload, payload_len);
                 break;
 
             case kCmdStop:
-                handle_cmd_stop();
+                handle_cmd_stop(ctx);
                 break;
 
             case kCmdReboot:
-                handle_cmd_reboot(g_tcp_client);
+                handle_cmd_reboot(ctx, g_tcp_client);
                 break;
 
             case kCmdDebugSeek:
