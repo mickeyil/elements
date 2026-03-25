@@ -25,8 +25,14 @@ valgrind --leak-check=full --error-exitcode=1 ./build/test_engine
 
 ### Python compiler
 ```bash
-# Activate the project venv first
-source ~/venvs/elements/bin/activate
+# Bootstrap/update the managed venv
+./elemctl setup
+
+# The repo-managed Python environment lives here
+source ~/.elements/venv/bin/activate
+
+# Or run directly without activating
+/home/mickey/.elements/venv/bin/python -m pytest
 
 # Run compiler tests
 cd compiler && python -m pytest
@@ -34,6 +40,11 @@ cd compiler && python -m pytest
 # Regenerate test fixture (blob used by C++ tests)
 python test/fixtures/generate.py
 ```
+
+### Python / elemctl bootstrap
+- Prefer `./elemctl ...` as the repo entrypoint on a clean install.
+- `elemctl` creates and maintains the managed venv at `~/.elements/venv`.
+- If you need to run Python tooling directly, use that venv's interpreter.
 
 ### ESP32 firmware (PlatformIO — not used for normal development)
 ```bash
