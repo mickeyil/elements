@@ -2863,14 +2863,15 @@ def _decode_json_msgs(json_msgs):
 
 
 class TestPresenceEvents:
-    def test_offline_to_online_emits_event(self):
+    def test_offline_to_online_emits_event(self, caplog):
         fakes = [_FakeDevice()]
         fakes[0].is_connected = False
         wall_clock = _FakeWallClock(10.5)
         svc, _ = _make_service(fake_devices=fakes, wall_clock=wall_clock)
 
         # tick_once probes and reconnects (ensure_connected sets is_connected=True)
-        json_msgs, _ = svc.tick_once()
+        with caplog.at_level(logging.INFO):
+            json_msgs, _ = svc.tick_once()
         events = _decode_json_msgs(json_msgs)
 
         status_events = [e for e in events if e.get('event') == 'device_status']
@@ -2887,6 +2888,7 @@ class TestPresenceEvents:
         snap = svc.build_snapshot()
         assert snap['online_count'] == snap['expected_count']
         assert snap['devices'][0]['last_seen'] == pytest.approx(10.5)
+        assert 'device connected: id=1 uid=sim-1 type=sim strip=test host=127.0.0.1 tcp=9000' in caplog.text
 
     def test_online_to_offline_emits_event(self):
         fakes = [_FakeDevice()]
@@ -2998,7 +3000,7 @@ class TestPresenceEvents:
         assert snap['devices'][0]['connected'] is True
         assert snap['devices'][0]['last_seen'] == pytest.approx(9.5)
 
-    def test_discovery_enabled_device_times_out_without_activity(self):
+    def test_discovery_enabled_device_times_out_without_activity(self, caplog):
         fakes = [_FakeDevice()]
         fakes[0].is_connected = True
         fakes[0].ensure_connected = lambda: False
@@ -3015,7 +3017,8 @@ class TestPresenceEvents:
 
         clock.now = 2_500_000_001
         wall_clock.now = 27.0
-        json_msgs, _ = svc.tick_once()
+        with caplog.at_level(logging.INFO):
+            json_msgs, _ = svc.tick_once()
         events = _decode_json_msgs(json_msgs)
 
         status_events = [e for e in events if e.get('event') == 'device_status']
@@ -3026,8 +3029,12 @@ class TestPresenceEvents:
         snap = svc.build_snapshot()
         assert snap['devices'][0]['connected'] is False
         assert snap['devices'][0]['last_seen'] == pytest.approx(20.0)
+        assert (
+            'device disconnected: id=1 uid=sim-1 type=sim strip=strip_a '
+            'reason=heartbeat timeout last_seen=20.000'
+        ) in caplog.text
 
-    def test_stale_disconnect_then_reconnect_emits_both_events_in_order(self):
+    def test_stale_disconnect_then_reconnect_emits_both_events_in_order(self, caplog):
         fakes = [_FakeDevice()]
         fakes[0].is_connected = True
         clock = _FakeClock()
@@ -3041,7 +3048,8 @@ class TestPresenceEvents:
 
         clock.now = 2_500_000_001
         wall_clock.now = 14.0
-        json_msgs, _ = svc.tick_once()
+        with caplog.at_level(logging.INFO):
+            json_msgs, _ = svc.tick_once()
         events = _decode_json_msgs(json_msgs)
 
         status_events = [e for e in events if e.get('event') == 'device_status']
@@ -3052,17 +3060,26 @@ class TestPresenceEvents:
         snap = svc.build_snapshot()
         assert snap['devices'][0]['connected'] is True
         assert snap['devices'][0]['last_seen'] == pytest.approx(14.0)
+        messages = [record.getMessage() for record in caplog.records if record.levelno == logging.INFO]
+        lifecycle = [msg for msg in messages if msg.startswith('device ')]
+        assert lifecycle == [
+            'device disconnected: id=1 uid=sim-1 type=sim strip=strip_a reason=heartbeat timeout last_seen=11.000',
+            'device connected: id=1 uid=sim-1 type=sim strip=strip_a',
+        ]
 
-    def test_no_event_when_stable(self):
+    def test_no_event_when_stable(self, caplog):
         svc, fakes = _make_service()
         # All connected at init, stays connected
-        json_msgs, _ = svc.tick_once()
-        events = _decode_json_msgs(json_msgs)
-        assert not any(e.get('event') == 'device_status' for e in events)
+        with caplog.at_level(logging.INFO):
+            json_msgs, _ = svc.tick_once()
+            events = _decode_json_msgs(json_msgs)
+            assert not any(e.get('event') == 'device_status' for e in events)
 
-        json_msgs, _ = svc.tick_once()
-        events = _decode_json_msgs(json_msgs)
-        assert not any(e.get('event') == 'device_status' for e in events)
+            json_msgs, _ = svc.tick_once()
+            events = _decode_json_msgs(json_msgs)
+            assert not any(e.get('event') == 'device_status' for e in events)
+        assert 'device connected:' not in caplog.text
+        assert 'device disconnected:' not in caplog.text
 
     def test_event_ordering_controller_first(self):
         fakes = [_FakeDevice()]

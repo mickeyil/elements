@@ -115,6 +115,7 @@ class ControllerService:
         self._prev_connected: dict[int, bool] = {}
         self._last_activity_ns: dict[int, int | None] = {}
         self._last_seen: dict[int, float | None] = {}
+        self._disconnect_reasons: dict[int, str | None] = {}
 
         animations_dir = resolve_runtime_path(
             None,
@@ -623,6 +624,44 @@ class ControllerService:
     def _iter_devices(self):
         return zip(self._device_configs, self._devices)
 
+    def _set_disconnect_reason(self, device_id: int, reason: str) -> None:
+        if device_id in self._disconnect_reasons:
+            self._disconnect_reasons[device_id] = reason
+
+    def _clear_disconnect_reason(self, device_id: int) -> None:
+        if device_id in self._disconnect_reasons:
+            self._disconnect_reasons[device_id] = None
+
+    @staticmethod
+    def _endpoint_for_log(dc: DeviceConfig, dev) -> tuple[str | None, int | None]:
+        host = getattr(dev, '_host', None) or dc.host or None
+        tcp_port = getattr(dev, '_tcp_port', None)
+        if tcp_port in (None, 0):
+            tcp_port = dc.tcp_port if dc.tcp_port not in (None, 0) else None
+        return host, tcp_port
+
+    def _log_connectivity_transition(self, dc: DeviceConfig, dev, connected: bool) -> None:
+        host, tcp_port = self._endpoint_for_log(dc, dev)
+        parts = [
+            f"device {'connected' if connected else 'disconnected'}:",
+            f'id={dc.device_id}',
+            f'uid={dc.device_uid}',
+            f'type={dc.device_type}',
+            f'strip={dc.strip_id}',
+        ]
+        if host is not None:
+            parts.append(f'host={host}')
+        if tcp_port is not None:
+            parts.append(f'tcp={tcp_port}')
+        if not connected:
+            reason = self._disconnect_reasons.get(dc.device_id)
+            if reason:
+                parts.append(f'reason={reason}')
+            last_seen = self._last_seen.get(dc.device_id)
+            if last_seen is not None:
+                parts.append(f'last_seen={last_seen:.3f}')
+        log.info(' '.join(parts))
+
     def _observe_device_activity(self, device_id: int, now_ns: int, now_wall: float) -> None:
         if device_id not in self._last_seen:
             return
@@ -638,9 +677,11 @@ class ControllerService:
         for dc, dev in self._iter_devices():
             connected = self._is_connected(dev)
             if connected != self._prev_connected[dc.device_id]:
+                self._log_connectivity_transition(dc, dev, connected)
                 self._prev_connected[dc.device_id] = connected
                 self._handle_clock_connectivity_transition(dc, connected)
                 json_msgs.append(encode_json(self._device_status_event(dc, dev, now_ns)))
+                self._clear_disconnect_reason(dc.device_id)
 
     def _expire_stale_devices(self, now_ns: int) -> None:
         if self._discovery is None:
@@ -653,6 +694,7 @@ class ControllerService:
                 continue
             if now_ns - last_activity_ns <= _LIVENESS_TIMEOUT_NS:
                 continue
+            self._set_disconnect_reason(dc.device_id, 'heartbeat timeout')
             self._disconnect_transport(dev)
 
     def _device_status_payload(self, dc: DeviceConfig, dev, now_ns: int) -> dict[str, object]:
@@ -1038,6 +1080,7 @@ class ControllerService:
         new_last_probe_ns: dict[int, int] = {}
         new_last_activity_ns: dict[int, int | None] = {}
         new_last_seen: dict[int, float | None] = {}
+        new_disconnect_reasons: dict[int, str | None] = {}
         now_ns = self._clock()
         now_wall = self._wall_clock()
 
@@ -1057,6 +1100,7 @@ class ControllerService:
                     preserved_last_seen = now_wall
                 new_last_activity_ns[dc.device_id] = preserved_last_activity
                 new_last_seen[dc.device_id] = preserved_last_seen
+                new_disconnect_reasons[dc.device_id] = None
                 continue
 
             if existing is not None:
@@ -1068,6 +1112,7 @@ class ControllerService:
             new_prev_connected[dc.device_id] = self._is_connected(dev)
             new_last_activity_ns[dc.device_id] = now_ns if self._is_connected(dev) else None
             new_last_seen[dc.device_id] = now_wall if self._is_connected(dev) else None
+            new_disconnect_reasons[dc.device_id] = None
 
         for _old_dc, dev in current_by_uid.values():
             dev.close()
@@ -1079,6 +1124,7 @@ class ControllerService:
         self._last_probe_ns = new_last_probe_ns
         self._last_activity_ns = new_last_activity_ns
         self._last_seen = new_last_seen
+        self._disconnect_reasons = new_disconnect_reasons
         self._uid_to_device = {
             dc.device_uid: (dc, dev)
             for dc, dev in zip(self._device_configs, self._devices)
