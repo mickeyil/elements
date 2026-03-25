@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <Esp.h>
+#include <Preferences.h>
 #include <WiFi.h>
 #include <WiFiUdp.h>
 #include <esp_system.h>
@@ -47,10 +48,13 @@ constexpr size_t TCP_MSG_MAX = 256 * 1024;
 
 constexpr uint32_t HELLO_INTERVAL_MS = 500;
 constexpr uint32_t STATUS_INTERVAL_MS = 5000;
+constexpr uint32_t WIFI_PREFERRED_TIMEOUT_MS = 4000;
 constexpr uint32_t WIFI_RETRY_INTERVAL_MS = 5000;
 constexpr uint32_t WIFI_CONNECT_TIMEOUT_MS = 12000;
 constexpr uint32_t LOOP_DELAY_MS = 1;
 constexpr uint32_t REBOOT_DELAY_MS = 100;
+constexpr char NVS_NAMESPACE[] = "elements";
+constexpr char NVS_LAST_GOOD_SSID_KEY[] = "last_ssid";
 
 struct TransportState {
     uint16_t device_id = 0;
@@ -62,6 +66,7 @@ WiFiServer g_tcp_server(TCP_PORT);
 WiFiClient g_tcp_client;
 WiFiUDP g_discovery_udp;
 WiFiUDP g_frame_udp;
+Preferences g_preferences;
 
 std::unique_ptr<ESPDevice> g_device;
 TransportState g_transport;
@@ -98,6 +103,8 @@ bool g_have_frame_stats = false;
 uint16_t g_last_frame_gen = 0;
 uint32_t g_last_frame_index = 0;
 float g_last_frame_t_rel = 0.0f;
+bool g_preferences_ready = false;
+String g_last_good_ssid;
 
 const char* yes_no(bool value)
 {
@@ -121,6 +128,33 @@ void log_line(const char* fmt, ...)
     vsnprintf(message, sizeof(message), fmt, ap);
     va_end(ap);
     Serial.println(message);
+}
+
+void load_last_good_ssid()
+{
+    if (!g_preferences_ready) {
+        return;
+    }
+    g_last_good_ssid = g_preferences.getString(NVS_LAST_GOOD_SSID_KEY, "");
+    if (g_last_good_ssid.length() > 0) {
+        log_line("[wifi] cached preferred ssid=%s", g_last_good_ssid.c_str());
+    }
+}
+
+void store_last_good_ssid(const char* ssid)
+{
+    if (!g_preferences_ready || ssid == nullptr || ssid[0] == '\0') {
+        return;
+    }
+    if (g_last_good_ssid == ssid) {
+        return;
+    }
+    if (!g_preferences.putString(NVS_LAST_GOOD_SSID_KEY, ssid)) {
+        log_line("[wifi] failed to cache preferred ssid=%s", ssid);
+        return;
+    }
+    g_last_good_ssid = ssid;
+    log_line("[wifi] cached preferred ssid=%s", g_last_good_ssid.c_str());
 }
 
 String make_device_uid()
@@ -241,17 +275,20 @@ bool connect_to_dev_wifi()
     WiFi.setAutoReconnect(true);
     WiFi.setSleep(false);
 
-    for (size_t i = 0; i < DEV_WIFI_CREDENTIAL_COUNT; ++i) {
-        const auto& cred = DEV_WIFI_CREDENTIALS[i];
+    auto try_credential = [](const DevWifiCredential& cred, uint32_t timeout_ms, bool preferred) {
         g_wifi_connect_attempts += 1;
-        log_line("[wifi] connecting to %s", cred.ssid);
+        if (preferred) {
+            log_line("[wifi] connecting to %s (preferred)", cred.ssid);
+        } else {
+            log_line("[wifi] connecting to %s", cred.ssid);
+        }
 
         WiFi.disconnect(true, true);
         delay(100);
         WiFi.begin(cred.ssid, cred.password);
 
         const uint32_t started = millis();
-        while (millis() - started < WIFI_CONNECT_TIMEOUT_MS) {
+        while (millis() - started < timeout_ms) {
             if (WiFi.status() == WL_CONNECTED) {
                 g_wifi_connect_successes += 1;
                 log_line(
@@ -259,12 +296,38 @@ bool connect_to_dev_wifi()
                     cred.ssid,
                     WiFi.localIP().toString().c_str()
                 );
+                store_last_good_ssid(cred.ssid);
                 return true;
             }
             delay(250);
         }
 
-        log_line("[wifi] failed to connect to %s", cred.ssid);
+        log_line(
+            "[wifi] failed to connect to %s after %lums",
+            cred.ssid,
+            static_cast<unsigned long>(millis() - started)
+        );
+        return false;
+    };
+
+    if (g_last_good_ssid.length() > 0) {
+        for (size_t i = 0; i < DEV_WIFI_CREDENTIAL_COUNT; ++i) {
+            const auto& cred = DEV_WIFI_CREDENTIALS[i];
+            if (g_last_good_ssid != cred.ssid) {
+                continue;
+            }
+            if (try_credential(cred, WIFI_PREFERRED_TIMEOUT_MS, true)) {
+                return true;
+            }
+            break;
+        }
+    }
+
+    for (size_t i = 0; i < DEV_WIFI_CREDENTIAL_COUNT; ++i) {
+        const auto& cred = DEV_WIFI_CREDENTIALS[i];
+        if (try_credential(cred, WIFI_CONNECT_TIMEOUT_MS, false)) {
+            return true;
+        }
     }
 
     return false;
@@ -800,6 +863,11 @@ void setup()
     log_line("[boot] build=%s %s", __DATE__, __TIME__);
     log_line("[boot] uid=%s", g_device_uid.c_str());
     log_line("[boot] boot_token=%lu", static_cast<unsigned long>(g_boot_token));
+    g_preferences_ready = g_preferences.begin(NVS_NAMESPACE, false);
+    if (!g_preferences_ready) {
+        log_line("[wifi] failed to open preferences namespace=%s", NVS_NAMESPACE);
+    }
+    load_last_good_ssid();
 
     connect_to_dev_wifi();
     ensure_network_services_started();
