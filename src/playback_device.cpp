@@ -135,6 +135,10 @@ void PlaybackDevice::handle_stop()
 
 void PlaybackDevice::handle_sync_result(int64_t offset)
 {
+    // Sync results encode the device clock offset relative to the controller:
+    //   offset = device_time - controller_time
+    // So converting a device monotonic timestamp into controller time requires
+    // subtracting the offset later in tick_once()/current_t_rel().
     _sync_offset = offset;
     _sync_valid = true;
 }
@@ -155,7 +159,7 @@ bool PlaybackDevice::tick_once()
 
     // PLAYING
     const int64_t effective_offset = _playback_uses_sync ? _sync_offset : 0;
-    float t_rel = (float)(now_mono() + effective_offset - _t0) / 1e6f;
+    float t_rel = (float)(now_mono() - effective_offset - _t0) / 1e6f;
     if (t_rel < 0.0f)
         return true;
 
@@ -192,7 +196,7 @@ float PlaybackDevice::current_t_rel() const
             return _paused_t_rel;
         case DeviceState::PLAYING: {
             const int64_t effective_offset = _playback_uses_sync ? _sync_offset : 0;
-            float t = (float)(now_mono() + effective_offset - _t0) / 1e6f;
+            float t = (float)(now_mono() - effective_offset - _t0) / 1e6f;
             if (t < 0.0f) return 0.0f;
             if (t > _duration) return _duration;
             return t;

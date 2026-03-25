@@ -48,7 +48,8 @@ public:
     void set_time(int64_t us) { _now = us; }
     int64_t now_mono() const override { return _now; }
 
-    void output_frame(float) override {}
+    int output_frame_count = 0;
+    void output_frame(float) override { output_frame_count++; }
 
 protected:
     int64_t playback_t0(int64_t controller_t0, float target_t_rel) const override {
@@ -478,16 +479,16 @@ TEST_CASE("Sync offset shifts computed t_rel", "[playback][sync]") {
     // Apply sync before playback starts so the next anchor uses controller time.
     dev.handle_sync_result(500'000);
 
-    dev.set_time(0);
+    // Start when controller t0=0 and the device clock is 0.5s ahead.
+    dev.set_time(500'000);
     dev.handle_start(0);
 
-    // With sync active, the controller/device shared clock is 0.5s ahead.
-    // So at wall clock 500'000, effective t_rel = (500'000 + 500'000 - 0) / 1e6 = 1.0
-    dev.set_time(500'000);
+    // At device time 1.5s, controller-relative playback time is 1.0s.
+    dev.set_time(1'500'000);
     CHECK(dev.current_t_rel() == Catch::Approx(1.0f));
 
-    // At wall clock 1'500'000, effective t_rel = (1'500'000 + 500'000 - 0)/1e6 = 2.0
-    dev.set_time(1'500'000);
+    // At device time 2.5s, controller-relative playback time is 2.0s.
+    dev.set_time(2'500'000);
     CHECK(dev.current_t_rel() == Catch::Approx(2.0f));
     CHECK(dev.tick_once());
 }
@@ -512,12 +513,31 @@ TEST_CASE("ESP-style synced start uses controller t0 without double-applying syn
     REQUIRE(dev.handle_load(blob.data(), blob.size(), 1));
 
     dev.handle_sync_result(500'000);
-    dev.set_time(0);
+    // Device clock is 0.5s ahead of the controller at start time.
+    dev.set_time(1'500'000);
+    dev.handle_start(1'000'000);
+    CHECK(dev.playback_uses_sync());
+
+    dev.set_time(1'600'000);
+    CHECK(dev.current_t_rel() == Catch::Approx(0.1f));
+}
+
+TEST_CASE("ESP-style synced start emits frames when device clock lags controller", "[playback][sync]") {
+    TestEspStyleDevice dev(5);
+    auto blob = load_blob(SHIFT_FIXTURE);
+    REQUIRE(dev.handle_load(blob.data(), blob.size(), 1));
+
+    // Device clock is 0.5s behind the controller, which matches the real
+    // boot-time shape where the host monotonic clock is far ahead of the ESP.
+    dev.handle_sync_result(-500'000);
+    dev.set_time(500'000);
     dev.handle_start(1'000'000);
     CHECK(dev.playback_uses_sync());
 
     dev.set_time(600'000);
     CHECK(dev.current_t_rel() == Catch::Approx(0.1f));
+    CHECK(dev.tick_once());
+    CHECK(dev.output_frame_count == 1);
 }
 
 TEST_CASE("ESP-style sync does not re-anchor an already-playing local session", "[playback][sync]") {

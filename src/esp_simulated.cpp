@@ -63,7 +63,8 @@ void ESPSimulated::debug_seek(float target_t_rel)
     _frame_index++;
 
     if (_state == DeviceState::PLAYING) {
-        _t0 = now_mono() + _sync_offset - (int64_t)(target_t_rel * 1e6f);
+        const int64_t effective_offset = _playback_uses_sync ? _sync_offset : 0;
+        _t0 = now_mono() - effective_offset - (int64_t)(target_t_rel * 1e6f);
     } else {
         _paused_t_rel = target_t_rel;
         _state = DeviceState::PAUSED;
