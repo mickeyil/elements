@@ -12,11 +12,11 @@ Three active transport paths per device:
 | **UDP outbound** | device → controller | RGB frames | Fire-and-forget streaming; dropped frame = client skips one update |
 | **UDP discovery / sync** | bidirectional | HELLO packets, discovery rejects, SYNC_REQ, SYNC_RESP | Lightweight presence plus low-latency sync probes on one known UDP port |
 
-Each device listens on one TCP port. The controller maintains a persistent TCP connection to each device. Devices send UDP frames to the controller's `frame_port`. Discovery HELLO packets are broadcast on `discovery_port` (default 6040) — the controller uses these to resolve live `(host, tcp_port)` for known `device_uid` values. Duplicate UIDs from different addresses are rejected via a discovery reject packet.
+Each device listens on one TCP port. The controller maintains a persistent TCP connection to each device. Devices send UDP frames to the controller's `frame_port`. Discovery HELLO packets are broadcast on `discovery_port` (default 6040) both before and during an active TCP session — the controller uses these to resolve live `(host, tcp_port)` for known `device_uid` values and as an active proof-of-life signal. Duplicate UIDs from different addresses are rejected via a discovery reject packet.
 
 Clock sync probes reuse that same discovery UDP port. The controller sends `SYNC_REQ` to the device's discovery port, and the device replies with `SYNC_RESP` from the same socket. There is no separate advertised sync port in the current implementation.
 
-`network_sim` keeps sending HELLO packets even after a TCP connection is established, so the controller can rediscover the device after reconnects without requiring a restart.
+Network runtimes keep sending HELLO packets even after a TCP connection is established, so the controller can rediscover a device after reconnects without requiring a restart and can mark a device disconnected quickly if HELLO/ACK/frame/sync traffic stops arriving. With discovery enabled, the controller's default liveness window is about 2 seconds.
 
 ---
 

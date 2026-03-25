@@ -52,6 +52,7 @@ from .uds_wire import PROTOCOL_VERSION, encode_frame, encode_json
 log = logging.getLogger(__name__)
 
 _PROBE_INTERVAL_NS = 1_000_000_000  # 1 second
+_LIVENESS_TIMEOUT_NS = 2_000_000_000  # 2 seconds
 _DEVICE_UID_RE = re.compile(r'^[A-Za-z0-9._:-]+$')
 _STRIP_ID_RE = re.compile(r'^[A-Za-z0-9_-]+$')
 _ESP32_CANONICAL_UID_RE = re.compile(r'^esp32-([0-9a-f]{12})$')
@@ -112,6 +113,7 @@ class ControllerService:
 
         # Baseline connectivity for transition detection
         self._prev_connected: dict[int, bool] = {}
+        self._last_activity_ns: dict[int, int | None] = {}
         self._last_seen: dict[int, float | None] = {}
 
         animations_dir = resolve_runtime_path(
@@ -427,12 +429,18 @@ class ControllerService:
         Returns (json_messages, frame_messages) as pre-encoded UDS bytes.
         """
         self._receiver.poll()
-        self._poll_discovery()
         now_ns = self._clock()
+        now_wall = self._wall_clock()
+        self._poll_discovery(now_ns, now_wall)
         if self._controller.state == ControllerState.IDLE:
             for dev in self._devices:
                 dev.tick_once(now_ns)
         self._controller.tick_once()
+        self._observe_device_activity_from_runtime(now_ns, now_wall)
+        sync_updates = self._clock_sync.poll()
+        for update in sync_updates:
+            if update.clock_state != 'stale':
+                self._observe_device_activity(update.device_id, now_ns, now_wall)
 
         # Drain controller events first (before probing mutates connectivity)
         json_msgs: list[bytes] = []
@@ -441,22 +449,17 @@ class ControllerService:
         for evt in self._controller.drain_events():
             json_msgs.append(encode_json(self._event_to_dict(evt)))
 
-        self._probe_devices(ignore_throttle=False, sync_baseline=False)
+        self._expire_stale_devices(now_ns)
+        self._append_connectivity_transitions(json_msgs, now_ns)
+        self._probe_devices(
+            ignore_throttle=False,
+            sync_baseline=False,
+            now_ns=now_ns,
+            now_wall=now_wall,
+        )
+        self._append_connectivity_transitions(json_msgs, now_ns)
 
-        now_wall = self._wall_clock()
-        for dc, dev in self._iter_devices():
-            if self._is_connected(dev):
-                self._last_seen[dc.device_id] = now_wall
-
-        # Detect connectivity transitions
-        for dc, dev in self._iter_devices():
-            connected = self._is_connected(dev)
-            if connected != self._prev_connected[dc.device_id]:
-                self._prev_connected[dc.device_id] = connected
-                self._handle_clock_connectivity_transition(dc, connected)
-                json_msgs.append(encode_json(self._device_status_event(dc, dev, now_ns)))
-
-        for update in self._clock_sync.poll():
+        for update in sync_updates:
             entry = self._device_id_to_device.get(update.device_id)
             if entry is None:
                 continue
@@ -597,8 +600,60 @@ class ControllerService:
     def _is_connected(dev) -> bool:
         return getattr(dev, 'is_connected', True)
 
+    @staticmethod
+    def _consume_activity_observed(dev) -> bool:
+        consume_activity = getattr(dev, 'consume_activity_observed', None)
+        if callable(consume_activity):
+            return bool(consume_activity())
+        return False
+
+    @staticmethod
+    def _disconnect_transport(dev) -> None:
+        disconnect_transport = getattr(dev, 'disconnect_transport', None)
+        if callable(disconnect_transport):
+            disconnect_transport()
+            return
+        if hasattr(dev, 'is_connected'):
+            setattr(dev, 'is_connected', False)
+            return
+        close = getattr(dev, 'close', None)
+        if callable(close):
+            close()
+
     def _iter_devices(self):
         return zip(self._device_configs, self._devices)
+
+    def _observe_device_activity(self, device_id: int, now_ns: int, now_wall: float) -> None:
+        if device_id not in self._last_seen:
+            return
+        self._last_activity_ns[device_id] = now_ns
+        self._last_seen[device_id] = now_wall
+
+    def _observe_device_activity_from_runtime(self, now_ns: int, now_wall: float) -> None:
+        for dc, dev in self._iter_devices():
+            if self._consume_activity_observed(dev):
+                self._observe_device_activity(dc.device_id, now_ns, now_wall)
+
+    def _append_connectivity_transitions(self, json_msgs: list[bytes], now_ns: int) -> None:
+        for dc, dev in self._iter_devices():
+            connected = self._is_connected(dev)
+            if connected != self._prev_connected[dc.device_id]:
+                self._prev_connected[dc.device_id] = connected
+                self._handle_clock_connectivity_transition(dc, connected)
+                json_msgs.append(encode_json(self._device_status_event(dc, dev, now_ns)))
+
+    def _expire_stale_devices(self, now_ns: int) -> None:
+        if self._discovery is None:
+            return
+        for dc, dev in self._iter_devices():
+            if not self._is_connected(dev):
+                continue
+            last_activity_ns = self._last_activity_ns.get(dc.device_id)
+            if last_activity_ns is None:
+                continue
+            if now_ns - last_activity_ns <= _LIVENESS_TIMEOUT_NS:
+                continue
+            self._disconnect_transport(dev)
 
     def _device_status_payload(self, dc: DeviceConfig, dev, now_ns: int) -> dict[str, object]:
         return {
@@ -794,7 +849,7 @@ class ControllerService:
             )
             return False
 
-    def _poll_discovery(self) -> None:
+    def _poll_discovery(self, now_ns: int, now_wall: float) -> None:
         if self._discovery is None:
             return
         self._discovery.poll()
@@ -824,6 +879,7 @@ class ControllerService:
                     uid, host, tcp_port,
                 )
                 continue
+            self._observe_device_activity(dc.device_id, now_ns, now_wall)
             self._discovery_cache[uid] = (host, tcp_port)
             changed = dev.update_address(host, tcp_port)
             if changed:
@@ -834,18 +890,31 @@ class ControllerService:
                 # Clear probe throttle so _probe_devices() connects immediately
                 self._last_probe_ns.pop(dc.device_id, None)
 
-    def _probe_devices(self, *, ignore_throttle: bool, sync_baseline: bool) -> None:
-        now = self._clock()
+    def _probe_devices(
+        self,
+        *,
+        ignore_throttle: bool,
+        sync_baseline: bool,
+        now_ns: int | None = None,
+        now_wall: float | None = None,
+    ) -> None:
+        if now_ns is None:
+            now_ns = self._clock()
+        if now_wall is None:
+            now_wall = self._wall_clock()
         for dc, dev in self._iter_devices():
             if self._is_connected(dev):
                 continue
             if not ignore_throttle:
                 last = self._last_probe_ns.get(dc.device_id, 0)
-                if now - last < _PROBE_INTERVAL_NS:
+                if now_ns - last < _PROBE_INTERVAL_NS:
                     continue
-                self._last_probe_ns[dc.device_id] = now
+                self._last_probe_ns[dc.device_id] = now_ns
             dev.ensure_connected()
             connected = self._is_connected(dev)
+            if connected:
+                self._observe_device_activity(dc.device_id, now_ns, now_wall)
+                self._consume_activity_observed(dev)
             if sync_baseline:
                 self._prev_connected[dc.device_id] = connected
                 self._handle_clock_connectivity_transition(dc, connected)
@@ -967,7 +1036,9 @@ class ControllerService:
         new_devices: list[object] = []
         new_prev_connected: dict[int, bool] = {}
         new_last_probe_ns: dict[int, int] = {}
+        new_last_activity_ns: dict[int, int | None] = {}
         new_last_seen: dict[int, float | None] = {}
+        now_ns = self._clock()
         now_wall = self._wall_clock()
 
         for dc in new_config.devices:
@@ -978,9 +1049,13 @@ class ControllerService:
                 new_prev_connected[dc.device_id] = self._is_connected(dev)
                 if old_dc.device_id in self._last_probe_ns:
                     new_last_probe_ns[dc.device_id] = self._last_probe_ns[old_dc.device_id]
+                preserved_last_activity = self._last_activity_ns.get(old_dc.device_id)
+                if preserved_last_activity is None and self._is_connected(dev):
+                    preserved_last_activity = now_ns
                 preserved_last_seen = self._last_seen.get(old_dc.device_id)
                 if preserved_last_seen is None and self._is_connected(dev):
                     preserved_last_seen = now_wall
+                new_last_activity_ns[dc.device_id] = preserved_last_activity
                 new_last_seen[dc.device_id] = preserved_last_seen
                 continue
 
@@ -991,6 +1066,7 @@ class ControllerService:
             dev = self._make_device(dc)
             new_devices.append(dev)
             new_prev_connected[dc.device_id] = self._is_connected(dev)
+            new_last_activity_ns[dc.device_id] = now_ns if self._is_connected(dev) else None
             new_last_seen[dc.device_id] = now_wall if self._is_connected(dev) else None
 
         for _old_dc, dev in current_by_uid.values():
@@ -1001,6 +1077,7 @@ class ControllerService:
         self._devices = new_devices
         self._prev_connected = new_prev_connected
         self._last_probe_ns = new_last_probe_ns
+        self._last_activity_ns = new_last_activity_ns
         self._last_seen = new_last_seen
         self._uid_to_device = {
             dc.device_uid: (dc, dev)

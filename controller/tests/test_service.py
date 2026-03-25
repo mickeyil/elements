@@ -66,6 +66,9 @@ class _FakeDevice:
     def __init__(self):
         self._state = DeviceState.IDLE
         self._t0_ns = 0
+        self._activity_observed = False
+        self._host = ''
+        self._tcp_port = 0
         self.is_connected = True
         self.ensure_connected_calls = 0
         self.load_calls = 0
@@ -145,6 +148,21 @@ class _FakeDevice:
         self.is_connected = True
         return True
 
+    def update_address(self, host, tcp_port):
+        changed = host != self._host or tcp_port != self._tcp_port
+        self._host = host
+        self._tcp_port = tcp_port
+        return changed
+
+    def consume_activity_observed(self):
+        seen = self._activity_observed
+        self._activity_observed = False
+        return seen
+
+    def disconnect_transport(self):
+        self._activity_observed = False
+        self.is_connected = False
+
     def close(self):
         self._state = DeviceState.IDLE
 
@@ -182,6 +200,7 @@ class _FrameProducingDevice(_FakeDevice):
             t_rel=t_rel,
             rgb=rgb,
         ))
+        self._activity_observed = True
         self._frame_index += 1
 
     def drain_frames(self):
@@ -2945,7 +2964,7 @@ class TestPresenceEvents:
         assert status_events[0]['clock_rtt_ms'] == pytest.approx(1.1)
         assert fake_device.sync_results == [(7, 1234, 2300)]
 
-    def test_last_seen_updates_each_tick_while_connected(self):
+    def test_last_seen_stays_stable_without_activity(self):
         wall_clock = _FakeWallClock(5.0)
         svc, _ = _make_service(wall_clock=wall_clock)
 
@@ -2954,7 +2973,85 @@ class TestPresenceEvents:
 
         wall_clock.now = 8.25
         svc.tick_once()
-        assert svc.build_snapshot()['devices'][0]['last_seen'] == pytest.approx(8.25)
+        assert svc.build_snapshot()['devices'][0]['last_seen'] == pytest.approx(5.0)
+
+    def test_discovery_hello_refreshes_last_seen(self):
+        fakes = [_FakeDevice()]
+        fakes[0].is_connected = True
+        clock = _FakeClock()
+        wall_clock = _FakeWallClock(5.0)
+        svc, _, disc = _make_discovery_service(
+            n_devices=1,
+            fake_devices=fakes,
+            clock=clock,
+            wall_clock=wall_clock,
+        )
+
+        assert svc.build_snapshot()['devices'][0]['last_seen'] == pytest.approx(5.0)
+
+        clock.now = 1_000_000_000
+        wall_clock.now = 9.5
+        disc.inject('sim-1', '10.0.0.1', 8001)
+        svc.tick_once()
+
+        snap = svc.build_snapshot()
+        assert snap['devices'][0]['connected'] is True
+        assert snap['devices'][0]['last_seen'] == pytest.approx(9.5)
+
+    def test_discovery_enabled_device_times_out_without_activity(self):
+        fakes = [_FakeDevice()]
+        fakes[0].is_connected = True
+        fakes[0].ensure_connected = lambda: False
+        clock = _FakeClock()
+        wall_clock = _FakeWallClock(20.0)
+        svc, _, _ = _make_discovery_service(
+            n_devices=1,
+            fake_devices=fakes,
+            clock=clock,
+            wall_clock=wall_clock,
+        )
+
+        assert svc.build_snapshot()['devices'][0]['last_seen'] == pytest.approx(20.0)
+
+        clock.now = 2_500_000_001
+        wall_clock.now = 27.0
+        json_msgs, _ = svc.tick_once()
+        events = _decode_json_msgs(json_msgs)
+
+        status_events = [e for e in events if e.get('event') == 'device_status']
+        assert len(status_events) == 1
+        assert status_events[0]['connected'] is False
+        assert status_events[0]['last_seen'] == pytest.approx(20.0)
+
+        snap = svc.build_snapshot()
+        assert snap['devices'][0]['connected'] is False
+        assert snap['devices'][0]['last_seen'] == pytest.approx(20.0)
+
+    def test_stale_disconnect_then_reconnect_emits_both_events_in_order(self):
+        fakes = [_FakeDevice()]
+        fakes[0].is_connected = True
+        clock = _FakeClock()
+        wall_clock = _FakeWallClock(11.0)
+        svc, _, _ = _make_discovery_service(
+            n_devices=1,
+            fake_devices=fakes,
+            clock=clock,
+            wall_clock=wall_clock,
+        )
+
+        clock.now = 2_500_000_001
+        wall_clock.now = 14.0
+        json_msgs, _ = svc.tick_once()
+        events = _decode_json_msgs(json_msgs)
+
+        status_events = [e for e in events if e.get('event') == 'device_status']
+        assert [evt['connected'] for evt in status_events] == [False, True]
+        assert status_events[0]['last_seen'] == pytest.approx(11.0)
+        assert status_events[1]['last_seen'] == pytest.approx(14.0)
+
+        snap = svc.build_snapshot()
+        assert snap['devices'][0]['connected'] is True
+        assert snap['devices'][0]['last_seen'] == pytest.approx(14.0)
 
     def test_no_event_when_stable(self):
         svc, fakes = _make_service()
@@ -3471,7 +3568,13 @@ class _FakeDiscovery:
         pass
 
 
-def _make_discovery_service(n_devices=2, fake_devices=None):
+def _make_discovery_service(
+    n_devices=2,
+    fake_devices=None,
+    clock=None,
+    wall_clock=None,
+    clock_sync_factory=None,
+):
     """Create a ControllerService with discovery enabled."""
     devices = []
     for i in range(n_devices):
@@ -3491,12 +3594,18 @@ def _make_discovery_service(n_devices=2, fake_devices=None):
             fd.is_connected = False
             fd.ensure_connected = lambda: False
     fake_disc = _FakeDiscovery(9999)
-    svc = ControllerService(
-        config,
+    kwargs = dict(
         receiver_factory=_NoopReceiver,
         device_factory=_make_fake_factory(fake_devices),
         discovery_factory=lambda port: fake_disc,
     )
+    if clock is not None:
+        kwargs['clock'] = clock
+    if wall_clock is not None:
+        kwargs['wall_clock'] = wall_clock
+    if clock_sync_factory is not None:
+        kwargs['clock_sync_factory'] = clock_sync_factory
+    svc = ControllerService(config, **kwargs)
     return svc, fake_devices, fake_disc
 
 

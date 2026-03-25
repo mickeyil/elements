@@ -392,9 +392,6 @@ void maybe_send_hello()
     if (!g_server_started || !g_wifi_ready || g_duplicate_uid_rejected) {
         return;
     }
-    if (g_tcp_client && g_tcp_client.connected()) {
-        return;
-    }
 
     const uint32_t now = millis();
     if (g_last_hello_ms == 0 || now - g_last_hello_ms >= HELLO_INTERVAL_MS) {

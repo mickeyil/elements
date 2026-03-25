@@ -89,6 +89,8 @@ The config is the inventory of known devices and strip topology. Discovery fills
 
 Discovery does not add unknown devices automatically. Unknown `device_uid` values are ignored until they are added to config.
 
+When discovery is enabled, the controller also treats accepted HELLO packets as the primary idle heartbeat for device presence. Connectivity is deadline-based: a connected device stays online only while the controller continues to observe recent HELLO, TCP ACK, UDP frame, or clock-sync traffic. If those signals stop for roughly 2 seconds, the controller marks the device disconnected and preserves the prior `last_seen` timestamp.
+
 ---
 
 ## Program manifest and identity
@@ -510,7 +512,7 @@ Note: `session_start` is emitted with `epoch: 0`. A `state` event with `state: "
 - **`session_start`** — new session loaded, includes all metadata for seek bar and frame slicing
 - **`state`** — playback state change (playing, paused, ended), includes current epoch
 - **`loop`** — program looped back to t=0, includes new epoch
-- **`device_status`** — device lifecycle change (connected/disconnected). State-oriented — UI updates indicators
+- **`device_status`** — device lifecycle change (connected/disconnected). `last_seen` is the wall-clock time of the last positive proof-of-life from that device, not "the last service tick while the socket still looked open". State-oriented — UI updates indicators
 - **`programs_updated`** — program library changed by `rescan_programs` or `publish_program`. Carries the full current catalog so writer and observer clients can refresh without polling
 - **`error`** — async failure. Human-oriented — UI shows notification/log. Current implementation emits a single human-readable `message` field.
 
@@ -621,7 +623,7 @@ With an empty install, the same snapshot shape is used with `expected_count: 0`,
 | `programs` | Current controller-owned program catalog. Each entry includes `program_id`, extracted `beat`, extracted `duration`, `error` if the file is present but not loadable, and optionally `strips` (list of strip names statically extracted from the DSL source; omitted when extraction is not possible) |
 | `session` | Active session if any — includes all metadata needed to render the seek bar and receive frames. `null` if no program is loaded |
 | `session.strips` | Canonical logical strip order and lengths — defines how program frame payloads are sliced. Each strip may also include `targets`, the currently bound physical devices. |
-| `devices` | Per-device status: `device_id` (numeric), `device_uid` (stable identity), `strip`, `length`, `device_type` (`"sim"` or `"esp32"`), `connected` (boolean) |
+| `devices` | Per-device status: `device_id` (numeric), `device_uid` (stable identity), `strip`, `length`, `device_type` (`"sim"` or `"esp32"`), `connected` (boolean), `last_seen` (wall-clock timestamp of the last positive proof-of-life) |
 
 After the snapshot, the controller sends incremental events (`state`, `session_start`, etc.) and program frames as they occur. The snapshot is never re-sent mid-connection — it's a connect-time-only message.
 

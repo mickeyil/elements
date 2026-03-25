@@ -844,6 +844,44 @@ class TestErrors:
         dev.tick_once(_sec(1.0))
         assert not dev._connected
 
+    def test_ack_receipt_sets_activity_flag(self, endpoint, receiver):
+        dev = _make_device(endpoint, receiver)
+        assert _load_device(dev, endpoint)
+
+        assert dev.consume_activity_observed() is True
+        assert dev.consume_activity_observed() is False
+
+    def test_send_only_does_not_set_activity_flag(self, endpoint, receiver):
+        dev = _make_device(endpoint, receiver)
+        assert _load_device(dev, endpoint)
+        assert dev.consume_activity_observed() is True
+
+        dev.start(_sec(0.0))
+
+        assert dev.consume_activity_observed() is False
+
+    def test_udp_frame_receipt_sets_activity_flag(self, endpoint, receiver):
+        dev = _make_device(endpoint, receiver)
+        assert _load_device(dev, endpoint)
+        assert dev.consume_activity_observed() is True
+
+        endpoint.send_udp_frame(
+            device_id=1,
+            gen=dev._gen,
+            frame_index=0,
+            t_rel=0.25,
+            rgb=b'\x01\x02\x03' * 5,
+        )
+
+        import time
+        time.sleep(0.05)
+
+        receiver.poll()
+        dev.tick_once(_sec(1.0))
+
+        assert dev.consume_activity_observed() is True
+        assert dev.consume_activity_observed() is False
+
     def test_malformed_udp_dropped(self, endpoint, receiver):
         dev = _make_device(endpoint, receiver, device_id=1)
         assert _load_device(dev, endpoint)

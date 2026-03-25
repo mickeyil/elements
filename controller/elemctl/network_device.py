@@ -69,6 +69,7 @@ class NetworkDevice:
         self._last_frame_gen: int | None = None
         self._last_frame_log_ns = 0
         self._log_next_frame = False
+        self._activity_observed = False
 
         udp_receiver.register_device(device_id)
 
@@ -174,6 +175,7 @@ class NetworkDevice:
         frames = self._udp_receiver.drain(self._device_id)
         self._frames.extend(frames)
         if frames:
+            self._activity_observed = True
             last = frames[-1]
             self._frames_received_total += len(frames)
             self._frames_received_since_log += len(frames)
@@ -271,6 +273,16 @@ class NetworkDevice:
         self._disconnect()
         self._state = DeviceState.IDLE
 
+    def disconnect_transport(self) -> None:
+        """Drop the live transport without resetting playback state."""
+        self._disconnect()
+
+    def consume_activity_observed(self) -> bool:
+        """Return whether recent device-originated traffic was observed."""
+        seen = self._activity_observed
+        self._activity_observed = False
+        return seen
+
     # ------------------------------------------------------------------
     # Private
     # ------------------------------------------------------------------
@@ -310,6 +322,7 @@ class NetworkDevice:
 
     def _disconnect(self) -> None:
         self._connected = False
+        self._activity_observed = False
         if self._sock is not None:
             try:
                 self._sock.close()
@@ -341,6 +354,7 @@ class NetworkDevice:
                     self._disconnect()
                     return None
                 buf.extend(chunk)
+                self._activity_observed = True
         except OSError as e:
             log.warning('recv from %s:%d failed: %s', self._host, self._tcp_port, e)
             self._disconnect()
