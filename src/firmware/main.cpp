@@ -3,11 +3,11 @@
 #include <Preferences.h>
 #include <WiFi.h>
 #include <WiFiUdp.h>
-#include <esp_system.h>
 
 #include <memory>
 
 #include "controller_runtime.h"
+#include "device_identity.h"
 #include "discovery_runtime.h"
 #include "diagnostics.h"
 #include "esp_device.h"
@@ -30,39 +30,6 @@ WifiState g_wifi;
 ControllerLinkState g_link(kTcpBufInitial);
 DiagnosticsState g_diag;
 RuntimeState g_runtime;
-
-uint32_t make_boot_token()
-{
-    uint32_t token = esp_random();
-    if (token == 0) {
-        token = 1;
-    }
-    return token;
-}
-
-String make_device_uid()
-{
-    const uint64_t chip_id = ESP.getEfuseMac();
-    const uint8_t mac0 = static_cast<uint8_t>((chip_id >> 0) & 0xff);
-    const uint8_t mac1 = static_cast<uint8_t>((chip_id >> 8) & 0xff);
-    const uint8_t mac2 = static_cast<uint8_t>((chip_id >> 16) & 0xff);
-    const uint8_t mac3 = static_cast<uint8_t>((chip_id >> 24) & 0xff);
-    const uint8_t mac4 = static_cast<uint8_t>((chip_id >> 32) & 0xff);
-    const uint8_t mac5 = static_cast<uint8_t>((chip_id >> 40) & 0xff);
-    char buf[32];
-    snprintf(
-        buf,
-        sizeof(buf),
-        "esp32-%02x%02x%02x%02x%02x%02x",
-        mac0,
-        mac1,
-        mac2,
-        mac3,
-        mac4,
-        mac5
-    );
-    return String(buf);
-}
 
 ControllerRuntimeContext make_controller_context()
 {
@@ -114,14 +81,18 @@ void setup()
     Serial.begin(115200);
     delay(200);
 
+    // Initialize the local device identity before any networked work starts.
     esp_device_init_leds();
     g_runtime.device_uid = make_device_uid();
     g_runtime.boot_token = make_boot_token();
 
+    // Emit boot details early so reconnect and provisioning issues are visible.
     log_line("[boot] elements esp32 runtime starting");
     log_line("[boot] build=%s %s", __DATE__, __TIME__);
     log_line("[boot] uid=%s", g_runtime.device_uid.c_str());
     log_line("[boot] boot_token=%lu", static_cast<unsigned long>(g_runtime.boot_token));
+
+    // Restore Wi-Fi preferences and bring up the controller-facing endpoints.
     g_wifi.preferences_ready = g_preferences.begin(kNvsNamespace, false);
     if (!g_wifi.preferences_ready) {
         log_line("[wifi] failed to open preferences namespace=%s", kNvsNamespace);
@@ -130,34 +101,21 @@ void setup()
 
     wifi_connect_to_dev_wifi(g_wifi, g_diag, g_preferences);
     wifi_ensure_network_services_started(
-        g_wifi,
-        g_diag,
-        g_tcp_server,
-        g_discovery_udp,
-        g_runtime.device_uid
-    );
+        g_wifi, g_diag, g_tcp_server, g_discovery_udp, g_runtime.device_uid);
 }
 
 void loop()
 {
     auto controller_ctx = make_controller_context();
 
+    // Keep Wi-Fi up and the TCP/UDP service endpoints bound.
     wifi_ensure_connected(
-        g_wifi,
-        g_diag,
-        g_preferences,
-        g_tcp_server,
-        g_discovery_udp,
-        g_runtime.device_uid,
-        handle_network_down
-    );
+        g_wifi, g_diag, g_preferences, g_tcp_server,
+        g_discovery_udp, g_runtime.device_uid, handle_network_down);
     wifi_ensure_network_services_started(
-        g_wifi,
-        g_diag,
-        g_tcp_server,
-        g_discovery_udp,
-        g_runtime.device_uid
-    );
+        g_wifi, g_diag, g_tcp_server, g_discovery_udp, g_runtime.device_uid);
+
+    // Service controller commands before advancing playback.
     controller_accept(controller_ctx);
 
     if (g_tcp_client && g_tcp_client.connected()) {
@@ -168,11 +126,13 @@ void loop()
         controller_handle_disconnect(controller_ctx);
     }
 
+    // Advance playback and flush any generated frames back to the controller.
     if (g_link.configured && g_device) {
         g_device->tick_once();
         controller_send_frames(controller_ctx);
     }
 
+    // Handle discovery, sync, periodic status, and deferred reboot work.
     discovery_maybe_send_hello(g_discovery_udp, g_wifi, g_diag, g_runtime);
     if (g_wifi.server_started) {
         discovery_poll_udp(g_discovery_udp, g_wifi, g_diag, g_runtime);
