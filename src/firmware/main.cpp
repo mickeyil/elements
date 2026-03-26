@@ -12,6 +12,7 @@
 #include "esp_device.h"
 #include "runtime_state.h"
 #include "tcp_commands.h"
+#include "wifi_runtime.h"
 #include "wire_constants.h"
 
 #if __has_include("secrets.h")
@@ -43,33 +44,6 @@ uint32_t make_boot_token()
         token = 1;
     }
     return token;
-}
-
-void load_last_good_ssid()
-{
-    if (!g_wifi.preferences_ready) {
-        return;
-    }
-    g_wifi.last_good_ssid = g_preferences.getString(kNvsLastGoodSsidKey, "");
-    if (g_wifi.last_good_ssid.length() > 0) {
-        log_line("[wifi] cached preferred ssid=%s", g_wifi.last_good_ssid.c_str());
-    }
-}
-
-void store_last_good_ssid(const char* ssid)
-{
-    if (!g_wifi.preferences_ready || ssid == nullptr || ssid[0] == '\0') {
-        return;
-    }
-    if (g_wifi.last_good_ssid == ssid) {
-        return;
-    }
-    if (!g_preferences.putString(kNvsLastGoodSsidKey, ssid)) {
-        log_line("[wifi] failed to cache preferred ssid=%s", ssid);
-        return;
-    }
-    g_wifi.last_good_ssid = ssid;
-    log_line("[wifi] cached preferred ssid=%s", g_wifi.last_good_ssid.c_str());
 }
 
 String make_device_uid()
@@ -127,129 +101,9 @@ void disconnect_controller(const char* reason = nullptr)
     clear_runtime_connection_state();
 }
 
-void stop_network_services()
+void handle_network_down()
 {
     disconnect_controller("network down");
-    g_tcp_server.end();
-    g_discovery_udp.stop();
-    g_wifi.server_started = false;
-}
-
-void ensure_network_services_started()
-{
-    if (g_wifi.server_started || WiFi.status() != WL_CONNECTED) {
-        return;
-    }
-
-    if (!g_discovery_udp.begin(kDiscoveryPort)) {
-        log_line("[wifi] failed to bind discovery UDP port %u", kDiscoveryPort);
-        return;
-    }
-
-    g_tcp_server.begin();
-    g_tcp_server.setNoDelay(true);
-    g_wifi.server_started = true;
-    g_diag.last_hello_ms = 0;
-
-    log_line(
-        "[net] uid=%s ip=%s tcp=%u discovery=%u",
-        g_runtime.device_uid.c_str(),
-        WiFi.localIP().toString().c_str(),
-        kTcpPort,
-        kDiscoveryPort
-    );
-}
-
-bool connect_to_dev_wifi()
-{
-    WiFi.mode(WIFI_STA);
-    WiFi.persistent(false);
-    WiFi.setAutoReconnect(true);
-    WiFi.setSleep(false);
-
-    auto try_credential = [](const DevWifiCredential& cred, uint32_t timeout_ms, bool preferred) {
-        g_diag.wifi_connect_attempts += 1;
-        if (preferred) {
-            log_line("[wifi] connecting to %s (preferred)", cred.ssid);
-        } else {
-            log_line("[wifi] connecting to %s", cred.ssid);
-        }
-
-        WiFi.disconnect(true, true);
-        delay(100);
-        WiFi.begin(cred.ssid, cred.password);
-
-        const uint32_t started = millis();
-        while (millis() - started < timeout_ms) {
-            if (WiFi.status() == WL_CONNECTED) {
-                g_diag.wifi_connect_successes += 1;
-                log_line(
-                    "[wifi] connected to %s ip=%s",
-                    cred.ssid,
-                    WiFi.localIP().toString().c_str()
-                );
-                store_last_good_ssid(cred.ssid);
-                return true;
-            }
-            delay(250);
-        }
-
-        log_line(
-            "[wifi] failed to connect to %s after %lums",
-            cred.ssid,
-            static_cast<unsigned long>(millis() - started)
-        );
-        return false;
-    };
-
-    if (g_wifi.last_good_ssid.length() > 0) {
-        for (size_t i = 0; i < DEV_WIFI_CREDENTIAL_COUNT; ++i) {
-            const auto& cred = DEV_WIFI_CREDENTIALS[i];
-            if (g_wifi.last_good_ssid != cred.ssid) {
-                continue;
-            }
-            if (try_credential(cred, kWifiPreferredTimeoutMs, true)) {
-                return true;
-            }
-            break;
-        }
-    }
-
-    for (size_t i = 0; i < DEV_WIFI_CREDENTIAL_COUNT; ++i) {
-        const auto& cred = DEV_WIFI_CREDENTIALS[i];
-        if (try_credential(cred, kWifiConnectTimeoutMs, false)) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-void ensure_wifi_connected()
-{
-    const wl_status_t status = WiFi.status();
-    if (status == WL_CONNECTED) {
-        if (!g_wifi.ready) {
-            g_wifi.ready = true;
-            g_wifi.last_retry_ms = 0;
-            ensure_network_services_started();
-        }
-        return;
-    }
-
-    if (g_wifi.ready) {
-        log_line("[wifi] disconnected");
-        g_wifi.ready = false;
-        stop_network_services();
-    }
-
-    const uint32_t now = millis();
-    if (g_wifi.last_retry_ms != 0 && now - g_wifi.last_retry_ms < kWifiRetryIntervalMs) {
-        return;
-    }
-
-    g_wifi.last_retry_ms = now;
-    connect_to_dev_wifi();
 }
 
 void send_discovery_hello()
@@ -574,16 +428,36 @@ void setup()
     if (!g_wifi.preferences_ready) {
         log_line("[wifi] failed to open preferences namespace=%s", kNvsNamespace);
     }
-    load_last_good_ssid();
+    wifi_load_last_good_ssid(g_wifi, g_preferences);
 
-    connect_to_dev_wifi();
-    ensure_network_services_started();
+    wifi_connect_to_dev_wifi(g_wifi, g_diag, g_preferences);
+    wifi_ensure_network_services_started(
+        g_wifi,
+        g_diag,
+        g_tcp_server,
+        g_discovery_udp,
+        g_runtime.device_uid
+    );
 }
 
 void loop()
 {
-    ensure_wifi_connected();
-    ensure_network_services_started();
+    wifi_ensure_connected(
+        g_wifi,
+        g_diag,
+        g_preferences,
+        g_tcp_server,
+        g_discovery_udp,
+        g_runtime.device_uid,
+        handle_network_down
+    );
+    wifi_ensure_network_services_started(
+        g_wifi,
+        g_diag,
+        g_tcp_server,
+        g_discovery_udp,
+        g_runtime.device_uid
+    );
     accept_controller();
 
     if (g_tcp_client && g_tcp_client.connected()) {
