@@ -5,14 +5,13 @@
 #include <WiFiUdp.h>
 #include <esp_system.h>
 
-#include <cstring>
 #include <memory>
 
+#include "controller_runtime.h"
 #include "discovery_runtime.h"
 #include "diagnostics.h"
 #include "esp_device.h"
 #include "runtime_state.h"
-#include "tcp_commands.h"
 #include "wifi_runtime.h"
 #include "wire_constants.h"
 
@@ -65,76 +64,25 @@ String make_device_uid()
     return String(buf);
 }
 
-void clear_runtime_connection_state()
+ControllerRuntimeContext make_controller_context()
 {
-    g_link.configured = false;
-    g_transport.device_id = 0;
-    g_transport.frame_port = 0;
-    g_transport.controller_ip = IPAddress();
-    g_link.tcp_buf_used = 0;
-    g_link.last_sync_seq = 0;
-    if (g_device) {
-        g_device->clear_sync();
-    }
-}
-
-void disconnect_controller(const char* reason = nullptr)
-{
-    if (g_link.connected) {
-        g_diag.tcp_disconnect_count += 1;
-        if (reason && reason[0] != '\0') {
-            log_line("[tcp] controller disconnected: %s", reason);
-        } else {
-            log_line("[tcp] controller disconnected");
-        }
-    }
-
-    if (g_tcp_client) {
-        g_tcp_client.stop();
-    }
-    g_link.connected = false;
-    clear_runtime_connection_state();
+    return ControllerRuntimeContext{
+        g_tcp_server,
+        g_tcp_client,
+        g_frame_udp,
+        g_device,
+        g_transport,
+        g_wifi,
+        g_link,
+        g_diag,
+        g_runtime,
+    };
 }
 
 void handle_network_down()
 {
-    disconnect_controller("network down");
-}
-
-void accept_controller()
-{
-    if (!g_wifi.server_started) {
-        return;
-    }
-
-    WiFiClient incoming = g_tcp_server.available();
-    if (!incoming) {
-        return;
-    }
-
-    if (g_tcp_client && g_tcp_client.connected()) {
-        log_line(
-            "[tcp] rejecting extra controller connection from %s",
-            incoming.remoteIP().toString().c_str()
-        );
-        incoming.stop();
-        return;
-    }
-
-    g_tcp_client = incoming;
-    g_tcp_client.setNoDelay(true);
-    clear_runtime_connection_state();
-    g_link.connected = true;
-    g_diag.tcp_accept_count += 1;
-    log_line("[tcp] controller connected: %s", g_tcp_client.remoteIP().toString().c_str());
-}
-
-void handle_disconnect()
-{
-    if (!g_link.connected || g_tcp_client.connected()) {
-        return;
-    }
-    disconnect_controller();
+    auto ctx = make_controller_context();
+    controller_disconnect(ctx, "network down");
 }
 
 void maybe_reboot()
@@ -153,151 +101,10 @@ void maybe_reboot()
         g_tcp_client.flush();
         delay(20);
     }
-    disconnect_controller("reboot");
+    auto ctx = make_controller_context();
+    controller_disconnect(ctx, "reboot");
     delay(20);
     ESP.restart();
-}
-
-int poll_tcp_commands()
-{
-    if (!(g_tcp_client && g_tcp_client.connected())) {
-        return -1;
-    }
-
-    TcpCommandContext ctx{g_device, g_transport, g_link, g_diag, g_runtime};
-
-    while (g_tcp_client.available() > 0) {
-        if (g_link.tcp_buf.size() - g_link.tcp_buf_used < 512) {
-            g_link.tcp_buf.resize(g_link.tcp_buf.size() * 2);
-        }
-
-        const int n = g_tcp_client.read(
-            g_link.tcp_buf.data() + g_link.tcp_buf_used,
-            g_link.tcp_buf.size() - g_link.tcp_buf_used
-        );
-        if (n < 0) {
-            return -1;
-        }
-        if (n == 0) {
-            break;
-        }
-        g_link.tcp_buf_used += static_cast<size_t>(n);
-    }
-
-    while (g_link.tcp_buf_used >= 4) {
-        uint32_t msg_len = 0;
-        memcpy(&msg_len, g_link.tcp_buf.data(), sizeof(msg_len));
-
-        if (msg_len < 1) {
-            g_link.tcp_buf_used -= 4;
-            if (g_link.tcp_buf_used > 0) {
-                memmove(g_link.tcp_buf.data(), g_link.tcp_buf.data() + 4, g_link.tcp_buf_used);
-            }
-            continue;
-        }
-
-        if (msg_len > kTcpMsgMax) {
-            log_line("[tcp] message too large (%lu), dropping client", static_cast<unsigned long>(msg_len));
-            return -1;
-        }
-
-        const size_t total = 4 + static_cast<size_t>(msg_len);
-        if (g_link.tcp_buf_used < total) {
-            if (g_link.tcp_buf.size() < total) {
-                g_link.tcp_buf.resize(total);
-            }
-            break;
-        }
-
-        const uint8_t cmd_type = g_link.tcp_buf[4];
-        const uint8_t* payload = g_link.tcp_buf.data() + 5;
-        const uint32_t payload_len = msg_len - 1;
-
-        switch (cmd_type) {
-            case kCmdConfigure:
-                handle_cmd_configure(ctx, g_tcp_client, payload, payload_len);
-                break;
-
-            case kCmdSyncResult:
-                handle_cmd_sync_result(ctx, payload, payload_len);
-                break;
-
-            case kCmdLoad:
-                handle_cmd_load(ctx, g_tcp_client, payload, payload_len);
-                break;
-
-            case kCmdStart:
-                handle_cmd_start(ctx, payload, payload_len);
-                break;
-
-            case kCmdJump:
-                handle_cmd_jump(ctx, payload, payload_len);
-                break;
-
-            case kCmdPause:
-                handle_cmd_pause(ctx);
-                break;
-
-            case kCmdResume:
-                handle_cmd_resume(ctx, payload, payload_len);
-                break;
-
-            case kCmdStop:
-                handle_cmd_stop(ctx);
-                break;
-
-            case kCmdReboot:
-                handle_cmd_reboot(ctx, g_tcp_client);
-                break;
-
-            case kCmdDebugSeek:
-            case kCmdDebugStep:
-                log_line("[tcp] ignored debug-only command 0x%02x", cmd_type);
-                break;
-
-            default:
-                log_line("[tcp] ignored unknown command 0x%02x", cmd_type);
-                break;
-        }
-
-        g_link.tcp_buf_used -= total;
-        if (g_link.tcp_buf_used > 0) {
-            memmove(g_link.tcp_buf.data(), g_link.tcp_buf.data() + total, g_link.tcp_buf_used);
-        }
-    }
-
-    return 0;
-}
-
-void send_frames()
-{
-    if (!g_link.configured || !g_device || g_transport.frame_port == 0) {
-        return;
-    }
-
-    auto frames = g_device->drain_frames();
-    for (auto& frame : frames) {
-        uint8_t header[12];
-        memcpy(header, &g_transport.device_id, 2);
-        memcpy(header + 2, &frame.gen, 2);
-        memcpy(header + 4, &frame.frame_index, 4);
-        memcpy(header + 8, &frame.t_rel, 4);
-
-        if (!g_frame_udp.beginPacket(g_transport.controller_ip, g_transport.frame_port)) {
-            continue;
-        }
-        g_frame_udp.write(header, sizeof(header));
-        if (!frame.rgb.empty()) {
-            g_frame_udp.write(frame.rgb.data(), frame.rgb.size());
-        }
-        if (g_frame_udp.endPacket() != 0) {
-            g_diag.frames_sent += 1;
-            g_diag.have_frame_stats = true;
-            g_diag.last_frame_gen = frame.gen;
-            g_diag.last_frame_index = frame.frame_index;
-            g_diag.last_frame_t_rel = frame.t_rel;
-        }
-    }
 }
 
 }  // namespace
@@ -333,6 +140,8 @@ void setup()
 
 void loop()
 {
+    auto controller_ctx = make_controller_context();
+
     wifi_ensure_connected(
         g_wifi,
         g_diag,
@@ -349,19 +158,19 @@ void loop()
         g_discovery_udp,
         g_runtime.device_uid
     );
-    accept_controller();
+    controller_accept(controller_ctx);
 
     if (g_tcp_client && g_tcp_client.connected()) {
-        if (poll_tcp_commands() < 0) {
-            disconnect_controller("socket error");
+        if (controller_poll_tcp_commands(controller_ctx) < 0) {
+            controller_disconnect(controller_ctx, "socket error");
         }
     } else {
-        handle_disconnect();
+        controller_handle_disconnect(controller_ctx);
     }
 
     if (g_link.configured && g_device) {
         g_device->tick_once();
-        send_frames();
+        controller_send_frames(controller_ctx);
     }
 
     discovery_maybe_send_hello(g_discovery_udp, g_wifi, g_diag, g_runtime);
