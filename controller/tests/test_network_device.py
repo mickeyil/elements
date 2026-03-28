@@ -12,7 +12,9 @@ from elemctl.network_device import NetworkDevice
 from elemctl.udp_receiver import UdpFrameReceiver
 from elemctl.wire import (
     CMD_ACK,
+    CMD_ATTACH,
     CMD_CONFIGURE,
+    CMD_SET_PROFILE,
     CMD_DEBUG_SEEK,
     CMD_JUMP,
     CMD_LOAD,
@@ -26,9 +28,12 @@ from elemctl.wire import (
     SYNC_REQ_STRUCT,
     SYNC_RESP,
     UDP_FRAME_HEADER,
+    encode_attach,
     encode_configure,
     encode_load,
+    encode_load_v1,
     encode_reboot,
+    encode_set_profile,
     encode_sync_req,
     encode_start,
     parse_ack,
@@ -153,20 +158,41 @@ def _make_device(
     )
 
 
-def _expect_configure(
+def _expect_set_profile(
+    endpoint: FakeEndpoint,
+    *,
+    strip_length: int = 5,
+) -> None:
+    cmd_type, payload = endpoint.read_command()
+    assert cmd_type == CMD_SET_PROFILE
+    (got_strip_length,) = struct.unpack_from('<H', payload, 0)
+    assert got_strip_length == strip_length
+    endpoint.send_ack(0)
+
+
+def _expect_attach(
+    endpoint: FakeEndpoint,
+    *,
+    device_id: int = 1,
+    frame_port: int,
+) -> None:
+    cmd_type, payload = endpoint.read_command()
+    assert cmd_type == CMD_ATTACH
+    got_device_id, got_frame_port = struct.unpack_from('<HH', payload, 0)
+    assert got_device_id == device_id
+    assert got_frame_port == frame_port
+    endpoint.send_ack(0)
+
+
+def _expect_handshake(
     endpoint: FakeEndpoint,
     *,
     device_id: int = 1,
     strip_length: int = 5,
     frame_port: int,
 ) -> None:
-    cmd_type, payload = endpoint.read_command()
-    assert cmd_type == CMD_CONFIGURE
-    got_device_id, got_strip_length, got_frame_port = struct.unpack_from('<HHH', payload, 0)
-    assert got_device_id == device_id
-    assert got_strip_length == strip_length
-    assert got_frame_port == frame_port
-    endpoint.send_ack(0)
+    _expect_set_profile(endpoint, strip_length=strip_length)
+    _expect_attach(endpoint, device_id=device_id, frame_port=frame_port)
 
 
 def _load_device(dev: NetworkDevice, ep: FakeEndpoint, gen: int = 1) -> bool:
@@ -175,7 +201,7 @@ def _load_device(dev: NetworkDevice, ep: FakeEndpoint, gen: int = 1) -> bool:
 
     def server_side():
         ep.accept()
-        _expect_configure(
+        _expect_handshake(
             ep,
             device_id=dev._device_id,
             strip_length=dev._strip_length,
@@ -202,6 +228,23 @@ def _sec(t: float) -> int:
 
 
 class TestWireEncoding:
+    def test_encode_set_profile(self):
+        msg = encode_set_profile(strip_length=10)
+        length = struct.unpack_from('<I', msg, 0)[0]
+        assert length == 3
+        assert msg[4] == CMD_SET_PROFILE
+        (strip_length,) = struct.unpack_from('<H', msg, 5)
+        assert strip_length == 10
+
+    def test_encode_attach(self):
+        msg = encode_attach(device_id=5, frame_port=9002)
+        length = struct.unpack_from('<I', msg, 0)[0]
+        assert length == 5
+        assert msg[4] == CMD_ATTACH
+        device_id, frame_port = struct.unpack_from('<HH', msg, 5)
+        assert device_id == 5
+        assert frame_port == 9002
+
     def test_encode_configure(self):
         msg = encode_configure(device_id=5, strip_length=10, frame_port=9002)
         length = struct.unpack_from('<I', msg, 0)[0]
@@ -213,10 +256,19 @@ class TestWireEncoding:
         assert frame_port == 9002
 
     def test_encode_load(self):
-        msg = encode_load(device_id=5, gen=2, blob=b'\xAA\xBB')
+        msg = encode_load(gen=2, blob=b'\xAA\xBB')
         # length prefix
         length = struct.unpack_from('<I', msg, 0)[0]
-        assert length == 1 + 2 + 2 + 2  # type + device_id + gen + blob
+        assert length == 1 + 2 + 2  # type + gen + blob
+        assert msg[4] == CMD_LOAD
+        (gen,) = struct.unpack_from('<H', msg, 5)
+        assert gen == 2
+        assert msg[7:] == b'\xAA\xBB'
+
+    def test_encode_load_v1(self):
+        msg = encode_load_v1(device_id=5, gen=2, blob=b'\xAA\xBB')
+        length = struct.unpack_from('<I', msg, 0)[0]
+        assert length == 1 + 2 + 2 + 2
         assert msg[4] == CMD_LOAD
         device_id, gen = struct.unpack_from('<HH', msg, 5)
         assert device_id == 5
@@ -291,12 +343,12 @@ class TestConnection:
         assert dev._connected
         assert dev.state() == DeviceState.LOADED
 
-    def test_connect_sends_configure_first(self, endpoint, receiver):
+    def test_connect_sends_profile_then_attach(self, endpoint, receiver):
         dev = _make_device(endpoint, receiver, device_id=7, strip_length=9)
 
         def server_side():
             endpoint.accept()
-            _expect_configure(
+            _expect_handshake(
                 endpoint,
                 device_id=7,
                 strip_length=9,
@@ -324,13 +376,29 @@ class TestConnection:
         assert not dev.load(b'\x00', 1)
         assert dev.state() == DeviceState.IDLE
 
-    def test_configure_ack_failure_disconnects(self, endpoint, receiver):
+    def test_set_profile_ack_failure_disconnects(self, endpoint, receiver):
         dev = _make_device(endpoint, receiver)
 
         def server_side():
             endpoint.accept()
             cmd_type, _payload = endpoint.read_command()
-            assert cmd_type == CMD_CONFIGURE
+            assert cmd_type == CMD_SET_PROFILE
+            endpoint.send_ack(1)
+
+        t = threading.Thread(target=server_side, daemon=True)
+        t.start()
+        assert not dev.load(b'\x00', 1)
+        t.join(timeout=3.0)
+        assert not dev._connected
+
+    def test_attach_ack_failure_disconnects(self, endpoint, receiver):
+        dev = _make_device(endpoint, receiver)
+
+        def server_side():
+            endpoint.accept()
+            _expect_set_profile(endpoint, strip_length=dev._strip_length)
+            cmd_type, _payload = endpoint.read_command()
+            assert cmd_type == CMD_ATTACH
             endpoint.send_ack(1)
 
         t = threading.Thread(target=server_side, daemon=True)
@@ -364,7 +432,7 @@ class TestConnection:
 
         def server_side():
             endpoint.accept()
-            _expect_configure(
+            _expect_handshake(
                 endpoint,
                 device_id=dev._device_id,
                 strip_length=dev._strip_length,
@@ -400,7 +468,7 @@ class TestLoad:
 
         def server_side():
             endpoint.accept()
-            _expect_configure(
+            _expect_handshake(
                 endpoint,
                 device_id=7,
                 strip_length=5,
@@ -408,10 +476,9 @@ class TestLoad:
             )
             cmd_type, payload = endpoint.read_command()
             assert cmd_type == CMD_LOAD
-            device_id, gen = struct.unpack_from('<HH', payload, 0)
-            assert device_id == 7
+            (gen,) = struct.unpack_from('<H', payload, 0)
             assert gen == 3
-            assert payload[4:] == b'\xDE\xAD'
+            assert payload[2:] == b'\xDE\xAD'
             endpoint.send_ack(0)
 
         t = threading.Thread(target=server_side, daemon=True)
@@ -427,7 +494,7 @@ class TestLoad:
 
         def server_side():
             endpoint.accept()
-            _expect_configure(
+            _expect_handshake(
                 endpoint,
                 device_id=1,
                 strip_length=5,
@@ -455,7 +522,7 @@ class TestReboot:
 
         def server_side():
             endpoint.accept()
-            _expect_configure(
+            _expect_handshake(
                 endpoint,
                 device_id=dev._device_id,
                 strip_length=dev._strip_length,
@@ -476,7 +543,7 @@ class TestReboot:
 
         def server_side():
             endpoint.accept()
-            _expect_configure(
+            _expect_handshake(
                 endpoint,
                 device_id=dev._device_id,
                 strip_length=dev._strip_length,
@@ -554,7 +621,7 @@ class TestReboot:
 
         def server_side():
             endpoint.accept()
-            _expect_configure(
+            _expect_handshake(
                 endpoint,
                 device_id=1,
                 strip_length=5,

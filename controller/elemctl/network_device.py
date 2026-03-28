@@ -14,13 +14,14 @@ import socket
 from .device import DeviceFrame, DeviceState
 from .udp_receiver import UdpFrameReceiver
 from .wire import (
-    encode_configure,
+    encode_attach,
     encode_debug_seek,
     encode_jump,
     encode_load,
     encode_pause,
     encode_reboot,
     encode_resume,
+    encode_set_profile,
     encode_sync_result,
     encode_start,
     encode_stop,
@@ -81,7 +82,7 @@ class NetworkDevice:
         if not self._connected and not self._connect():
             return False
 
-        msg = encode_load(self._device_id, gen, blob)
+        msg = encode_load(gen, blob)
         if not self._send(msg):
             return False
 
@@ -300,16 +301,22 @@ class NetworkDevice:
             sock.connect((self._host, self._tcp_port))
             self._sock = sock
             self._connected = True
-            if not self._send(encode_configure(
-                self._device_id,
-                self._strip_length,
-                self._frame_port,
-            )):
+            if not self._send(encode_set_profile(self._strip_length)):
                 return False
             status = self._recv_ack()
             if status != 0:
                 log.warning(
-                    'configure for %s:%d failed with status=%s',
+                    'set_profile for %s:%d failed with status=%s',
+                    self._host, self._tcp_port, status,
+                )
+                self._disconnect()
+                return False
+            if not self._send(encode_attach(self._device_id, self._frame_port)):
+                return False
+            status = self._recv_ack()
+            if status != 0:
+                log.warning(
+                    'attach for %s:%d failed with status=%s',
                     self._host, self._tcp_port, status,
                 )
                 self._disconnect()

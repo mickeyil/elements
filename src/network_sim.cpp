@@ -6,11 +6,12 @@
 // Usage:
 //   ./network_sim --device-uid UID [--tcp-port PORT]
 //                 [--discovery-port PORT] [--discovery-host HOST]
-// Discovery is mandatory. Runtime config (device_id, strip_length, frame_port)
-// is provided by the controller via CMD_CONFIGURE after TCP connect.
+// Discovery is mandatory. Runtime profile/attach state is controller-driven
+// over TCP after connect.
 
 #include "esp_simulated.h"
 #include "elements_version.h"
+#include "hardware_profile.h"
 #include "slogger.h"
 
 #include <cerrno>
@@ -29,6 +30,8 @@
 
 // Wire protocol command types (must match controller/elemctl/wire.py)
 static constexpr uint8_t CMD_CONFIGURE  = 0x04;
+static constexpr uint8_t CMD_SET_PROFILE = 0x05;
+static constexpr uint8_t CMD_ATTACH = 0x06;
 static constexpr uint8_t CMD_LOAD       = 0x10;
 static constexpr uint8_t CMD_START      = 0x11;
 static constexpr uint8_t CMD_JUMP       = 0x12;
@@ -44,7 +47,9 @@ static volatile sig_atomic_t g_running = 1;
 static void signal_handler(int) { g_running = 0; }
 
 struct TransportState {
-    uint16_t device_id;
+    uint16_t device_id = 0;
+    uint16_t frame_port = 0;
+    bool attached = false;
 };
 
 // ---------------------------------------------------------------------------
@@ -117,12 +122,19 @@ static constexpr size_t TCP_BUF_INITIAL = 32768;
 // 4 MiB — large enough for any realistic blob, small enough to reject garbage.
 static constexpr size_t TCP_MSG_MAX = 4 * 1024 * 1024;
 
+static void reset_attach_state(TransportState& state, sockaddr_in& controller_addr)
+{
+    state.device_id = 0;
+    state.frame_port = 0;
+    state.attached = false;
+    controller_addr.sin_port = 0;
+}
+
 // Returns: 0 = ok, -1 = connection closed/error
 static int poll_tcp_commands(int tcp_fd,
-                             std::unique_ptr<ESPSimulated>& device,
+                             ESPSimulated& device,
                              TransportState& state,
                              sockaddr_in& controller_addr,
-                             bool& configured,
                              std::vector<uint8_t>& buf, size_t& buf_used)
 {
     // Ensure room for at least one recv chunk
@@ -172,47 +184,105 @@ static int poll_tcp_commands(int tcp_fd,
         uint32_t payload_len = msg_len - 1;
 
         switch (cmd_type) {
-        case CMD_CONFIGURE: {
-            if (configured) { send_ack(tcp_fd, 1); break; }
-            if (payload_len < 6) { send_ack(tcp_fd, 1); break; }
-            uint16_t device_id, strip_length, frame_port;
-            memcpy(&device_id, payload, 2);
-            memcpy(&strip_length, payload + 2, 2);
-            memcpy(&frame_port, payload + 4, 2);
-            if (strip_length < 1 || frame_port < 1) {
+        case CMD_SET_PROFILE: {
+            if (payload_len < 2) {
                 send_ack(tcp_fd, 1);
                 break;
             }
-            device = std::make_unique<ESPSimulated>(strip_length);
+
+            uint16_t strip_length = 0;
+            memcpy(&strip_length, payload, 2);
+            HardwareProfile profile(strip_length);
+            if (!profile.is_valid()) {
+                send_ack(tcp_fd, 1);
+                break;
+            }
+
+            const bool same_profile = device.has_hardware_profile()
+                && device.hardware_profile() == profile;
+            if (!device.apply_hardware_profile(profile)) {
+                send_ack(tcp_fd, 1);
+                break;
+            }
+
+            if (state.attached && !same_profile) {
+                reset_attach_state(state, controller_addr);
+            }
+
+            send_ack(tcp_fd, 0);
+            break;
+        }
+        case CMD_ATTACH: {
+            if (payload_len < 4 || !device.has_hardware_profile()) {
+                send_ack(tcp_fd, 1);
+                break;
+            }
+            if (state.attached) {
+                send_ack(tcp_fd, 1);
+                break;
+            }
+
+            uint16_t device_id = 0;
+            uint16_t frame_port = 0;
+            memcpy(&device_id, payload, 2);
+            memcpy(&frame_port, payload + 2, 2);
+            if (frame_port < 1) {
+                send_ack(tcp_fd, 1);
+                break;
+            }
+
             state.device_id = device_id;
+            state.frame_port = frame_port;
+            state.attached = true;
             controller_addr.sin_port = htons(frame_port);
-            configured = true;
+            send_ack(tcp_fd, 0);
+            break;
+        }
+        case CMD_CONFIGURE: {
+            if (state.attached || payload_len < 6) {
+                send_ack(tcp_fd, 1);
+                break;
+            }
+
+            uint16_t device_id = 0;
+            uint16_t strip_length = 0;
+            uint16_t frame_port = 0;
+            memcpy(&device_id, payload, 2);
+            memcpy(&strip_length, payload + 2, 2);
+            memcpy(&frame_port, payload + 4, 2);
+            HardwareProfile profile(strip_length);
+            if (!profile.is_valid() || frame_port < 1 || !device.apply_hardware_profile(profile)) {
+                send_ack(tcp_fd, 1);
+                break;
+            }
+            state.device_id = device_id;
+            state.frame_port = frame_port;
+            state.attached = true;
+            controller_addr.sin_port = htons(frame_port);
             send_ack(tcp_fd, 0);
             break;
         }
         case CMD_LOAD: {
-            if (!configured || !device) { send_ack(tcp_fd, 2); break; }
-            if (payload_len < 4) { send_ack(tcp_fd, 1); break; }
-            uint16_t dev_id, gen;
-            memcpy(&dev_id, payload, 2);
-            memcpy(&gen, payload + 2, 2);
-            state.device_id = dev_id;
-            const uint8_t* blob = payload + 4;
-            size_t blob_len = payload_len - 4;
-            bool ok = device->handle_load(blob, blob_len, gen);
+            if (!state.attached) { send_ack(tcp_fd, 2); break; }
+            if (payload_len < 2) { send_ack(tcp_fd, 1); break; }
+            uint16_t gen = 0;
+            memcpy(&gen, payload, 2);
+            const uint8_t* blob = payload + 2;
+            size_t blob_len = payload_len - 2;
+            bool ok = device.handle_load(blob, blob_len, gen);
             send_ack(tcp_fd, ok ? 0 : 1);
             break;
         }
         case CMD_START: {
-            if (!configured || !device) break;
+            if (!state.attached) break;
             if (payload_len < 8) break;
             int64_t t0;
             memcpy(&t0, payload, 8);
-            device->handle_start(t0);
+            device.handle_start(t0);
             break;
         }
         case CMD_JUMP: {
-            if (!configured || !device) break;
+            if (!state.attached) break;
             if (payload_len < 14) break;
             int64_t t0;
             float t_rel;
@@ -220,36 +290,36 @@ static int poll_tcp_commands(int tcp_fd,
             memcpy(&t0, payload, 8);
             memcpy(&t_rel, payload + 8, 4);
             memcpy(&gen, payload + 12, 2);
-            device->handle_jump(t0, t_rel, gen);
+            device.handle_jump(t0, t_rel, gen);
             break;
         }
         case CMD_PAUSE:
-            if (configured && device) device->handle_pause();
+            if (state.attached) device.handle_pause();
             break;
         case CMD_RESUME: {
-            if (!configured || !device) break;
+            if (!state.attached) break;
             if (payload_len < 8) break;
             int64_t t0;
             memcpy(&t0, payload, 8);
-            device->handle_resume(t0);
+            device.handle_resume(t0);
             break;
         }
         case CMD_STOP:
-            if (configured && device) device->handle_stop();
+            if (state.attached) device.handle_stop();
             break;
         case CMD_DEBUG_SEEK: {
-            if (!configured || !device) break;
+            if (!state.attached) break;
             if (payload_len < 4) break;
             float t_rel;
             memcpy(&t_rel, payload, 4);
-            device->debug_seek(t_rel);
+            device.debug_seek(t_rel);
             break;
         }
         case CMD_DEBUG_STEP: {
-            if (!configured || !device) break;
+            if (!state.attached) break;
             if (payload_len < 1) break;
             int8_t direction = (int8_t)payload[0];
-            device->debug_step(direction);
+            device.debug_step(direction);
             break;
         }
         default:
@@ -273,6 +343,10 @@ static int poll_tcp_commands(int tcp_fd,
 static void send_frames(int udp_fd, const sockaddr_in& controller_addr,
                         const TransportState& state, ESPSimulated& device)
 {
+    if (!state.attached || state.frame_port == 0) {
+        return;
+    }
+
     auto frames = device.drain_frames();
     for (auto& f : frames) {
         // Header: device_id(u16) + gen(u16) + frame_index(u32) + t_rel(f32) = 12 bytes
@@ -388,8 +462,8 @@ static bool poll_discovery_reject(int udp_fd, const std::string& device_uid)
         if (buf[3] != DISCOVERY_REASON_DUPLICATE_UID)
             continue;
 
-        slog::error(
-            "network_sim: rejected by controller: duplicate device uid %s",
+        slog::warn(
+            "network_sim: duplicate uid reject received for %s; suppressing HELLO temporarily",
             device_uid.c_str()
         );
         return true;
@@ -408,8 +482,8 @@ int main(int argc, char** argv)
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
 
-    std::unique_ptr<ESPSimulated> device;
-    TransportState state{0};
+    ESPSimulated device;
+    TransportState state{};
 
     // TCP server socket (non-blocking for accept)
     int tcp_server = socket(AF_INET, SOCK_STREAM, 0);
@@ -467,7 +541,9 @@ int main(int argc, char** argv)
                args.discovery_host.c_str(), args.discovery_port, args.device_uid.c_str());
 
     static constexpr int64_t HELLO_INTERVAL_US = 500000; // 500ms
+    static constexpr int64_t HELLO_BACKOFF_US = 5000000; // 5s
     int64_t last_hello_us = 0;
+    int64_t hello_backoff_until_us = 0;
 
     while (g_running) {
         slog::info("Waiting for controller on port %d...", args.tcp_port);
@@ -482,14 +558,12 @@ int main(int argc, char** argv)
                 }
                 // Send HELLO if discovery is enabled
                 int64_t now = now_us();
-                if (now - last_hello_us >= HELLO_INTERVAL_US) {
+                if (now >= hello_backoff_until_us && now - last_hello_us >= HELLO_INTERVAL_US) {
                     send_hello(udp_fd, discovery_addr, hello_pkt);
                     last_hello_us = now;
                 }
                 if (poll_discovery_reject(udp_fd, args.device_uid)) {
-                    close(udp_fd);
-                    close(tcp_server);
-                    return 1;
+                    hello_backoff_until_us = now + HELLO_BACKOFF_US;
                 }
                 usleep(100000); // 100ms between accept attempts
             }
@@ -507,7 +581,8 @@ int main(int argc, char** argv)
         controller_addr.sin_family = AF_INET;
         controller_addr.sin_port = 0;
         controller_addr.sin_addr = peer.sin_addr;
-        bool configured = false;
+        reset_attach_state(state, controller_addr);
+        controller_addr.sin_addr = peer.sin_addr;
 
         // Set TCP non-blocking for recv
         fcntl(tcp_fd, F_SETFL, O_NONBLOCK);
@@ -516,20 +591,20 @@ int main(int argc, char** argv)
 
         while (g_running) {
             int rc = poll_tcp_commands(
-                tcp_fd, device, state, controller_addr, configured, tcp_buf, tcp_buf_used
+                tcp_fd, device, state, controller_addr, tcp_buf, tcp_buf_used
             );
             if (rc < 0) break; // connection closed
 
-            if (device) {
-                device->tick_once();
-                send_frames(udp_fd, controller_addr, state, *device);
-            }
+            device.tick_once();
+            send_frames(udp_fd, controller_addr, state, device);
 
-            // Continue sending HELLOs during active connection (enables re-discovery)
             int64_t now = now_us();
-            if (now - last_hello_us >= HELLO_INTERVAL_US) {
+            if (now >= hello_backoff_until_us && now - last_hello_us >= HELLO_INTERVAL_US) {
                 send_hello(udp_fd, discovery_addr, hello_pkt);
                 last_hello_us = now;
+            }
+            if (poll_discovery_reject(udp_fd, args.device_uid)) {
+                hello_backoff_until_us = now + HELLO_BACKOFF_US;
             }
 
             usleep(20000); // ~50fps
@@ -538,8 +613,8 @@ int main(int argc, char** argv)
         close(tcp_fd);
         slog::info("Controller disconnected.");
 
-        device.reset();
-        state.device_id = 0;
+        device.reset_for_detach();
+        reset_attach_state(state, controller_addr);
     }
 
     close(udp_fd);

@@ -12,7 +12,7 @@ namespace {
 
 bool connection_has_client_(ConnectionState state)
 {
-    return state == ConnectionState::client_connected || state == ConnectionState::configured;
+    return state == ConnectionState::client_connected || state == ConnectionState::attached;
 }
 
 }  // namespace
@@ -49,12 +49,12 @@ void maybe_log_status(
     const unsigned long uptime_s = now / 1000;
     if (connection.have_frame_stats) {
         log_line(
-            "[status] up=%lus wifi=%s ip=%s ctrl=%s cfg=%s tries=%lu ok=%lu hellos=%lu tcp=%lu/%lu frames=%llu last=%u/%lu/%.3f load=%lu start=%lu stop=%lu",
+            "[status] up=%lus wifi=%s ip=%s ctrl=%s att=%s tries=%lu ok=%lu hellos=%lu tcp=%lu/%lu frames=%llu last=%u/%lu/%.3f load=%lu start=%lu stop=%lu",
             uptime_s,
             wifi.ready ? "up" : "down",
             ip.c_str(),
             yes_no(connection_has_client_(connection.state)),
-            yes_no(connection.state == ConnectionState::configured),
+            yes_no(connection.state == ConnectionState::attached),
             static_cast<unsigned long>(wifi.connect_attempts),
             static_cast<unsigned long>(wifi.connect_successes),
             static_cast<unsigned long>(discovery.hello_count),
@@ -72,12 +72,12 @@ void maybe_log_status(
     }
 
     log_line(
-        "[status] up=%lus wifi=%s ip=%s ctrl=%s cfg=%s tries=%lu ok=%lu hellos=%lu tcp=%lu/%lu frames=%llu load=%lu start=%lu stop=%lu",
+        "[status] up=%lus wifi=%s ip=%s ctrl=%s att=%s tries=%lu ok=%lu hellos=%lu tcp=%lu/%lu frames=%llu load=%lu start=%lu stop=%lu",
         uptime_s,
         wifi.ready ? "up" : "down",
         ip.c_str(),
         yes_no(connection_has_client_(connection.state)),
-        yes_no(connection.state == ConnectionState::configured),
+        yes_no(connection.state == ConnectionState::attached),
         static_cast<unsigned long>(wifi.connect_attempts),
         static_cast<unsigned long>(wifi.connect_successes),
         static_cast<unsigned long>(discovery.hello_count),

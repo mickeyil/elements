@@ -96,7 +96,7 @@ ConnectionPollResult ControllerConnection::poll()
 
 void ControllerConnection::send_frames()
 {
-    if (!is_configured() || _frame_port == 0 || _device == nullptr) {
+    if (!is_attached() || _frame_port == 0 || _device == nullptr) {
         return;
     }
 
@@ -126,9 +126,9 @@ void ControllerConnection::send_frames()
     }
 }
 
-bool ControllerConnection::is_configured() const
+bool ControllerConnection::is_attached() const
 {
-    return _state == ConnectionState::configured;
+    return _state == ConnectionState::attached;
 }
 
 ConnectionSnapshot ControllerConnection::snapshot() const
@@ -141,6 +141,8 @@ ConnectionSnapshot ControllerConnection::snapshot() const
     snapshot.last_sync_seq = _last_sync_seq;
     snapshot.tcp_accept_count = _tcp_accept_count;
     snapshot.tcp_disconnect_count = _tcp_disconnect_count;
+    snapshot.set_profile_count = _set_profile_count;
+    snapshot.attach_count = _attach_count;
     snapshot.configure_count = _configure_count;
     snapshot.load_count = _load_count;
     snapshot.start_count = _start_count;
@@ -207,7 +209,15 @@ int ControllerConnection::poll_commands_(ConnectionPollResult& result)
 
         switch (cmd_type) {
             case kCmdConfigure:
-                handle_configure_(payload, payload_len);
+                handle_configure_compat_(payload, payload_len);
+                break;
+
+            case kCmdSetProfile:
+                handle_set_profile_(payload, payload_len);
+                break;
+
+            case kCmdAttach:
+                handle_attach_(payload, payload_len);
                 break;
 
             case kCmdSyncResult:
@@ -314,7 +324,7 @@ void ControllerConnection::reset_session_state_()
 
 bool ControllerConnection::has_active_client_() const
 {
-    return _state == ConnectionState::client_connected || _state == ConnectionState::configured;
+    return _state == ConnectionState::client_connected || _state == ConnectionState::attached;
 }
 
 bool ControllerConnection::send_all_(const uint8_t* data, size_t len)
@@ -340,13 +350,78 @@ void ControllerConnection::send_ack_(uint8_t status)
     send_all_(buf, sizeof(buf));
 }
 
-void ControllerConnection::handle_configure_(const uint8_t* payload, uint32_t payload_len)
+uint8_t ControllerConnection::apply_profile_(const HardwareProfile& profile)
 {
-    if (is_configured()) {
+    if (_device == nullptr || !profile.is_valid()) {
+        return 1;
+    }
+
+    const bool had_profile = _device->has_hardware_profile();
+    const HardwareProfile current = _device->hardware_profile();
+    const bool same_profile = had_profile && current == profile;
+    const bool was_attached = is_attached();
+
+    if (!_device->apply_hardware_profile(profile)) {
+        return 1;
+    }
+
+    _set_profile_count += 1;
+
+    if (was_attached && !same_profile) {
+        log_line(
+            "[tcp] profile changed while attached; detaching device_id=%u old_len=%u new_len=%u",
+            static_cast<unsigned>(_device_id),
+            static_cast<unsigned>(current.strip_length),
+            static_cast<unsigned>(profile.strip_length)
+        );
+        _device_id = 0;
+        _frame_port = 0;
+        _controller_ip = IPAddress();
+        _last_sync_seq = 0;
+        _state = ConnectionState::client_connected;
+    } else {
+        log_line(
+            "[tcp] set_profile ok strip_length=%u%s",
+            static_cast<unsigned>(profile.strip_length),
+            same_profile && was_attached ? " (unchanged, still attached)" : ""
+        );
+    }
+
+    return 0;
+}
+
+uint8_t ControllerConnection::attach_(uint16_t device_id, uint16_t frame_port)
+{
+    if (_device == nullptr || !_device->has_hardware_profile() || frame_port < 1) {
+        return 1;
+    }
+    if (is_attached()) {
+        return 1;
+    }
+
+    _device_id = device_id;
+    _frame_port = frame_port;
+    _controller_ip = _tcp_client.remoteIP();
+    _last_sync_seq = 0;
+    _state = ConnectionState::attached;
+    _attach_count += 1;
+
+    log_line(
+        "[tcp] attach ok device_id=%u frame_port=%u controller=%s",
+        static_cast<unsigned>(device_id),
+        static_cast<unsigned>(frame_port),
+        _controller_ip.toString().c_str()
+    );
+    return 0;
+}
+
+void ControllerConnection::handle_configure_compat_(const uint8_t* payload, uint32_t payload_len)
+{
+    if (is_attached()) {
         send_ack_(1);
         return;
     }
-    if (payload_len < 6 || _device == nullptr) {
+    if (payload_len < 6) {
         send_ack_(1);
         return;
     }
@@ -359,31 +434,53 @@ void ControllerConnection::handle_configure_(const uint8_t* payload, uint32_t pa
     memcpy(&frame_port, payload + 4, 2);
 
     HardwareProfile profile(strip_length);
-    if (!profile.is_valid() || frame_port < 1 || !_device->apply_hardware_profile(profile)) {
+    uint8_t status = apply_profile_(profile);
+    if (status == 0) {
+        status = attach_(device_id, frame_port);
+    }
+    if (status == 0) {
+        _configure_count += 1;
+        log_line(
+            "[tcp] legacy configure ok device_id=%u strip_length=%u frame_port=%u",
+            static_cast<unsigned>(device_id),
+            static_cast<unsigned>(strip_length),
+            static_cast<unsigned>(frame_port)
+        );
+    }
+    send_ack_(status);
+}
+
+void ControllerConnection::handle_set_profile_(const uint8_t* payload, uint32_t payload_len)
+{
+    if (payload_len < 2) {
         send_ack_(1);
         return;
     }
 
-    _device_id = device_id;
-    _frame_port = frame_port;
-    _controller_ip = _tcp_client.remoteIP();
-    _last_sync_seq = 0;
-    _state = ConnectionState::configured;
-    _configure_count += 1;
+    uint16_t strip_length = 0;
+    memcpy(&strip_length, payload, 2);
+    const uint8_t status = apply_profile_(HardwareProfile(strip_length));
+    send_ack_(status);
+}
 
-    log_line(
-        "[tcp] configure ok device_id=%u strip_length=%u frame_port=%u controller=%s",
-        device_id,
-        strip_length,
-        frame_port,
-        _controller_ip.toString().c_str()
-    );
-    send_ack_(0);
+void ControllerConnection::handle_attach_(const uint8_t* payload, uint32_t payload_len)
+{
+    if (payload_len < 4) {
+        send_ack_(1);
+        return;
+    }
+
+    uint16_t device_id = 0;
+    uint16_t frame_port = 0;
+    memcpy(&device_id, payload, 2);
+    memcpy(&frame_port, payload + 2, 2);
+    const uint8_t status = attach_(device_id, frame_port);
+    send_ack_(status);
 }
 
 void ControllerConnection::handle_sync_result_(const uint8_t* payload, uint32_t payload_len)
 {
-    if (!is_configured() || _device == nullptr || _identity == nullptr || payload_len < 14) {
+    if (!is_attached() || _device == nullptr || _identity == nullptr || payload_len < 14) {
         return;
     }
 
@@ -422,23 +519,20 @@ void ControllerConnection::handle_sync_result_(const uint8_t* payload, uint32_t 
 
 void ControllerConnection::handle_load_(const uint8_t* payload, uint32_t payload_len)
 {
-    if (!is_configured() || _device == nullptr) {
+    if (!is_attached() || _device == nullptr) {
         send_ack_(2);
         return;
     }
-    if (payload_len < 4) {
+    if (payload_len < 2) {
         send_ack_(1);
         return;
     }
 
-    uint16_t device_id = 0;
     uint16_t gen = 0;
-    memcpy(&device_id, payload, 2);
-    memcpy(&gen, payload + 2, 2);
-    _device_id = device_id;
+    memcpy(&gen, payload, 2);
 
-    const uint8_t* blob = payload + 4;
-    const size_t blob_len = payload_len - 4;
+    const uint8_t* blob = payload + 2;
+    const size_t blob_len = payload_len - 2;
     const bool ok = _device->handle_load(blob, blob_len, gen);
     _load_count += 1;
     log_line(
@@ -452,7 +546,7 @@ void ControllerConnection::handle_load_(const uint8_t* payload, uint32_t payload
 
 void ControllerConnection::handle_start_(const uint8_t* payload, uint32_t payload_len)
 {
-    if (is_configured() && _device != nullptr && payload_len >= 8) {
+    if (is_attached() && _device != nullptr && payload_len >= 8) {
         int64_t t0 = 0;
         memcpy(&t0, payload, 8);
         _device->handle_start(t0);
@@ -463,7 +557,7 @@ void ControllerConnection::handle_start_(const uint8_t* payload, uint32_t payloa
 
 void ControllerConnection::handle_jump_(const uint8_t* payload, uint32_t payload_len)
 {
-    if (is_configured() && _device != nullptr && payload_len >= 14) {
+    if (is_attached() && _device != nullptr && payload_len >= 14) {
         int64_t t0 = 0;
         float t_rel = 0.0f;
         uint16_t gen = 0;
@@ -483,7 +577,7 @@ void ControllerConnection::handle_jump_(const uint8_t* payload, uint32_t payload
 
 void ControllerConnection::handle_pause_()
 {
-    if (is_configured() && _device != nullptr) {
+    if (is_attached() && _device != nullptr) {
         _device->handle_pause();
         _pause_count += 1;
         log_line("[tcp] pause");
@@ -492,7 +586,7 @@ void ControllerConnection::handle_pause_()
 
 void ControllerConnection::handle_resume_(const uint8_t* payload, uint32_t payload_len)
 {
-    if (is_configured() && _device != nullptr && payload_len >= 8) {
+    if (is_attached() && _device != nullptr && payload_len >= 8) {
         int64_t t0 = 0;
         memcpy(&t0, payload, 8);
         _device->handle_resume(t0);
@@ -503,7 +597,7 @@ void ControllerConnection::handle_resume_(const uint8_t* payload, uint32_t paylo
 
 void ControllerConnection::handle_stop_()
 {
-    if (is_configured() && _device != nullptr) {
+    if (is_attached() && _device != nullptr) {
         _device->handle_stop();
         _stop_count += 1;
         log_line("[tcp] stop");

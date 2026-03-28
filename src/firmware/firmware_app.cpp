@@ -53,7 +53,7 @@ void FirmwareApp::run_once()
 
     _discovery.poll();
 
-    if (_connection.is_configured()) {
+    if (_connection.is_attached()) {
         _device.tick_once();
         _connection.send_frames();
     }

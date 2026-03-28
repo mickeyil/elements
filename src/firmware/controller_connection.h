@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "device_identity.h"
+#include "hardware_profile.h"
 
 class ESPDevice;
 
@@ -17,7 +18,7 @@ enum class ConnectionState {
     stopped,
     listening,
     client_connected,
-    configured,
+    attached,
 };
 
 struct ConnectionPollResult {
@@ -33,6 +34,8 @@ struct ConnectionSnapshot {
     uint16_t last_sync_seq = 0;
     uint32_t tcp_accept_count = 0;
     uint32_t tcp_disconnect_count = 0;
+    uint32_t set_profile_count = 0;
+    uint32_t attach_count = 0;
     uint32_t configure_count = 0;
     uint32_t load_count = 0;
     uint32_t start_count = 0;
@@ -57,7 +60,7 @@ public:
     void stop(const char* reason = nullptr);
     ConnectionPollResult poll();
     void send_frames();
-    bool is_configured() const;
+    bool is_attached() const;
     ConnectionSnapshot snapshot() const;
 
 private:
@@ -68,8 +71,12 @@ private:
     bool has_active_client_() const;
     bool send_all_(const uint8_t* data, size_t len);
     void send_ack_(uint8_t status);
+    uint8_t apply_profile_(const HardwareProfile& profile);
+    uint8_t attach_(uint16_t device_id, uint16_t frame_port);
 
-    void handle_configure_(const uint8_t* payload, uint32_t payload_len);
+    void handle_configure_compat_(const uint8_t* payload, uint32_t payload_len);
+    void handle_set_profile_(const uint8_t* payload, uint32_t payload_len);
+    void handle_attach_(const uint8_t* payload, uint32_t payload_len);
     void handle_sync_result_(const uint8_t* payload, uint32_t payload_len);
     void handle_load_(const uint8_t* payload, uint32_t payload_len);
     void handle_start_(const uint8_t* payload, uint32_t payload_len);
@@ -93,6 +100,8 @@ private:
     size_t _tcp_buf_used = 0;
     uint32_t _tcp_accept_count = 0;
     uint32_t _tcp_disconnect_count = 0;
+    uint32_t _set_profile_count = 0;
+    uint32_t _attach_count = 0;
     uint32_t _configure_count = 0;
     uint32_t _load_count = 0;
     uint32_t _start_count = 0;
