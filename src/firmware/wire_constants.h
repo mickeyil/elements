@@ -32,6 +32,7 @@ constexpr size_t kTcpBufInitial = 4096;
 constexpr size_t kTcpMsgMax = 256 * 1024;
 
 constexpr uint32_t kHelloIntervalMs = 500;
+constexpr uint32_t kDuplicateHelloBackoffMs = 5000;
 constexpr uint32_t kStatusIntervalMs = 5000;
 constexpr uint32_t kWifiPreferredTimeoutMs = 4000;
 constexpr uint32_t kWifiRetryIntervalMs = 5000;

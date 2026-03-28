@@ -6,7 +6,11 @@
 
 namespace firmware {
 
-uint32_t make_boot_token();
-String make_device_uid();
+struct DeviceIdentity {
+    String uid;
+    uint32_t boot_token = 0;
+};
+
+DeviceIdentity read_device_identity();
 
 }  // namespace firmware

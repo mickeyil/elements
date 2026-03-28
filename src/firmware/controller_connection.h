@@ -1,0 +1,110 @@
+#pragma once
+
+#include <WiFi.h>
+#include <WiFiUdp.h>
+
+#include <cstddef>
+#include <cstdint>
+#include <vector>
+
+#include "device_identity.h"
+
+class ESPDevice;
+
+namespace firmware {
+
+enum class ConnectionState {
+    stopped,
+    listening,
+    client_connected,
+    configured,
+};
+
+struct ConnectionPollResult {
+    bool disconnected = false;
+    bool reboot_requested = false;
+};
+
+struct ConnectionSnapshot {
+    ConnectionState state = ConnectionState::stopped;
+    uint16_t device_id = 0;
+    uint16_t frame_port = 0;
+    IPAddress controller_ip;
+    uint16_t last_sync_seq = 0;
+    uint32_t tcp_accept_count = 0;
+    uint32_t tcp_disconnect_count = 0;
+    uint32_t configure_count = 0;
+    uint32_t load_count = 0;
+    uint32_t start_count = 0;
+    uint32_t jump_count = 0;
+    uint32_t pause_count = 0;
+    uint32_t resume_count = 0;
+    uint32_t stop_count = 0;
+    uint64_t frames_sent = 0;
+    bool have_frame_stats = false;
+    uint16_t last_frame_gen = 0;
+    uint32_t last_frame_index = 0;
+    float last_frame_t_rel = 0.0f;
+};
+
+class ControllerConnection {
+public:
+    ControllerConnection();
+
+    void begin(ESPDevice& device, const DeviceIdentity& identity);
+    void start_if_needed();
+    void flush_active_client();
+    void stop(const char* reason = nullptr);
+    ConnectionPollResult poll();
+    void send_frames();
+    bool is_configured() const;
+    ConnectionSnapshot snapshot() const;
+
+private:
+    int poll_commands_(ConnectionPollResult& result);
+    void accept_client_();
+    void disconnect_client_(const char* reason = nullptr);
+    void reset_session_state_();
+    bool has_active_client_() const;
+    bool send_all_(const uint8_t* data, size_t len);
+    void send_ack_(uint8_t status);
+
+    void handle_configure_(const uint8_t* payload, uint32_t payload_len);
+    void handle_sync_result_(const uint8_t* payload, uint32_t payload_len);
+    void handle_load_(const uint8_t* payload, uint32_t payload_len);
+    void handle_start_(const uint8_t* payload, uint32_t payload_len);
+    void handle_jump_(const uint8_t* payload, uint32_t payload_len);
+    void handle_pause_();
+    void handle_resume_(const uint8_t* payload, uint32_t payload_len);
+    void handle_stop_();
+    void handle_reboot_(ConnectionPollResult& result);
+
+    const DeviceIdentity* _identity = nullptr;
+    ESPDevice* _device = nullptr;
+    WiFiServer _tcp_server;
+    WiFiClient _tcp_client;
+    WiFiUDP _frame_udp;
+    ConnectionState _state = ConnectionState::stopped;
+    uint16_t _device_id = 0;
+    uint16_t _frame_port = 0;
+    IPAddress _controller_ip;
+    uint16_t _last_sync_seq = 0;
+    std::vector<uint8_t> _tcp_buf;
+    size_t _tcp_buf_used = 0;
+    uint32_t _tcp_accept_count = 0;
+    uint32_t _tcp_disconnect_count = 0;
+    uint32_t _configure_count = 0;
+    uint32_t _load_count = 0;
+    uint32_t _start_count = 0;
+    uint32_t _jump_count = 0;
+    uint32_t _pause_count = 0;
+    uint32_t _resume_count = 0;
+    uint32_t _stop_count = 0;
+    uint64_t _frames_sent = 0;
+    bool _have_frame_stats = false;
+    uint16_t _last_frame_gen = 0;
+    uint32_t _last_frame_index = 0;
+    float _last_frame_t_rel = 0.0f;
+};
+
+}  // namespace firmware

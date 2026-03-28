@@ -6,8 +6,9 @@
 #include <cstdio>
 
 namespace firmware {
+namespace {
 
-uint32_t make_boot_token()
+uint32_t make_boot_token_()
 {
     uint32_t token = esp_random();
     if (token == 0) {
@@ -16,7 +17,7 @@ uint32_t make_boot_token()
     return token;
 }
 
-String make_device_uid()
+String make_device_uid_()
 {
     const uint64_t chip_id = ESP.getEfuseMac();
     const uint8_t mac0 = static_cast<uint8_t>((chip_id >> 0) & 0xff);
@@ -38,6 +39,16 @@ String make_device_uid()
         mac5
     );
     return String(buf);
+}
+
+}  // namespace
+
+DeviceIdentity read_device_identity()
+{
+    DeviceIdentity identity;
+    identity.uid = make_device_uid_();
+    identity.boot_token = make_boot_token_();
+    return identity;
 }
 
 }  // namespace firmware
