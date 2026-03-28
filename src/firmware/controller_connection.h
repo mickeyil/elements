@@ -34,14 +34,8 @@ struct ConnectionSnapshot {
     uint16_t last_sync_seq = 0;
     uint32_t tcp_accept_count = 0;
     uint32_t tcp_disconnect_count = 0;
-    uint32_t set_profile_count = 0;
-    uint32_t attach_count = 0;
-    uint32_t configure_count = 0;
     uint32_t load_count = 0;
     uint32_t start_count = 0;
-    uint32_t jump_count = 0;
-    uint32_t pause_count = 0;
-    uint32_t resume_count = 0;
     uint32_t stop_count = 0;
     uint64_t frames_sent = 0;
     bool have_frame_stats = false;
@@ -74,7 +68,6 @@ private:
     uint8_t apply_profile_(const HardwareProfile& profile);
     uint8_t attach_(uint16_t device_id, uint16_t frame_port);
 
-    void handle_configure_compat_(const uint8_t* payload, uint32_t payload_len);
     void handle_set_profile_(const uint8_t* payload, uint32_t payload_len);
     void handle_attach_(const uint8_t* payload, uint32_t payload_len);
     void handle_sync_result_(const uint8_t* payload, uint32_t payload_len);
@@ -100,14 +93,8 @@ private:
     size_t _tcp_buf_used = 0;
     uint32_t _tcp_accept_count = 0;
     uint32_t _tcp_disconnect_count = 0;
-    uint32_t _set_profile_count = 0;
-    uint32_t _attach_count = 0;
-    uint32_t _configure_count = 0;
     uint32_t _load_count = 0;
     uint32_t _start_count = 0;
-    uint32_t _jump_count = 0;
-    uint32_t _pause_count = 0;
-    uint32_t _resume_count = 0;
     uint32_t _stop_count = 0;
     uint64_t _frames_sent = 0;
     bool _have_frame_stats = false;

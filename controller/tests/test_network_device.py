@@ -13,7 +13,6 @@ from elemctl.udp_receiver import UdpFrameReceiver
 from elemctl.wire import (
     CMD_ACK,
     CMD_ATTACH,
-    CMD_CONFIGURE,
     CMD_SET_PROFILE,
     CMD_DEBUG_SEEK,
     CMD_JUMP,
@@ -29,9 +28,7 @@ from elemctl.wire import (
     SYNC_RESP,
     UDP_FRAME_HEADER,
     encode_attach,
-    encode_configure,
     encode_load,
-    encode_load_v1,
     encode_reboot,
     encode_set_profile,
     encode_sync_req,
@@ -245,16 +242,6 @@ class TestWireEncoding:
         assert device_id == 5
         assert frame_port == 9002
 
-    def test_encode_configure(self):
-        msg = encode_configure(device_id=5, strip_length=10, frame_port=9002)
-        length = struct.unpack_from('<I', msg, 0)[0]
-        assert length == 7
-        assert msg[4] == CMD_CONFIGURE
-        device_id, strip_length, frame_port = struct.unpack_from('<HHH', msg, 5)
-        assert device_id == 5
-        assert strip_length == 10
-        assert frame_port == 9002
-
     def test_encode_load(self):
         msg = encode_load(gen=2, blob=b'\xAA\xBB')
         # length prefix
@@ -264,16 +251,6 @@ class TestWireEncoding:
         (gen,) = struct.unpack_from('<H', msg, 5)
         assert gen == 2
         assert msg[7:] == b'\xAA\xBB'
-
-    def test_encode_load_v1(self):
-        msg = encode_load_v1(device_id=5, gen=2, blob=b'\xAA\xBB')
-        length = struct.unpack_from('<I', msg, 0)[0]
-        assert length == 1 + 2 + 2 + 2
-        assert msg[4] == CMD_LOAD
-        device_id, gen = struct.unpack_from('<HH', msg, 5)
-        assert device_id == 5
-        assert gen == 2
-        assert msg[9:] == b'\xAA\xBB'
 
     def test_encode_start(self):
         msg = encode_start(t0_us=123456789)

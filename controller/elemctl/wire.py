@@ -15,7 +15,6 @@ from .device import DeviceFrame
 SYNC_REQ = 0x01
 SYNC_RESP = 0x02
 CMD_SYNC_RESULT = 0x03
-CMD_CONFIGURE = 0x04
 CMD_SET_PROFILE = 0x05
 CMD_ATTACH = 0x06
 CMD_LOAD = 0x10
@@ -37,15 +36,6 @@ SYNC_RESP_STRUCT = struct.Struct('<BHIqqq')
 def encode_load(gen: int, blob: bytes) -> bytes:
     payload = struct.pack('<H', gen) + blob
     return struct.pack('<IB', 1 + len(payload), CMD_LOAD) + payload
-
-
-def encode_load_v1(device_id: int, gen: int, blob: bytes) -> bytes:
-    payload = struct.pack('<HH', device_id, gen) + blob
-    return struct.pack('<IB', 1 + len(payload), CMD_LOAD) + payload
-
-
-def encode_configure(device_id: int, strip_length: int, frame_port: int) -> bytes:
-    return struct.pack('<IBHHH', 7, CMD_CONFIGURE, device_id, strip_length, frame_port)
 
 
 def encode_set_profile(strip_length: int) -> bytes:

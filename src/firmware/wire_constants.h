@@ -9,7 +9,6 @@ constexpr uint16_t kTcpPort = 6053;
 constexpr uint16_t kDiscoveryPort = 6040;
 constexpr uint16_t kMaxDevicePixels = 250;
 
-constexpr uint8_t kCmdConfigure = 0x04;
 constexpr uint8_t kCmdSetProfile = 0x05;
 constexpr uint8_t kCmdAttach = 0x06;
 constexpr uint8_t kSyncReq = 0x01;

@@ -29,7 +29,6 @@
 #include <vector>
 
 // Wire protocol command types (must match controller/elemctl/wire.py)
-static constexpr uint8_t CMD_CONFIGURE  = 0x04;
 static constexpr uint8_t CMD_SET_PROFILE = 0x05;
 static constexpr uint8_t CMD_ATTACH = 0x06;
 static constexpr uint8_t CMD_LOAD       = 0x10;
@@ -48,7 +47,6 @@ static void signal_handler(int) { g_running = 0; }
 
 struct TransportState {
     uint16_t device_id = 0;
-    uint16_t frame_port = 0;
     bool attached = false;
 };
 
@@ -125,7 +123,6 @@ static constexpr size_t TCP_MSG_MAX = 4 * 1024 * 1024;
 static void reset_attach_state(TransportState& state, sockaddr_in& controller_addr)
 {
     state.device_id = 0;
-    state.frame_port = 0;
     state.attached = false;
     controller_addr.sin_port = 0;
 }
@@ -232,31 +229,6 @@ static int poll_tcp_commands(int tcp_fd,
             }
 
             state.device_id = device_id;
-            state.frame_port = frame_port;
-            state.attached = true;
-            controller_addr.sin_port = htons(frame_port);
-            send_ack(tcp_fd, 0);
-            break;
-        }
-        case CMD_CONFIGURE: {
-            if (state.attached || payload_len < 6) {
-                send_ack(tcp_fd, 1);
-                break;
-            }
-
-            uint16_t device_id = 0;
-            uint16_t strip_length = 0;
-            uint16_t frame_port = 0;
-            memcpy(&device_id, payload, 2);
-            memcpy(&strip_length, payload + 2, 2);
-            memcpy(&frame_port, payload + 4, 2);
-            HardwareProfile profile(strip_length);
-            if (!profile.is_valid() || frame_port < 1 || !device.apply_hardware_profile(profile)) {
-                send_ack(tcp_fd, 1);
-                break;
-            }
-            state.device_id = device_id;
-            state.frame_port = frame_port;
             state.attached = true;
             controller_addr.sin_port = htons(frame_port);
             send_ack(tcp_fd, 0);
@@ -343,7 +315,7 @@ static int poll_tcp_commands(int tcp_fd,
 static void send_frames(int udp_fd, const sockaddr_in& controller_addr,
                         const TransportState& state, ESPSimulated& device)
 {
-    if (!state.attached || state.frame_port == 0) {
+    if (!state.attached || controller_addr.sin_port == 0) {
         return;
     }
 
