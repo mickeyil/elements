@@ -229,6 +229,9 @@ class NetworkDevice:
         self._frames.clear()
         return out
 
+    def produces_program_frames(self) -> bool:
+        return self._device_type == 'sim'
+
     def supports_debug_seek(self) -> bool:
         return self._device_type == 'sim'
 

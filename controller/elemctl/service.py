@@ -443,22 +443,38 @@ class ControllerService:
             if update.clock_state != 'stale':
                 self._observe_device_activity(update.device_id, now_ns, now_wall)
 
-        # Drain controller events first (before probing mutates connectivity)
-        json_msgs: list[bytes] = []
-        while self._service_events:
-            json_msgs.append(encode_json(self._service_events.pop(0)))
-        for evt in self._controller.drain_events():
-            json_msgs.append(encode_json(self._event_to_dict(evt)))
-
         self._expire_stale_devices(now_ns)
-        self._append_connectivity_transitions(json_msgs, now_ns)
+        status_events: list[dict[str, object]] = []
+        active_disconnects: list[tuple[int, str]] = []
+
+        new_status_events, new_disconnects = self._collect_connectivity_transitions(now_ns)
+        status_events.extend(new_status_events)
+        active_disconnects.extend(new_disconnects)
+
         self._probe_devices(
             ignore_throttle=False,
             sync_baseline=False,
             now_ns=now_ns,
             now_wall=now_wall,
         )
-        self._append_connectivity_transitions(json_msgs, now_ns)
+        new_status_events, new_disconnects = self._collect_connectivity_transitions(now_ns)
+        status_events.extend(new_status_events)
+        active_disconnects.extend(new_disconnects)
+
+        if active_disconnects:
+            detail = '; '.join(
+                f'id={device_id}:{reason}'
+                for device_id, reason in active_disconnects
+            )
+            self._controller.abort(f'active device disconnected: {detail}')
+
+        json_msgs: list[bytes] = []
+        while self._service_events:
+            json_msgs.append(encode_json(self._service_events.pop(0)))
+        for evt in self._controller.drain_events():
+            json_msgs.append(encode_json(self._event_to_dict(evt)))
+        for event in status_events:
+            json_msgs.append(encode_json(event))
 
         for update in sync_updates:
             entry = self._device_id_to_device.get(update.device_id)
@@ -674,14 +690,30 @@ class ControllerService:
                 self._observe_device_activity(dc.device_id, now_ns, now_wall)
 
     def _append_connectivity_transitions(self, json_msgs: list[bytes], now_ns: int) -> None:
+        # Deprecated helper kept only until all call sites move to
+        # _collect_connectivity_transitions().
+        status_events, _ = self._collect_connectivity_transitions(now_ns)
+        for event in status_events:
+            json_msgs.append(encode_json(event))
+
+    def _collect_connectivity_transitions(
+        self,
+        now_ns: int,
+    ) -> tuple[list[dict[str, object]], list[tuple[int, str]]]:
+        status_events: list[dict[str, object]] = []
+        active_disconnects: list[tuple[int, str]] = []
         for dc, dev in self._iter_devices():
             connected = self._is_connected(dev)
             if connected != self._prev_connected[dc.device_id]:
                 self._log_connectivity_transition(dc, dev, connected)
                 self._prev_connected[dc.device_id] = connected
                 self._handle_clock_connectivity_transition(dc, connected)
-                json_msgs.append(encode_json(self._device_status_event(dc, dev, now_ns)))
+                status_events.append(self._device_status_event(dc, dev, now_ns))
+                if not connected and self._controller.uses_device(dev):
+                    reason = self._disconnect_reasons.get(dc.device_id) or 'disconnected'
+                    active_disconnects.append((dc.device_id, reason))
                 self._clear_disconnect_reason(dc.device_id)
+        return status_events, active_disconnects
 
     def _expire_stale_devices(self, now_ns: int) -> None:
         if self._discovery is None:

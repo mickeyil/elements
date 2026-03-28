@@ -20,16 +20,24 @@ from elemctl.device import DeviceFrame, DeviceState
 class MockDevice:
     """Minimal device that tracks state and produces frames deterministically."""
 
-    def __init__(self, duration: float = 5.0, strip_length: int = 5):
+    def __init__(
+        self,
+        duration: float = 5.0,
+        strip_length: int = 5,
+        *,
+        produces_program_frames: bool = True,
+    ):
         self._state = DeviceState.IDLE
         self._gen = 0
         self._frame_index = 0
         self._t0_ns = 0
         self._duration_sec = duration
         self._strip_length = strip_length
+        self._produces_program_frames = produces_program_frames
         self._last_t_rel = 0.0
         self._frames: list[DeviceFrame] = []
         self.load_should_fail = False
+        self.is_connected = True
         self.load_calls = 0
         self.start_calls = 0
         self.jump_calls = 0
@@ -124,6 +132,9 @@ class MockDevice:
         self._frames.clear()
         return out
 
+    def produces_program_frames(self) -> bool:
+        return self._produces_program_frames
+
     def supports_debug_seek(self) -> bool:
         return True
 
@@ -157,6 +168,7 @@ class FakeDevice:
         self._state = DeviceState.IDLE
         self._gen = 0
         self._last_t_rel = 0.0
+        self.is_connected = True
 
     def load(self, blob: bytes, gen: int) -> bool:
         self._state = DeviceState.LOADED
@@ -194,6 +206,9 @@ class FakeDevice:
 
     def drain_frames(self) -> list[DeviceFrame]:
         return []
+
+    def produces_program_frames(self) -> bool:
+        return False
 
     def supports_debug_seek(self) -> bool:
         return False
@@ -1063,7 +1078,124 @@ class TestGenFiltering:
 
 
 # =========================================================================
-# 9. Events
+# 9. Abort and frame-stream capability
+# =========================================================================
+
+
+class TestAbortAndFrameStream:
+    def test_program_frame_stream_enabled_for_all_frame_devices(self):
+        f = DualFixture()
+        ctrl = Controller(f.strips(), clock=f.clock)
+
+        assert ctrl.load(f.manifest())
+        assert ctrl.program_frame_stream_enabled is True
+
+    def test_program_frame_stream_disabled_for_mixed_runtime(self):
+        now_ns = [0]
+        sim = MockDevice(produces_program_frames=True)
+        esp = MockDevice(produces_program_frames=False)
+        ctrl = Controller(
+            [
+                StripConfig("main", 5, sim),
+                StripConfig("main", 5, esp),
+            ],
+            clock=lambda: now_ns[0],
+        )
+        manifest = CompiledManifest(
+            duration=5.0,
+            strips=[CompiledStripArtifact("main", 5, b'\x00')],
+            safe_intervals=[],
+        )
+
+        assert ctrl.load(manifest, target_groups=[[0, 1]])
+        assert ctrl.program_frame_stream_enabled is False
+
+    def test_abort_from_playing_resets_runtime_without_resetting_identity(self):
+        f = DualFixture()
+        ctrl = Controller(f.strips(), clock=f.clock)
+        assert ctrl.load(f.manifest())
+
+        f.set_time(0)
+        ctrl.play()
+        ctrl.drain_events()
+        f.set_time(1.0)
+        ctrl.tick_once()
+        ctrl.drain_program_frames()
+
+        session_id = ctrl.session_id
+        gen = ctrl.gen
+        f.right.is_connected = False
+
+        ctrl.abort("device lost transport")
+
+        assert ctrl.state == ControllerState.IDLE
+        assert ctrl.session_id == session_id
+        assert ctrl.gen == gen
+        assert ctrl.duration == 0.0
+        assert ctrl.session_strips == []
+        assert ctrl.session_target_groups == []
+        assert ctrl.program_frame_stream_enabled is False
+        assert f.left.stop_calls == 1
+        assert f.right.stop_calls == 0
+        assert ctrl.drain_program_frames() == []
+
+        evts = ctrl.drain_events()
+        assert [evt.kind for evt in evts] == [
+            ControllerEvent.Kind.ERROR,
+            ControllerEvent.Kind.STATE_CHANGED,
+        ]
+        assert evts[0].message == "device lost transport"
+        assert evts[1].state == ControllerState.IDLE
+
+    def test_abort_on_idle_is_noop(self):
+        ctrl = Controller([], clock=lambda: 0)
+        ctrl.abort("noop")
+        assert ctrl.state == ControllerState.IDLE
+        assert ctrl.drain_events() == []
+
+    def test_tick_once_drains_and_discards_frames_when_session_stream_disabled(self):
+        now_ns = [0]
+        sim = MockDevice(produces_program_frames=True)
+        esp = MockDevice(produces_program_frames=False)
+        ctrl = Controller(
+            [
+                StripConfig("main", 5, sim),
+                StripConfig("main", 5, esp),
+            ],
+            clock=lambda: now_ns[0],
+        )
+        manifest = CompiledManifest(
+            duration=5.0,
+            strips=[CompiledStripArtifact("main", 5, b'\x00')],
+            safe_intervals=[],
+        )
+
+        assert ctrl.load(manifest, target_groups=[[0, 1]])
+        now_ns[0] = _sec(0.0)
+        ctrl.play()
+        ctrl.drain_events()
+
+        now_ns[0] = _sec(1.0)
+        ctrl.tick_once()
+
+        assert ctrl.drain_program_frames() == []
+        assert sim.drain_frames() == []
+        assert esp.drain_frames() == []
+
+    def test_uses_device_matches_active_runtime_membership(self):
+        f = DualFixture()
+        ctrl = Controller(f.strips(), clock=f.clock)
+        assert ctrl.load(f.manifest())
+
+        assert ctrl.uses_device(f.left) is True
+        assert ctrl.uses_device(f.right) is True
+
+        other = MockDevice()
+        assert ctrl.uses_device(other) is False
+
+
+# =========================================================================
+# 10. Events
 # =========================================================================
 
 
@@ -1119,7 +1251,7 @@ class TestEvents:
 
 
 # =========================================================================
-# 10. Safe intervals property
+# 11. Safe intervals property
 # =========================================================================
 
 
@@ -1208,7 +1340,6 @@ class TestConstructor:
                 [StripConfig("strip", 5, None)],
                 clock=lambda: 0,
             )
-
 
 # =========================================================================
 # Debug seek from ENDED

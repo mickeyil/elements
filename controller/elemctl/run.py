@@ -109,24 +109,36 @@ def run_controller(
                 receiver.poll()
                 controller.tick_once()
 
-                for ev in controller.drain_events():
-                    log.info("event: %s %s", ev.kind.name, ev.message)
-
                 frames = controller.drain_program_frames()
                 if frames:
                     last_frame_time = time.monotonic()
 
+                disconnected = any(
+                    controller.uses_device(dev)
+                    and not getattr(dev, "is_connected", True)
+                    for dev in devices
+                )
+                if disconnected:
+                    controller.abort("active device disconnected")
+
+                for ev in controller.drain_events():
+                    log.info("event: %s %s", ev.kind.name, ev.message)
+
+                if disconnected:
+                    break
+
                 if controller.state == ControllerState.ENDED:
                     break
 
-                # If no frames arrive for stall_timeout, abort.
-                now_mono = time.monotonic()
-                if now_mono - last_frame_time > stall_timeout:
-                    log.error(
-                        "no frames received for %.1fs, aborting",
-                        stall_timeout,
-                    )
-                    break
+                if controller.program_frame_stream_enabled:
+                    # If no frames arrive for stall_timeout, abort.
+                    now_mono = time.monotonic()
+                    if now_mono - last_frame_time > stall_timeout:
+                        log.error(
+                            "no frames received for %.1fs, aborting",
+                            stall_timeout,
+                        )
+                        break
 
                 time.sleep(0.020)
         finally:

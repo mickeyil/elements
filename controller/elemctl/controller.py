@@ -88,6 +88,7 @@ class Controller:
         self._buckets: dict[int, _Bucket] = {}
 
         self._program_frames: list[ProgramFrame] = []
+        self._program_frame_stream_enabled = False
         self._events: list[ControllerEvent] = []
 
     # ------------------------------------------------------------------
@@ -142,6 +143,10 @@ class Controller:
     @property
     def session_target_groups(self) -> list[list[int]]:
         return [list(group) for group in self._session_target_groups]
+
+    @property
+    def program_frame_stream_enabled(self) -> bool:
+        return self._program_frame_stream_enabled
 
     # ------------------------------------------------------------------
     # Commands
@@ -257,17 +262,7 @@ class Controller:
                     for strip in prev_active_strips:
                         strip.device.stop()
                     self._state = ControllerState.IDLE
-                    self._duration = 0.0
-                    self._paused_t_rel = 0.0
-                    self._loop = False
-                    self._safe_intervals = []
-                    self._buckets.clear()
-                    self._program_frames = []
-                    self._active_strips = []
-                    self._slot_for_active = []
-                    self._session_manifest_strips = []
-                    self._session_target_groups = []
-                    self._expected_gen = []
+                    self._reset_active_runtime()
                 self._queue_event(
                     ControllerEvent.Kind.ERROR,
                     f"device load failed for {active_strip.strip_id}",
@@ -294,6 +289,10 @@ class Controller:
         self._session_manifest_strips = new_session_manifest_strips
         self._session_target_groups = new_session_target_groups
         self._expected_gen = [self._gen] * len(self._active_strips)
+        self._program_frame_stream_enabled = all(
+            s.device.produces_program_frames()
+            for s in self._active_strips
+        )
 
         self._state = ControllerState.LOADED
         for strip in stale_previous_strips:
@@ -301,6 +300,19 @@ class Controller:
         self._queue_event(ControllerEvent.Kind.SESSION_STARTED)
         self._queue_event(ControllerEvent.Kind.STATE_CHANGED)
         return True
+
+    def abort(self, reason: str) -> None:
+        if self._state == ControllerState.IDLE:
+            return
+
+        for s in self._active_strips:
+            if getattr(s.device, 'is_connected', True):
+                s.device.stop()
+
+        self._reset_active_runtime()
+        self._state = ControllerState.IDLE
+        self._queue_event(ControllerEvent.Kind.ERROR, reason)
+        self._queue_event(ControllerEvent.Kind.STATE_CHANGED)
 
     def play(self) -> None:
         if self._state in (ControllerState.IDLE, ControllerState.PLAYING):
@@ -413,7 +425,11 @@ class Controller:
 
         # 2. Drain active frames, filter by gen, assemble into logical buckets
         for i, s in enumerate(self._active_strips):
-            for frame in s.device.drain_frames():
+            drained = s.device.drain_frames()
+            if not self._program_frame_stream_enabled:
+                continue
+
+            for frame in drained:
                 if frame.gen != self._expected_gen[i]:
                     continue
 
@@ -498,6 +514,23 @@ class Controller:
                 message=message,
             )
         )
+
+    def _reset_active_runtime(self) -> None:
+        self._duration = 0.0
+        self._paused_t_rel = 0.0
+        self._loop = False
+        self._safe_intervals = []
+        self._active_strips = []
+        self._slot_for_active = []
+        self._session_manifest_strips = []
+        self._session_target_groups = []
+        self._expected_gen = []
+        self._buckets.clear()
+        self._program_frames = []
+        self._program_frame_stream_enabled = False
+
+    def uses_device(self, device: ControllerDevice) -> bool:
+        return any(s.device is device for s in self._active_strips)
 
     def _max_current_t_rel(self, now: int) -> float:
         if not self._active_strips:

@@ -136,6 +136,9 @@ class _FakeDevice:
     def drain_frames(self):
         return []
 
+    def produces_program_frames(self):
+        return False
+
     def supports_debug_seek(self):
         return False
 
@@ -207,6 +210,9 @@ class _FrameProducingDevice(_FakeDevice):
         out = self._pending_frames[:]
         self._pending_frames.clear()
         return out
+
+    def produces_program_frames(self):
+        return True
 
 
 class _TickCountingDevice(_FakeDevice):
@@ -3111,6 +3117,86 @@ class TestPresenceEvents:
         assert max(controller_indices) < min(status_indices), (
             'controller events must appear before device_status'
         )
+
+    def test_active_disconnect_aborts_runtime_same_tick(self):
+        clock = _FakeClock()
+        svc, fakes = _make_service(clock=clock)
+
+        svc.handle_cmd({
+            'id': 1, 'cmd': 'load',
+            'source': _SIMPLE_DSL, 'beat': 1.0, 'duration': 0.5,
+        })
+        svc.handle_cmd({'id': 2, 'cmd': 'play'})
+        svc.tick_once()  # drain initial load/play events
+
+        fakes[0].is_connected = False
+        clock.now += 1_000_000_000
+        json_msgs, _ = svc.tick_once()
+        events = _decode_json_msgs(json_msgs)
+
+        error_indices = [
+            i for i, e in enumerate(events)
+            if e.get('event') == 'error'
+        ]
+        idle_indices = [
+            i for i, e in enumerate(events)
+            if e.get('event') == 'state' and e.get('state') == 'idle'
+        ]
+        status_indices = [
+            i for i, e in enumerate(events)
+            if e.get('event') == 'device_status'
+        ]
+
+        assert error_indices, 'expected abort error event'
+        assert idle_indices, 'expected idle state event after abort'
+        assert status_indices, 'expected device_status disconnect event'
+        assert max(error_indices + idle_indices) < min(status_indices)
+        assert events[error_indices[0]]['message'] == 'active device disconnected: id=1:disconnected'
+        assert svc._controller.state == ControllerState.IDLE
+
+    def test_multiple_active_disconnects_abort_once(self):
+        config = Config(frame_port=1, devices=[
+            DeviceConfig(1, 'sim-left', 'sim', '127.0.0.1', 9001, 'left', 5),
+            DeviceConfig(2, 'sim-right', 'sim', '127.0.0.1', 9002, 'right', 5),
+        ])
+        fakes = [_FakeDevice(), _FakeDevice()]
+        clock = _FakeClock()
+        svc = ControllerService(
+            config,
+            receiver_factory=_NoopReceiver,
+            device_factory=_make_fake_factory(fakes),
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir),
+            clock=clock,
+        )
+
+        svc.handle_cmd({
+            'id': 1, 'cmd': 'load',
+            'source': _LEFT_RIGHT_DSL, 'beat': 1.0, 'duration': 0.5,
+        })
+        svc.handle_cmd({'id': 2, 'cmd': 'play'})
+        svc.tick_once()  # drain initial load/play events
+
+        for fake in fakes:
+            fake.ensure_connected = lambda: False
+            fake.is_connected = False
+        clock.now += 1_000_000_000
+        json_msgs, _ = svc.tick_once()
+        events = _decode_json_msgs(json_msgs)
+
+        error_events = [e for e in events if e.get('event') == 'error']
+        idle_events = [
+            e for e in events
+            if e.get('event') == 'state' and e.get('state') == 'idle'
+        ]
+        status_events = [e for e in events if e.get('event') == 'device_status']
+
+        assert len(error_events) == 1
+        assert len(idle_events) == 1
+        assert len(status_events) == 2
+        assert error_events[0]['message'] == (
+            'active device disconnected: id=1:disconnected; id=2:disconnected'
+        )
+        assert svc._controller.state == ControllerState.IDLE
 
 
 class TestProbeAllBaseline:

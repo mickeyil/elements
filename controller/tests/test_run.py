@@ -152,6 +152,7 @@ class _SilentDevice:
     def __init__(self, device_id, host, tcp_port, device_type, strip_length, frame_port, udp_receiver):
         self._state = DeviceState.IDLE
         self._t0_ns = 0
+        self.is_connected = True
 
     def load(self, blob, gen):
         self._state = DeviceState.LOADED
@@ -190,6 +191,9 @@ class _SilentDevice:
     def drain_frames(self):
         return []
 
+    def produces_program_frames(self):
+        return False
+
     def supports_debug_seek(self):
         return False
 
@@ -198,19 +202,25 @@ class _SilentDevice:
 
     def close(self):
         self._state = DeviceState.IDLE
+        self.is_connected = False
 
 
-class TestStallDetection:
-    """Test that stalled playback aborts instead of hanging."""
+class _DisconnectingDevice(_SilentDevice):
+    def tick_once(self, now_ns):
+        self.is_connected = False
 
-    def _make_config(self):
+
+class TestNonFrameRunBehavior:
+    """Real-ESP-style no-frame sessions should not use frame stall logic."""
+
+    def _make_config(self, *, device_type="esp32"):
         return Config(
             frame_port=1,  # unused by _NoopReceiver
             devices=[
                 DeviceConfig(
                     device_id=1,
                     device_uid="fake",
-                    device_type="sim",
+                    device_type=device_type,
                     host="127.0.0.1",
                     tcp_port=1,
                     strip_id="test",
@@ -227,30 +237,30 @@ class TestStallDetection:
             safe_intervals=[],
         )
 
-    def test_stall_aborts(self):
-        """Device goes PLAYING but emits no frames → runner aborts."""
+    def test_silent_non_frame_device_ends_without_false_stall(self):
+        """A non-frame-producing session should end naturally, not stall-abort."""
         state = run_controller(
             self._make_config(),
-            self._make_manifest(duration=10.0),
-            stall_timeout=0.15,
+            self._make_manifest(duration=0.1),
+            stall_timeout=0.01,
             receiver_factory=_NoopReceiver,
             device_factory=_SilentDevice,
         )
-        # Runner should abort (stall), not reach ENDED
-        assert state == ControllerState.PLAYING
+        assert state == ControllerState.ENDED
 
-    def test_stall_aborts_quickly(self):
-        """Stall abort should happen within ~stall_timeout, not hang."""
+    def test_active_disconnect_aborts_quickly(self):
+        """A participating device transport loss should abort promptly."""
         t0 = time.monotonic()
-        run_controller(
+        state = run_controller(
             self._make_config(),
             self._make_manifest(duration=10.0),
             stall_timeout=0.2,
             receiver_factory=_NoopReceiver,
-            device_factory=_SilentDevice,
+            device_factory=_DisconnectingDevice,
         )
         elapsed = time.monotonic() - t0
-        assert elapsed < 1.0, f"took {elapsed:.1f}s, should abort in ~0.2s"
+        assert state == ControllerState.IDLE
+        assert elapsed < 1.0, f"took {elapsed:.1f}s, should abort promptly on disconnect"
 
 
 class TestZeroDeviceConfig:

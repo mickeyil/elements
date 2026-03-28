@@ -905,6 +905,22 @@ class TestErrors:
 
 
 class TestCapability:
+    def test_sim_produces_program_frames(self, receiver):
+        dev = NetworkDevice(
+            device_id=1, host='127.0.0.1', tcp_port=1,
+            device_type='sim', strip_length=5,
+            frame_port=_receiver_port(receiver), udp_receiver=receiver,
+        )
+        assert dev.produces_program_frames()
+
+    def test_esp32_no_program_frames(self, receiver):
+        dev = NetworkDevice(
+            device_id=1, host='127.0.0.1', tcp_port=1,
+            device_type='esp32', strip_length=5,
+            frame_port=_receiver_port(receiver), udp_receiver=receiver,
+        )
+        assert not dev.produces_program_frames()
+
     def test_sim_supports_debug_seek(self, receiver):
         dev = NetworkDevice(
             device_id=1, host='127.0.0.1', tcp_port=1,
