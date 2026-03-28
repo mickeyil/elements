@@ -3,9 +3,15 @@
 
 #include <chrono>
 
-ESPSimulated::ESPSimulated(uint16_t strip_length)
-    : PlaybackDevice(strip_length, /*gamma_enabled=*/false)
+ESPSimulated::ESPSimulated()
+    : PlaybackDevice(/*gamma_enabled=*/false)
 {
+}
+
+ESPSimulated::ESPSimulated(uint16_t strip_length)
+    : ESPSimulated()
+{
+    apply_hardware_profile(HardwareProfile{strip_length});
 }
 
 int64_t ESPSimulated::now_mono() const
@@ -17,17 +23,26 @@ int64_t ESPSimulated::now_mono() const
 
 void ESPSimulated::output_frame(float t_rel)
 {
+    const uint16_t length = strip_length();
+    const uint8_t* rgb = rgb_data();
+
     SimRgbFrame f;
     f.gen = _gen;
     f.frame_index = _frame_index;
     f.t_rel = t_rel;
-    f.rgb.assign(_rgb_buf, _rgb_buf + _strip_length * 3);
+    f.rgb.assign(rgb, rgb + length * 3);
     _frames.push_back(std::move(f));
 }
 
 void ESPSimulated::send_telemetry(DeviceState s, float t, const char* err)
 {
     _telemetry.push_back({s, t, err ? err : ""});
+}
+
+void ESPSimulated::clear_queued_runtime_outputs()
+{
+    _frames.clear();
+    _telemetry.clear();
 }
 
 std::vector<SimRgbFrame> ESPSimulated::drain_frames()

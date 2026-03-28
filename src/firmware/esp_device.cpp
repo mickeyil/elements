@@ -9,9 +9,8 @@
 namespace {
 
 constexpr uint8_t LED_PIN = 13;
-constexpr uint16_t MAX_DEVICE_PIXELS = 250;
 
-CRGB g_leds[MAX_DEVICE_PIXELS];
+CRGB g_leds[kMaxStripPixels];
 bool g_leds_initialized = false;
 
 const char* device_state_name(DeviceState state)
@@ -36,11 +35,11 @@ const char* device_state_name(DeviceState state)
 void esp_device_init_leds()
 {
     if (!g_leds_initialized) {
-        FastLED.addLeds<WS2812B, LED_PIN, GRB>(g_leds, MAX_DEVICE_PIXELS);
+        FastLED.addLeds<WS2812B, LED_PIN, GRB>(g_leds, kMaxStripPixels);
         FastLED.setBrightness(255);
         g_leds_initialized = true;
     }
-    fill_solid(g_leds, MAX_DEVICE_PIXELS, CRGB::Black);
+    fill_solid(g_leds, kMaxStripPixels, CRGB::Black);
     FastLED.show();
 }
 
@@ -49,13 +48,19 @@ void esp_device_clear_leds()
     if (!g_leds_initialized) {
         return;
     }
-    fill_solid(g_leds, MAX_DEVICE_PIXELS, CRGB::Black);
+    fill_solid(g_leds, kMaxStripPixels, CRGB::Black);
     FastLED.show();
 }
 
-ESPDevice::ESPDevice(uint16_t strip_length)
-    : PlaybackDevice(strip_length, /*gamma_enabled=*/true)
+ESPDevice::ESPDevice()
+    : PlaybackDevice(/*gamma_enabled=*/true)
 {
+}
+
+ESPDevice::ESPDevice(uint16_t strip_length)
+    : ESPDevice()
+{
+    apply_hardware_profile(HardwareProfile{strip_length});
 }
 
 int64_t ESPDevice::now_mono() const
@@ -73,12 +78,15 @@ int64_t ESPDevice::playback_t0(int64_t controller_t0, float target_t_rel) const
 
 void ESPDevice::output_frame(float t_rel)
 {
-    memcpy(g_leds, _rgb_buf, _strip_length * 3);
-    if (_strip_length < MAX_DEVICE_PIXELS) {
+    const uint16_t length = strip_length();
+    const uint8_t* rgb = rgb_data();
+
+    memcpy(g_leds, rgb, length * 3);
+    if (length < kMaxStripPixels) {
         memset(
-            g_leds + _strip_length,
+            g_leds + length,
             0,
-            (MAX_DEVICE_PIXELS - _strip_length) * sizeof(CRGB)
+            (kMaxStripPixels - length) * sizeof(CRGB)
         );
     }
     FastLED.show();
@@ -87,7 +95,7 @@ void ESPDevice::output_frame(float t_rel)
     frame.gen = _gen;
     frame.frame_index = _frame_index;
     frame.t_rel = t_rel;
-    frame.rgb.assign(_rgb_buf, _rgb_buf + _strip_length * 3);
+    frame.rgb.assign(rgb, rgb + length * 3);
     _frames.push_back(std::move(frame));
 }
 
@@ -115,4 +123,9 @@ std::vector<EspRgbFrame> ESPDevice::drain_frames()
     std::vector<EspRgbFrame> out;
     out.swap(_frames);
     return out;
+}
+
+void ESPDevice::clear_queued_runtime_outputs()
+{
+    _frames.clear();
 }

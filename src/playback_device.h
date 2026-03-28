@@ -1,17 +1,27 @@
 #pragma once
 
+#include "hardware_profile.h"
+
+#include <array>
 #include <cstdint>
 #include <cstddef>
+#include <memory>
+
+#include "strip.h"
 
 class Engine;
-class Strip;
 
 enum class DeviceState : uint8_t { IDLE, LOADED, PLAYING, PAUSED, ENDED };
 
 class PlaybackDevice {
 public:
+    explicit PlaybackDevice(bool gamma_enabled = true);
     PlaybackDevice(uint16_t strip_length, bool gamma_enabled = true);
     virtual ~PlaybackDevice();
+
+    bool has_hardware_profile() const;
+    const HardwareProfile& hardware_profile() const;
+    bool apply_hardware_profile(const HardwareProfile& profile);
 
     // Command handlers
     bool handle_load(const uint8_t* blob, size_t blob_len, uint16_t gen);
@@ -22,6 +32,7 @@ public:
     void handle_stop();
     void handle_sync_result(int64_t offset);
     void clear_sync();
+    void reset_for_detach();
 
     // Per-frame tick — call in main loop
     bool tick_once();
@@ -43,11 +54,12 @@ protected:
     virtual void output_frame(float t_rel) = 0;
     virtual void send_telemetry(DeviceState s, float t, const char* err = nullptr) {}
     virtual int64_t playback_t0(int64_t controller_t0, float target_t_rel) const;
+    virtual void clear_queued_runtime_outputs() {}
 
-    uint16_t _strip_length;
-    uint8_t* _rgb_buf;
-    Strip* _strip;
-    Engine* _engine = nullptr;
+    std::array<uint8_t, kMaxStripPixels * 3> _rgb_storage{};
+    Strip _strip;
+    std::unique_ptr<Engine> _engine;
+    HardwareProfile _profile{};
     DeviceState _state = DeviceState::IDLE;
     float _duration = 0.0f;
     int64_t _t0 = 0;
@@ -58,4 +70,11 @@ protected:
     uint32_t _frame_index = 0;
     float _paused_t_rel = 0.0f;
     bool _gamma_enabled;
+
+private:
+    void unload_program_();
+    void reset_program_state_();
+    void reset_timing_state_();
+    void reset_sync_state_();
+    void clear_render_buffer_();
 };

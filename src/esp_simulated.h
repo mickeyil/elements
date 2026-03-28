@@ -21,6 +21,7 @@ struct SimTelemetry {
 
 class ESPSimulated : public PlaybackDevice {
 public:
+    ESPSimulated();
     explicit ESPSimulated(uint16_t strip_length);
 
     // Drain queued frames/telemetry — destructive, order-preserving
@@ -36,6 +37,7 @@ public:
 protected:
     void output_frame(float t_rel) override;
     void send_telemetry(DeviceState s, float t, const char* err = nullptr) override;
+    void clear_queued_runtime_outputs() override;
 
 private:
     std::vector<SimRgbFrame> _frames;

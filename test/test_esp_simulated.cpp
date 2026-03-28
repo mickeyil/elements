@@ -13,6 +13,7 @@
 
 class ControlledESPSimulated : public ESPSimulated {
 public:
+    ControlledESPSimulated() : ESPSimulated() {}
     ControlledESPSimulated(uint16_t len) : ESPSimulated(len) {}
 
     void set_time(int64_t us) { _now = us; }
@@ -124,6 +125,53 @@ TEST_CASE("ESPSimulated construction", "[espsim]") {
     ControlledESPSimulated dev(5);
     CHECK(dev.state() == DeviceState::IDLE);
     CHECK(dev.strip_length() == 5);
+    CHECK(dev.drain_frames().empty());
+    CHECK(dev.drain_telemetry().empty());
+}
+
+TEST_CASE("Unprofiled ESPSimulated rejects load until profiled", "[espsim][profile]") {
+    ControlledESPSimulated dev;
+    auto blob = load_blob(SHIFT_FIXTURE);
+
+    CHECK_FALSE(dev.has_hardware_profile());
+    CHECK(dev.strip_length() == 0);
+    CHECK_FALSE(dev.handle_load(blob.data(), blob.size(), 1));
+    CHECK(dev.state() == DeviceState::IDLE);
+    CHECK(dev.drain_frames().empty());
+    CHECK(dev.drain_telemetry().empty());
+
+    REQUIRE(dev.apply_hardware_profile(HardwareProfile{5}));
+    REQUIRE(dev.handle_load(blob.data(), blob.size(), 1));
+    CHECK(dev.state() == DeviceState::LOADED);
+}
+
+TEST_CASE("Profile change and detach clear queued simulator outputs", "[espsim][profile]") {
+    ControlledESPSimulated dev(5);
+    auto blob = load_blob(SHIFT_FIXTURE);
+
+    REQUIRE(dev.handle_load(blob.data(), blob.size(), 1));
+    dev.set_time(0);
+    dev.handle_start(0);
+    dev.set_time(1'000'000);
+    REQUIRE(dev.tick_once());
+
+    REQUIRE(dev.apply_hardware_profile(HardwareProfile{4}));
+    CHECK(dev.state() == DeviceState::IDLE);
+    CHECK(dev.strip_length() == 4);
+    CHECK(dev.drain_frames().empty());
+    CHECK(dev.drain_telemetry().empty());
+
+    REQUIRE(dev.handle_load(blob.data(), blob.size(), 2));
+    dev.handle_sync_result(500'000);
+    dev.set_time(0);
+    dev.handle_start(0);
+    dev.set_time(1'000'000);
+    REQUIRE(dev.tick_once());
+
+    dev.reset_for_detach();
+    CHECK(dev.state() == DeviceState::IDLE);
+    CHECK(dev.strip_length() == 4);
+    CHECK_FALSE(dev.sync_valid());
     CHECK(dev.drain_frames().empty());
     CHECK(dev.drain_telemetry().empty());
 }

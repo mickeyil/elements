@@ -18,6 +18,9 @@ struct TelemetryEntry {
 
 class TestDevice : public PlaybackDevice {
 public:
+    TestDevice()
+        : PlaybackDevice(/*gamma_enabled=*/false) {}
+
     TestDevice(uint16_t len)
         : PlaybackDevice(len, /*gamma_enabled=*/false) {}
 
@@ -42,6 +45,9 @@ private:
 
 class TestEspStyleDevice : public PlaybackDevice {
 public:
+    TestEspStyleDevice()
+        : PlaybackDevice(/*gamma_enabled=*/false) {}
+
     TestEspStyleDevice(uint16_t len)
         : PlaybackDevice(len, /*gamma_enabled=*/false) {}
 
@@ -95,6 +101,111 @@ static void check_pixel(const uint8_t* rgb, int i, uint8_t expected) {
 // ---------------------------------------------------------------------------
 // State machine basics
 // ---------------------------------------------------------------------------
+
+TEST_CASE("Unprofiled device rejects load until profile is applied", "[playback][profile]") {
+    TestDevice dev;
+    auto blob = load_blob(SHIFT_FIXTURE);
+
+    CHECK_FALSE(dev.has_hardware_profile());
+    CHECK(dev.strip_length() == 0);
+    CHECK_FALSE(dev.handle_load(blob.data(), blob.size(), 1));
+    CHECK(dev.state() == DeviceState::IDLE);
+    CHECK(dev.output_frame_count == 0);
+    CHECK(dev.telemetry.empty());
+
+    REQUIRE(dev.apply_hardware_profile(HardwareProfile{5}));
+    CHECK(dev.has_hardware_profile());
+    CHECK(dev.strip_length() == 5);
+
+    REQUIRE(dev.handle_load(blob.data(), blob.size(), 1));
+    CHECK(dev.state() == DeviceState::LOADED);
+}
+
+TEST_CASE("Applying hardware profile is idempotent and non-presenting", "[playback][profile]") {
+    TestDevice dev;
+    auto blob = load_blob(SHIFT_FIXTURE);
+
+    REQUIRE(dev.apply_hardware_profile(HardwareProfile{5}));
+    CHECK(dev.output_frame_count == 0);
+    CHECK(dev.telemetry.empty());
+
+    REQUIRE(dev.apply_hardware_profile(HardwareProfile{5}));
+    CHECK(dev.output_frame_count == 0);
+    CHECK(dev.telemetry.empty());
+
+    REQUIRE(dev.handle_load(blob.data(), blob.size(), 1));
+    dev.set_time(0);
+    dev.handle_start(0);
+    dev.set_time(1'000'000);
+    REQUIRE(dev.tick_once());
+
+    const int baseline_frames = dev.output_frame_count;
+    const size_t baseline_telemetry = dev.telemetry.size();
+
+    REQUIRE(dev.apply_hardware_profile(HardwareProfile{4}));
+    CHECK(dev.has_hardware_profile());
+    CHECK(dev.strip_length() == 4);
+    CHECK(dev.state() == DeviceState::IDLE);
+    CHECK(dev.output_frame_count == baseline_frames);
+    CHECK(dev.telemetry.size() == baseline_telemetry);
+    CHECK_FALSE(dev.sync_valid());
+    CHECK_FALSE(dev.playback_uses_sync());
+}
+
+TEST_CASE("reset_for_detach invalidates runtime without presenting", "[playback][profile]") {
+    TestDevice dev(5);
+    auto blob = load_blob(SHIFT_FIXTURE);
+
+    REQUIRE(dev.handle_load(blob.data(), blob.size(), 1));
+    dev.handle_sync_result(250'000);
+    dev.set_time(0);
+    dev.handle_start(0);
+    dev.set_time(1'000'000);
+    REQUIRE(dev.tick_once());
+
+    const int baseline_frames = dev.output_frame_count;
+    dev.reset_for_detach();
+
+    CHECK(dev.has_hardware_profile());
+    CHECK(dev.strip_length() == 5);
+    CHECK(dev.state() == DeviceState::IDLE);
+    CHECK(dev.current_t_rel() == Catch::Approx(0.0f));
+    CHECK(dev.output_frame_count == baseline_frames);
+    CHECK_FALSE(dev.sync_valid());
+    CHECK_FALSE(dev.playback_uses_sync());
+    for (int i = 0; i < 5 * 3; i++) {
+        CHECK(dev.rgb_data()[i] == 0);
+    }
+
+    REQUIRE(dev.handle_load(blob.data(), blob.size(), 2));
+    CHECK(dev.state() == DeviceState::LOADED);
+}
+
+TEST_CASE("handle_stop and reset_for_detach remain distinct", "[playback][profile]") {
+    TestDevice stop_dev(5);
+    TestDevice detach_dev(5);
+    auto blob = load_blob(SHIFT_FIXTURE);
+
+    REQUIRE(stop_dev.handle_load(blob.data(), blob.size(), 1));
+    stop_dev.set_time(0);
+    stop_dev.handle_start(0);
+    stop_dev.set_time(1'000'000);
+    REQUIRE(stop_dev.tick_once());
+    const int stop_frames_before = stop_dev.output_frame_count;
+    stop_dev.handle_stop();
+    CHECK(stop_dev.state() == DeviceState::LOADED);
+    CHECK(stop_dev.output_frame_count == stop_frames_before + 1);
+
+    REQUIRE(detach_dev.handle_load(blob.data(), blob.size(), 1));
+    detach_dev.set_time(0);
+    detach_dev.handle_start(0);
+    detach_dev.set_time(1'000'000);
+    REQUIRE(detach_dev.tick_once());
+    const int detach_frames_before = detach_dev.output_frame_count;
+    detach_dev.reset_for_detach();
+    CHECK(detach_dev.state() == DeviceState::IDLE);
+    CHECK(detach_dev.output_frame_count == detach_frames_before);
+}
 
 TEST_CASE("State machine: IDLE → LOADED → PLAYING → ENDED", "[playback]") {
     TestDevice dev(5);

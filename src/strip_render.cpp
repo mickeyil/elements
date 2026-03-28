@@ -16,13 +16,18 @@
 
 class RenderDevice : public PlaybackDevice {
 public:
-    RenderDevice(uint16_t len) : PlaybackDevice(len, /*gamma_enabled=*/false) {}
+    explicit RenderDevice(uint16_t len)
+        : PlaybackDevice(/*gamma_enabled=*/false)
+    {
+        apply_hardware_profile(HardwareProfile{len});
+    }
+
     void set_now(int64_t us) { _now = us; }
     int64_t now_mono() const override { return _now; }
 protected:
     void output_frame(float t_rel) override {
         fwrite(&t_rel, sizeof(float), 1, stdout);
-        fwrite(_rgb_buf, 1, _strip_length * 3, stdout);
+        fwrite(rgb_data(), 1, strip_length() * 3, stdout);
     }
 private:
     int64_t _now = 0;
