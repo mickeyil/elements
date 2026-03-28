@@ -90,20 +90,26 @@ if(BUILD_TESTS)
     if(PYTHON3)
         add_custom_command(
             OUTPUT ${CMAKE_SOURCE_DIR}/test/fixtures/test_animation.bin
-            COMMAND ${PYTHON3} ${CMAKE_SOURCE_DIR}/test/fixtures/generate.py
+            COMMAND ${CMAKE_COMMAND} -E env
+                    PYTHONPATH=${CMAKE_SOURCE_DIR}/compiler
+                    ${PYTHON3} ${CMAKE_SOURCE_DIR}/test/fixtures/generate.py
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
             COMMENT "Generating test fixture test_animation.bin"
         )
         add_custom_command(
             OUTPUT ${CMAKE_SOURCE_DIR}/test/fixtures/test_shift.bin
-            COMMAND ${PYTHON3} ${CMAKE_SOURCE_DIR}/test/fixtures/generate_shift.py
+            COMMAND ${CMAKE_COMMAND} -E env
+                    PYTHONPATH=${CMAKE_SOURCE_DIR}/compiler
+                    ${PYTHON3} ${CMAKE_SOURCE_DIR}/test/fixtures/generate_shift.py
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
             COMMENT "Generating test fixture test_shift.bin"
         )
         add_custom_command(
             OUTPUT ${CMAKE_SOURCE_DIR}/test/fixtures/test_dual_shift_left.bin
                    ${CMAKE_SOURCE_DIR}/test/fixtures/test_dual_shift_right.bin
-            COMMAND ${PYTHON3} ${CMAKE_SOURCE_DIR}/test/fixtures/generate_dual_shift.py
+            COMMAND ${CMAKE_COMMAND} -E env
+                    PYTHONPATH=${CMAKE_SOURCE_DIR}/compiler
+                    ${PYTHON3} ${CMAKE_SOURCE_DIR}/test/fixtures/generate_dual_shift.py
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
             COMMENT "Generating dual-strip test fixtures"
         )
