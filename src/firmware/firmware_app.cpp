@@ -55,7 +55,6 @@ void FirmwareApp::run_once()
 
     if (_connection.is_attached()) {
         _device.tick_once();
-        _connection.send_frames();
     }
 
     maybe_log_status(

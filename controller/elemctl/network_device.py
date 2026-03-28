@@ -14,6 +14,9 @@ import socket
 from .device import DeviceFrame, DeviceState
 from .udp_receiver import UdpFrameReceiver
 from .wire import (
+    ACK_ERROR,
+    ACK_OK,
+    ACK_WRONG_STATE,
     encode_attach,
     encode_debug_seek,
     encode_jump,
@@ -31,7 +34,6 @@ from .wire import (
 log = logging.getLogger(__name__)
 
 _ACK_TIMEOUT = 5.0  # seconds
-_FRAME_LOG_INTERVAL_NS = 10_000_000_000
 
 
 class NetworkDevice:
@@ -64,12 +66,8 @@ class NetworkDevice:
         self._t0_us: int = 0
         self._last_t_rel: float = 0.0
         self._frames: list[DeviceFrame] = []
-        self._frames_received_total = 0
-        self._frames_received_since_log = 0
         self._last_frame_index: int | None = None
         self._last_frame_gen: int | None = None
-        self._last_frame_log_ns = 0
-        self._log_next_frame = False
         self._activity_observed = False
 
         udp_receiver.register_device(device_id)
@@ -90,24 +88,36 @@ class NetworkDevice:
         if status is None:
             self._disconnect()
             return False
-        if status != 0:
-            # Device rejected the blob (decode error). Per PlaybackDevice,
-            # the device is now IDLE. Reset local state to match.
+        if status == ACK_OK:
             self._reset_runtime_caches()
+            self._state = DeviceState.LOADED
+            self._gen = gen
+            return True
+        if status == ACK_WRONG_STATE:
+            log.warning(
+                'load rejected in wrong state for %s:%d (device_id=%d)',
+                self._host, self._tcp_port, self._device_id,
+            )
+            self._disconnect()
             self._state = DeviceState.IDLE
             return False
+        if status != ACK_ERROR:
+            log.warning(
+                'load failed with unexpected ACK status=%s for %s:%d (device_id=%d)',
+                status, self._host, self._tcp_port, self._device_id,
+            )
 
+        # Device rejected the blob (decode/app failure). Per PlaybackDevice,
+        # the device is now IDLE. Reset local state to match.
         self._reset_runtime_caches()
-        self._state = DeviceState.LOADED
-        self._gen = gen
-        return True
+        self._state = DeviceState.IDLE
+        return False
 
     def start(self, t0_ns: int) -> None:
         t0_us = t0_ns // 1000
         if self._send(encode_start(t0_us)):
             self._state = DeviceState.PLAYING
             self._t0_us = t0_us
-            self._log_next_frame = True
 
     def jump(self, t0_ns: int, t_rel: float, gen: int) -> None:
         t0_us = t0_ns // 1000
@@ -115,7 +125,6 @@ class NetworkDevice:
             was_playing = self._state == DeviceState.PLAYING
             self._gen = gen
             self._t0_us = t0_us
-            self._log_next_frame = True
             if not was_playing:
                 self._state = DeviceState.PAUSED
                 self._last_t_rel = t_rel
@@ -131,13 +140,11 @@ class NetworkDevice:
         if self._send(encode_resume(t0_us)):
             self._state = DeviceState.PLAYING
             self._t0_us = t0_us
-            self._log_next_frame = True
 
     def stop(self) -> None:
         if self._send(encode_stop()):
             self._state = DeviceState.LOADED
             self._last_t_rel = 0.0
-            self._log_next_frame = False
 
     def reboot(self) -> bool:
         if not self._connected and not self._connect():
@@ -149,7 +156,7 @@ class NetworkDevice:
         if status is None:
             self._disconnect()
             return False
-        if status != 0:
+        if status != ACK_OK:
             return False
 
         log.info('device %d reboot acknowledged', self._device_id)
@@ -175,41 +182,9 @@ class NetworkDevice:
         if frames:
             self._activity_observed = True
             last = frames[-1]
-            self._frames_received_total += len(frames)
-            self._frames_received_since_log += len(frames)
             self._last_frame_index = last.frame_index
             self._last_frame_gen = last.gen
             self._last_t_rel = last.t_rel
-
-            if self._device_type == 'esp32':
-                if self._log_next_frame:
-                    log.info(
-                        'device %d first frame received gen=%d frame_index=%d t_rel=%.3f batch=%d total=%d',
-                        self._device_id,
-                        last.gen,
-                        last.frame_index,
-                        last.t_rel,
-                        len(frames),
-                        self._frames_received_total,
-                    )
-                    self._log_next_frame = False
-                    self._frames_received_since_log = 0
-                    self._last_frame_log_ns = now_ns
-                elif (
-                    self._last_frame_log_ns == 0
-                    or now_ns - self._last_frame_log_ns >= _FRAME_LOG_INTERVAL_NS
-                ):
-                    log.info(
-                        'device %d frames received recent=%d total=%d last_gen=%d last_frame_index=%d t_rel=%.3f',
-                        self._device_id,
-                        self._frames_received_since_log,
-                        self._frames_received_total,
-                        last.gen,
-                        last.frame_index,
-                        last.t_rel,
-                    )
-                    self._frames_received_since_log = 0
-                    self._last_frame_log_ns = now_ns
         self._check_liveness()
 
     def state(self) -> DeviceState:
@@ -301,7 +276,7 @@ class NetworkDevice:
             if not self._send(encode_set_profile(self._strip_length)):
                 return False
             status = self._recv_ack()
-            if status != 0:
+            if status != ACK_OK:
                 log.warning(
                     'set_profile for %s:%d failed with status=%s',
                     self._host, self._tcp_port, status,
@@ -311,7 +286,7 @@ class NetworkDevice:
             if not self._send(encode_attach(self._device_id, self._frame_port)):
                 return False
             status = self._recv_ack()
-            if status != 0:
+            if status != ACK_OK:
                 log.warning(
                     'attach for %s:%d failed with status=%s',
                     self._host, self._tcp_port, status,
@@ -339,19 +314,12 @@ class NetworkDevice:
             self._sock = None
 
     def _reset_runtime_caches(self) -> None:
-        """Reset session-scoped runtime observations.
-
-        Intentionally preserves `_frames_received_total`, which is a lifetime
-        diagnostic counter rather than session-scoped state.
-        """
+        """Reset session-scoped runtime observations."""
         self._t0_us = 0
         self._last_t_rel = 0.0
         self._frames.clear()
-        self._frames_received_since_log = 0
         self._last_frame_index = None
         self._last_frame_gen = None
-        self._last_frame_log_ns = 0
-        self._log_next_frame = False
 
     def _send(self, data: bytes) -> bool:
         if not self._connected or self._sock is None:

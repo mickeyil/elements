@@ -7,7 +7,6 @@ namespace firmware {
 
 constexpr uint16_t kTcpPort = 6053;
 constexpr uint16_t kDiscoveryPort = 6040;
-constexpr uint16_t kMaxDevicePixels = 250;
 
 constexpr uint8_t kCmdSetProfile = 0x05;
 constexpr uint8_t kCmdAttach = 0x06;
@@ -24,6 +23,9 @@ constexpr uint8_t kCmdReboot = 0x30;
 constexpr uint8_t kCmdDebugSeek = 0x22;
 constexpr uint8_t kCmdDebugStep = 0x23;
 constexpr uint8_t kCmdAck = 0x80;
+constexpr uint8_t kAckOk = 0;
+constexpr uint8_t kAckError = 1;
+constexpr uint8_t kAckWrongState = 2;
 
 constexpr uint16_t kDiscoveryMagic = 0x454C;
 constexpr uint8_t kDiscoveryTypeReject = 0x01;

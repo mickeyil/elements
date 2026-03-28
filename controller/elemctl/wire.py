@@ -26,6 +26,9 @@ CMD_STOP = 0x15
 CMD_REBOOT = 0x30
 CMD_DEBUG_SEEK = 0x22
 CMD_ACK = 0x80
+ACK_OK = 0
+ACK_ERROR = 1
+ACK_WRONG_STATE = 2
 
 # UDP frame header: device_id(u16) + gen(u16) + frame_index(u32) + t_rel(f32)
 UDP_FRAME_HEADER = struct.Struct('<HHIf')

@@ -40,6 +40,9 @@ static constexpr uint8_t CMD_STOP       = 0x15;
 static constexpr uint8_t CMD_DEBUG_SEEK = 0x22;
 static constexpr uint8_t CMD_DEBUG_STEP = 0x23;
 static constexpr uint8_t CMD_ACK        = 0x80;
+static constexpr uint8_t ACK_OK         = 0;
+static constexpr uint8_t ACK_ERROR      = 1;
+static constexpr uint8_t ACK_WRONG_STATE = 2;
 
 static volatile sig_atomic_t g_running = 1;
 
@@ -183,7 +186,7 @@ static int poll_tcp_commands(int tcp_fd,
         switch (cmd_type) {
         case CMD_SET_PROFILE: {
             if (payload_len < 2) {
-                send_ack(tcp_fd, 1);
+                send_ack(tcp_fd, ACK_ERROR);
                 break;
             }
 
@@ -191,14 +194,14 @@ static int poll_tcp_commands(int tcp_fd,
             memcpy(&strip_length, payload, 2);
             HardwareProfile profile(strip_length);
             if (!profile.is_valid()) {
-                send_ack(tcp_fd, 1);
+                send_ack(tcp_fd, ACK_ERROR);
                 break;
             }
 
             const bool same_profile = device.has_hardware_profile()
                 && device.hardware_profile() == profile;
             if (!device.apply_hardware_profile(profile)) {
-                send_ack(tcp_fd, 1);
+                send_ack(tcp_fd, ACK_ERROR);
                 break;
             }
 
@@ -206,16 +209,16 @@ static int poll_tcp_commands(int tcp_fd,
                 reset_attach_state(state, controller_addr);
             }
 
-            send_ack(tcp_fd, 0);
+            send_ack(tcp_fd, ACK_OK);
             break;
         }
         case CMD_ATTACH: {
             if (payload_len < 4 || !device.has_hardware_profile()) {
-                send_ack(tcp_fd, 1);
+                send_ack(tcp_fd, ACK_ERROR);
                 break;
             }
             if (state.attached) {
-                send_ack(tcp_fd, 1);
+                send_ack(tcp_fd, ACK_ERROR);
                 break;
             }
 
@@ -224,25 +227,25 @@ static int poll_tcp_commands(int tcp_fd,
             memcpy(&device_id, payload, 2);
             memcpy(&frame_port, payload + 2, 2);
             if (frame_port < 1) {
-                send_ack(tcp_fd, 1);
+                send_ack(tcp_fd, ACK_ERROR);
                 break;
             }
 
             state.device_id = device_id;
             state.attached = true;
             controller_addr.sin_port = htons(frame_port);
-            send_ack(tcp_fd, 0);
+            send_ack(tcp_fd, ACK_OK);
             break;
         }
         case CMD_LOAD: {
-            if (!state.attached) { send_ack(tcp_fd, 2); break; }
-            if (payload_len < 2) { send_ack(tcp_fd, 1); break; }
+            if (!state.attached) { send_ack(tcp_fd, ACK_WRONG_STATE); break; }
+            if (payload_len < 2) { send_ack(tcp_fd, ACK_ERROR); break; }
             uint16_t gen = 0;
             memcpy(&gen, payload, 2);
             const uint8_t* blob = payload + 2;
             size_t blob_len = payload_len - 2;
             bool ok = device.handle_load(blob, blob_len, gen);
-            send_ack(tcp_fd, ok ? 0 : 1);
+            send_ack(tcp_fd, ok ? ACK_OK : ACK_ERROR);
             break;
         }
         case CMD_START: {

@@ -57,7 +57,6 @@ void ControllerConnection::stop(const char* reason)
         _tcp_client.stop();
     }
     _tcp_server.end();
-    _frame_udp.stop();
     reset_session_state_();
     _state = ConnectionState::stopped;
 }
@@ -94,38 +93,6 @@ ConnectionPollResult ControllerConnection::poll()
     return result;
 }
 
-void ControllerConnection::send_frames()
-{
-    if (!is_attached() || _frame_port == 0 || _device == nullptr) {
-        return;
-    }
-
-    std::vector<EspRgbFrame> frames = _device->drain_frames();
-    for (size_t i = 0; i < frames.size(); ++i) {
-        EspRgbFrame& frame = frames[i];
-        uint8_t header[12];
-        memcpy(header, &_device_id, 2);
-        memcpy(header + 2, &frame.gen, 2);
-        memcpy(header + 4, &frame.frame_index, 4);
-        memcpy(header + 8, &frame.t_rel, 4);
-
-        if (!_frame_udp.beginPacket(_controller_ip, _frame_port)) {
-            continue;
-        }
-        _frame_udp.write(header, sizeof(header));
-        if (!frame.rgb.empty()) {
-            _frame_udp.write(frame.rgb.data(), frame.rgb.size());
-        }
-        if (_frame_udp.endPacket() != 0) {
-            _frames_sent += 1;
-            _have_frame_stats = true;
-            _last_frame_gen = frame.gen;
-            _last_frame_index = frame.frame_index;
-            _last_frame_t_rel = frame.t_rel;
-        }
-    }
-}
-
 bool ControllerConnection::is_attached() const
 {
     return _state == ConnectionState::attached;
@@ -144,11 +111,6 @@ ConnectionSnapshot ControllerConnection::snapshot() const
     snapshot.load_count = _load_count;
     snapshot.start_count = _start_count;
     snapshot.stop_count = _stop_count;
-    snapshot.frames_sent = _frames_sent;
-    snapshot.have_frame_stats = _have_frame_stats;
-    snapshot.last_frame_gen = _last_frame_gen;
-    snapshot.last_frame_index = _last_frame_index;
-    snapshot.last_frame_t_rel = _last_frame_t_rel;
     return snapshot;
 }
 
@@ -347,7 +309,7 @@ void ControllerConnection::send_ack_(uint8_t status)
 uint8_t ControllerConnection::apply_profile_(const HardwareProfile& profile)
 {
     if (_device == nullptr || !profile.is_valid()) {
-        return 1;
+        return kAckError;
     }
 
     const bool had_profile = _device->has_hardware_profile();
@@ -356,7 +318,7 @@ uint8_t ControllerConnection::apply_profile_(const HardwareProfile& profile)
     const bool was_attached = is_attached();
 
     if (!_device->apply_hardware_profile(profile)) {
-        return 1;
+        return kAckError;
     }
 
     if (was_attached && !same_profile) {
@@ -379,16 +341,16 @@ uint8_t ControllerConnection::apply_profile_(const HardwareProfile& profile)
         );
     }
 
-    return 0;
+    return kAckOk;
 }
 
 uint8_t ControllerConnection::attach_(uint16_t device_id, uint16_t frame_port)
 {
     if (_device == nullptr || !_device->has_hardware_profile() || frame_port < 1) {
-        return 1;
+        return kAckError;
     }
     if (is_attached()) {
-        return 1;
+        return kAckError;
     }
 
     _device_id = device_id;
@@ -403,13 +365,13 @@ uint8_t ControllerConnection::attach_(uint16_t device_id, uint16_t frame_port)
         static_cast<unsigned>(frame_port),
         _controller_ip.toString().c_str()
     );
-    return 0;
+    return kAckOk;
 }
 
 void ControllerConnection::handle_set_profile_(const uint8_t* payload, uint32_t payload_len)
 {
     if (payload_len < 2) {
-        send_ack_(1);
+        send_ack_(kAckError);
         return;
     }
 
@@ -422,7 +384,7 @@ void ControllerConnection::handle_set_profile_(const uint8_t* payload, uint32_t 
 void ControllerConnection::handle_attach_(const uint8_t* payload, uint32_t payload_len)
 {
     if (payload_len < 4) {
-        send_ack_(1);
+        send_ack_(kAckError);
         return;
     }
 
@@ -476,11 +438,11 @@ void ControllerConnection::handle_sync_result_(const uint8_t* payload, uint32_t 
 void ControllerConnection::handle_load_(const uint8_t* payload, uint32_t payload_len)
 {
     if (!is_attached() || _device == nullptr) {
-        send_ack_(2);
+        send_ack_(kAckWrongState);
         return;
     }
     if (payload_len < 2) {
-        send_ack_(1);
+        send_ack_(kAckError);
         return;
     }
 
@@ -497,7 +459,7 @@ void ControllerConnection::handle_load_(const uint8_t* payload, uint32_t payload
         static_cast<unsigned long>(blob_len),
         ok ? "ok" : "decode-failed"
     );
-    send_ack_(ok ? 0 : 1);
+    send_ack_(ok ? kAckOk : kAckError);
 }
 
 void ControllerConnection::handle_start_(const uint8_t* payload, uint32_t payload_len)
@@ -560,7 +522,7 @@ void ControllerConnection::handle_stop_()
 void ControllerConnection::handle_reboot_(ConnectionPollResult& result)
 {
     log_line("[tcp] reboot requested");
-    send_ack_(0);
+    send_ack_(kAckOk);
     result.reboot_requested = true;
 }
 

@@ -11,6 +11,9 @@ from elemctl.device import DeviceFrame, DeviceState
 from elemctl.network_device import NetworkDevice
 from elemctl.udp_receiver import UdpFrameReceiver
 from elemctl.wire import (
+    ACK_ERROR,
+    ACK_OK,
+    ACK_WRONG_STATE,
     CMD_ACK,
     CMD_ATTACH,
     CMD_SET_PROFILE,
@@ -78,7 +81,7 @@ class FakeEndpoint:
         body = self._recv_exact(length)
         return body[0], body[1:]
 
-    def send_ack(self, status: int = 0) -> None:
+    def send_ack(self, status: int = ACK_OK) -> None:
         assert self._conn is not None
         msg = struct.pack('<IBB', 2, CMD_ACK, status)
         self._conn.sendall(msg)
@@ -164,7 +167,7 @@ def _expect_set_profile(
     assert cmd_type == CMD_SET_PROFILE
     (got_strip_length,) = struct.unpack_from('<H', payload, 0)
     assert got_strip_length == strip_length
-    endpoint.send_ack(0)
+    endpoint.send_ack(ACK_OK)
 
 
 def _expect_attach(
@@ -178,7 +181,7 @@ def _expect_attach(
     got_device_id, got_frame_port = struct.unpack_from('<HH', payload, 0)
     assert got_device_id == device_id
     assert got_frame_port == frame_port
-    endpoint.send_ack(0)
+    endpoint.send_ack(ACK_OK)
 
 
 def _expect_handshake(
@@ -205,7 +208,7 @@ def _load_device(dev: NetworkDevice, ep: FakeEndpoint, gen: int = 1) -> bool:
             frame_port=dev._frame_port,
         )
         ep.read_command()
-        ep.send_ack(0)
+        ep.send_ack(ACK_OK)
 
     t = threading.Thread(target=server_side, daemon=True)
     t.start()
@@ -261,12 +264,16 @@ class TestWireEncoding:
         assert t0 == 123456789
 
     def test_parse_ack_ok(self):
-        data = struct.pack('<IBB', 2, CMD_ACK, 0)
-        assert parse_ack(data) == 0
+        data = struct.pack('<IBB', 2, CMD_ACK, ACK_OK)
+        assert parse_ack(data) == ACK_OK
 
     def test_parse_ack_fail(self):
-        data = struct.pack('<IBB', 2, CMD_ACK, 1)
-        assert parse_ack(data) == 1
+        data = struct.pack('<IBB', 2, CMD_ACK, ACK_ERROR)
+        assert parse_ack(data) == ACK_ERROR
+
+    def test_parse_ack_wrong_state(self):
+        data = struct.pack('<IBB', 2, CMD_ACK, ACK_WRONG_STATE)
+        assert parse_ack(data) == ACK_WRONG_STATE
 
     def test_encode_reboot(self):
         msg = encode_reboot()
@@ -333,7 +340,7 @@ class TestConnection:
             )
             cmd_type, _payload = endpoint.read_command()
             assert cmd_type == CMD_LOAD
-            endpoint.send_ack(0)
+            endpoint.send_ack(ACK_OK)
 
         t = threading.Thread(target=server_side, daemon=True)
         t.start()
@@ -360,7 +367,7 @@ class TestConnection:
             endpoint.accept()
             cmd_type, _payload = endpoint.read_command()
             assert cmd_type == CMD_SET_PROFILE
-            endpoint.send_ack(1)
+            endpoint.send_ack(ACK_ERROR)
 
         t = threading.Thread(target=server_side, daemon=True)
         t.start()
@@ -376,7 +383,7 @@ class TestConnection:
             _expect_set_profile(endpoint, strip_length=dev._strip_length)
             cmd_type, _payload = endpoint.read_command()
             assert cmd_type == CMD_ATTACH
-            endpoint.send_ack(1)
+            endpoint.send_ack(ACK_ERROR)
 
         t = threading.Thread(target=server_side, daemon=True)
         t.start()
@@ -456,7 +463,7 @@ class TestLoad:
             (gen,) = struct.unpack_from('<H', payload, 0)
             assert gen == 3
             assert payload[2:] == b'\xDE\xAD'
-            endpoint.send_ack(0)
+            endpoint.send_ack(ACK_OK)
 
         t = threading.Thread(target=server_side, daemon=True)
         t.start()
@@ -478,7 +485,7 @@ class TestLoad:
                 frame_port=_receiver_port(receiver),
             )
             endpoint.read_command()
-            endpoint.send_ack(1)  # decode error
+            endpoint.send_ack(ACK_ERROR)  # decode error
 
         t = threading.Thread(target=server_side, daemon=True)
         t.start()
@@ -508,7 +515,7 @@ class TestReboot:
             cmd_type, payload = endpoint.read_command()
             assert cmd_type == CMD_REBOOT
             assert payload == b''
-            endpoint.send_ack(0)
+            endpoint.send_ack(ACK_OK)
 
         t = threading.Thread(target=server_side, daemon=True)
         t.start()
@@ -575,12 +582,11 @@ class TestReboot:
         dev.tick_once(_sec(1.1))
         assert dev._last_frame_index == 8
         assert dev._last_frame_gen == dev._gen
-        assert dev._frames_received_since_log >= 1
 
         # Second load — device rejects it
         def server_side():
             endpoint.read_command()
-            endpoint.send_ack(1)  # decode error
+            endpoint.send_ack(ACK_ERROR)  # decode error
 
         t = threading.Thread(target=server_side, daemon=True)
         t.start()
@@ -591,11 +597,8 @@ class TestReboot:
         assert dev.state() == DeviceState.IDLE
         assert dev._last_t_rel == 0.0
         assert dev.drain_frames() == []
-        assert dev._frames_received_since_log == 0
         assert dev._last_frame_index is None
         assert dev._last_frame_gen is None
-        assert dev._last_frame_log_ns == 0
-        assert dev._log_next_frame is False
 
     def test_successful_reload_clears_stale_runtime_caches(self, endpoint, receiver):
         dev = _make_device(endpoint, receiver)
@@ -626,11 +629,10 @@ class TestReboot:
         dev.tick_once(_sec(1.1))
         assert dev._last_frame_index == 5
         assert dev._last_frame_gen == dev._gen
-        total_before = dev._frames_received_total
 
         def accept():
             endpoint.read_command()
-            endpoint.send_ack(0)
+            endpoint.send_ack(ACK_OK)
 
         t = threading.Thread(target=accept, daemon=True)
         t.start()
@@ -640,12 +642,8 @@ class TestReboot:
         assert dev.state() == DeviceState.LOADED
         assert dev._gen == 3
         assert dev.drain_frames() == []
-        assert dev._frames_received_since_log == 0
         assert dev._last_frame_index is None
         assert dev._last_frame_gen is None
-        assert dev._last_frame_log_ns == 0
-        assert dev._log_next_frame is False
-        assert dev._frames_received_total == total_before
 
     def test_reload_recovery_after_ack_failure(self, endpoint, receiver):
         """After a rejected load, a subsequent load on the same connection succeeds."""
@@ -655,7 +653,7 @@ class TestReboot:
         # Second load — rejected
         def reject():
             endpoint.read_command()
-            endpoint.send_ack(1)
+            endpoint.send_ack(ACK_ERROR)
 
         t = threading.Thread(target=reject, daemon=True)
         t.start()
@@ -666,7 +664,7 @@ class TestReboot:
         # Third load — accepted, same TCP connection
         def accept():
             endpoint.read_command()
-            endpoint.send_ack(0)
+            endpoint.send_ack(ACK_OK)
 
         t = threading.Thread(target=accept, daemon=True)
         t.start()
@@ -689,7 +687,7 @@ class TestReboot:
             )
             endpoint.read_command()
             # Send ACK in two separate writes to simulate fragmentation
-            ack = struct.pack('<IBB', 2, CMD_ACK, 0)
+            ack = struct.pack('<IBB', 2, CMD_ACK, ACK_OK)
             endpoint._conn.sendall(ack[:3])
             import time
             time.sleep(0.01)
@@ -878,27 +876,6 @@ class TestCurrentTRel:
 
 
 class TestFrames:
-    def test_esp32_logs_first_frame_received_after_start(self, endpoint, receiver, caplog):
-        dev = _make_device(endpoint, receiver, device_type='esp32')
-        assert _load_device(dev, endpoint)
-
-        dev.start(_sec(0.0))
-        endpoint.read_command()
-
-        rgb = b'\xFF\x00\x00' * 5
-        endpoint.send_udp_frame(device_id=1, gen=1, frame_index=0, t_rel=0.5, rgb=rgb)
-
-        import time
-        time.sleep(0.05)
-
-        receiver.poll()
-        caplog.set_level(logging.INFO)
-        dev.tick_once(_sec(1.0))
-
-        assert 'first frame received' in caplog.text
-        assert 'device 1' in caplog.text
-        assert 'frame_index=0' in caplog.text
-
     def test_frames_routed_by_device_id(self, endpoint, receiver):
         dev = _make_device(endpoint, receiver, device_id=5)
         assert _load_device(dev, endpoint)
@@ -988,8 +965,6 @@ class TestErrors:
         dev.tick_once(_sec(1.0))
 
         assert dev._last_frame_index == 9
-        assert dev._frames_received_since_log >= 1
-        total_before = dev._frames_received_total
 
         dev.disconnect_transport()
 
@@ -997,12 +972,31 @@ class TestErrors:
         assert dev.drain_frames() == []
         assert dev._t0_us == 0
         assert dev._last_t_rel == 0.0
-        assert dev._frames_received_since_log == 0
         assert dev._last_frame_index is None
         assert dev._last_frame_gen is None
-        assert dev._last_frame_log_ns == 0
-        assert dev._log_next_frame is False
-        assert dev._frames_received_total == total_before
+
+    def test_load_wrong_state_disconnects_transport(self, endpoint, receiver):
+        dev = _make_device(endpoint, receiver)
+
+        def server_side():
+            endpoint.accept()
+            _expect_handshake(
+                endpoint,
+                device_id=dev._device_id,
+                strip_length=dev._strip_length,
+                frame_port=dev._frame_port,
+            )
+            endpoint.read_command()
+            endpoint.send_ack(ACK_WRONG_STATE)
+
+        t = threading.Thread(target=server_side, daemon=True)
+        t.start()
+        assert not dev.load(b'\x00', 1)
+        t.join(timeout=3.0)
+
+        assert dev.state() == DeviceState.IDLE
+        assert not dev._connected
+        assert dev.drain_frames() == []
 
     def test_ack_receipt_sets_activity_flag(self, endpoint, receiver):
         dev = _make_device(endpoint, receiver)

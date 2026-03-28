@@ -12,6 +12,7 @@ constexpr uint8_t LED_PIN = 13;
 
 CRGB g_leds[kMaxStripPixels];
 bool g_leds_initialized = false;
+static_assert(sizeof(CRGB) == 3, "ESPDevice assumes packed CRGB layout");
 
 const char* device_state_name(DeviceState state)
 {
@@ -78,6 +79,7 @@ int64_t ESPDevice::playback_t0(int64_t controller_t0, float target_t_rel) const
 
 void ESPDevice::output_frame(float t_rel)
 {
+    (void)t_rel;
     const uint16_t length = strip_length();
     const uint8_t* rgb = rgb_data();
 
@@ -90,13 +92,6 @@ void ESPDevice::output_frame(float t_rel)
         );
     }
     FastLED.show();
-
-    EspRgbFrame frame;
-    frame.gen = _gen;
-    frame.frame_index = _frame_index;
-    frame.t_rel = t_rel;
-    frame.rgb.assign(rgb, rgb + length * 3);
-    _frames.push_back(std::move(frame));
 }
 
 void ESPDevice::send_telemetry(DeviceState state, float t_rel, const char* err)
@@ -116,16 +111,4 @@ void ESPDevice::send_telemetry(DeviceState state, float t_rel, const char* err)
         device_state_name(state),
         t_rel
     );
-}
-
-std::vector<EspRgbFrame> ESPDevice::drain_frames()
-{
-    std::vector<EspRgbFrame> out;
-    out.swap(_frames);
-    return out;
-}
-
-void ESPDevice::clear_queued_runtime_outputs()
-{
-    _frames.clear();
 }
