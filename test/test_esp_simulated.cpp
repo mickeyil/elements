@@ -176,6 +176,34 @@ TEST_CASE("Profile change and detach clear queued simulator outputs", "[espsim][
     CHECK(dev.drain_telemetry().empty());
 }
 
+TEST_CASE("Reload clears stale queued simulator outputs", "[espsim][load]") {
+    ControlledESPSimulated dev(5);
+    auto blob = load_blob(SHIFT_FIXTURE);
+
+    REQUIRE(dev.handle_load(blob.data(), blob.size(), 1));
+    dev.drain_telemetry();
+
+    dev.set_time(0);
+    dev.handle_start(0);
+    dev.drain_telemetry();
+    dev.set_time(1'000'000);
+    REQUIRE(dev.tick_once());
+    REQUIRE(dev.drain_frames().size() == 1);
+
+    dev.set_time(1'200'000);
+    REQUIRE(dev.tick_once());
+    auto stale = dev.drain_frames();
+    REQUIRE(stale.size() == 1);
+    auto stale_telem = dev.drain_telemetry();
+    CHECK(stale_telem.empty());
+
+    REQUIRE(dev.handle_load(blob.data(), blob.size(), 2));
+    CHECK(dev.drain_frames().empty());
+    auto telem = dev.drain_telemetry();
+    REQUIRE(telem.size() == 1);
+    CHECK(telem[0].state == DeviceState::LOADED);
+}
+
 TEST_CASE("Frame emission on normal playback tick", "[espsim]") {
     ControlledESPSimulated dev(5);
     auto blob = load_blob(SHIFT_FIXTURE);

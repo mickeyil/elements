@@ -256,6 +256,10 @@ int ControllerConnection::poll_commands_(ConnectionPollResult& result)
         if (_tcp_buf_used > 0) {
             memmove(_tcp_buf.data(), _tcp_buf.data() + total, _tcp_buf_used);
         }
+
+        if (result.reboot_requested) {
+            return 0;
+        }
     }
 
     return 0;

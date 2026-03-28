@@ -134,10 +134,11 @@ def run_controller(
                     # If no frames arrive for stall_timeout, abort.
                     now_mono = time.monotonic()
                     if now_mono - last_frame_time > stall_timeout:
-                        log.error(
-                            "no frames received for %.1fs, aborting",
-                            stall_timeout,
-                        )
+                        reason = f"no frames received for {stall_timeout:.1f}s"
+                        log.error("%s, aborting", reason)
+                        controller.abort(reason)
+                        for ev in controller.drain_events():
+                            log.info("event: %s %s", ev.kind.name, ev.message)
                         break
 
                 time.sleep(0.020)

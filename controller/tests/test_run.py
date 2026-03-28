@@ -210,6 +210,11 @@ class _DisconnectingDevice(_SilentDevice):
         self.is_connected = False
 
 
+class _SilentFrameDevice(_SilentDevice):
+    def produces_program_frames(self):
+        return True
+
+
 class TestNonFrameRunBehavior:
     """Real-ESP-style no-frame sessions should not use frame stall logic."""
 
@@ -261,6 +266,17 @@ class TestNonFrameRunBehavior:
         elapsed = time.monotonic() - t0
         assert state == ControllerState.IDLE
         assert elapsed < 1.0, f"took {elapsed:.1f}s, should abort promptly on disconnect"
+
+    def test_silent_frame_producer_stall_aborts_to_idle(self):
+        """A frame-producing but silent session should explicitly abort."""
+        state = run_controller(
+            self._make_config(device_type="sim"),
+            self._make_manifest(duration=10.0),
+            stall_timeout=0.01,
+            receiver_factory=_NoopReceiver,
+            device_factory=_SilentFrameDevice,
+        )
+        assert state == ControllerState.IDLE
 
 
 class TestZeroDeviceConfig:

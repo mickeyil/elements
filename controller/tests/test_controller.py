@@ -1182,6 +1182,43 @@ class TestAbortAndFrameStream:
         assert sim.drain_frames() == []
         assert esp.drain_frames() == []
 
+    def test_tick_once_drains_and_discards_inactive_device_frames(self):
+        now_ns = [0]
+        active = MockDevice(produces_program_frames=True)
+        inactive = MockDevice(produces_program_frames=True)
+        ctrl = Controller(
+            [
+                StripConfig("left", 5, active),
+                StripConfig("right", 5, inactive),
+            ],
+            clock=lambda: now_ns[0],
+        )
+        manifest = CompiledManifest(
+            duration=5.0,
+            strips=[CompiledStripArtifact("left", 5, b'\x00')],
+            safe_intervals=[],
+        )
+
+        assert ctrl.load(manifest, target_groups=[[0]])
+        now_ns[0] = _sec(0.0)
+        ctrl.play()
+        ctrl.drain_events()
+
+        inactive._frames.append(DeviceFrame(
+            gen=99,
+            frame_index=123,
+            t_rel=0.25,
+            rgb=b'\xAA' * 15,
+        ))
+
+        now_ns[0] = _sec(1.0)
+        ctrl.tick_once()
+
+        frames = ctrl.drain_program_frames()
+        assert len(frames) == 1
+        assert frames[0].frame_index == 0
+        assert inactive.drain_frames() == []
+
     def test_uses_device_matches_active_runtime_membership(self):
         f = DualFixture()
         ctrl = Controller(f.strips(), clock=f.clock)

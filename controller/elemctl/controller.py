@@ -423,9 +423,22 @@ class Controller:
         for s in self._strips:
             s.device.tick_once(now)
 
-        # 2. Drain active frames, filter by gen, assemble into logical buckets
+        # 2. Drain each unique device exactly once, then assemble only the
+        # active-device frames into logical buckets.
+        drained_by_device: dict[int, list[DeviceFrame]] = {}
+        for s in self._strips:
+            dev_oid = id(s.device)
+            if dev_oid not in drained_by_device:
+                drained_by_device[dev_oid] = s.device.drain_frames()
+
+        assembled_devices: set[int] = set()
         for i, s in enumerate(self._active_strips):
-            drained = s.device.drain_frames()
+            dev_oid = id(s.device)
+            if dev_oid in assembled_devices:
+                continue
+            assembled_devices.add(dev_oid)
+
+            drained = drained_by_device.get(dev_oid, [])
             if not self._program_frame_stream_enabled:
                 continue
 

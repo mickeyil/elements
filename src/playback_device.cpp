@@ -63,6 +63,7 @@ bool PlaybackDevice::handle_load(const uint8_t* blob, size_t blob_len, uint16_t 
 
     unload_program_();
     reset_program_state_();
+    clear_queued_runtime_outputs();
 
     Program* prog = decode_program(blob, blob_len);
     if (!prog) {

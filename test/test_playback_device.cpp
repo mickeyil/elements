@@ -69,6 +69,37 @@ private:
     int64_t _now = 0;
 };
 
+class QueueingTestDevice : public PlaybackDevice {
+public:
+    QueueingTestDevice()
+        : PlaybackDevice(/*gamma_enabled=*/false) {}
+
+    QueueingTestDevice(uint16_t len)
+        : PlaybackDevice(len, /*gamma_enabled=*/false) {}
+
+    void set_time(int64_t us) { _now = us; }
+    int64_t now_mono() const override { return _now; }
+
+    void output_frame(float t_rel) override { queued_frames.push_back(t_rel); }
+
+    void send_telemetry(DeviceState s, float t, const char* err = nullptr) override {
+        queued_telemetry.push_back({s, t, err ? err : ""});
+    }
+
+protected:
+    void clear_queued_runtime_outputs() override {
+        queued_frames.clear();
+        queued_telemetry.clear();
+    }
+
+public:
+    std::vector<float> queued_frames;
+    std::vector<TelemetryEntry> queued_telemetry;
+
+private:
+    int64_t _now = 0;
+};
+
 // ---------------------------------------------------------------------------
 // Load test blob from file
 // ---------------------------------------------------------------------------
@@ -576,6 +607,52 @@ TEST_CASE("Double load replaces program cleanly", "[playback][load]") {
     dev.set_time(1'000'000);
     dev.handle_start(1'000'000);
     CHECK(dev.state() == DeviceState::PLAYING);
+}
+
+TEST_CASE("Reload clears stale queued outputs before new load success", "[playback][load]") {
+    QueueingTestDevice dev(5);
+    auto blob = load_blob(SHIFT_FIXTURE);
+    REQUIRE(dev.handle_load(blob.data(), blob.size(), 1));
+
+    dev.queued_frames.clear();
+    dev.queued_telemetry.clear();
+
+    dev.set_time(0);
+    dev.handle_start(0);
+    dev.set_time(500'000);
+    REQUIRE(dev.tick_once());
+    REQUIRE_FALSE(dev.queued_frames.empty());
+    REQUIRE_FALSE(dev.queued_telemetry.empty());
+
+    REQUIRE(dev.handle_load(blob.data(), blob.size(), 2));
+    CHECK(dev.queued_frames.empty());
+    REQUIRE(dev.queued_telemetry.size() == 1);
+    CHECK(dev.queued_telemetry[0].state == DeviceState::LOADED);
+    CHECK(dev.queued_telemetry[0].err.empty());
+}
+
+TEST_CASE("Reload clears stale queued outputs before load failure", "[playback][load]") {
+    QueueingTestDevice dev(5);
+    auto blob = load_blob(SHIFT_FIXTURE);
+    REQUIRE(dev.handle_load(blob.data(), blob.size(), 1));
+
+    dev.queued_frames.clear();
+    dev.queued_telemetry.clear();
+
+    dev.set_time(0);
+    dev.handle_start(0);
+    dev.set_time(500'000);
+    REQUIRE(dev.tick_once());
+    REQUIRE_FALSE(dev.queued_frames.empty());
+    REQUIRE_FALSE(dev.queued_telemetry.empty());
+
+    uint8_t garbage[] = {0xDE, 0xAD, 0xBE, 0xEF};
+    CHECK_FALSE(dev.handle_load(garbage, sizeof(garbage), 2));
+    REQUIRE(dev.queued_frames.size() == 1);
+    CHECK(dev.queued_frames[0] == Catch::Approx(0.0f));
+    REQUIRE(dev.queued_telemetry.size() == 1);
+    CHECK(dev.queued_telemetry[0].state == DeviceState::IDLE);
+    CHECK(dev.queued_telemetry[0].err == "decode failed");
 }
 
 // ---------------------------------------------------------------------------

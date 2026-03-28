@@ -550,6 +550,33 @@ class TestReboot:
         endpoint.read_command()  # consume START
         assert dev.state() == DeviceState.PLAYING
 
+        endpoint.send_udp_frame(
+            device_id=dev._device_id,
+            gen=dev._gen,
+            frame_index=7,
+            t_rel=0.25,
+            rgb=b'\x01\x02\x03' * 5,
+        )
+        import time
+        time.sleep(0.05)
+        receiver.poll()
+        dev.tick_once(_sec(1.0))
+        assert len(dev.drain_frames()) == 1
+
+        endpoint.send_udp_frame(
+            device_id=dev._device_id,
+            gen=dev._gen,
+            frame_index=8,
+            t_rel=0.30,
+            rgb=b'\x03\x02\x01' * 5,
+        )
+        time.sleep(0.05)
+        receiver.poll()
+        dev.tick_once(_sec(1.1))
+        assert dev._last_frame_index == 8
+        assert dev._last_frame_gen == dev._gen
+        assert dev._frames_received_since_log >= 1
+
         # Second load — device rejects it
         def server_side():
             endpoint.read_command()
@@ -563,6 +590,62 @@ class TestReboot:
         # Should be IDLE, not stuck in PLAYING
         assert dev.state() == DeviceState.IDLE
         assert dev._last_t_rel == 0.0
+        assert dev.drain_frames() == []
+        assert dev._frames_received_since_log == 0
+        assert dev._last_frame_index is None
+        assert dev._last_frame_gen is None
+        assert dev._last_frame_log_ns == 0
+        assert dev._log_next_frame is False
+
+    def test_successful_reload_clears_stale_runtime_caches(self, endpoint, receiver):
+        dev = _make_device(endpoint, receiver)
+        assert _load_device(dev, endpoint, gen=1)
+
+        endpoint.send_udp_frame(
+            device_id=dev._device_id,
+            gen=dev._gen,
+            frame_index=4,
+            t_rel=0.2,
+            rgb=b'\x01\x00\x00' * 5,
+        )
+        import time
+        time.sleep(0.05)
+        receiver.poll()
+        dev.tick_once(_sec(1.0))
+        assert len(dev.drain_frames()) == 1
+
+        endpoint.send_udp_frame(
+            device_id=dev._device_id,
+            gen=dev._gen,
+            frame_index=5,
+            t_rel=0.3,
+            rgb=b'\x00\x01\x00' * 5,
+        )
+        time.sleep(0.05)
+        receiver.poll()
+        dev.tick_once(_sec(1.1))
+        assert dev._last_frame_index == 5
+        assert dev._last_frame_gen == dev._gen
+        total_before = dev._frames_received_total
+
+        def accept():
+            endpoint.read_command()
+            endpoint.send_ack(0)
+
+        t = threading.Thread(target=accept, daemon=True)
+        t.start()
+        assert dev.load(b'\x00', gen=3)
+        t.join(timeout=3.0)
+
+        assert dev.state() == DeviceState.LOADED
+        assert dev._gen == 3
+        assert dev.drain_frames() == []
+        assert dev._frames_received_since_log == 0
+        assert dev._last_frame_index is None
+        assert dev._last_frame_gen is None
+        assert dev._last_frame_log_ns == 0
+        assert dev._log_next_frame is False
+        assert dev._frames_received_total == total_before
 
     def test_reload_recovery_after_ack_failure(self, endpoint, receiver):
         """After a rejected load, a subsequent load on the same connection succeeds."""
@@ -887,6 +970,39 @@ class TestErrors:
 
         dev.tick_once(_sec(1.0))
         assert not dev._connected
+
+    def test_disconnect_transport_clears_runtime_caches(self, endpoint, receiver):
+        dev = _make_device(endpoint, receiver)
+        assert _load_device(dev, endpoint)
+
+        endpoint.send_udp_frame(
+            device_id=dev._device_id,
+            gen=dev._gen,
+            frame_index=9,
+            t_rel=0.5,
+            rgb=b'\x05\x04\x03' * 5,
+        )
+        import time
+        time.sleep(0.05)
+        receiver.poll()
+        dev.tick_once(_sec(1.0))
+
+        assert dev._last_frame_index == 9
+        assert dev._frames_received_since_log >= 1
+        total_before = dev._frames_received_total
+
+        dev.disconnect_transport()
+
+        assert not dev._connected
+        assert dev.drain_frames() == []
+        assert dev._t0_us == 0
+        assert dev._last_t_rel == 0.0
+        assert dev._frames_received_since_log == 0
+        assert dev._last_frame_index is None
+        assert dev._last_frame_gen is None
+        assert dev._last_frame_log_ns == 0
+        assert dev._log_next_frame is False
+        assert dev._frames_received_total == total_before
 
     def test_ack_receipt_sets_activity_flag(self, endpoint, receiver):
         dev = _make_device(endpoint, receiver)

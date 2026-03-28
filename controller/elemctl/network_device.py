@@ -93,16 +93,13 @@ class NetworkDevice:
         if status != 0:
             # Device rejected the blob (decode error). Per PlaybackDevice,
             # the device is now IDLE. Reset local state to match.
+            self._reset_runtime_caches()
             self._state = DeviceState.IDLE
-            self._t0_us = 0
-            self._last_t_rel = 0.0
             return False
 
+        self._reset_runtime_caches()
         self._state = DeviceState.LOADED
         self._gen = gen
-        self._t0_us = 0
-        self._last_t_rel = 0.0
-        self._log_next_frame = False
         return True
 
     def start(self, t0_ns: int) -> None:
@@ -333,12 +330,28 @@ class NetworkDevice:
     def _disconnect(self) -> None:
         self._connected = False
         self._activity_observed = False
+        self._reset_runtime_caches()
         if self._sock is not None:
             try:
                 self._sock.close()
             except OSError:
                 pass
             self._sock = None
+
+    def _reset_runtime_caches(self) -> None:
+        """Reset session-scoped runtime observations.
+
+        Intentionally preserves `_frames_received_total`, which is a lifetime
+        diagnostic counter rather than session-scoped state.
+        """
+        self._t0_us = 0
+        self._last_t_rel = 0.0
+        self._frames.clear()
+        self._frames_received_since_log = 0
+        self._last_frame_index = None
+        self._last_frame_gen = None
+        self._last_frame_log_ns = 0
+        self._log_next_frame = False
 
     def _send(self, data: bytes) -> bool:
         if not self._connected or self._sock is None:
