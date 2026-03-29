@@ -2,7 +2,7 @@
 
 Beat-synced LED animation engine targeting ESP32. Work in progress.
 
-**[Design document](docs/design.md)** — architecture, abstractions, and links to all detailed docs.
+**Docs:** [firmware & engine](docs/firmware.md) · [controller](docs/controller.md) · [protocol](docs/protocol.md) · [web app](docs/web_app.md) · [future plans](docs/draft_future_plans.md)
 
 ## Build
 
@@ -81,8 +81,11 @@ Notes:
 ## Project structure
 
 ```
-src/          C++ engine (decoder, engine, compositor, animations)
-test/         Catch2 tests
-compiler/     Python compiler (DSL → binary blob)
-docs/         Design documents
+src/              C++ engine core (decoder, engine, compositor, animations)
+src/firmware/     ESP32 firmware (WiFi, TCP, discovery, LED output)
+test/             Catch2 tests
+compiler/         Python compiler (DSL → binary blob)
+controller/       Python controller service, TUI, web relay
+web_ui/           Vue 3 browser interface
+docs/             Documentation
 ```
