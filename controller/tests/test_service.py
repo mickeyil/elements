@@ -3156,6 +3156,7 @@ class TestPresenceEvents:
         assert max(error_indices + idle_indices) < min(status_indices)
         assert events[error_indices[0]]['message'] == 'active device disconnected: id=1:disconnected'
         assert svc._controller.state == ControllerState.IDLE
+        assert fakes[0].ensure_connected_calls == 0
 
     def test_multiple_active_disconnects_abort_once(self):
         config = Config(frame_port=1, devices=[
@@ -3805,6 +3806,73 @@ class TestDiscoveryIntegration:
 
         saved = load_config(str(path))
         assert [dc.device_uid for dc in saved.devices] == ['esp32-246f28b5f190']
+
+    def test_discovery_defers_provisional_esp32_promotion_while_runtime_active(
+        self, tmp_path, caplog
+    ):
+        config = Config(
+            frame_port=1,
+            discovery_port=9999,
+            devices=[
+                DeviceConfig(
+                    device_id=1,
+                    device_uid='b5f190',
+                    device_type='esp32',
+                    host='',
+                    tcp_port=0,
+                    strip_id='main',
+                    length=60,
+                ),
+            ],
+        )
+        created: list[_AddressableFakeDevice] = []
+
+        def factory(device_id, host, tcp_port, device_type, strip_length, frame_port, udp_receiver):
+            dev = _AddressableFakeDevice()
+            created.append(dev)
+            return dev
+
+        fake_disc = _FakeDiscovery(9999)
+        svc, path = _make_service_with_path(
+            tmp_path,
+            config,
+            device_factory=factory,
+            discovery_factory=lambda port: fake_disc,
+        )
+
+        source = """\
+from elements.dsl import strip, spark, sec
+s = strip('main', length=60)
+sp = spark(color='white', fade=1.0)
+sp.schedule(s.pixels('0-59'), at=0, duration=sec(0.5))
+"""
+
+        assert svc.handle_cmd({
+            'id': 1, 'cmd': 'load',
+            'source': source, 'beat': 1.0, 'duration': 0.5,
+        })['ok'] is True
+        assert svc.handle_cmd({'id': 2, 'cmd': 'play'})['ok'] is True
+        assert svc._controller.state == ControllerState.PLAYING
+
+        old_controller = svc._controller
+        old_device = svc._devices[0]
+
+        with caplog.at_level(logging.INFO):
+            fake_disc.inject('esp32-246f28b5f190', '10.0.0.5', 8001)
+            svc.tick_once()
+
+        assert svc._controller is old_controller
+        assert svc._devices[0] is old_device
+        assert len(created) == 1
+        assert created[0].close_calls == 0
+        assert [dc.device_uid for dc in svc._device_configs] == ['b5f190']
+        assert svc._discovery_cache['esp32-246f28b5f190'] == ('10.0.0.5', 8001)
+        saved = load_config(str(path))
+        assert [dc.device_uid for dc in saved.devices] == ['b5f190']
+        assert (
+            'discovery: deferring esp32 uid promotion until controller is quiescent: '
+            'esp32-246f28b5f190'
+        ) in caplog.text
 
     def test_discovery_leaves_ambiguous_provisional_esp32_uid_unpromoted(
         self,

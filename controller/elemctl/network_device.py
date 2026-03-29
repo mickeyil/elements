@@ -328,8 +328,11 @@ class NetworkDevice:
         if preserve_runtime:
             frozen_t_rel = 0.0
             if self._state == DeviceState.PLAYING:
-                freeze_ns = time.monotonic_ns() if now_ns is None else now_ns
-                frozen_t_rel = max(0.0, (freeze_ns // 1000 - self._t0_us) / 1e6)
+                if self._t0_us:
+                    freeze_ns = time.monotonic_ns() if now_ns is None else now_ns
+                    frozen_t_rel = max(0.0, (freeze_ns // 1000 - self._t0_us) / 1e6)
+                else:
+                    frozen_t_rel = self._last_t_rel
             elif self._state == DeviceState.PAUSED:
                 frozen_t_rel = self._last_t_rel
         else:

@@ -452,22 +452,22 @@ class ControllerService:
         status_events.extend(new_status_events)
         active_disconnects.extend(new_disconnects)
 
-        self._probe_devices(
-            ignore_throttle=False,
-            sync_baseline=False,
-            now_ns=now_ns,
-            now_wall=now_wall,
-        )
-        new_status_events, new_disconnects = self._collect_connectivity_transitions(now_ns)
-        status_events.extend(new_status_events)
-        active_disconnects.extend(new_disconnects)
-
         if active_disconnects:
             detail = '; '.join(
                 f'id={device_id}:{reason}'
                 for device_id, reason in active_disconnects
             )
             self._controller.abort(f'active device disconnected: {detail}')
+        else:
+            self._probe_devices(
+                ignore_throttle=False,
+                sync_baseline=False,
+                now_ns=now_ns,
+                now_wall=now_wall,
+            )
+            new_status_events, new_disconnects = self._collect_connectivity_transitions(now_ns)
+            status_events.extend(new_status_events)
+            active_disconnects.extend(new_disconnects)
 
         json_msgs: list[bytes] = []
         while self._service_events:
@@ -902,6 +902,12 @@ class ControllerService:
         return True
 
     def _maybe_promote_discovered_esp32_uid(self, discovered_uid: str) -> bool:
+        if not self._mutation_is_quiescent():
+            log.info(
+                'discovery: deferring esp32 uid promotion until controller is quiescent: %s',
+                discovered_uid,
+            )
+            return False
         candidates = self._find_esp32_promotion_candidates(discovered_uid)
         if not candidates:
             return False
@@ -1215,13 +1221,15 @@ class ControllerService:
             json.dumps(parts, separators=(',', ':')).encode('utf-8')
         ).hexdigest()
 
-    def _require_mutation_quiescent(self) -> None:
-        allowed = {
+    def _mutation_is_quiescent(self) -> bool:
+        return self._controller.state in {
             ControllerState.IDLE,
             ControllerState.STOPPED,
             ControllerState.ENDED,
         }
-        if self._controller.state not in allowed:
+
+    def _require_mutation_quiescent(self) -> None:
+        if not self._mutation_is_quiescent():
             state = self._controller.state.name.lower()
             raise ValueError(
                 f'controller must be idle or stopped before changing devices (current state: {state})'

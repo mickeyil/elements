@@ -1069,6 +1069,24 @@ class TestErrors:
         assert dev._last_frame_index is None
         assert dev._last_frame_gen is None
 
+    def test_disconnect_transport_preserves_last_t_rel_when_playing_without_t0(self, receiver):
+        dev = NetworkDevice(
+            device_id=1, host='127.0.0.1', tcp_port=1,
+            device_type='sim', strip_length=5,
+            frame_port=_receiver_port(receiver), udp_receiver=receiver,
+        )
+        dev._connected = True
+        dev._state = DeviceState.PLAYING
+        dev._t0_us = 0
+        dev._last_t_rel = 1.25
+
+        dev.disconnect_transport()
+
+        assert not dev.is_connected
+        assert dev._t0_us == 0
+        assert dev._last_t_rel == pytest.approx(1.25)
+        assert dev.current_t_rel(_sec(99.0)) == pytest.approx(1.25)
+
     def test_tick_once_detects_peer_disconnect_and_freezes_playback(self, endpoint, receiver):
         dev = _make_device(endpoint, receiver)
         assert _load_device(dev, endpoint)

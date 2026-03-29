@@ -440,13 +440,8 @@ class Controller:
             if dev_oid not in drained_by_device:
                 drained_by_device[dev_oid] = s.device.drain_frames()
 
-        assembled_devices: set[int] = set()
         for i, s in enumerate(self._active_strips):
             dev_oid = id(s.device)
-            if dev_oid in assembled_devices:
-                continue
-            assembled_devices.add(dev_oid)
-
             drained = drained_by_device.get(dev_oid, [])
             if not self._program_frame_stream_enabled:
                 continue

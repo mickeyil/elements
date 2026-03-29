@@ -18,3 +18,4 @@ build/
 test/build/
 test/fixtures/*.bin
 /logs/
+/drafts/
