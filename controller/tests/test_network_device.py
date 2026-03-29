@@ -682,8 +682,7 @@ class TestReboot:
         time.sleep(0.05)
         receiver.poll()
         dev.tick_once(_sec(1.1))
-        assert dev._last_frame_index == 8
-        assert dev._last_frame_gen == dev._gen
+        assert dev._last_t_rel == pytest.approx(0.30)
 
         # Second load — device rejects it
         def server_side():
@@ -699,8 +698,6 @@ class TestReboot:
         assert dev.state() == DeviceState.IDLE
         assert dev._last_t_rel == 0.0
         assert dev.drain_frames() == []
-        assert dev._last_frame_index is None
-        assert dev._last_frame_gen is None
 
     def test_successful_reload_clears_stale_runtime_caches(self, endpoint, receiver):
         dev = _make_device(endpoint, receiver)
@@ -729,8 +726,7 @@ class TestReboot:
         time.sleep(0.05)
         receiver.poll()
         dev.tick_once(_sec(1.1))
-        assert dev._last_frame_index == 5
-        assert dev._last_frame_gen == dev._gen
+        assert dev._last_t_rel == pytest.approx(0.3)
 
         def accept():
             endpoint.read_command()
@@ -744,8 +740,6 @@ class TestReboot:
         assert dev.state() == DeviceState.LOADED
         assert dev._gen == 3
         assert dev.drain_frames() == []
-        assert dev._last_frame_index is None
-        assert dev._last_frame_gen is None
 
     def test_reload_recovery_after_ack_failure(self, endpoint, receiver):
         """After a rejected load, a subsequent load on the same connection succeeds."""
@@ -1066,8 +1060,6 @@ class TestErrors:
         assert dev._t0_us == 0
         assert dev._last_t_rel == pytest.approx(1.5)
         assert dev.current_t_rel(_sec(99.0)) == pytest.approx(1.5)
-        assert dev._last_frame_index is None
-        assert dev._last_frame_gen is None
 
     def test_disconnect_transport_preserves_last_t_rel_when_playing_without_t0(self, receiver):
         dev = NetworkDevice(

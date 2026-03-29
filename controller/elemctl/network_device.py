@@ -70,8 +70,6 @@ class NetworkDevice:
         self._t0_us: int = 0
         self._last_t_rel: float = 0.0
         self._frames: list[DeviceFrame] = []
-        self._last_frame_index: int | None = None
-        self._last_frame_gen: int | None = None
         self._activity_observed = False
 
         udp_receiver.register_device(device_id)
@@ -197,8 +195,6 @@ class NetworkDevice:
         if frames:
             self._activity_observed = True
             last = frames[-1]
-            self._last_frame_index = last.frame_index
-            self._last_frame_gen = last.gen
             self._last_t_rel = last.t_rel
         self._check_liveness(now_ns)
 
@@ -354,8 +350,6 @@ class NetworkDevice:
         self._t0_us = 0
         self._last_t_rel = 0.0
         self._frames.clear()
-        self._last_frame_index = None
-        self._last_frame_gen = None
 
     def _send(self, data: bytes) -> bool:
         if not self._connected or self._sock is None:

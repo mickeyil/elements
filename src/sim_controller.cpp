@@ -3,6 +3,16 @@
 
 #include <stdexcept>
 
+namespace {
+
+uint16_t advance_gen_u16(uint16_t gen)
+{
+    const uint16_t next = static_cast<uint16_t>(gen + 1);
+    return next == 0 ? 1 : next;
+}
+
+}  // namespace
+
 SimController::SimController(std::vector<ControllerStrip> strips)
     : _strips(std::move(strips)),
       _expected_gen(_strips.size(), 0)
@@ -65,7 +75,7 @@ bool SimController::load(const CompiledManifest& manifest, bool loop)
 
     // Attempt device loads with a provisional gen.
     // Identity (_session_id, _epoch, _gen) is NOT mutated until all succeed.
-    uint16_t new_gen = _gen + 1;
+    uint16_t new_gen = advance_gen_u16(_gen);
     std::vector<size_t> loaded;  // canonical indices successfully loaded
 
     for (size_t pi = 0; pi < manifest.strips.size(); pi++) {
@@ -168,7 +178,7 @@ void SimController::seek(float t_rel)
     bool was_playing = (_state == ControllerState::PLAYING);
 
     _epoch++;
-    _gen++;
+    _gen = advance_gen_u16(_gen);
     int64_t now = _strips[0].device->now_mono();
     int64_t t0 = now - (int64_t)(snapped * 1e6f);
     for (size_t i = 0; i < _strips.size(); i++) {
@@ -300,7 +310,7 @@ void SimController::tick_once()
         if (all_ended) {
             if (_loop) {
                 _epoch++;
-                _gen++;
+                _gen = advance_gen_u16(_gen);
                 _buckets.clear();
                 int64_t now = _strips[0].device->now_mono();
                 for (size_t i = 0; i < _strips.size(); i++) {

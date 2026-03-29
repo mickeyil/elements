@@ -998,6 +998,24 @@ class TestStop:
         assert ctrl.state == ControllerState.PLAYING
         assert ctrl.epoch == epoch_before + 1
 
+    def test_stop_preserves_already_assembled_program_frames(self):
+        f = DualFixture()
+        ctrl = Controller(f.strips(), clock=f.clock)
+        assert ctrl.load(f.manifest())
+
+        f.set_time(0)
+        ctrl.play()
+        ctrl.drain_events()
+
+        f.set_time(1.0)
+        ctrl.tick_once()
+
+        ctrl.stop()
+        assert ctrl.state == ControllerState.STOPPED
+
+        frames = ctrl.drain_program_frames()
+        assert len(frames) == 1
+
 
 # =========================================================================
 # 7. End and loop

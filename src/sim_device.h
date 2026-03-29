@@ -1,5 +1,8 @@
 #pragma once
 
+// Desktop test/development support code.
+// The canonical runtime controller lives in controller/elemctl/.
+
 #include "controller_device.h"
 #include "esp_simulated.h"
 

@@ -90,6 +90,7 @@ bool WifiManager::connect_to_dev_wifi_()
 {
     configure_wifi_runtime_();
 
+    bool tried_preferred = false;
     for (size_t i = 0; i < DEV_WIFI_CREDENTIAL_COUNT; ++i) {
         const DevWifiCredential& cred = DEV_WIFI_CREDENTIALS[i];
         const bool preferred = _last_good_ssid.length() > 0 && _last_good_ssid == cred.ssid;
@@ -97,58 +98,56 @@ bool WifiManager::connect_to_dev_wifi_()
             continue;
         }
 
-        _connect_attempts += 1;
-        log_line("[wifi] connecting to %s (preferred)", cred.ssid);
-        WiFi.disconnect(true, true);
-        delay(100);
-        WiFi.begin(cred.ssid, cred.password);
-
-        const uint32_t started = millis();
-        while (millis() - started < kWifiPreferredTimeoutMs) {
-            if (WiFi.status() == WL_CONNECTED) {
-                _connect_successes += 1;
-                log_line("[wifi] connected to %s ip=%s", cred.ssid, WiFi.localIP().toString().c_str());
-                store_last_good_ssid_(cred.ssid);
-                return true;
-            }
-            delay(250);
+        tried_preferred = true;
+        if (attempt_credential_(cred.ssid, cred.password, kWifiPreferredTimeoutMs, " (preferred)")) {
+            return true;
         }
-
-        log_line(
-            "[wifi] failed to connect to %s after %lums",
-            cred.ssid,
-            static_cast<unsigned long>(millis() - started)
-        );
         break;
     }
 
     for (size_t i = 0; i < DEV_WIFI_CREDENTIAL_COUNT; ++i) {
         const DevWifiCredential& cred = DEV_WIFI_CREDENTIALS[i];
-
-        _connect_attempts += 1;
-        log_line("[wifi] connecting to %s", cred.ssid);
-        WiFi.disconnect(true, true);
-        delay(100);
-        WiFi.begin(cred.ssid, cred.password);
-
-        const uint32_t started = millis();
-        while (millis() - started < kWifiConnectTimeoutMs) {
-            if (WiFi.status() == WL_CONNECTED) {
-                _connect_successes += 1;
-                log_line("[wifi] connected to %s ip=%s", cred.ssid, WiFi.localIP().toString().c_str());
-                store_last_good_ssid_(cred.ssid);
-                return true;
-            }
-            delay(250);
+        if (tried_preferred && _last_good_ssid.length() > 0 && _last_good_ssid == cred.ssid) {
+            continue;
         }
 
-        log_line(
-            "[wifi] failed to connect to %s after %lums",
-            cred.ssid,
-            static_cast<unsigned long>(millis() - started)
-        );
+        if (attempt_credential_(cred.ssid, cred.password, kWifiConnectTimeoutMs, "")) {
+            return true;
+        }
     }
 
+    return false;
+}
+
+bool WifiManager::attempt_credential_(
+    const char* ssid,
+    const char* password,
+    uint32_t timeout_ms,
+    const char* label
+)
+{
+    _connect_attempts += 1;
+    log_line("[wifi] connecting to %s%s", ssid, label);
+    WiFi.disconnect(true, true);
+    delay(100);
+    WiFi.begin(ssid, password);
+
+    const uint32_t started = millis();
+    while (millis() - started < timeout_ms) {
+        if (WiFi.status() == WL_CONNECTED) {
+            _connect_successes += 1;
+            log_line("[wifi] connected to %s ip=%s", ssid, WiFi.localIP().toString().c_str());
+            store_last_good_ssid_(ssid);
+            return true;
+        }
+        delay(250);
+    }
+
+    log_line(
+        "[wifi] failed to connect to %s after %lums",
+        ssid,
+        static_cast<unsigned long>(millis() - started)
+    );
     return false;
 }
 

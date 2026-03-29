@@ -31,6 +31,12 @@ public:
 
 private:
     bool connect_to_dev_wifi_();
+    bool attempt_credential_(
+        const char* ssid,
+        const char* password,
+        uint32_t timeout_ms,
+        const char* label
+    );
     void load_last_good_ssid_();
     void store_last_good_ssid_(const char* ssid);
 

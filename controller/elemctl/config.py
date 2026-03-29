@@ -14,6 +14,7 @@ DEFAULT_CONFIG_PATH = '~/.config/elemctl/config.json'
 DEFAULT_SOCKET_PATH = '/tmp/elemctl.sock'
 DEFAULT_FRAME_PORT = 9002
 DEFAULT_DISCOVERY_PORT = 6040
+# Must match kMaxStripPixels in src/hardware_profile.h
 MAX_DEVICE_PIXELS = 250
 DEFAULT_ANIMATIONS_PATH = str(Path(__file__).resolve().parent.parent.parent / 'animations')
 DEFAULT_LOGS_PATH = str(Path(__file__).resolve().parent.parent.parent / 'logs')

@@ -508,6 +508,16 @@ class Controller:
     # ------------------------------------------------------------------
 
     def drain_program_frames(self) -> list[ProgramFrame]:
+        """Drain assembled program frames.
+
+        Queue ownership is intentionally asymmetric:
+
+        - session-invalidating operations such as load/abort clear the queue
+        - within-session operations such as stop/seek/debug_seek do not
+
+        That keeps already assembled frames available to consumers until they
+        are explicitly drained.
+        """
         out = self._program_frames
         self._program_frames = []
         return out
