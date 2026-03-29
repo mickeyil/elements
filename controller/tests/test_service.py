@@ -114,6 +114,7 @@ class _FakeDevice:
 
     def reboot(self):
         self.reboot_calls += 1
+        self.is_connected = False
         return True
 
     def send_sync_result(self, seq: int, boot_token: int, offset_us: int):
@@ -2054,6 +2055,8 @@ class TestRebootDevice:
         assert reply['ok'] is True
         assert reply['result']['message'] == 'reboot requested for esp32-246f28b5f190'
         assert fake.reboot_calls == 1
+        assert fake.is_connected is False
+        assert svc._disconnect_reasons[1] == 'reboot requested'
 
     def test_reboot_device_rejects_unknown_uid(self):
         svc, _ = _make_service()

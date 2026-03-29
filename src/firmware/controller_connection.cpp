@@ -10,6 +10,17 @@
 #include "wire_constants.h"
 
 namespace firmware {
+namespace {
+
+bool seq_is_newer_u16(uint16_t seq, uint16_t last)
+{
+    if (seq == last) {
+        return false;
+    }
+    return static_cast<uint16_t>(seq - last) < 0x8000;
+}
+
+}  // namespace
 
 ControllerConnection::ControllerConnection()
     : _tcp_server(kTcpPort),
@@ -165,11 +176,15 @@ int ControllerConnection::poll_commands_(ConnectionPollResult& result)
 
         switch (cmd_type) {
             case kCmdSetProfile:
-                handle_set_profile_(payload, payload_len);
+                if (!handle_set_profile_(payload, payload_len)) {
+                    return -1;
+                }
                 break;
 
             case kCmdAttach:
-                handle_attach_(payload, payload_len);
+                if (!handle_attach_(payload, payload_len)) {
+                    return -1;
+                }
                 break;
 
             case kCmdSyncResult:
@@ -177,7 +192,9 @@ int ControllerConnection::poll_commands_(ConnectionPollResult& result)
                 break;
 
             case kCmdLoad:
-                handle_load_(payload, payload_len);
+                if (!handle_load_(payload, payload_len)) {
+                    return -1;
+                }
                 break;
 
             case kCmdStart:
@@ -201,7 +218,9 @@ int ControllerConnection::poll_commands_(ConnectionPollResult& result)
                 break;
 
             case kCmdReboot:
-                handle_reboot_(result);
+                if (!handle_reboot_(result)) {
+                    return -1;
+                }
                 break;
 
             case kCmdDebugSeek:
@@ -296,14 +315,14 @@ bool ControllerConnection::send_all_(const uint8_t* data, size_t len)
     return true;
 }
 
-void ControllerConnection::send_ack_(uint8_t status)
+bool ControllerConnection::send_ack_(uint8_t status)
 {
     uint8_t buf[6];
     const uint32_t len = 2;
     memcpy(buf, &len, sizeof(len));
     buf[4] = kCmdAck;
     buf[5] = status;
-    send_all_(buf, sizeof(buf));
+    return send_all_(buf, sizeof(buf));
 }
 
 uint8_t ControllerConnection::apply_profile_(const HardwareProfile& profile)
@@ -368,24 +387,22 @@ uint8_t ControllerConnection::attach_(uint16_t device_id, uint16_t frame_port)
     return kAckOk;
 }
 
-void ControllerConnection::handle_set_profile_(const uint8_t* payload, uint32_t payload_len)
+bool ControllerConnection::handle_set_profile_(const uint8_t* payload, uint32_t payload_len)
 {
     if (payload_len < 2) {
-        send_ack_(kAckError);
-        return;
+        return send_ack_(kAckError);
     }
 
     uint16_t strip_length = 0;
     memcpy(&strip_length, payload, 2);
     const uint8_t status = apply_profile_(HardwareProfile(strip_length));
-    send_ack_(status);
+    return send_ack_(status);
 }
 
-void ControllerConnection::handle_attach_(const uint8_t* payload, uint32_t payload_len)
+bool ControllerConnection::handle_attach_(const uint8_t* payload, uint32_t payload_len)
 {
     if (payload_len < 4) {
-        send_ack_(kAckError);
-        return;
+        return send_ack_(kAckError);
     }
 
     uint16_t device_id = 0;
@@ -393,7 +410,7 @@ void ControllerConnection::handle_attach_(const uint8_t* payload, uint32_t paylo
     memcpy(&device_id, payload, 2);
     memcpy(&frame_port, payload + 2, 2);
     const uint8_t status = attach_(device_id, frame_port);
-    send_ack_(status);
+    return send_ack_(status);
 }
 
 void ControllerConnection::handle_sync_result_(const uint8_t* payload, uint32_t payload_len)
@@ -417,9 +434,9 @@ void ControllerConnection::handle_sync_result_(const uint8_t* payload, uint32_t 
         );
         return;
     }
-    if (seq < _last_sync_seq) {
+    if (_last_sync_seq != 0 && !seq_is_newer_u16(seq, _last_sync_seq)) {
         log_line(
-            "[sync] old result ignored seq=%u last=%u",
+            "[sync] old/duplicate result ignored seq=%u last=%u",
             static_cast<unsigned>(seq),
             static_cast<unsigned>(_last_sync_seq)
         );
@@ -435,15 +452,13 @@ void ControllerConnection::handle_sync_result_(const uint8_t* payload, uint32_t 
     log_line("[sync] ready for playback");
 }
 
-void ControllerConnection::handle_load_(const uint8_t* payload, uint32_t payload_len)
+bool ControllerConnection::handle_load_(const uint8_t* payload, uint32_t payload_len)
 {
     if (!is_attached() || _device == nullptr) {
-        send_ack_(kAckWrongState);
-        return;
+        return send_ack_(kAckWrongState);
     }
     if (payload_len < 2) {
-        send_ack_(kAckError);
-        return;
+        return send_ack_(kAckError);
     }
 
     uint16_t gen = 0;
@@ -459,7 +474,7 @@ void ControllerConnection::handle_load_(const uint8_t* payload, uint32_t payload
         static_cast<unsigned long>(blob_len),
         ok ? "ok" : "decode-failed"
     );
-    send_ack_(ok ? kAckOk : kAckError);
+    return send_ack_(ok ? kAckOk : kAckError);
 }
 
 void ControllerConnection::handle_start_(const uint8_t* payload, uint32_t payload_len)
@@ -519,11 +534,14 @@ void ControllerConnection::handle_stop_()
     }
 }
 
-void ControllerConnection::handle_reboot_(ConnectionPollResult& result)
+bool ControllerConnection::handle_reboot_(ConnectionPollResult& result)
 {
     log_line("[tcp] reboot requested");
-    send_ack_(kAckOk);
+    if (!send_ack_(kAckOk)) {
+        return false;
+    }
     result.reboot_requested = true;
+    return true;
 }
 
 }  // namespace firmware

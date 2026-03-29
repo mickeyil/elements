@@ -56,20 +56,20 @@ private:
     void reset_session_state_();
     bool has_active_client_() const;
     bool send_all_(const uint8_t* data, size_t len);
-    void send_ack_(uint8_t status);
+    bool send_ack_(uint8_t status);
     uint8_t apply_profile_(const HardwareProfile& profile);
     uint8_t attach_(uint16_t device_id, uint16_t frame_port);
 
-    void handle_set_profile_(const uint8_t* payload, uint32_t payload_len);
-    void handle_attach_(const uint8_t* payload, uint32_t payload_len);
+    bool handle_set_profile_(const uint8_t* payload, uint32_t payload_len);
+    bool handle_attach_(const uint8_t* payload, uint32_t payload_len);
     void handle_sync_result_(const uint8_t* payload, uint32_t payload_len);
-    void handle_load_(const uint8_t* payload, uint32_t payload_len);
+    bool handle_load_(const uint8_t* payload, uint32_t payload_len);
     void handle_start_(const uint8_t* payload, uint32_t payload_len);
     void handle_jump_(const uint8_t* payload, uint32_t payload_len);
     void handle_pause_();
     void handle_resume_(const uint8_t* payload, uint32_t payload_len);
     void handle_stop_();
-    void handle_reboot_(ConnectionPollResult& result);
+    bool handle_reboot_(ConnectionPollResult& result);
 
     const DeviceIdentity* _identity = nullptr;
     ESPDevice* _device = nullptr;

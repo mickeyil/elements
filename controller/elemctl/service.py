@@ -321,6 +321,7 @@ class ControllerService:
         if not dev.reboot():
             raise ValueError(f'device reboot failed: {device_uid}')
 
+        self._set_disconnect_reason(dc.device_id, 'reboot requested')
         return {'message': f'reboot requested for {device_uid}'}
 
     def _cmd_rescan_programs(self, cmd: dict) -> dict:

@@ -34,7 +34,10 @@ from .wire import (
 
 log = logging.getLogger(__name__)
 
-_ACK_TIMEOUT = 5.0  # seconds
+_PROBE_CONNECT_TIMEOUT = 0.5
+_COMMAND_CONNECT_TIMEOUT = 1.0
+_HANDSHAKE_ACK_TIMEOUT = 1.0
+_COMMAND_ACK_TIMEOUT = 1.0
 
 
 class NetworkDevice:
@@ -78,14 +81,17 @@ class NetworkDevice:
     # ------------------------------------------------------------------
 
     def load(self, blob: bytes, gen: int) -> bool:
-        if not self._connected and not self._connect():
+        if not self._connected and not self._connect(
+            connect_timeout_s=_COMMAND_CONNECT_TIMEOUT,
+            ack_timeout_s=_HANDSHAKE_ACK_TIMEOUT,
+        ):
             return False
 
         msg = encode_load(gen, blob)
         if not self._send(msg):
             return False
 
-        status = self._recv_ack()
+        status = self._recv_ack(timeout_s=_COMMAND_ACK_TIMEOUT)
         if status is None:
             if self._connected:
                 self.close()
@@ -148,12 +154,15 @@ class NetworkDevice:
             self._last_t_rel = 0.0
 
     def reboot(self) -> bool:
-        if not self._connected and not self._connect():
+        if not self._connected and not self._connect(
+            connect_timeout_s=_COMMAND_CONNECT_TIMEOUT,
+            ack_timeout_s=_HANDSHAKE_ACK_TIMEOUT,
+        ):
             return False
         if not self._send(encode_reboot()):
             return False
 
-        status = self._recv_ack()
+        status = self._recv_ack(timeout_s=_COMMAND_ACK_TIMEOUT)
         if status is None:
             if self._connected:
                 self.close()
@@ -162,10 +171,14 @@ class NetworkDevice:
             return False
 
         log.info('device %d reboot acknowledged', self._device_id)
+        self._drop_transport(preserve_runtime=True)
         return True
 
     def send_sync_result(self, seq: int, boot_token: int, offset_us: int) -> bool:
-        if not self._connected and not self._connect():
+        if not self._connected and not self._connect(
+            connect_timeout_s=_COMMAND_CONNECT_TIMEOUT,
+            ack_timeout_s=_HANDSHAKE_ACK_TIMEOUT,
+        ):
             return False
         if not self._send(encode_sync_result(seq, boot_token, offset_us)):
             return False
@@ -246,7 +259,10 @@ class NetworkDevice:
             return True
         if not self._has_address():
             return False
-        return self._connect()
+        return self._connect(
+            connect_timeout_s=_PROBE_CONNECT_TIMEOUT,
+            ack_timeout_s=_HANDSHAKE_ACK_TIMEOUT,
+        )
 
     def close(self) -> None:
         """Disconnect and reset to IDLE. Safe to call multiple times."""
@@ -270,16 +286,16 @@ class NetworkDevice:
     def _has_address(self) -> bool:
         return bool(self._host) and self._tcp_port != 0
 
-    def _connect(self) -> bool:
+    def _connect(self, *, connect_timeout_s: float, ack_timeout_s: float) -> bool:
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(_ACK_TIMEOUT)
+            sock.settimeout(connect_timeout_s)
             sock.connect((self._host, self._tcp_port))
             self._sock = sock
             self._connected = True
             if not self._send(encode_set_profile(self._strip_length)):
                 return False
-            status = self._recv_ack()
+            status = self._recv_ack(timeout_s=ack_timeout_s)
             if status != ACK_OK:
                 log.warning(
                     'set_profile for %s:%d failed with status=%s',
@@ -290,7 +306,7 @@ class NetworkDevice:
                 return False
             if not self._send(encode_attach(self._device_id, self._frame_port)):
                 return False
-            status = self._recv_ack()
+            status = self._recv_ack(timeout_s=ack_timeout_s)
             if status != ACK_OK:
                 log.warning(
                     'attach for %s:%d failed with status=%s',
@@ -349,13 +365,13 @@ class NetworkDevice:
             self._drop_transport(preserve_runtime=True)
             return False
 
-    def _recv_exact(self, n: int) -> bytes | None:
+    def _recv_exact(self, n: int, *, timeout_s: float) -> bytes | None:
         """Read exactly n bytes from the TCP socket. Returns None on error."""
         if not self._connected or self._sock is None:
             return None
         buf = bytearray()
         try:
-            self._sock.settimeout(_ACK_TIMEOUT)
+            self._sock.settimeout(timeout_s)
             while len(buf) < n:
                 chunk = self._sock.recv(n - len(buf))
                 if not chunk:
@@ -369,9 +385,9 @@ class NetworkDevice:
             return None
         return bytes(buf)
 
-    def _recv_ack(self) -> int | None:
+    def _recv_ack(self, *, timeout_s: float = _COMMAND_ACK_TIMEOUT) -> int | None:
         # ACK is 6 bytes: length(4) + type(1) + status(1)
-        data = self._recv_exact(6)
+        data = self._recv_exact(6, timeout_s=timeout_s)
         if data is None:
             return None
         return parse_ack(data)

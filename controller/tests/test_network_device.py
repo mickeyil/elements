@@ -7,6 +7,7 @@ import threading
 
 import pytest
 
+import elemctl.network_device as network_device_module
 from elemctl.device import DeviceFrame, DeviceState
 from elemctl.network_device import NetworkDevice
 from elemctl.udp_receiver import UdpFrameReceiver
@@ -114,6 +115,35 @@ class FakeEndpoint:
                 raise ConnectionError('connection closed')
             buf.extend(chunk)
         return bytes(buf)
+
+
+class _TimeoutRecordingSocket:
+    def __init__(self, ack_count: int):
+        ack = struct.pack('<IBB', 2, CMD_ACK, ACK_OK)
+        self._recv_buf = bytearray(ack * ack_count)
+        self.timeouts: list[float] = []
+        self.sent: list[bytes] = []
+        self.connected_to = None
+        self.closed = False
+
+    def settimeout(self, timeout: float) -> None:
+        self.timeouts.append(timeout)
+
+    def connect(self, addr) -> None:
+        self.connected_to = addr
+
+    def sendall(self, data: bytes) -> None:
+        self.sent.append(data)
+
+    def recv(self, n: int) -> bytes:
+        if not self._recv_buf:
+            return b''
+        chunk = self._recv_buf[:n]
+        del self._recv_buf[:n]
+        return bytes(chunk)
+
+    def close(self) -> None:
+        self.closed = True
 
 
 # ---------------------------------------------------------------------------
@@ -339,6 +369,31 @@ class TestWireEncoding:
 
 
 class TestConnection:
+    def test_ensure_connected_uses_probe_and_handshake_timeouts(self, receiver, monkeypatch):
+        fake_sock = _TimeoutRecordingSocket(ack_count=2)
+        monkeypatch.setattr(
+            'elemctl.network_device.socket.socket',
+            lambda *args, **kwargs: fake_sock,
+        )
+
+        dev = NetworkDevice(
+            device_id=1,
+            host='127.0.0.1',
+            tcp_port=9001,
+            device_type='esp32',
+            strip_length=5,
+            frame_port=_receiver_port(receiver),
+            udp_receiver=receiver,
+        )
+
+        assert dev.ensure_connected()
+        assert fake_sock.connected_to == ('127.0.0.1', 9001)
+        assert fake_sock.timeouts == [
+            network_device_module._PROBE_CONNECT_TIMEOUT,
+            network_device_module._HANDSHAKE_ACK_TIMEOUT,
+            network_device_module._HANDSHAKE_ACK_TIMEOUT,
+        ]
+
     def test_lazy_connect_on_load(self, endpoint, receiver):
         dev = _make_device(endpoint, receiver)
         assert dev.state() == DeviceState.IDLE
@@ -468,6 +523,31 @@ class TestConnection:
 
 
 class TestLoad:
+    def test_load_uses_command_connect_and_ack_timeouts(self, receiver, monkeypatch):
+        fake_sock = _TimeoutRecordingSocket(ack_count=3)
+        monkeypatch.setattr(
+            'elemctl.network_device.socket.socket',
+            lambda *args, **kwargs: fake_sock,
+        )
+
+        dev = NetworkDevice(
+            device_id=1,
+            host='127.0.0.1',
+            tcp_port=9001,
+            device_type='esp32',
+            strip_length=5,
+            frame_port=_receiver_port(receiver),
+            udp_receiver=receiver,
+        )
+
+        assert dev.load(b'\x00', gen=1)
+        assert fake_sock.timeouts == [
+            network_device_module._COMMAND_CONNECT_TIMEOUT,
+            network_device_module._HANDSHAKE_ACK_TIMEOUT,
+            network_device_module._HANDSHAKE_ACK_TIMEOUT,
+            network_device_module._COMMAND_ACK_TIMEOUT,
+        ]
+
     def test_load_sends_correct_wire_format(self, endpoint, receiver):
         dev = _make_device(endpoint, receiver, device_id=7)
 
@@ -542,6 +622,7 @@ class TestReboot:
         t.start()
         assert dev.reboot() is True
         t.join(timeout=3.0)
+        assert not dev.is_connected
 
     def test_send_sync_result_writes_tcp_command(self, endpoint, receiver):
         dev = _make_device(endpoint, receiver, device_type='esp32')
