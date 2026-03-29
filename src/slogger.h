@@ -3,17 +3,19 @@
 #include <chrono>
 #include <cstdarg>
 #include <cstdio>
-#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <mutex>
 #include <sstream>
 #include <string>
+#include <sys/stat.h>
 
 namespace slog {
 
-inline std::mutex g_mutex;
-inline std::ofstream g_file;
+namespace detail {
+    inline std::mutex& mutex() { static std::mutex m; return m; }
+    inline std::ofstream& file() { static std::ofstream f; return f; }
+}  // namespace detail
 
 inline std::string timestamp_now()
 {
@@ -37,19 +39,23 @@ inline void init(const std::string& log_file = {})
         return;
     }
 
-    std::lock_guard<std::mutex> lock(g_mutex);
-    if (g_file.is_open()) {
+    std::lock_guard<std::mutex> lock(detail::mutex());
+    if (detail::file().is_open()) {
         return;
     }
 
-    const auto path = std::filesystem::path(log_file);
-    if (path.has_parent_path()) {
-        std::error_code ec;
-        std::filesystem::create_directories(path.parent_path(), ec);
+    auto pos = log_file.rfind('/');
+    if (pos != std::string::npos) {
+        std::string dir = log_file.substr(0, pos);
+        for (size_t i = 1; i <= dir.size(); ++i) {
+            if (i == dir.size() || dir[i] == '/') {
+                mkdir(dir.substr(0, i).c_str(), 0755);
+            }
+        }
     }
 
-    g_file.open(log_file, std::ios::app);
-    if (!g_file.is_open()) {
+    detail::file().open(log_file, std::ios::app);
+    if (!detail::file().is_open()) {
         std::fprintf(stderr, "slogger: failed to open log file: %s\n", log_file.c_str());
     }
 }
@@ -62,12 +68,12 @@ inline void vlog(char level, const char* fmt, va_list ap)
     const std::string line =
         "[" + timestamp_now() + "] -" + std::string(1, level) + "- : " + message;
 
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::mutex> lock(detail::mutex());
     std::fprintf(stdout, "%s\n", line.c_str());
     std::fflush(stdout);
-    if (g_file.is_open()) {
-        g_file << line << '\n';
-        g_file.flush();
+    if (detail::file().is_open()) {
+        detail::file() << line << '\n';
+        detail::file().flush();
     }
 }
 
