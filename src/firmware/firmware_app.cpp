@@ -38,6 +38,18 @@ void FirmwareApp::run_once()
         on_network_down();
     }
 
+    if (_reboot_pending) {
+        maybe_log_status(
+            _last_status_ms,
+            _wifi.snapshot(),
+            _discovery.snapshot(),
+            _connection.snapshot()
+        );
+        reboot_if_due();
+        delay(kLoopDelayMs);
+        return;
+    }
+
     if (_wifi.is_ready()) {
         _discovery.start_if_needed();
         _connection.start_if_needed();
@@ -48,6 +60,15 @@ void FirmwareApp::run_once()
         }
         if (result.reboot_requested) {
             schedule_reboot();
+            maybe_log_status(
+                _last_status_ms,
+                _wifi.snapshot(),
+                _discovery.snapshot(),
+                _connection.snapshot()
+            );
+            reboot_if_due();
+            delay(kLoopDelayMs);
+            return;
         }
     }
 
@@ -88,6 +109,9 @@ void FirmwareApp::invalidate_controller_runtime_(const char* reason, bool stop_t
 
 void FirmwareApp::schedule_reboot()
 {
+    if (_reboot_pending) {
+        return;
+    }
     _reboot_pending = true;
     _reboot_deadline_ms = millis() + kRebootDelayMs;
     log_line("[sys] reboot scheduled");

@@ -253,11 +253,6 @@ const uint8_t* PlaybackDevice::rgb_data() const
     return _rgb_storage.data();
 }
 
-uint8_t* PlaybackDevice::rgb_buf()
-{
-    return _rgb_storage.data();
-}
-
 uint16_t PlaybackDevice::strip_length() const
 {
     return _strip.length();

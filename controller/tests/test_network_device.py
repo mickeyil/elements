@@ -15,6 +15,7 @@ from elemctl.wire import (
     ACK_OK,
     ACK_WRONG_STATE,
     CMD_ACK,
+    MAX_LOAD_BLOB_BYTES,
     CMD_ATTACH,
     CMD_SET_PROFILE,
     CMD_DEBUG_SEEK,
@@ -31,6 +32,7 @@ from elemctl.wire import (
     SYNC_RESP,
     UDP_FRAME_HEADER,
     encode_attach,
+    encode_jump,
     encode_load,
     encode_reboot,
     encode_set_profile,
@@ -254,6 +256,25 @@ class TestWireEncoding:
         (gen,) = struct.unpack_from('<H', msg, 5)
         assert gen == 2
         assert msg[7:] == b'\xAA\xBB'
+
+    def test_encode_load_rejects_out_of_range_gen(self):
+        with pytest.raises(ValueError, match='gen must fit in u16'):
+            encode_load(gen=0x10000, blob=b'\x00')
+
+    def test_encode_load_accepts_max_blob(self):
+        blob = b'\xAA' * MAX_LOAD_BLOB_BYTES
+        msg = encode_load(gen=2, blob=blob)
+        length = struct.unpack_from('<I', msg, 0)[0]
+        assert length == 1 + 2 + len(blob)
+        assert msg[4] == CMD_LOAD
+
+    def test_encode_load_rejects_oversize_blob(self):
+        with pytest.raises(ValueError, match='compiled blob too large'):
+            encode_load(gen=2, blob=b'\x00' * (MAX_LOAD_BLOB_BYTES + 1))
+
+    def test_encode_jump_rejects_out_of_range_gen(self):
+        with pytest.raises(ValueError, match='gen must fit in u16'):
+            encode_jump(t0_us=123, t_rel=0.5, gen=0x10000)
 
     def test_encode_start(self):
         msg = encode_start(t0_us=123456789)
@@ -948,32 +969,42 @@ class TestErrors:
         dev.tick_once(_sec(1.0))
         assert not dev._connected
 
-    def test_disconnect_transport_clears_runtime_caches(self, endpoint, receiver):
+    def test_disconnect_transport_freezes_playback_position(self, endpoint, receiver, monkeypatch):
         dev = _make_device(endpoint, receiver)
         assert _load_device(dev, endpoint)
 
-        endpoint.send_udp_frame(
-            device_id=dev._device_id,
-            gen=dev._gen,
-            frame_index=9,
-            t_rel=0.5,
-            rgb=b'\x05\x04\x03' * 5,
-        )
-        import time
-        time.sleep(0.05)
-        receiver.poll()
-        dev.tick_once(_sec(1.0))
+        dev.start(_sec(1.0))
+        endpoint.read_command()
 
-        assert dev._last_frame_index == 9
+        monkeypatch.setattr('elemctl.network_device.time.monotonic_ns', lambda: _sec(2.5))
 
         dev.disconnect_transport()
 
         assert not dev._connected
         assert dev.drain_frames() == []
         assert dev._t0_us == 0
-        assert dev._last_t_rel == 0.0
+        assert dev._last_t_rel == pytest.approx(1.5)
+        assert dev.current_t_rel(_sec(99.0)) == pytest.approx(1.5)
         assert dev._last_frame_index is None
         assert dev._last_frame_gen is None
+
+    def test_tick_once_detects_peer_disconnect_and_freezes_playback(self, endpoint, receiver):
+        dev = _make_device(endpoint, receiver)
+        assert _load_device(dev, endpoint)
+        assert dev._connected
+
+        dev.start(_sec(1.0))
+        endpoint.read_command()
+
+        endpoint._conn.close()
+        endpoint._conn = None
+
+        dev.tick_once(_sec(2.0))
+
+        assert not dev._connected
+        assert dev._t0_us == 0
+        assert dev._last_t_rel == pytest.approx(1.0)
+        assert dev.current_t_rel(_sec(99.0)) == pytest.approx(1.0)
 
     def test_load_wrong_state_disconnects_transport(self, endpoint, receiver):
         dev = _make_device(endpoint, receiver)
@@ -1123,15 +1154,22 @@ class TestUpdateAddress:
         assert dev._host == '127.0.0.1'
         assert dev._tcp_port == 9999
 
-    def test_update_while_connected_disconnects(self, endpoint, receiver):
+    def test_update_while_connected_disconnects_and_freezes_runtime(self, endpoint, receiver, monkeypatch):
         dev = _make_device(endpoint, receiver)
         assert _load_device(dev, endpoint)
         assert dev._connected
+
+        dev.start(_sec(1.0))
+        endpoint.read_command()
+
+        monkeypatch.setattr('elemctl.network_device.time.monotonic_ns', lambda: _sec(2.25))
 
         dev.update_address('192.168.1.1', 5555)
         assert not dev._connected
         assert dev._host == '192.168.1.1'
         assert dev._tcp_port == 5555
+        assert dev._last_t_rel == pytest.approx(1.25)
+        assert dev.current_t_rel(_sec(99.0)) == pytest.approx(1.25)
 
 
 # =========================================================================

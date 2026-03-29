@@ -120,8 +120,8 @@ static std::vector<uint8_t> build_hello_packet(const std::string& uid, uint16_t 
 // ---------------------------------------------------------------------------
 
 static constexpr size_t TCP_BUF_INITIAL = 32768;
-// 4 MiB — large enough for any realistic blob, small enough to reject garbage.
-static constexpr size_t TCP_MSG_MAX = 4 * 1024 * 1024;
+// Keep simulator parity with real firmware message-size limits.
+static constexpr size_t TCP_MSG_MAX = 256 * 1024;
 
 static void reset_attach_state(TransportState& state, sockaddr_in& controller_addr)
 {

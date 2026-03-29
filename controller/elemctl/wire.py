@@ -29,6 +29,8 @@ CMD_ACK = 0x80
 ACK_OK = 0
 ACK_ERROR = 1
 ACK_WRONG_STATE = 2
+MAX_WIRE_MESSAGE_BYTES = 256 * 1024
+MAX_LOAD_BLOB_BYTES = MAX_WIRE_MESSAGE_BYTES - 3  # cmd(u8) + gen(u16)
 
 # UDP frame header: device_id(u16) + gen(u16) + frame_index(u32) + t_rel(f32)
 UDP_FRAME_HEADER = struct.Struct('<HHIf')
@@ -36,7 +38,17 @@ SYNC_REQ_STRUCT = struct.Struct('<BHIq')
 SYNC_RESP_STRUCT = struct.Struct('<BHIqqq')
 
 
+def _require_u16(name: str, value: int) -> None:
+    if not (0 <= value <= 0xFFFF):
+        raise ValueError(f'{name} must fit in u16, got {value}')
+
+
 def encode_load(gen: int, blob: bytes) -> bytes:
+    _require_u16('gen', gen)
+    if len(blob) > MAX_LOAD_BLOB_BYTES:
+        raise ValueError(
+            f'compiled blob too large for wire protocol: {len(blob)} > {MAX_LOAD_BLOB_BYTES}'
+        )
     payload = struct.pack('<H', gen) + blob
     return struct.pack('<IB', 1 + len(payload), CMD_LOAD) + payload
 
@@ -62,6 +74,7 @@ def encode_start(t0_us: int) -> bytes:
 
 
 def encode_jump(t0_us: int, t_rel: float, gen: int) -> bytes:
+    _require_u16('gen', gen)
     return struct.pack('<IBqfH', 15, CMD_JUMP, t0_us, t_rel, gen)
 
 

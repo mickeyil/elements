@@ -1378,6 +1378,28 @@ class TestConstructor:
                 clock=lambda: 0,
             )
 
+    def test_rejects_reused_device_object(self):
+        shared = MockDevice()
+        with pytest.raises(ValueError, match="one strip per device"):
+            Controller(
+                [
+                    StripConfig("left", 5, shared),
+                    StripConfig("right", 5, shared),
+                ],
+                clock=lambda: 0,
+            )
+
+
+class TestGenWrap:
+    def test_peek_and_advance_wrap_skip_zero(self):
+        ctrl = Controller([], clock=lambda: 0)
+
+        ctrl._gen = 0xFFFE
+        assert ctrl._peek_next_gen() == 0xFFFF
+        assert ctrl._advance_gen() == 0xFFFF
+        assert ctrl._peek_next_gen() == 1
+        assert ctrl._advance_gen() == 1
+
 # =========================================================================
 # Debug seek from ENDED
 # =========================================================================

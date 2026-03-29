@@ -64,9 +64,18 @@ class Controller:
     ):
         self._strips = list(strips)
         self._strip_id_to_indices: dict[str, list[int]] = {}
+        seen_devices: dict[int, str] = {}
         for i, s in enumerate(self._strips):
             if s.device is None:
                 raise ValueError(f"strip {s.strip_id!r} has no device")
+            device_oid = id(s.device)
+            prev = seen_devices.get(device_oid)
+            if prev is not None:
+                raise ValueError(
+                    "Controller currently assumes one strip per device; "
+                    f"device object reused for strips {prev!r} and {s.strip_id!r}"
+                )
+            seen_devices[device_oid] = s.strip_id
             self._strip_id_to_indices.setdefault(s.strip_id, []).append(i)
 
         self._clock = clock
@@ -249,7 +258,7 @@ class Controller:
         overlaps_previous_session = bool(prev_active_device_ids & new_active_device_ids)
 
         # Attempt device loads with provisional gen
-        new_gen = self._gen + 1
+        new_gen = self._peek_next_gen()
         loaded_active: list[int] = []
 
         for ai, active_strip in enumerate(new_active_strips):
@@ -361,7 +370,7 @@ class Controller:
         was_playing = self._state == ControllerState.PLAYING
 
         self._epoch += 1
-        self._gen += 1
+        self._advance_gen()
         now = self._clock()
         t0 = now - int(snapped * 1e9)
         for i, s in enumerate(self._active_strips):
@@ -484,7 +493,7 @@ class Controller:
             if all_past_end:
                 if self._loop:
                     self._epoch += 1
-                    self._gen += 1
+                    self._advance_gen()
                     self._buckets.clear()
                     now = self._clock()
                     # Devices are ENDED here. jump() transitions ENDED→PAUSED,
@@ -527,6 +536,16 @@ class Controller:
                 message=message,
             )
         )
+
+    def _peek_next_gen(self) -> int:
+        next_gen = (self._gen + 1) & 0xFFFF
+        if next_gen == 0:
+            next_gen = 1
+        return next_gen
+
+    def _advance_gen(self) -> int:
+        self._gen = self._peek_next_gen()
+        return self._gen
 
     def _reset_active_runtime(self) -> None:
         self._duration = 0.0

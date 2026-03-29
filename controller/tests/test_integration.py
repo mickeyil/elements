@@ -243,8 +243,8 @@ class TestIntegration:
         finally:
             receiver1.close()
 
-        # --- Disconnect: close the TCP socket ---
-        dev1._disconnect()
+        # --- Disconnect: drop the live transport ---
+        dev1.disconnect_transport()
 
         # Wait for network_sim to reset and re-enter accept()
         assert sim_process.wait_ready(timeout=5.0), \

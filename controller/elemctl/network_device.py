@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import select
 import socket
+import time
 
 from .device import DeviceFrame, DeviceState
 from .udp_receiver import UdpFrameReceiver
@@ -86,7 +87,8 @@ class NetworkDevice:
 
         status = self._recv_ack()
         if status is None:
-            self._disconnect()
+            if self._connected:
+                self.close()
             return False
         if status == ACK_OK:
             self._reset_runtime_caches()
@@ -98,8 +100,7 @@ class NetworkDevice:
                 'load rejected in wrong state for %s:%d (device_id=%d)',
                 self._host, self._tcp_port, self._device_id,
             )
-            self._disconnect()
-            self._state = DeviceState.IDLE
+            self.close()
             return False
         if status != ACK_ERROR:
             log.warning(
@@ -154,7 +155,8 @@ class NetworkDevice:
 
         status = self._recv_ack()
         if status is None:
-            self._disconnect()
+            if self._connected:
+                self.close()
             return False
         if status != ACK_OK:
             return False
@@ -185,13 +187,15 @@ class NetworkDevice:
             self._last_frame_index = last.frame_index
             self._last_frame_gen = last.gen
             self._last_t_rel = last.t_rel
-        self._check_liveness()
+        self._check_liveness(now_ns)
 
     def state(self) -> DeviceState:
         return self._state
 
     def current_t_rel(self, now_ns: int) -> float:
         if self._state == DeviceState.PLAYING:
+            if not self._connected:
+                return self._last_t_rel
             return (now_ns // 1000 - self._t0_us) / 1e6
         if self._state == DeviceState.PAUSED:
             return self._last_t_rel
@@ -229,7 +233,7 @@ class NetworkDevice:
         if host == self._host and tcp_port == self._tcp_port:
             return False
         if self._connected:
-            self._disconnect()
+            self._drop_transport(preserve_runtime=True)
         self._host = host
         self._tcp_port = tcp_port
         self._connect_error_logged = False
@@ -246,12 +250,12 @@ class NetworkDevice:
 
     def close(self) -> None:
         """Disconnect and reset to IDLE. Safe to call multiple times."""
-        self._disconnect()
+        self._drop_transport(preserve_runtime=False)
         self._state = DeviceState.IDLE
 
     def disconnect_transport(self) -> None:
-        """Drop the live transport without resetting playback state."""
-        self._disconnect()
+        """Drop the live transport while freezing the visible runtime state."""
+        self._drop_transport(preserve_runtime=True)
 
     def consume_activity_observed(self) -> bool:
         """Return whether recent device-originated traffic was observed."""
@@ -281,7 +285,8 @@ class NetworkDevice:
                     'set_profile for %s:%d failed with status=%s',
                     self._host, self._tcp_port, status,
                 )
-                self._disconnect()
+                if self._connected:
+                    self._drop_transport(preserve_runtime=True)
                 return False
             if not self._send(encode_attach(self._device_id, self._frame_port)):
                 return False
@@ -291,7 +296,8 @@ class NetworkDevice:
                     'attach for %s:%d failed with status=%s',
                     self._host, self._tcp_port, status,
                 )
-                self._disconnect()
+                if self._connected:
+                    self._drop_transport(preserve_runtime=True)
                 return False
             self._ever_connected = True
             self._connect_error_logged = False
@@ -302,10 +308,21 @@ class NetworkDevice:
                 self._connect_error_logged = True
             return False
 
-    def _disconnect(self) -> None:
+    def _drop_transport(self, preserve_runtime: bool, now_ns: int | None = None) -> None:
+        if preserve_runtime:
+            frozen_t_rel = 0.0
+            if self._state == DeviceState.PLAYING:
+                freeze_ns = time.monotonic_ns() if now_ns is None else now_ns
+                frozen_t_rel = max(0.0, (freeze_ns // 1000 - self._t0_us) / 1e6)
+            elif self._state == DeviceState.PAUSED:
+                frozen_t_rel = self._last_t_rel
+        else:
+            frozen_t_rel = 0.0
+
         self._connected = False
         self._activity_observed = False
         self._reset_runtime_caches()
+        self._last_t_rel = frozen_t_rel
         if self._sock is not None:
             try:
                 self._sock.close()
@@ -329,7 +346,7 @@ class NetworkDevice:
             return True
         except OSError as e:
             log.warning('send to %s:%d failed: %s', self._host, self._tcp_port, e)
-            self._disconnect()
+            self._drop_transport(preserve_runtime=True)
             return False
 
     def _recv_exact(self, n: int) -> bytes | None:
@@ -342,13 +359,13 @@ class NetworkDevice:
             while len(buf) < n:
                 chunk = self._sock.recv(n - len(buf))
                 if not chunk:
-                    self._disconnect()
+                    self._drop_transport(preserve_runtime=True)
                     return None
                 buf.extend(chunk)
                 self._activity_observed = True
         except OSError as e:
             log.warning('recv from %s:%d failed: %s', self._host, self._tcp_port, e)
-            self._disconnect()
+            self._drop_transport(preserve_runtime=True)
             return None
         return bytes(buf)
 
@@ -359,7 +376,7 @@ class NetworkDevice:
             return None
         return parse_ack(data)
 
-    def _check_liveness(self) -> None:
+    def _check_liveness(self, now_ns: int) -> None:
         if not self._connected or self._sock is None:
             return
 
@@ -370,7 +387,7 @@ class NetworkDevice:
                 'liveness check for %s:%d failed: %s',
                 self._host, self._tcp_port, e,
             )
-            self._disconnect()
+            self._drop_transport(preserve_runtime=True, now_ns=now_ns)
             return
 
         if not readable:
@@ -385,8 +402,8 @@ class NetworkDevice:
                 'liveness recv from %s:%d failed: %s',
                 self._host, self._tcp_port, e,
             )
-            self._disconnect()
+            self._drop_transport(preserve_runtime=True, now_ns=now_ns)
             return
 
         if not peek:
-            self._disconnect()
+            self._drop_transport(preserve_runtime=True, now_ns=now_ns)

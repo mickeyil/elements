@@ -42,7 +42,6 @@ public:
     float duration() const;
     float current_t_rel() const;
     const uint8_t* rgb_data() const;
-    uint8_t* rgb_buf();
     uint16_t strip_length() const;
     bool sync_valid() const;
     bool playback_uses_sync() const;
