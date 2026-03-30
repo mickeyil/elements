@@ -2886,6 +2886,7 @@ class TestPresenceEvents:
         status_events = [e for e in events if e.get('event') == 'device_status']
         assert len(status_events) == 1
         evt = status_events[0]
+        assert evt['source'] == 'connectivity'
         assert evt['connected'] is True
         assert evt['device_id'] == 1
         assert evt['device_uid'] == 'sim-1'
@@ -2917,6 +2918,7 @@ class TestPresenceEvents:
 
         status_events = [e for e in events if e.get('event') == 'device_status']
         assert len(status_events) == 1
+        assert status_events[0]['source'] == 'connectivity'
         assert status_events[0]['connected'] is False
         assert status_events[0]['last_seen'] == pytest.approx(20.0)
 
@@ -2970,6 +2972,7 @@ class TestPresenceEvents:
 
         status_events = [e for e in events if e.get('event') == 'device_status']
         assert len(status_events) == 1
+        assert status_events[0]['source'] == 'clock'
         assert status_events[0]['clock_state'] == 'synced'
         assert status_events[0]['clock_offset_ms'] == pytest.approx(2.3)
         assert status_events[0]['clock_rtt_ms'] == pytest.approx(1.1)

@@ -1035,6 +1035,8 @@ def _format_controller_event(msg: dict) -> list[str]:
         return [f'state {state} epoch={epoch} session={sid}']
 
     if event == 'device_status':
+        if msg.get('source') == 'clock':
+            return []
         uid = msg.get('device_uid', '?')
         strip = msg.get('strip', '?')
         length = msg.get('length')

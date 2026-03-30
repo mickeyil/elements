@@ -527,7 +527,9 @@ class ControllerService:
                     offset_label,
                     rtt_label,
                 )
-            json_msgs.append(encode_json(self._device_status_event(dc, dev, now_ns)))
+            json_msgs.append(encode_json(
+                self._device_status_event(dc, dev, now_ns, source='clock')
+            ))
 
         self._clock_sync.send_due_probes(self._sync_targets(), now_ns)
 
@@ -709,7 +711,9 @@ class ControllerService:
                 self._log_connectivity_transition(dc, dev, connected)
                 self._prev_connected[dc.device_id] = connected
                 self._handle_clock_connectivity_transition(dc, connected)
-                status_events.append(self._device_status_event(dc, dev, now_ns))
+                status_events.append(
+                    self._device_status_event(dc, dev, now_ns, source='connectivity')
+                )
                 if not connected and self._controller.uses_device(dev):
                     reason = self._disconnect_reasons.get(dc.device_id) or 'disconnected'
                     active_disconnects.append((dc.device_id, reason))
@@ -742,10 +746,18 @@ class ControllerService:
             **self._clock_status_for_device(dc, now_ns),
         }
 
-    def _device_status_event(self, dc: DeviceConfig, dev, now_ns: int) -> dict[str, object]:
+    def _device_status_event(
+        self,
+        dc: DeviceConfig,
+        dev,
+        now_ns: int,
+        *,
+        source: str,
+    ) -> dict[str, object]:
         return {
             'type': 'event',
             'event': 'device_status',
+            'source': source,
             **self._device_status_payload(dc, dev, now_ns),
         }
 

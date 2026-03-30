@@ -208,8 +208,11 @@ Each command carries an `id` that the controller echoes in the reply. Replies ar
 ```json
 {"type": "event", "event": "session_start", "session_id": 42, "duration": 300.0, ...}
 {"type": "event", "event": "state", "state": "playing", "epoch": 1}
-{"type": "event", "event": "device_status", "device_uid": "sim-1", "connected": true}
+{"type": "event", "event": "device_status", "source": "connectivity", "device_uid": "sim-1", "connected": true}
+{"type": "event", "event": "device_status", "source": "clock", "device_uid": "esp32-246f28b5f190", "clock_state": "synced", ...}
 ```
+
+`device_status.source` distinguishes connectivity transitions from clock-sync status updates. Clients that only care about per-device deltas may ignore it; transcript-style clients should use it to avoid labeling clock updates as reconnects.
 
 ### Program Frames (Binary, kind=0x02)
 

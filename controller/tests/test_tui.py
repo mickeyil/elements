@@ -149,6 +149,7 @@ class TestFormatEvent:
     def test_device_connected(self):
         msg = {
             'type': 'event', 'event': 'device_status',
+            'source': 'connectivity',
             'device_uid': 'sim-1', 'strip': 'strip_a', 'length': 10, 'connected': True,
         }
         result = format_event(KIND_JSON, _json_payload(msg))
@@ -157,10 +158,26 @@ class TestFormatEvent:
     def test_device_disconnected(self):
         msg = {
             'type': 'event', 'event': 'device_status',
+            'source': 'connectivity',
             'device_uid': 'sim-2', 'strip': 'strip_b', 'length': 20, 'connected': False,
         }
         result = format_event(KIND_JSON, _json_payload(msg))
         assert result == ['device sim-2 disconnected (strip_b, 20 LEDs)']
+
+    def test_clock_device_status_is_silent(self):
+        msg = {
+            'type': 'event', 'event': 'device_status',
+            'source': 'clock',
+            'device_uid': 'esp32-246f28b5f190',
+            'strip': 'ring8',
+            'length': 8,
+            'connected': True,
+            'clock_state': 'synced',
+            'clock_offset_ms': 0.2,
+            'clock_rtt_ms': 1.1,
+        }
+        result = format_event(KIND_JSON, _json_payload(msg))
+        assert result == []
 
     def test_session_start(self):
         msg = {
