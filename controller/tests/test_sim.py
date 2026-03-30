@@ -1,9 +1,12 @@
 """Tests for elemctl.sim command building."""
 
+import subprocess
+
 import pytest
 
 from elemctl.config import Config, DEFAULT_DISCOVERY_PORT, DeviceConfig
-from elemctl.sim import build_sim_command
+from elemctl import sim
+from elemctl.sim import build_sim_command, ensure_network_sim_built
 
 
 def _device(**overrides) -> DeviceConfig:
@@ -110,3 +113,93 @@ class TestBuildSimCommand:
                 tcp_port=70000,
                 network_sim_bin=fake_bin,
             )
+
+
+class TestEnsureNetworkSimBuilt:
+    def test_invokes_cmake_build_for_network_sim(self, monkeypatch, tmp_path):
+        build_dir = tmp_path / 'build'
+        build_dir.mkdir()
+        (build_dir / 'CMakeCache.txt').write_text('# fake cache\n')
+        calls = []
+
+        def fake_run(cmd, check, cwd):
+            calls.append((cmd, check, cwd))
+
+        monkeypatch.setattr(sim.subprocess, 'run', fake_run)
+
+        ensure_network_sim_built(build_dir=build_dir)
+
+        assert calls == [(
+            ['cmake', '--build', str(build_dir), '--target', 'network_sim'],
+            True,
+            sim.REPO_ROOT,
+        )]
+
+    def test_requires_configured_build_dir(self, tmp_path):
+        build_dir = tmp_path / 'build'
+        build_dir.mkdir()
+
+        with pytest.raises(ValueError, match='run `cmake -B build` first'):
+            ensure_network_sim_built(build_dir=build_dir)
+
+    def test_wraps_cmake_build_failures(self, monkeypatch, tmp_path):
+        build_dir = tmp_path / 'build'
+        build_dir.mkdir()
+        (build_dir / 'CMakeCache.txt').write_text('# fake cache\n')
+
+        def fake_run(cmd, check, cwd):
+            raise subprocess.CalledProcessError(returncode=1, cmd=cmd)
+
+        monkeypatch.setattr(sim.subprocess, 'run', fake_run)
+
+        with pytest.raises(ValueError, match='failed to build network_sim'):
+            ensure_network_sim_built(build_dir=build_dir)
+
+
+class TestSimMain:
+    def test_builds_before_exec(self, monkeypatch, tmp_path):
+        cfg = _config()
+        events = []
+
+        class ExecCalled(Exception):
+            pass
+
+        def fake_ensure() -> None:
+            events.append('build')
+
+        def fake_build_sim_command(config, device_uid, **kwargs):
+            events.append(('cmd', device_uid, kwargs))
+            return ['/tmp/network_sim', '--tcp-port', '0']
+
+        def fake_execv(path, argv):
+            events.append(('exec', path, argv))
+            raise ExecCalled
+
+        monkeypatch.setattr(sim, 'ensure_network_sim_built', fake_ensure)
+        monkeypatch.setattr(sim, 'build_sim_command', fake_build_sim_command)
+        monkeypatch.setattr(sim, 'resolve_config_path', lambda _: tmp_path / 'controller.json')
+        monkeypatch.setattr(sim, 'load_config', lambda _: cfg)
+        monkeypatch.setattr(sim, 'resolve_runtime_path', lambda *_: str(tmp_path / 'logs'))
+        monkeypatch.setattr(sim.os, 'execv', fake_execv)
+        monkeypatch.setattr(
+            sim.sys,
+            'argv',
+            ['elemctl', 'sim-1', '--config', str(tmp_path / 'controller.json')],
+        )
+
+        with pytest.raises(ExecCalled):
+            sim.main()
+
+        assert events == [
+            'build',
+            (
+                'cmd',
+                'sim-1',
+                {
+                    'discovery_host': '127.0.0.1',
+                    'tcp_port': 0,
+                    'log_file': str(tmp_path / 'logs' / 'sim-1.log'),
+                },
+            ),
+            ('exec', '/tmp/network_sim', ['/tmp/network_sim', '--tcp-port', '0']),
+        ]

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -19,7 +20,28 @@ from .config import (
     resolve_runtime_path,
 )
 
-NETWORK_SIM_BIN = Path(__file__).resolve().parent.parent.parent / 'build' / 'network_sim'
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+BUILD_DIR = REPO_ROOT / 'build'
+NETWORK_SIM_BIN = BUILD_DIR / 'network_sim'
+
+
+def ensure_network_sim_built(*, build_dir: Path = BUILD_DIR) -> None:
+    """Build network_sim in an already-configured build tree."""
+    if not (build_dir / 'CMakeCache.txt').is_file():
+        raise ValueError(
+            f'build directory is not configured at {build_dir}; run `cmake -B build` first'
+        )
+
+    try:
+        subprocess.run(
+            ['cmake', '--build', str(build_dir), '--target', 'network_sim'],
+            check=True,
+            cwd=REPO_ROOT,
+        )
+    except FileNotFoundError as e:
+        raise ValueError('cmake is not available on PATH') from e
+    except subprocess.CalledProcessError as e:
+        raise ValueError(f'failed to build network_sim in {build_dir}') from e
 
 
 def build_sim_command(
@@ -96,6 +118,7 @@ def main() -> None:
         config = load_config(config_path)
         log_dir = resolve_runtime_path(args.log_dir, config.logs_dir, DEFAULT_LOGS_PATH)
         Path(log_dir).mkdir(parents=True, exist_ok=True)
+        ensure_network_sim_built()
         cmd = build_sim_command(
             config,
             args.device_uid,

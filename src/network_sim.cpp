@@ -198,15 +198,30 @@ static int poll_tcp_commands(int tcp_fd,
                 break;
             }
 
+            const bool had_profile = device.has_hardware_profile();
+            const HardwareProfile current = device.hardware_profile();
             const bool same_profile = device.has_hardware_profile()
                 && device.hardware_profile() == profile;
+            const bool was_attached = state.attached;
             if (!device.apply_hardware_profile(profile)) {
                 send_ack(tcp_fd, ACK_ERROR);
                 break;
             }
 
-            if (state.attached && !same_profile) {
+            if (was_attached && !same_profile) {
+                slog::info(
+                    "network_sim: profile changed while attached; detaching device_id=%u old_len=%u new_len=%u",
+                    static_cast<unsigned>(state.device_id),
+                    static_cast<unsigned>(had_profile ? current.strip_length : 0),
+                    static_cast<unsigned>(profile.strip_length)
+                );
                 reset_attach_state(state, controller_addr);
+            } else {
+                slog::info(
+                    "network_sim: set_profile ok strip_length=%u%s",
+                    static_cast<unsigned>(profile.strip_length),
+                    same_profile && was_attached ? " (unchanged, still attached)" : ""
+                );
             }
 
             send_ack(tcp_fd, ACK_OK);
@@ -234,6 +249,19 @@ static int poll_tcp_commands(int tcp_fd,
             state.device_id = device_id;
             state.attached = true;
             controller_addr.sin_port = htons(frame_port);
+            char controller_ip[INET_ADDRSTRLEN] = {0};
+            const char* controller_ip_str = inet_ntop(
+                AF_INET,
+                &controller_addr.sin_addr,
+                controller_ip,
+                sizeof(controller_ip)
+            );
+            slog::info(
+                "network_sim: attach ok device_id=%u frame_port=%u controller=%s",
+                static_cast<unsigned>(device_id),
+                static_cast<unsigned>(frame_port),
+                controller_ip_str != nullptr ? controller_ip_str : "unknown"
+            );
             send_ack(tcp_fd, ACK_OK);
             break;
         }
