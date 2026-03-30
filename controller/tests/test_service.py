@@ -18,6 +18,7 @@ _repo = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_repo / 'compiler'))
 
 from elemctl.config import Config, DeviceConfig, MAX_DEVICE_PIXELS, load_config, load_config_obj
+from elemctl.clock_sync import ClockSyncPollResult
 from elemctl.controller import ControllerState
 from elemctl.device import DeviceState
 from elemctl.library import ProgramEntry
@@ -299,6 +300,7 @@ class _FakeClockSyncManager:
         self.targets_sent: list[list[tuple[int, str]]] = []
         self.status_by_device: dict[int, dict[str, object]] = {}
         self.pending_updates: list = []
+        self.pending_activity_ids: set[int] = set()
         self.closed = False
 
     def close(self):
@@ -323,8 +325,12 @@ class _FakeClockSyncManager:
         })
 
     def poll(self):
-        out = list(self.pending_updates)
+        out = ClockSyncPollResult(
+            status_updates=list(self.pending_updates),
+            observed_activity_device_ids=set(self.pending_activity_ids),
+        )
         self.pending_updates.clear()
+        self.pending_activity_ids.clear()
         return out
 
     def send_due_probes(self, targets, now_ns):
@@ -2978,6 +2984,31 @@ class TestPresenceEvents:
         assert status_events[0]['clock_rtt_ms'] == pytest.approx(1.1)
         assert fake_device.sync_results == [(7, 1234, 2300)]
 
+    def test_sync_activity_prevents_stale_expiry_without_status_update(self):
+        fake_device = _FakeDevice()
+        fake_sync = _FakeClockSyncManager()
+        fake_sync.pending_activity_ids.add(1)
+        clock = _FakeClock()
+        wall_clock = _FakeWallClock(20.0)
+        svc, _, _ = _make_discovery_service(
+            n_devices=1,
+            fake_devices=[fake_device],
+            clock=clock,
+            wall_clock=wall_clock,
+            clock_sync_factory=lambda port, clock_ns: fake_sync,
+        )
+
+        clock.now = 6_500_000_001
+        wall_clock.now = 27.0
+        json_msgs, _ = svc.tick_once()
+        events = _decode_json_msgs(json_msgs)
+
+        assert [e for e in events if e.get('event') == 'device_status'] == []
+        snap = svc.build_snapshot()
+        assert snap['devices'][0]['connected'] is True
+        assert snap['devices'][0]['last_seen'] == pytest.approx(27.0)
+        assert svc._last_activity_source[1] == 'sync'
+
     def test_last_seen_stays_stable_without_activity(self):
         wall_clock = _FakeWallClock(5.0)
         svc, _ = _make_service(wall_clock=wall_clock)
@@ -3027,7 +3058,7 @@ class TestPresenceEvents:
 
         assert svc.build_snapshot()['devices'][0]['last_seen'] == pytest.approx(20.0)
 
-        clock.now = 2_500_000_001
+        clock.now = 6_500_000_001
         wall_clock.now = 27.0
         with caplog.at_level(logging.INFO):
             json_msgs, _ = svc.tick_once()
@@ -3043,7 +3074,36 @@ class TestPresenceEvents:
         assert snap['devices'][0]['last_seen'] == pytest.approx(20.0)
         assert (
             'device disconnected: id=1 uid=sim-1 type=sim strip=strip_a '
-            'reason=heartbeat timeout last_seen=20.000'
+            'reason=heartbeat timeout last_seen=20.000 age_ms=6500.0'
+        ) in caplog.text
+
+    def test_heartbeat_timeout_log_includes_last_source_and_age(self, caplog):
+        fakes = [_FakeDevice()]
+        fakes[0].is_connected = True
+        fakes[0].ensure_connected = lambda: False
+        clock = _FakeClock()
+        wall_clock = _FakeWallClock(20.0)
+        svc, _, disc = _make_discovery_service(
+            n_devices=1,
+            fake_devices=fakes,
+            clock=clock,
+            wall_clock=wall_clock,
+        )
+
+        clock.now = 1_000_000_000
+        wall_clock.now = 21.0
+        disc.inject('sim-1', '10.0.0.1', 8001)
+        svc.tick_once()
+
+        clock.now = 7_500_000_001
+        wall_clock.now = 28.0
+        with caplog.at_level(logging.INFO):
+            svc.tick_once()
+
+        assert (
+            'device disconnected: id=1 uid=sim-1 type=sim strip=strip_a '
+            'host=10.0.0.1 tcp=8001 reason=heartbeat timeout '
+            'last_seen=21.000 last_source=discovery age_ms=6500.0'
         ) in caplog.text
 
     def test_stale_disconnect_then_reconnect_emits_both_events_in_order(self, caplog):
@@ -3058,7 +3118,7 @@ class TestPresenceEvents:
             wall_clock=wall_clock,
         )
 
-        clock.now = 2_500_000_001
+        clock.now = 6_500_000_001
         wall_clock.now = 14.0
         with caplog.at_level(logging.INFO):
             json_msgs, _ = svc.tick_once()
@@ -3075,7 +3135,7 @@ class TestPresenceEvents:
         messages = [record.getMessage() for record in caplog.records if record.levelno == logging.INFO]
         lifecycle = [msg for msg in messages if msg.startswith('device ')]
         assert lifecycle == [
-            'device disconnected: id=1 uid=sim-1 type=sim strip=strip_a reason=heartbeat timeout last_seen=11.000',
+            'device disconnected: id=1 uid=sim-1 type=sim strip=strip_a reason=heartbeat timeout last_seen=11.000 age_ms=6500.0',
             'device connected: id=1 uid=sim-1 type=sim strip=strip_a',
         ]
 
@@ -3246,6 +3306,24 @@ class TestLastSeenReconciliation:
         snap = svc.build_snapshot()
         assert snap['devices'][0]['last_seen'] == pytest.approx(42.0)
         assert snap['devices'][1]['last_seen'] == pytest.approx(42.0)
+
+    def test_reconcile_preserves_last_activity_source_for_unchanged_devices(self):
+        clock = _FakeClock()
+        wall_clock = _FakeWallClock(42.0)
+        svc, fakes = _make_service(n_devices=2, clock=clock, wall_clock=wall_clock)
+
+        fakes[0]._activity_observed = True
+        svc.tick_once()
+        assert svc._last_activity_source[1] == 'runtime'
+
+        candidate = copy.deepcopy(svc._config_to_doc(svc._config))
+        new_config = load_config_obj(candidate)
+        clock.now = 1_000_000_000
+        wall_clock.now = 100.0
+        svc._reconcile_devices(new_config)
+
+        assert svc._last_activity_source[1] == 'runtime'
+        assert svc._last_activity_source[2] is None
 
     def test_reconcile_seeds_last_seen_for_already_connected_devices(self):
         wall_clock = _FakeWallClock(17.0)

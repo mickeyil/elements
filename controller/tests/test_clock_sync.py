@@ -7,7 +7,7 @@ import struct
 
 import pytest
 
-from elemctl.clock_sync import ClockSyncManager
+from elemctl.clock_sync import ClockSyncManager, ClockSyncPollResult
 from elemctl.wire import SYNC_REQ_STRUCT
 
 
@@ -50,7 +50,7 @@ def _drive_probe(
     boot_token: int,
     offset_us: int,
     rtt_us: int = 4_000,
-) -> list:
+) -> ClockSyncPollResult:
     manager.send_due_probes([(device_id, host)], fake_clock.now_ns)
     seq, _boot_hint, t1_us = _recv_sync_req(udp)
     one_way_a = rtt_us // 2 + offset_us
@@ -68,9 +68,9 @@ def _drive_probe(
         t2_us=t2_us,
         t3_us=t3_us,
     )
-    updates = manager.poll()
+    result = manager.poll()
     fake_clock.now_ns += 20_000_000_000
-    return updates
+    return result
 
 
 class TestClockSyncManager:
@@ -85,14 +85,14 @@ class TestClockSyncManager:
             manager.on_connected(1)
             assert _drive_probe(
                 udp, manager, fake_clock, boot_token=55, offset_us=100
-            ) == []
+            ).status_updates == []
             assert _drive_probe(
                 udp, manager, fake_clock, boot_token=55, offset_us=100
-            ) == []
+            ).status_updates == []
 
             updates = _drive_probe(
                 udp, manager, fake_clock, boot_token=55, offset_us=100
-            )
+            ).status_updates
             assert len(updates) == 1
             assert updates[0].device_id == 1
             assert updates[0].clock_state == 'settling'
@@ -107,7 +107,7 @@ class TestClockSyncManager:
 
             updates = _drive_probe(
                 udp, manager, fake_clock, boot_token=55, offset_us=100
-            )
+            ).status_updates
             assert len(updates) == 1
             assert updates[0].clock_state == 'synced'
             assert updates[0].clock_offset_us == 0
@@ -132,21 +132,21 @@ class TestClockSyncManager:
             manager.on_connected(1)
             assert _drive_probe(
                 udp, manager, fake_clock, boot_token=77, offset_us=0, rtt_us=10_000
-            ) == []
+            ).status_updates == []
             assert _drive_probe(
                 udp, manager, fake_clock, boot_token=77, offset_us=0, rtt_us=10_000
-            ) == []
+            ).status_updates == []
 
             updates = _drive_probe(
                 udp, manager, fake_clock, boot_token=77, offset_us=0, rtt_us=10_000
-            )
+            ).status_updates
             assert len(updates) == 1
             assert updates[0].send_correction is True
             assert updates[0].correction_offset_us == 0
 
             updates = _drive_probe(
                 udp, manager, fake_clock, boot_token=77, offset_us=0, rtt_us=10_000
-            )
+            ).status_updates
             assert len(updates) == 1
             assert updates[0].clock_state == 'synced'
             assert updates[0].clock_offset_us == 0
@@ -154,14 +154,14 @@ class TestClockSyncManager:
 
             assert _drive_probe(
                 udp, manager, fake_clock, boot_token=77, offset_us=3_000, rtt_us=10_000
-            ) == []
+            ).status_updates == []
             assert _drive_probe(
                 udp, manager, fake_clock, boot_token=77, offset_us=3_000, rtt_us=10_000
-            ) == []
+            ).status_updates == []
 
             updates = _drive_probe(
                 udp, manager, fake_clock, boot_token=77, offset_us=3_000, rtt_us=10_000
-            )
+            ).status_updates
             assert len(updates) == 1
             assert updates[0].clock_state == 'synced'
             assert updates[0].clock_offset_us == 3_000
@@ -169,7 +169,7 @@ class TestClockSyncManager:
 
             updates = _drive_probe(
                 udp, manager, fake_clock, boot_token=77, offset_us=3_000, rtt_us=10_000
-            )
+            ).status_updates
             assert len(updates) == 1
             assert updates[0].clock_state == 'settling'
             assert updates[0].clock_offset_us is None
@@ -194,7 +194,7 @@ class TestClockSyncManager:
             _drive_probe(udp, manager, fake_clock, boot_token=91, offset_us=100)
 
             fake_clock.now_ns += 61_000_000_000
-            updates = manager.poll()
+            updates = manager.poll().status_updates
             assert len(updates) == 1
             assert updates[0].clock_state == 'stale'
             assert updates[0].send_correction is False
@@ -204,13 +204,155 @@ class TestClockSyncManager:
 
             updates = _drive_probe(
                 udp, manager, fake_clock, boot_token=91, offset_us=100
-            )
+            ).status_updates
             assert len(updates) == 1
             assert updates[0].clock_state == 'pending'
             assert updates[0].send_correction is False
 
             status = manager.clock_status(1, fake_clock.now_ns)
             assert status['clock_state'] == 'pending'
+        finally:
+            manager.close()
+            udp.close()
+
+    def test_matched_response_without_emitted_update_still_reports_activity(self):
+        fake_clock = _FakeClock(1_000_000_000)
+        udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        udp.bind(('127.0.0.1', 0))
+        udp.settimeout(1.0)
+        manager = ClockSyncManager(udp.getsockname()[1], clock_ns=fake_clock)
+
+        try:
+            manager.on_connected(1)
+            _drive_probe(udp, manager, fake_clock, boot_token=55, offset_us=100)
+            _drive_probe(udp, manager, fake_clock, boot_token=55, offset_us=100)
+            _drive_probe(udp, manager, fake_clock, boot_token=55, offset_us=100)
+            _drive_probe(udp, manager, fake_clock, boot_token=55, offset_us=100)
+
+            result = _drive_probe(
+                udp, manager, fake_clock, boot_token=55, offset_us=100
+            )
+            assert result.status_updates == []
+            assert result.observed_activity_device_ids == {1}
+        finally:
+            manager.close()
+            udp.close()
+
+    def test_outlier_rtt_matched_response_still_reports_activity(self):
+        fake_clock = _FakeClock(1_000_000_000)
+        udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        udp.bind(('127.0.0.1', 0))
+        udp.settimeout(1.0)
+        manager = ClockSyncManager(udp.getsockname()[1], clock_ns=fake_clock)
+
+        try:
+            manager.on_connected(1)
+            manager.send_due_probes([(1, '127.0.0.1')], fake_clock.now_ns)
+            seq, _boot_hint, t1_us = _recv_sync_req(udp)
+            t2_us = t1_us + 150_000
+            t3_us = t2_us + 200
+            fake_clock.now_ns = (t1_us + 300_200) * 1000
+            _send_sync_resp(
+                udp,
+                manager,
+                seq=seq,
+                boot_token=55,
+                t1_us=t1_us,
+                t2_us=t2_us,
+                t3_us=t3_us,
+            )
+
+            result = manager.poll()
+            assert result.status_updates == []
+            assert result.observed_activity_device_ids == {1}
+        finally:
+            manager.close()
+            udp.close()
+
+    def test_wrong_t1_does_not_consume_pending_probe(self):
+        fake_clock = _FakeClock(1_000_000_000)
+        udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        udp.bind(('127.0.0.1', 0))
+        udp.settimeout(1.0)
+        manager = ClockSyncManager(udp.getsockname()[1], clock_ns=fake_clock)
+
+        try:
+            manager.on_connected(1)
+            manager.send_due_probes([(1, '127.0.0.1')], fake_clock.now_ns)
+            seq, _boot_hint, t1_us = _recv_sync_req(udp)
+
+            fake_clock.now_ns = (t1_us + 4_200) * 1000
+            _send_sync_resp(
+                udp,
+                manager,
+                seq=seq,
+                boot_token=55,
+                t1_us=t1_us + 1,
+                t2_us=t1_us + 2_100,
+                t3_us=t1_us + 2_300,
+            )
+            first = manager.poll()
+            assert first.status_updates == []
+            assert first.observed_activity_device_ids == set()
+
+            fake_clock.now_ns = (t1_us + 4_200) * 1000
+            _send_sync_resp(
+                udp,
+                manager,
+                seq=seq,
+                boot_token=55,
+                t1_us=t1_us,
+                t2_us=t1_us + 2_100,
+                t3_us=t1_us + 2_300,
+            )
+            second = manager.poll()
+            assert second.status_updates == []
+            assert second.observed_activity_device_ids == {1}
+        finally:
+            manager.close()
+            udp.close()
+
+    def test_missing_state_does_not_consume_pending_probe(self):
+        fake_clock = _FakeClock(1_000_000_000)
+        udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        udp.bind(('127.0.0.1', 0))
+        udp.settimeout(1.0)
+        manager = ClockSyncManager(udp.getsockname()[1], clock_ns=fake_clock)
+
+        try:
+            manager.on_connected(1)
+            manager.send_due_probes([(1, '127.0.0.1')], fake_clock.now_ns)
+            seq, _boot_hint, t1_us = _recv_sync_req(udp)
+
+            manager._states.clear()
+            fake_clock.now_ns = (t1_us + 4_200) * 1000
+            _send_sync_resp(
+                udp,
+                manager,
+                seq=seq,
+                boot_token=55,
+                t1_us=t1_us,
+                t2_us=t1_us + 2_100,
+                t3_us=t1_us + 2_300,
+            )
+            first = manager.poll()
+            assert first.status_updates == []
+            assert first.observed_activity_device_ids == set()
+
+            manager.on_connected(1)
+            fake_clock.now_ns = (t1_us + 4_200) * 1000
+            _send_sync_resp(
+                udp,
+                manager,
+                seq=seq,
+                boot_token=55,
+                t1_us=t1_us,
+                t2_us=t1_us + 2_100,
+                t3_us=t1_us + 2_300,
+            )
+            second = manager.poll()
+            assert second.status_updates == []
+            assert second.observed_activity_device_ids == {1}
         finally:
             manager.close()
             udp.close()

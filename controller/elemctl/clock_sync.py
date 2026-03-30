@@ -69,6 +69,12 @@ class SyncUpdate:
     correction_offset_us: int | None = None
 
 
+@dataclass
+class ClockSyncPollResult:
+    status_updates: list[SyncUpdate] = field(default_factory=list)
+    observed_activity_device_ids: set[int] = field(default_factory=set)
+
+
 class ClockSyncManager:
     """Maintains per-device sync probes and filtered offset estimates."""
 
@@ -181,8 +187,8 @@ class ClockSyncManager:
             else:
                 state.next_probe_ns = now_ns + self._steady_interval_for_state(state)
 
-    def poll(self) -> list[SyncUpdate]:
-        updates: list[SyncUpdate] = []
+    def poll(self) -> ClockSyncPollResult:
+        result = ClockSyncPollResult()
         samples_by_device: dict[int, list[_SyncSample]] = {}
         while True:
             try:
@@ -197,13 +203,15 @@ class ClockSyncManager:
             if parsed is None:
                 continue
             seq, boot_token, t1_us, t2_us, t3_us = parsed
-            pending = self._pending.pop(seq, None)
+            pending = self._pending.get(seq)
             if pending is None or pending.t1_us != t1_us:
                 continue
 
             state = self._states.get(pending.device_id)
             if state is None:
                 continue
+            self._pending.pop(seq, None)
+            result.observed_activity_device_ids.add(pending.device_id)
 
             if state.boot_token != boot_token:
                 state.boot_token = boot_token
@@ -225,14 +233,14 @@ class ClockSyncManager:
                 continue
             update = self._process_round_samples(device_id, state, round_samples, now_ns)
             if update is not None and self._should_emit_status_update(state, update):
-                updates.append(update)
+                result.status_updates.append(update)
 
         for update in self._collect_stale_updates(now_ns):
             state = self._states.get(update.device_id)
             if state is not None and self._should_emit_status_update(state, update):
-                updates.append(update)
+                result.status_updates.append(update)
 
-        return updates
+        return result
 
     @property
     def local_port(self) -> int:
