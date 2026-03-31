@@ -156,6 +156,17 @@ class MockDevice:
             self._state = DeviceState.PAUSED
 
 
+class MisreportingCurrentTimeDevice(MockDevice):
+    """Mock device whose current_t_rel() lies to the controller."""
+
+    def __init__(self, reported_t_rel: float, **kwargs):
+        super().__init__(**kwargs)
+        self._reported_t_rel = reported_t_rel
+
+    def current_t_rel(self, now_ns: int) -> float:
+        return self._reported_t_rel
+
+
 # ---------------------------------------------------------------------------
 # FakeDevice — device without debug_seek support
 # ---------------------------------------------------------------------------
@@ -610,6 +621,39 @@ class TestPlayback:
         assert pf[0].t_rel == pytest.approx(0.5)
         assert len(pf[0].strips) == 2
 
+    def test_current_t_rel_uses_controller_clock_not_device_reports(self):
+        now_ns = [0]
+        ctrl = Controller(
+            [
+                StripConfig(
+                    "left",
+                    5,
+                    MisreportingCurrentTimeDevice(reported_t_rel=111.0, duration=5.0),
+                ),
+                StripConfig(
+                    "right",
+                    5,
+                    MisreportingCurrentTimeDevice(reported_t_rel=222.0, duration=5.0),
+                ),
+            ],
+            clock=lambda: now_ns[0],
+        )
+        manifest = CompiledManifest(
+            duration=5.0,
+            strips=[
+                CompiledStripArtifact("left", 5, b'\x00'),
+                CompiledStripArtifact("right", 5, b'\x00'),
+            ],
+            safe_intervals=[],
+        )
+        assert ctrl.load(manifest)
+
+        now_ns[0] = _sec(0.0)
+        ctrl.play()
+
+        now_ns[0] = _sec(0.75)
+        assert ctrl.current_t_rel == pytest.approx(0.75)
+
     def test_play_from_idle_is_noop(self):
         f = DualFixture()
         ctrl = Controller(f.strips(), clock=f.clock)
@@ -675,6 +719,41 @@ class TestPauseResume:
         assert len(pf) >= 1
         assert pf[0].t_rel >= 0.9
 
+    def test_pause_uses_controller_clock_not_device_reports(self):
+        now_ns = [0]
+        ctrl = Controller(
+            [
+                StripConfig(
+                    "left",
+                    5,
+                    MisreportingCurrentTimeDevice(reported_t_rel=111.0, duration=5.0),
+                ),
+                StripConfig(
+                    "right",
+                    5,
+                    MisreportingCurrentTimeDevice(reported_t_rel=222.0, duration=5.0),
+                ),
+            ],
+            clock=lambda: now_ns[0],
+        )
+        manifest = CompiledManifest(
+            duration=5.0,
+            strips=[
+                CompiledStripArtifact("left", 5, b'\x00'),
+                CompiledStripArtifact("right", 5, b'\x00'),
+            ],
+            safe_intervals=[],
+        )
+        assert ctrl.load(manifest)
+
+        now_ns[0] = _sec(0.0)
+        ctrl.play()
+
+        now_ns[0] = _sec(1.0)
+        ctrl.pause()
+        assert ctrl.state == ControllerState.PAUSED
+        assert ctrl.current_t_rel == pytest.approx(1.0)
+
 
 # =========================================================================
 # 4. Debug seek
@@ -699,13 +778,16 @@ class TestDebugSeek:
         ctrl.debug_seek(2.0)
         assert ctrl.state == ControllerState.PLAYING
         assert ctrl.epoch == epoch_before + 1
+        assert ctrl.current_t_rel == pytest.approx(2.0)
         # gen should NOT be incremented
         assert ctrl.gen == 1  # from load only
 
+        f.set_time(1.0)
+        assert ctrl.current_t_rel == pytest.approx(2.5)
         ctrl.tick_once()
         pf = ctrl.drain_program_frames()
         assert len(pf) >= 1
-        assert pf[0].t_rel == pytest.approx(2.0)
+        assert any(p.t_rel == pytest.approx(2.5) for p in pf)
 
     def test_from_loaded_goes_to_paused(self):
         f = DualFixture()
@@ -715,6 +797,7 @@ class TestDebugSeek:
 
         ctrl.debug_seek(2.0)
         assert ctrl.state == ControllerState.PAUSED
+        assert ctrl.current_t_rel == pytest.approx(2.0)
 
         ctrl.tick_once()
         pf = ctrl.drain_program_frames()
@@ -1033,6 +1116,43 @@ class TestEndAndLoop:
         ctrl.drain_events()
 
         f.set_time(5.1)
+        ctrl.tick_once()
+
+        assert ctrl.state == ControllerState.ENDED
+        assert has_state_event(ctrl.drain_events(), ControllerState.ENDED)
+
+    def test_non_looping_ends_from_controller_clock_not_device_reports(self):
+        now_ns = [0]
+        ctrl = Controller(
+            [
+                StripConfig(
+                    "left",
+                    5,
+                    MisreportingCurrentTimeDevice(reported_t_rel=0.0, duration=5.0),
+                ),
+                StripConfig(
+                    "right",
+                    5,
+                    MisreportingCurrentTimeDevice(reported_t_rel=0.0, duration=5.0),
+                ),
+            ],
+            clock=lambda: now_ns[0],
+        )
+        manifest = CompiledManifest(
+            duration=5.0,
+            strips=[
+                CompiledStripArtifact("left", 5, b'\x00'),
+                CompiledStripArtifact("right", 5, b'\x00'),
+            ],
+            safe_intervals=[],
+        )
+        assert ctrl.load(manifest)
+
+        now_ns[0] = _sec(0.0)
+        ctrl.play()
+        ctrl.drain_events()
+
+        now_ns[0] = _sec(5.1)
         ctrl.tick_once()
 
         assert ctrl.state == ControllerState.ENDED

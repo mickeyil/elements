@@ -86,6 +86,7 @@ class Controller:
         self._gen = 0
         self._duration = 0.0
         self._paused_t_rel = 0.0
+        self._play_t0_ns = 0
         self._loop = False
         self._safe_intervals: list[tuple[float, float]] = []
 
@@ -126,20 +127,7 @@ class Controller:
 
     @property
     def current_t_rel(self) -> float:
-        if self._state in (
-            ControllerState.IDLE,
-            ControllerState.LOADED,
-            ControllerState.STOPPED,
-        ):
-            return 0.0
-        if self._state == ControllerState.PAUSED:
-            return self._paused_t_rel
-        if self._state == ControllerState.PLAYING:
-            now = self._clock()
-            return self._max_current_t_rel(now)
-        if self._state == ControllerState.ENDED:
-            return self._duration
-        return 0.0
+        return self._session_t_rel(self._clock())
 
     @property
     def safe_intervals(self) -> list[tuple[float, float]]:
@@ -291,6 +279,7 @@ class Controller:
         self._loop = loop
         self._safe_intervals = list(manifest.safe_intervals)
         self._paused_t_rel = 0.0
+        self._play_t0_ns = 0
         self._buckets.clear()
         self._program_frames = []
         self._active_strips = new_active_strips
@@ -332,6 +321,7 @@ class Controller:
             t0 = now - int(self._paused_t_rel * 1e9)
             for s in self._active_strips:
                 s.device.resume(t0)
+            self._play_t0_ns = t0
             self._state = ControllerState.PLAYING
             self._queue_event(ControllerEvent.Kind.STATE_CHANGED)
             return
@@ -340,6 +330,7 @@ class Controller:
         t0 = self._clock()
         for s in self._active_strips:
             s.device.start(t0)
+        self._play_t0_ns = t0
         self._epoch += 1
         self._state = ControllerState.PLAYING
         self._queue_event(ControllerEvent.Kind.STATE_CHANGED)
@@ -352,7 +343,7 @@ class Controller:
         for s in self._active_strips:
             s.device.pause(now)
 
-        self._paused_t_rel = self._max_current_t_rel(now)
+        self._paused_t_rel = self._session_t_rel(now)
         self._state = ControllerState.PAUSED
         self._queue_event(ControllerEvent.Kind.STATE_CHANGED)
 
@@ -376,10 +367,11 @@ class Controller:
         for i, s in enumerate(self._active_strips):
             s.device.jump(t0, snapped, self._gen)
             self._expected_gen[i] = self._gen
+        self._play_t0_ns = t0
         self._buckets.clear()
 
         if not was_playing:
-            self._paused_t_rel = self._max_current_t_rel(now)
+            self._paused_t_rel = snapped
             self._state = ControllerState.PAUSED
         self._queue_event(ControllerEvent.Kind.STATE_CHANGED)
 
@@ -395,16 +387,18 @@ class Controller:
                 )
                 return
 
+        target_t_rel = self._clamp_t_rel(t_rel)
         self._epoch += 1
         now = self._clock()
         for s in self._active_strips:
-            s.device.debug_seek(t_rel, now)
+            s.device.debug_seek(target_t_rel, now)
+        self._play_t0_ns = now - int(target_t_rel * 1e9)
         self._buckets.clear()
 
         if self._state == ControllerState.PLAYING:
             pass  # stay PLAYING
         else:
-            self._paused_t_rel = self._max_current_t_rel(now)
+            self._paused_t_rel = target_t_rel
             self._state = ControllerState.PAUSED
         self._queue_event(ControllerEvent.Kind.STATE_CHANGED)
 
@@ -481,9 +475,9 @@ class Controller:
 
         # 4. End-of-program detection (controller-inferred, not device-reported)
         if self._state == ControllerState.PLAYING:
-            all_past_end = bool(self._active_strips) and all(
-                s.device.current_t_rel(now) >= self._duration
-                for s in self._active_strips
+            all_past_end = (
+                bool(self._active_strips)
+                and self._session_t_rel(now) >= self._duration
             )
             if all_past_end:
                 if self._loop:
@@ -491,6 +485,7 @@ class Controller:
                     self._advance_gen()
                     self._buckets.clear()
                     now = self._clock()
+                    self._play_t0_ns = now
                     # Devices are ENDED here. jump() transitions ENDED→PAUSED,
                     # so resume() is needed to restart playback. This differs
                     # from seek-while-PLAYING where jump() keeps devices PLAYING.
@@ -555,6 +550,7 @@ class Controller:
     def _reset_active_runtime(self) -> None:
         self._duration = 0.0
         self._paused_t_rel = 0.0
+        self._play_t0_ns = 0
         self._loop = False
         self._safe_intervals = []
         self._active_strips = []
@@ -568,6 +564,18 @@ class Controller:
 
     def uses_device(self, device: ControllerDevice) -> bool:
         return any(s.device is device for s in self._active_strips)
+
+    def _session_t_rel(self, now: int) -> float:
+        if self._state == ControllerState.PLAYING:
+            return max(0.0, (now - self._play_t0_ns) / 1e9)
+        if self._state == ControllerState.PAUSED:
+            return self._paused_t_rel
+        if self._state == ControllerState.ENDED:
+            return self._duration
+        return 0.0
+
+    def _clamp_t_rel(self, t_rel: float) -> float:
+        return max(0.0, min(t_rel, self._duration))
 
     def _max_current_t_rel(self, now: int) -> float:
         if not self._active_strips:
