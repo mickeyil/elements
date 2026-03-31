@@ -18,12 +18,14 @@ from .wire import (
     ACK_ERROR,
     ACK_OK,
     ACK_WRONG_STATE,
+    MAX_WIRE_MESSAGE_BYTES,
     encode_attach,
     encode_clear_background,
     encode_debug_seek,
     encode_jump,
     encode_load,
     encode_pause,
+    encode_query_device_status,
     encode_reboot,
     encode_resume,
     encode_set_profile,
@@ -32,6 +34,8 @@ from .wire import (
     encode_start,
     encode_stop,
     parse_ack,
+    parse_ack_with_payload,
+    parse_device_status_payload,
 )
 
 log = logging.getLogger(__name__)
@@ -154,6 +158,40 @@ class NetworkDevice:
                 self.close()
             return False
         return status == ACK_OK
+
+    def query_device_status(self) -> dict[str, object] | None:
+        if not self._connected and not self._connect(
+            connect_timeout_s=_COMMAND_CONNECT_TIMEOUT,
+            ack_timeout_s=_HANDSHAKE_ACK_TIMEOUT,
+        ):
+            return None
+
+        if not self._send(encode_query_device_status()):
+            return None
+
+        data = self._recv_message(timeout_s=_COMMAND_ACK_TIMEOUT)
+        if data is None:
+            return None
+        parsed = parse_ack_with_payload(data)
+        if parsed is None:
+            log.warning(
+                'device-status query received malformed ACK from %s:%d',
+                self._host, self._tcp_port,
+            )
+            self._drop_transport(preserve_runtime=True)
+            return None
+        status, payload = parsed
+        if status != ACK_OK:
+            return None
+        reported = parse_device_status_payload(payload)
+        if reported is None:
+            log.warning(
+                'device-status query received malformed payload from %s:%d',
+                self._host, self._tcp_port,
+            )
+            self._drop_transport(preserve_runtime=True)
+            return None
+        return reported
 
     def start(self, t0_ns: int) -> None:
         t0_us = t0_ns // 1000
@@ -419,9 +457,25 @@ class NetworkDevice:
             return None
         return bytes(buf)
 
+    def _recv_message(self, *, timeout_s: float = _COMMAND_ACK_TIMEOUT) -> bytes | None:
+        header = self._recv_exact(4, timeout_s=timeout_s)
+        if header is None:
+            return None
+        length = int.from_bytes(header, 'little')
+        if length < 1 or length > MAX_WIRE_MESSAGE_BYTES:
+            log.warning(
+                'invalid message length=%d from %s:%d',
+                length, self._host, self._tcp_port,
+            )
+            self._drop_transport(preserve_runtime=True)
+            return None
+        body = self._recv_exact(length, timeout_s=timeout_s)
+        if body is None:
+            return None
+        return header + body
+
     def _recv_ack(self, *, timeout_s: float = _COMMAND_ACK_TIMEOUT) -> int | None:
-        # ACK is 6 bytes: length(4) + type(1) + status(1)
-        data = self._recv_exact(6, timeout_s=timeout_s)
+        data = self._recv_message(timeout_s=timeout_s)
         if data is None:
             return None
         return parse_ack(data)

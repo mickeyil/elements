@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "background_store.h"
+#include "device_mode.h"
 #include "device_identity.h"
 #include "hardware_profile.h"
 
@@ -42,7 +43,12 @@ class ControllerConnection {
 public:
     ControllerConnection();
 
-    void begin(ESPDevice& device, const DeviceIdentity& identity, BackgroundStore& background_store);
+    void begin(
+        ESPDevice& device,
+        const DeviceIdentity& identity,
+        BackgroundStore& background_store,
+        const DeviceMode* mode
+    );
     void start_if_needed();
     void flush_active_client();
     void stop(const char* reason = nullptr);
@@ -58,6 +64,7 @@ private:
     bool has_active_client_() const;
     bool send_all_(const uint8_t* data, size_t len);
     bool send_ack_(uint8_t status);
+    bool send_ack_(uint8_t status, const uint8_t* payload, size_t payload_len);
     uint8_t apply_profile_(const HardwareProfile& profile);
     uint8_t attach_(uint16_t device_id, uint16_t frame_port);
 
@@ -67,6 +74,7 @@ private:
     bool handle_load_(const uint8_t* payload, uint32_t payload_len);
     bool handle_store_background_(const uint8_t* payload, uint32_t payload_len);
     bool handle_clear_background_();
+    bool handle_query_device_status_();
     void handle_start_(const uint8_t* payload, uint32_t payload_len);
     void handle_jump_(const uint8_t* payload, uint32_t payload_len);
     void handle_pause_();
@@ -77,6 +85,7 @@ private:
     const DeviceIdentity* _identity = nullptr;
     ESPDevice* _device = nullptr;
     BackgroundStore* _background_store = nullptr;
+    const DeviceMode* _mode = nullptr;
     WiFiServer _tcp_server;
     WiFiClient _tcp_client;
     ConnectionState _state = ConnectionState::stopped;

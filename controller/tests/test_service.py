@@ -85,6 +85,16 @@ class _FakeDevice:
         self.clear_background_calls = 0
         self.store_background_ok = True
         self.clear_background_ok = True
+        self.query_device_status_calls = 0
+        self.reported_status = {
+            'mode': 'attached_controlled',
+            'profile_present': True,
+            'profile_strip_length': 10,
+            'background_present': False,
+            'background_strip_length': 0,
+            'background_blob_len': 0,
+            'background_crc32': 0,
+        }
 
     def load(self, blob, gen):
         self.load_calls += 1
@@ -134,6 +144,10 @@ class _FakeDevice:
     def clear_background(self) -> bool:
         self.clear_background_calls += 1
         return self.clear_background_ok
+
+    def query_device_status(self):
+        self.query_device_status_calls += 1
+        return copy.deepcopy(self.reported_status)
 
     def tick_once(self, now_ns):
         pass
@@ -2902,8 +2916,8 @@ class TestPresenceEvents:
         events = _decode_json_msgs(json_msgs)
 
         status_events = [e for e in events if e.get('event') == 'device_status']
-        assert len(status_events) == 1
-        evt = status_events[0]
+        assert len(status_events) == 2
+        evt = next(e for e in status_events if e['source'] == 'connectivity')
         assert evt['source'] == 'connectivity'
         assert evt['connected'] is True
         assert evt['device_id'] == 1
@@ -2911,6 +2925,8 @@ class TestPresenceEvents:
         assert evt['strip'] == 'test'
         assert evt['length'] == 5
         assert evt['last_seen'] == pytest.approx(10.5)
+        reported = next(e for e in status_events if e['source'] == 'reported')
+        assert reported['reported']['mode'] == 'attached_controlled'
 
         # Snapshot stays aligned
         snap = svc.build_snapshot()
@@ -3137,9 +3153,14 @@ class TestPresenceEvents:
         events = _decode_json_msgs(json_msgs)
 
         status_events = [e for e in events if e.get('event') == 'device_status']
-        assert [evt['connected'] for evt in status_events] == [False, True]
+        assert [(evt['source'], evt['connected']) for evt in status_events] == [
+            ('connectivity', False),
+            ('connectivity', True),
+            ('reported', True),
+        ]
         assert status_events[0]['last_seen'] == pytest.approx(11.0)
         assert status_events[1]['last_seen'] == pytest.approx(14.0)
+        assert status_events[2]['last_seen'] == pytest.approx(14.0)
 
         snap = svc.build_snapshot()
         assert snap['devices'][0]['connected'] is True
@@ -3325,6 +3346,7 @@ class TestDeviceRejoin:
             'device_status', 'device_detached', 'device_rejoined'
         )] == [
             'device_detached',
+            'device_status',
             'device_status',
             'device_status',
             'device_rejoined',
@@ -4627,6 +4649,132 @@ class TestBackgroundProvisioning:
         assert reply['ok'] is True
         assert reply['result'] == {'device_uid': 'esp-1'}
         assert fake.clear_background_calls == 1
+
+
+class TestReportedDeviceStatus:
+    def test_query_device_status_command_updates_snapshot_and_emits_event(self):
+        wall_clock = _FakeWallClock(42.0)
+        svc, fakes = _make_service(wall_clock=wall_clock)
+
+        reply = svc.handle_cmd({
+            'id': 1,
+            'cmd': 'query_device_status',
+            'device_uid': 'sim-1',
+        })
+
+        assert reply['ok'] is True
+        assert reply['result'] == fakes[0].reported_status
+        assert fakes[0].query_device_status_calls == 1
+
+        snap = svc.build_snapshot()
+        assert snap['devices'][0]['reported'] == fakes[0].reported_status
+        assert snap['devices'][0]['reported_at'] == pytest.approx(42.0)
+
+        json_msgs, _ = svc.tick_once()
+        events = _decode_json_msgs(json_msgs)
+        reported = [e for e in events if e.get('event') == 'device_status' and e.get('source') == 'reported']
+        assert len(reported) == 1
+        assert reported[0]['reported'] == fakes[0].reported_status
+
+    def test_connect_transition_queries_device_status(self):
+        fake = _FakeDevice()
+        fake.is_connected = False
+        wall_clock = _FakeWallClock(10.5)
+        svc, _ = _make_service(fake_devices=[fake], wall_clock=wall_clock)
+
+        json_msgs, _ = svc.tick_once()
+        events = _decode_json_msgs(json_msgs)
+
+        assert fake.query_device_status_calls == 1
+        snap = svc.build_snapshot()
+        assert snap['devices'][0]['connected'] is True
+        assert snap['devices'][0]['reported'] == fake.reported_status
+        assert snap['devices'][0]['reported_at'] == pytest.approx(10.5)
+        assert len([
+            e for e in events
+            if e.get('event') == 'device_status' and e.get('source') == 'reported'
+        ]) == 1
+
+    def test_disconnect_keeps_last_reported_state(self):
+        wall_clock = _FakeWallClock(5.0)
+        svc, fakes = _make_service(wall_clock=wall_clock)
+        assert svc.handle_cmd({
+            'id': 1,
+            'cmd': 'query_device_status',
+            'device_uid': 'sim-1',
+        })['ok'] is True
+
+        fakes[0].is_connected = False
+        fakes[0].ensure_connected = lambda: False
+        wall_clock.now = 9.0
+        svc.tick_once()
+
+        snap = svc.build_snapshot()
+        assert snap['devices'][0]['connected'] is False
+        assert snap['devices'][0]['reported'] == fakes[0].reported_status
+        assert snap['devices'][0]['reported_at'] == pytest.approx(5.0)
+
+    def test_background_commands_update_cached_report(self):
+        config = Config(frame_port=1, devices=[
+            DeviceConfig(1, 'esp-1', 'esp32', '127.0.0.1', 9001, 'main', 10),
+        ])
+        fake = _FakeDevice()
+        fake.reported_status = {
+            'mode': 'attached_controlled',
+            'profile_present': True,
+            'profile_strip_length': 10,
+            'background_present': False,
+            'background_strip_length': 0,
+            'background_blob_len': 0,
+            'background_crc32': 0,
+        }
+        wall_clock = _FakeWallClock(7.0)
+        svc = ControllerService(
+            config,
+            receiver_factory=_NoopReceiver,
+            device_factory=_make_fake_factory([fake]),
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir),
+            wall_clock=wall_clock,
+        )
+
+        assert svc.handle_cmd({
+            'id': 1,
+            'cmd': 'query_device_status',
+            'device_uid': 'esp-1',
+        })['ok'] is True
+
+        manifest = CompiledManifest(
+            duration=1.0,
+            strips=[CompiledStripArtifact('main', 5, b'123456789')],
+            safe_intervals=[],
+        )
+        assert svc._controller.load(manifest) is True
+
+        wall_clock.now = 8.0
+        assert svc.handle_cmd({
+            'id': 2,
+            'cmd': 'provision_background',
+            'device_uid': 'esp-1',
+        })['ok'] is True
+        snap = svc.build_snapshot()
+        assert snap['devices'][0]['reported']['background_present'] is True
+        assert snap['devices'][0]['reported']['background_strip_length'] == 5
+        assert snap['devices'][0]['reported']['background_blob_len'] == 9
+        assert snap['devices'][0]['reported']['background_crc32'] == 0xCBF43926
+        assert snap['devices'][0]['reported_at'] == pytest.approx(8.0)
+
+        wall_clock.now = 9.0
+        assert svc.handle_cmd({
+            'id': 3,
+            'cmd': 'clear_background',
+            'device_uid': 'esp-1',
+        })['ok'] is True
+        snap = svc.build_snapshot()
+        assert snap['devices'][0]['reported']['background_present'] is False
+        assert snap['devices'][0]['reported']['background_strip_length'] == 0
+        assert snap['devices'][0]['reported']['background_blob_len'] == 0
+        assert snap['devices'][0]['reported']['background_crc32'] == 0
+        assert snap['devices'][0]['reported_at'] == pytest.approx(9.0)
 
 
 class TestUdsFrameDelivery:

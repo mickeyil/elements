@@ -25,6 +25,7 @@ CMD_RESUME = 0x14
 CMD_STOP = 0x15
 CMD_STORE_BACKGROUND = 0x16
 CMD_CLEAR_BACKGROUND = 0x17
+CMD_QUERY_DEVICE_STATUS = 0x18
 CMD_REBOOT = 0x30
 CMD_DEBUG_SEEK = 0x22
 CMD_ACK = 0x80
@@ -39,6 +40,16 @@ MAX_STORE_BACKGROUND_BLOB_BYTES = MAX_WIRE_MESSAGE_BYTES - 7  # cmd + strip_leng
 UDP_FRAME_HEADER = struct.Struct('<HHIf')
 SYNC_REQ_STRUCT = struct.Struct('<BHIq')
 SYNC_RESP_STRUCT = struct.Struct('<BHIqqq')
+DEVICE_STATUS_STRUCT = struct.Struct('<BBHHII')
+
+_DEVICE_MODE_NAMES = {
+    0: 'attached_controlled',
+    1: 'detached_grace_hold',
+    2: 'detached_blank',
+    3: 'detached_background',
+}
+_DEVICE_STATUS_FLAG_PROFILE_PRESENT = 0x01
+_DEVICE_STATUS_FLAG_BACKGROUND_PRESENT = 0x02
 
 
 def _require_u16(name: str, value: int) -> None:
@@ -81,6 +92,10 @@ def encode_clear_background() -> bytes:
     return struct.pack('<IB', 1, CMD_CLEAR_BACKGROUND)
 
 
+def encode_query_device_status() -> bytes:
+    return struct.pack('<IB', 1, CMD_QUERY_DEVICE_STATUS)
+
+
 def encode_sync_req(seq: int, boot_token: int, t1_us: int) -> bytes:
     return SYNC_REQ_STRUCT.pack(SYNC_REQ, seq, boot_token, t1_us)
 
@@ -120,6 +135,15 @@ def encode_debug_seek(t_rel: float) -> bytes:
 
 def parse_ack(data: bytes) -> int | None:
     """Parse a length-prefixed ACK message. Returns status byte or None."""
+    parsed = parse_ack_with_payload(data)
+    if parsed is None:
+        return None
+    status, _payload = parsed
+    return status
+
+
+def parse_ack_with_payload(data: bytes) -> tuple[int, bytes] | None:
+    """Parse a length-prefixed ACK message. Returns (status, payload) or None."""
     if len(data) < 6:  # 4 (length) + 1 (type) + 1 (status)
         return None
     length = struct.unpack_from('<I', data, 0)[0]
@@ -127,7 +151,28 @@ def parse_ack(data: bytes) -> int | None:
         return None
     if data[4] != CMD_ACK:
         return None
-    return data[5]
+    return data[5], data[6:4 + length]
+
+
+def parse_device_status_payload(payload: bytes) -> dict[str, object] | None:
+    """Parse a device-status ACK payload to a dict."""
+    if len(payload) != DEVICE_STATUS_STRUCT.size:
+        return None
+    mode, flags, profile_strip_length, background_strip_length, background_blob_len, background_crc32 = (
+        DEVICE_STATUS_STRUCT.unpack(payload)
+    )
+    mode_name = _DEVICE_MODE_NAMES.get(mode)
+    if mode_name is None:
+        return None
+    return {
+        'mode': mode_name,
+        'profile_present': bool(flags & _DEVICE_STATUS_FLAG_PROFILE_PRESENT),
+        'profile_strip_length': profile_strip_length,
+        'background_present': bool(flags & _DEVICE_STATUS_FLAG_BACKGROUND_PRESENT),
+        'background_strip_length': background_strip_length,
+        'background_blob_len': background_blob_len,
+        'background_crc32': background_crc32,
+    }
 
 
 def parse_sync_resp(data: bytes) -> tuple[int, int, int, int, int] | None:

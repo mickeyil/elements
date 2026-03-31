@@ -4,19 +4,13 @@
 
 #include "background_store.h"
 #include "controller_connection.h"
+#include "device_mode.h"
 #include "device_identity.h"
 #include "discovery_service.h"
 #include "esp_device.h"
 #include "wifi_manager.h"
 
 namespace firmware {
-
-enum class DeviceMode : uint8_t {
-    attached_controlled,
-    detached_grace_hold,
-    detached_blank,
-    detached_background,
-};
 
 class FirmwareApp {
 public:

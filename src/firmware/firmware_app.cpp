@@ -33,7 +33,7 @@ void FirmwareApp::begin()
 
     _background_store.begin();
     _discovery.begin(_identity);
-    _connection.begin(_device, _identity, _background_store);
+    _connection.begin(_device, _identity, _background_store, &_mode);
     _wifi.begin();
 
     if (_background_store.metadata().present) {

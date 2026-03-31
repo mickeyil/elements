@@ -119,6 +119,8 @@ class ControllerService:
         self._last_seen: dict[int, float | None] = {}
         self._disconnect_reasons: dict[int, str | None] = {}
         self._sync_ready_boot_token: dict[int, int | None] = {}
+        self._reported_status: dict[int, dict[str, object] | None] = {}
+        self._reported_at: dict[int, float | None] = {}
 
         animations_dir = resolve_runtime_path(
             None,
@@ -152,6 +154,7 @@ class ControllerService:
             'pause': self._cmd_pause,
             'publish_program': self._cmd_publish_program,
             'provision_background': self._cmd_provision_background,
+            'query_device_status': self._cmd_query_device_status,
             'reboot_device': self._cmd_reboot_device,
             'rescan_programs': self._cmd_rescan_programs,
             'clear_background': self._cmd_clear_background,
@@ -311,12 +314,42 @@ class ControllerService:
         if not store_background(blob, strip_length, crc32):
             raise ValueError(f'background provisioning failed: {device_uid}')
 
+        self._update_cached_background_report(
+            dc.device_id,
+            background_present=True,
+            background_strip_length=strip_length,
+            background_blob_len=len(blob),
+            background_crc32=crc32,
+        )
+
         return {
             'device_uid': dc.device_uid,
             'strip_length': strip_length,
             'blob_len': len(blob),
             'crc32': crc32,
         }
+
+    def _cmd_query_device_status(self, cmd: dict) -> dict:
+        device_uid = cmd.get('device_uid')
+        if not isinstance(device_uid, str) or not device_uid:
+            raise ValueError("missing 'device_uid' field")
+
+        entry = self._uid_to_device.get(device_uid)
+        if entry is None:
+            raise ValueError(f'device not found: {device_uid}')
+
+        dc, dev = entry
+        if not self._is_connected(dev):
+            raise ValueError('device is not currently connected')
+
+        reported = self._refresh_reported_status(dc, dev, now_wall=self._wall_clock())
+        if reported is None:
+            raise ValueError(f'device status query failed: {device_uid}')
+
+        self._service_events.append(
+            self._device_status_event(dc, dev, self._clock(), source='reported')
+        )
+        return reported
 
     def _cmd_clear_background(self, cmd: dict) -> dict:
         device_uid = cmd.get('device_uid')
@@ -338,6 +371,14 @@ class ControllerService:
             raise ValueError('device transport does not support background provisioning')
         if not clear_background():
             raise ValueError(f'background clear failed: {device_uid}')
+
+        self._update_cached_background_report(
+            dc.device_id,
+            background_present=False,
+            background_strip_length=0,
+            background_blob_len=0,
+            background_crc32=0,
+        )
 
         return {'device_uid': dc.device_uid}
 
@@ -510,10 +551,13 @@ class ControllerService:
         detach_events: list[dict[str, object]] = []
         session_disconnects: list[tuple[DeviceConfig, object, str]] = []
 
-        new_status_events, new_disconnects = self._collect_connectivity_transitions(now_ns)
+        connected_devices: list[tuple[DeviceConfig, object]] = []
+
+        new_status_events, new_disconnects, newly_connected = self._collect_connectivity_transitions(now_ns)
         status_events.extend(new_status_events)
         session_disconnects.extend(new_disconnects)
         detach_events.extend(self._commit_session_disconnects(session_disconnects))
+        connected_devices.extend(newly_connected)
 
         self._probe_devices(
             ignore_throttle=False,
@@ -521,10 +565,11 @@ class ControllerService:
             now_ns=now_ns,
             now_wall=now_wall,
         )
-        new_status_events, new_disconnects = self._collect_connectivity_transitions(now_ns)
+        new_status_events, new_disconnects, newly_connected = self._collect_connectivity_transitions(now_ns)
         status_events.extend(new_status_events)
         session_disconnects.extend(new_disconnects)
         detach_events.extend(self._commit_session_disconnects(new_disconnects))
+        connected_devices.extend(newly_connected)
 
         clock_events: list[dict[str, object]] = []
         for update in sync_result.status_updates:
@@ -586,6 +631,7 @@ class ControllerService:
                 self._device_status_event(dc, dev, now_ns, source='clock')
             )
 
+        reported_events = self._query_connected_device_statuses(connected_devices, now_ns, now_wall)
         rejoin_events = self._maybe_rejoin_devices(now_ns)
 
         json_msgs: list[bytes] = []
@@ -598,6 +644,8 @@ class ControllerService:
         for event in status_events:
             json_msgs.append(encode_json(event))
         for event in clock_events:
+            json_msgs.append(encode_json(event))
+        for event in reported_events:
             json_msgs.append(encode_json(event))
         for event in rejoin_events:
             json_msgs.append(encode_json(event))
@@ -799,16 +847,21 @@ class ControllerService:
     def _append_connectivity_transitions(self, json_msgs: list[bytes], now_ns: int) -> None:
         # Deprecated helper kept only until all call sites move to
         # _collect_connectivity_transitions().
-        status_events, _ = self._collect_connectivity_transitions(now_ns)
+        status_events, _, _ = self._collect_connectivity_transitions(now_ns)
         for event in status_events:
             json_msgs.append(encode_json(event))
 
     def _collect_connectivity_transitions(
         self,
         now_ns: int,
-    ) -> tuple[list[dict[str, object]], list[tuple[DeviceConfig, object, str]]]:
+    ) -> tuple[
+        list[dict[str, object]],
+        list[tuple[DeviceConfig, object, str]],
+        list[tuple[DeviceConfig, object]],
+    ]:
         status_events: list[dict[str, object]] = []
         session_disconnects: list[tuple[DeviceConfig, object, str]] = []
+        newly_connected: list[tuple[DeviceConfig, object]] = []
         for dc, dev in self._iter_devices():
             connected = self._is_connected(dev)
             if connected != self._prev_connected[dc.device_id]:
@@ -817,6 +870,7 @@ class ControllerService:
                 self._handle_clock_connectivity_transition(dc, connected)
                 if connected:
                     self._controller.mark_transport_attached(dev)
+                    newly_connected.append((dc, dev))
                 status_events.append(
                     self._device_status_event(dc, dev, now_ns, source='connectivity')
                 )
@@ -824,7 +878,7 @@ class ControllerService:
                     reason = self._disconnect_reasons.get(dc.device_id) or 'disconnected'
                     session_disconnects.append((dc, dev, reason))
                 self._clear_disconnect_reason(dc.device_id)
-        return status_events, session_disconnects
+        return status_events, session_disconnects, newly_connected
 
     def _expire_stale_devices(self, now_ns: int) -> None:
         if self._discovery is None:
@@ -841,6 +895,7 @@ class ControllerService:
             self._disconnect_transport(dev)
 
     def _device_status_payload(self, dc: DeviceConfig, dev, now_ns: int) -> dict[str, object]:
+        reported = self._reported_status.get(dc.device_id)
         return {
             'device_id': dc.device_id,
             'device_uid': dc.device_uid,
@@ -849,6 +904,8 @@ class ControllerService:
             'device_type': dc.device_type,
             'connected': self._is_connected(dev),
             'last_seen': self._last_seen.get(dc.device_id),
+            'reported': copy.deepcopy(reported) if reported is not None else None,
+            'reported_at': self._reported_at.get(dc.device_id),
             **self._clock_status_for_device(dc, now_ns),
         }
 
@@ -897,6 +954,63 @@ class ControllerService:
             'session_id': self._controller.session_id,
             'state': self._controller.state.name.lower(),
         }
+
+    def _refresh_reported_status(
+        self,
+        dc: DeviceConfig,
+        dev,
+        *,
+        now_wall: float,
+    ) -> dict[str, object] | None:
+        query_device_status = getattr(dev, 'query_device_status', None)
+        if not callable(query_device_status):
+            return None
+        reported = query_device_status()
+        if not isinstance(reported, dict):
+            return None
+        self._reported_status[dc.device_id] = copy.deepcopy(reported)
+        self._reported_at[dc.device_id] = now_wall
+        return reported
+
+    def _query_connected_device_statuses(
+        self,
+        connected_devices: list[tuple[DeviceConfig, object]],
+        now_ns: int,
+        now_wall: float,
+    ) -> list[dict[str, object]]:
+        events: list[dict[str, object]] = []
+        seen: set[int] = set()
+        for dc, dev in connected_devices:
+            if dc.device_id in seen:
+                continue
+            seen.add(dc.device_id)
+            reported = self._refresh_reported_status(dc, dev, now_wall=now_wall)
+            if reported is None:
+                continue
+            events.append(
+                self._device_status_event(dc, dev, now_ns, source='reported')
+            )
+        return events
+
+    def _update_cached_background_report(
+        self,
+        device_id: int,
+        *,
+        background_present: bool,
+        background_strip_length: int,
+        background_blob_len: int,
+        background_crc32: int,
+    ) -> None:
+        reported = self._reported_status.get(device_id)
+        if reported is None:
+            return
+        updated = copy.deepcopy(reported)
+        updated['background_present'] = background_present
+        updated['background_strip_length'] = background_strip_length
+        updated['background_blob_len'] = background_blob_len
+        updated['background_crc32'] = background_crc32
+        self._reported_status[device_id] = updated
+        self._reported_at[device_id] = self._wall_clock()
 
     def _commit_session_disconnects(
         self,
@@ -1311,6 +1425,8 @@ class ControllerService:
         new_last_seen: dict[int, float | None] = {}
         new_disconnect_reasons: dict[int, str | None] = {}
         new_sync_ready_boot_token: dict[int, int | None] = {}
+        new_reported_status: dict[int, dict[str, object] | None] = {}
+        new_reported_at: dict[int, float | None] = {}
         now_ns = self._clock()
         now_wall = self._wall_clock()
 
@@ -1338,11 +1454,20 @@ class ControllerService:
                     if self._is_connected(dev)
                     else None
                 )
+                new_reported_status[dc.device_id] = copy.deepcopy(
+                    self._reported_status.get(old_dc.device_id)
+                )
+                new_reported_at[dc.device_id] = self._reported_at.get(old_dc.device_id)
                 continue
 
             if existing is not None:
-                _old_dc, old_dev = existing
+                old_dc, old_dev = existing
+                preserved_reported = copy.deepcopy(self._reported_status.get(old_dc.device_id))
+                preserved_reported_at = self._reported_at.get(old_dc.device_id)
                 old_dev.close()
+            else:
+                preserved_reported = None
+                preserved_reported_at = None
 
             dev = self._make_device(dc)
             new_devices.append(dev)
@@ -1352,6 +1477,8 @@ class ControllerService:
             new_last_seen[dc.device_id] = now_wall if self._is_connected(dev) else None
             new_disconnect_reasons[dc.device_id] = None
             new_sync_ready_boot_token[dc.device_id] = None
+            new_reported_status[dc.device_id] = preserved_reported
+            new_reported_at[dc.device_id] = preserved_reported_at
 
         for _old_dc, dev in current_by_uid.values():
             dev.close()
@@ -1366,6 +1493,8 @@ class ControllerService:
         self._last_seen = new_last_seen
         self._disconnect_reasons = new_disconnect_reasons
         self._sync_ready_boot_token = new_sync_ready_boot_token
+        self._reported_status = new_reported_status
+        self._reported_at = new_reported_at
         self._uid_to_device = {
             dc.device_uid: (dc, dev)
             for dc, dev in zip(self._device_configs, self._devices)

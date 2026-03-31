@@ -31,12 +31,14 @@ ControllerConnection::ControllerConnection()
 void ControllerConnection::begin(
     ESPDevice& device,
     const DeviceIdentity& identity,
-    BackgroundStore& background_store
+    BackgroundStore& background_store,
+    const DeviceMode* mode
 )
 {
     _device = &device;
     _identity = &identity;
     _background_store = &background_store;
+    _mode = mode;
 }
 
 void ControllerConnection::start_if_needed()
@@ -214,6 +216,12 @@ int ControllerConnection::poll_commands_(ConnectionPollResult& result)
                 }
                 break;
 
+            case kCmdQueryDeviceStatus:
+                if (!handle_query_device_status_()) {
+                    return -1;
+                }
+                break;
+
             case kCmdStart:
                 handle_start_(payload, payload_len);
                 break;
@@ -334,12 +342,20 @@ bool ControllerConnection::send_all_(const uint8_t* data, size_t len)
 
 bool ControllerConnection::send_ack_(uint8_t status)
 {
-    uint8_t buf[6];
-    const uint32_t len = 2;
-    memcpy(buf, &len, sizeof(len));
+    return send_ack_(status, nullptr, 0);
+}
+
+bool ControllerConnection::send_ack_(uint8_t status, const uint8_t* payload, size_t payload_len)
+{
+    std::vector<uint8_t> buf(6 + payload_len);
+    const uint32_t len = static_cast<uint32_t>(2 + payload_len);
+    memcpy(buf.data(), &len, sizeof(len));
     buf[4] = kCmdAck;
     buf[5] = status;
-    return send_all_(buf, sizeof(buf));
+    if (payload_len > 0 && payload != nullptr) {
+        memcpy(buf.data() + 6, payload, payload_len);
+    }
+    return send_all_(buf.data(), buf.size());
 }
 
 uint8_t ControllerConnection::apply_profile_(const HardwareProfile& profile)
@@ -528,6 +544,56 @@ bool ControllerConnection::handle_clear_background_()
     const bool ok = _background_store->clear();
     log_line("[tcp] clear_background status=%s", ok ? "ok" : "failed");
     return send_ack_(ok ? kAckOk : kAckError);
+}
+
+bool ControllerConnection::handle_query_device_status_()
+{
+    if (!is_attached() || _device == nullptr || _background_store == nullptr || _mode == nullptr) {
+        return send_ack_(kAckWrongState);
+    }
+
+    uint8_t payload[14] = {};
+    uint8_t mode = 0;
+    switch (*_mode) {
+        case DeviceMode::attached_controlled:
+            mode = 0;
+            break;
+        case DeviceMode::detached_grace_hold:
+            mode = 1;
+            break;
+        case DeviceMode::detached_blank:
+            mode = 2;
+            break;
+        case DeviceMode::detached_background:
+            mode = 3;
+            break;
+    }
+
+    uint8_t flags = 0;
+    uint16_t profile_strip_length = 0;
+    if (_device->has_hardware_profile()) {
+        flags |= 0x01;
+        profile_strip_length = _device->strip_length();
+    }
+
+    const BackgroundMetadata meta = _background_store->metadata();
+    uint16_t background_strip_length = 0;
+    uint32_t background_blob_len = 0;
+    uint32_t background_crc32 = 0;
+    if (meta.present) {
+        flags |= 0x02;
+        background_strip_length = meta.strip_length;
+        background_blob_len = meta.blob_len;
+        background_crc32 = meta.crc32;
+    }
+
+    payload[0] = mode;
+    payload[1] = flags;
+    memcpy(payload + 2, &profile_strip_length, sizeof(profile_strip_length));
+    memcpy(payload + 4, &background_strip_length, sizeof(background_strip_length));
+    memcpy(payload + 6, &background_blob_len, sizeof(background_blob_len));
+    memcpy(payload + 10, &background_crc32, sizeof(background_crc32));
+    return send_ack_(kAckOk, payload, sizeof(payload));
 }
 
 void ControllerConnection::handle_start_(const uint8_t* payload, uint32_t payload_len)

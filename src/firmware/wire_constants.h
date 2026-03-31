@@ -21,6 +21,7 @@ constexpr uint8_t kCmdResume = 0x14;
 constexpr uint8_t kCmdStop = 0x15;
 constexpr uint8_t kCmdStoreBackground = 0x16;
 constexpr uint8_t kCmdClearBackground = 0x17;
+constexpr uint8_t kCmdQueryDeviceStatus = 0x18;
 constexpr uint8_t kCmdReboot = 0x30;
 constexpr uint8_t kCmdDebugSeek = 0x22;
 constexpr uint8_t kCmdDebugStep = 0x23;

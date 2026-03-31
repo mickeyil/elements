@@ -26,6 +26,7 @@ from elemctl.wire import (
     CMD_PAUSE,
     CMD_STORE_BACKGROUND,
     CMD_CLEAR_BACKGROUND,
+    CMD_QUERY_DEVICE_STATUS,
     CMD_REBOOT,
     CMD_RESUME,
     CMD_SYNC_RESULT,
@@ -39,12 +40,15 @@ from elemctl.wire import (
     encode_clear_background,
     encode_jump,
     encode_load,
+    encode_query_device_status,
     encode_reboot,
     encode_set_profile,
     encode_store_background,
     encode_sync_req,
     encode_start,
     parse_ack,
+    parse_ack_with_payload,
+    parse_device_status_payload,
     parse_sync_resp,
     parse_udp_frame,
 )
@@ -89,9 +93,9 @@ class FakeEndpoint:
         body = self._recv_exact(length)
         return body[0], body[1:]
 
-    def send_ack(self, status: int = ACK_OK) -> None:
+    def send_ack(self, status: int = ACK_OK, payload: bytes = b'') -> None:
         assert self._conn is not None
-        msg = struct.pack('<IBB', 2, CMD_ACK, status)
+        msg = struct.pack('<IBB', 2 + len(payload), CMD_ACK, status) + payload
         self._conn.sendall(msg)
 
     def send_udp_frame(
@@ -383,8 +387,36 @@ class TestWireEncoding:
         assert length == 1
         assert msg[4] == CMD_CLEAR_BACKGROUND
 
+    def test_encode_query_device_status(self):
+        msg = encode_query_device_status()
+        length = struct.unpack_from('<I', msg, 0)[0]
+        assert length == 1
+        assert msg[4] == CMD_QUERY_DEVICE_STATUS
+
     def test_python_crc32_matches_standard_check_vector(self):
         assert zlib.crc32(b"123456789") & 0xFFFFFFFF == 0xCBF43926
+
+    def test_parse_ack_with_payload(self):
+        data = struct.pack('<IBB', 16, CMD_ACK, ACK_OK) + struct.pack(
+            '<BBHHII', 3, 0x03, 8, 8, 60, 0x133CB4BD
+        )
+        assert parse_ack(data) == ACK_OK
+        assert parse_ack_with_payload(data) == (
+            ACK_OK,
+            struct.pack('<BBHHII', 3, 0x03, 8, 8, 60, 0x133CB4BD),
+        )
+
+    def test_parse_device_status_payload(self):
+        payload = struct.pack('<BBHHII', 3, 0x03, 8, 8, 60, 0x133CB4BD)
+        assert parse_device_status_payload(payload) == {
+            'mode': 'detached_background',
+            'profile_present': True,
+            'profile_strip_length': 8,
+            'background_present': True,
+            'background_strip_length': 8,
+            'background_blob_len': 60,
+            'background_crc32': 0x133CB4BD,
+        }
 
 
 # =========================================================================
@@ -414,6 +446,8 @@ class TestConnection:
         assert fake_sock.connected_to == ('127.0.0.1', 9001)
         assert fake_sock.timeouts == [
             network_device_module._PROBE_CONNECT_TIMEOUT,
+            network_device_module._HANDSHAKE_ACK_TIMEOUT,
+            network_device_module._HANDSHAKE_ACK_TIMEOUT,
             network_device_module._HANDSHAKE_ACK_TIMEOUT,
             network_device_module._HANDSHAKE_ACK_TIMEOUT,
         ]
@@ -569,6 +603,9 @@ class TestLoad:
             network_device_module._COMMAND_CONNECT_TIMEOUT,
             network_device_module._HANDSHAKE_ACK_TIMEOUT,
             network_device_module._HANDSHAKE_ACK_TIMEOUT,
+            network_device_module._HANDSHAKE_ACK_TIMEOUT,
+            network_device_module._HANDSHAKE_ACK_TIMEOUT,
+            network_device_module._COMMAND_ACK_TIMEOUT,
             network_device_module._COMMAND_ACK_TIMEOUT,
         ]
 
@@ -714,6 +751,38 @@ class TestReboot:
         t = threading.Thread(target=server_side, daemon=True)
         t.start()
         assert dev.clear_background() is True
+        t.join(timeout=3.0)
+
+    def test_query_device_status_reads_ack_payload(self, endpoint, receiver):
+        dev = _make_device(endpoint, receiver, device_type='esp32')
+
+        def server_side():
+            endpoint.accept()
+            _expect_handshake(
+                endpoint,
+                device_id=dev._device_id,
+                strip_length=dev._strip_length,
+                frame_port=dev._frame_port,
+            )
+            cmd_type, payload = endpoint.read_command()
+            assert cmd_type == CMD_QUERY_DEVICE_STATUS
+            assert payload == b''
+            endpoint.send_ack(
+                ACK_OK,
+                struct.pack('<BBHHII', 3, 0x03, 8, 8, 60, 0x133CB4BD),
+            )
+
+        t = threading.Thread(target=server_side, daemon=True)
+        t.start()
+        assert dev.query_device_status() == {
+            'mode': 'detached_background',
+            'profile_present': True,
+            'profile_strip_length': 8,
+            'background_present': True,
+            'background_strip_length': 8,
+            'background_blob_len': 60,
+            'background_crc32': 0x133CB4BD,
+        }
         t.join(timeout=3.0)
 
     def test_reload_ack_failure_resets_state(self, endpoint, receiver):
