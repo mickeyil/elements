@@ -14,6 +14,7 @@ namespace firmware {
 namespace {
 
 static constexpr uint32_t kDetachGraceHoldMs = 5000;
+static constexpr char kProfileStripLengthKey[] = "prof_len";
 
 }  // namespace
 
@@ -30,6 +31,12 @@ void FirmwareApp::begin()
     log_line("[boot] uid=%s", _identity.uid.c_str());
     log_line("[boot] boot_token=%lu", static_cast<unsigned long>(_identity.boot_token));
     log_line("[mode] %s", mode_name_());
+
+    _profile_preferences_ready = _profile_preferences.begin(kNvsNamespace, false);
+    if (!_profile_preferences_ready) {
+        log_line("[profile] prefs unavailable");
+    }
+    load_persisted_profile_();
 
     _background_store.begin();
     _discovery.begin(_identity);
@@ -78,6 +85,7 @@ void FirmwareApp::run_once()
         if (result.disconnected) {
             on_controller_disconnect();
         }
+        persist_profile_if_needed_();
         if (result.reboot_requested) {
             schedule_reboot();
             maybe_log_status(
@@ -244,6 +252,7 @@ bool FirmwareApp::try_start_background_()
             "[bg] applied stored profile strip_length=%u",
             static_cast<unsigned>(meta.strip_length)
         );
+        persist_profile_if_needed_();
     }
 
     std::unique_ptr<uint8_t[]> blob(new (std::nothrow) uint8_t[meta.blob_len]);
@@ -280,6 +289,79 @@ bool FirmwareApp::try_start_background_()
         static_cast<unsigned long>(meta.crc32)
     );
     return true;
+}
+
+bool FirmwareApp::load_persisted_profile_()
+{
+    if (!_profile_preferences_ready) {
+        return false;
+    }
+
+    const uint16_t strip_length = _profile_preferences.getUShort(kProfileStripLengthKey, 0);
+    if (strip_length == 0) {
+        log_line("[profile] none");
+        _handled_profile_present = false;
+        _handled_profile_strip_length = 0;
+        return false;
+    }
+
+    _handled_profile_present = true;
+    _handled_profile_strip_length = strip_length;
+
+    const HardwareProfile profile(strip_length);
+    if (!profile.is_valid()) {
+        log_line(
+            "[profile] invalid stored strip_length=%u",
+            static_cast<unsigned>(strip_length)
+        );
+        return false;
+    }
+    if (!_device.apply_hardware_profile(profile)) {
+        log_line(
+            "[profile] apply failed strip_length=%u",
+            static_cast<unsigned>(strip_length)
+        );
+        return false;
+    }
+    log_line(
+        "[profile] loaded strip_length=%u",
+        static_cast<unsigned>(strip_length)
+    );
+    return true;
+}
+
+void FirmwareApp::persist_profile_if_needed_()
+{
+    if (!_device.has_hardware_profile()) {
+        return;
+    }
+
+    const uint16_t strip_length = _device.strip_length();
+    if (_handled_profile_present && strip_length == _handled_profile_strip_length) {
+        return;
+    }
+
+    if (_profile_preferences_ready) {
+        if (_profile_preferences.putUShort(kProfileStripLengthKey, strip_length)) {
+            log_line(
+                "[profile] persisted strip_length=%u",
+                static_cast<unsigned>(strip_length)
+            );
+        } else {
+            log_line(
+                "[profile] persist failed strip_length=%u (continuing)",
+                static_cast<unsigned>(strip_length)
+            );
+        }
+    } else {
+        log_line(
+            "[profile] persist skipped strip_length=%u (prefs unavailable)",
+            static_cast<unsigned>(strip_length)
+        );
+    }
+
+    _handled_profile_present = true;
+    _handled_profile_strip_length = strip_length;
 }
 
 const char* FirmwareApp::mode_name_() const

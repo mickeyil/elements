@@ -1,5 +1,7 @@
 #pragma once
 
+#include <Preferences.h>
+
 #include <cstdint>
 
 #include "background_store.h"
@@ -27,6 +29,8 @@ private:
     void enter_detached_background_();
     void tick_detached_mode_();
     bool try_start_background_();
+    bool load_persisted_profile_();
+    void persist_profile_if_needed_();
     const char* mode_name_() const;
     void schedule_reboot();
     void reboot_if_due();
@@ -37,6 +41,10 @@ private:
     BackgroundStore _background_store;
     ESPDevice _device;
     DeviceIdentity _identity;
+    Preferences _profile_preferences;
+    bool _profile_preferences_ready = false;
+    uint16_t _handled_profile_strip_length = 0;
+    bool _handled_profile_present = false;
     uint32_t _last_status_ms = 0;
     DeviceMode _mode = DeviceMode::detached_blank;
     uint32_t _detach_hold_deadline_ms = 0;
