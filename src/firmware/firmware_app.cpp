@@ -3,7 +3,11 @@
 #include <Arduino.h>
 #include <Esp.h>
 
+#include <memory>
+#include <new>
+
 #include "diagnostics.h"
+#include "hardware_profile.h"
 #include "wire_constants.h"
 
 namespace firmware {
@@ -31,6 +35,14 @@ void FirmwareApp::begin()
     _discovery.begin(_identity);
     _connection.begin(_device, _identity, _background_store);
     _wifi.begin();
+
+    if (_background_store.metadata().present) {
+        if (try_start_background_()) {
+            enter_detached_background_();
+        } else {
+            log_line("[bg] startup skipped or failed");
+        }
+    }
 
     if (_wifi.is_ready()) {
         _discovery.start_if_needed();
@@ -162,16 +174,112 @@ void FirmwareApp::enter_detached_blank_(const char* reason)
     }
 }
 
+void FirmwareApp::enter_detached_background_()
+{
+    if (_mode == DeviceMode::detached_background) {
+        return;
+    }
+    _mode = DeviceMode::detached_background;
+    _detach_hold_deadline_ms = 0;
+    log_line("[mode] detached_background");
+}
+
 void FirmwareApp::tick_detached_mode_()
 {
-    if (_mode != DeviceMode::detached_grace_hold) {
+    if (_mode == DeviceMode::detached_grace_hold) {
+        const uint32_t now = millis();
+        if (static_cast<int32_t>(now - _detach_hold_deadline_ms) < 0) {
+            return;
+        }
+        enter_detached_blank_("grace expired");
+        if (try_start_background_()) {
+            enter_detached_background_();
+        }
         return;
     }
-    const uint32_t now = millis();
-    if (static_cast<int32_t>(now - _detach_hold_deadline_ms) < 0) {
+
+    if (_mode != DeviceMode::detached_background) {
         return;
     }
-    enter_detached_blank_("grace expired");
+
+    if (_device.tick_once()) {
+        return;
+    }
+
+    if (_device.state() == DeviceState::ENDED) {
+        log_line("[bg] restarting local background");
+        _device.handle_start(0);
+        return;
+    }
+
+    log_line("[bg] background runtime left detached mode unexpectedly");
+    enter_detached_blank_("background runtime unexpected state");
+}
+
+bool FirmwareApp::try_start_background_()
+{
+    const BackgroundMetadata meta = _background_store.metadata();
+    if (!meta.present) {
+        return false;
+    }
+
+    if (_device.has_hardware_profile()) {
+        if (_device.strip_length() != meta.strip_length) {
+            log_line(
+                "[bg] profile mismatch current=%u stored=%u",
+                static_cast<unsigned>(_device.strip_length()),
+                static_cast<unsigned>(meta.strip_length)
+            );
+            return false;
+        }
+    } else {
+        if (!_device.apply_hardware_profile(HardwareProfile(meta.strip_length))) {
+            log_line(
+                "[bg] failed to apply stored profile strip_length=%u",
+                static_cast<unsigned>(meta.strip_length)
+            );
+            return false;
+        }
+        log_line(
+            "[bg] applied stored profile strip_length=%u",
+            static_cast<unsigned>(meta.strip_length)
+        );
+    }
+
+    std::unique_ptr<uint8_t[]> blob(new (std::nothrow) uint8_t[meta.blob_len]);
+    if (!blob) {
+        log_line(
+            "[bg] failed to allocate %lu bytes for background",
+            static_cast<unsigned long>(meta.blob_len)
+        );
+        return false;
+    }
+    if (!_background_store.read_blob(blob.get(), meta.blob_len)) {
+        log_line("[bg] failed to read stored background");
+        return false;
+    }
+    if (!_device.handle_load(blob.get(), meta.blob_len, 0)) {
+        log_line("[bg] failed to load stored background");
+        return false;
+    }
+    if (_device.state() != DeviceState::LOADED) {
+        log_line("[bg] stored background left device in unexpected state after load");
+        return false;
+    }
+
+    _device.handle_start(0);
+    if (_device.state() != DeviceState::PLAYING) {
+        log_line("[bg] failed to start stored background");
+        return false;
+    }
+
+    log_line(
+        "[bg] started strip_length=%u bytes=%lu crc32=%08lx",
+        static_cast<unsigned>(meta.strip_length),
+        static_cast<unsigned long>(meta.blob_len),
+        static_cast<unsigned long>(meta.crc32)
+    );
+    return true;
 }
 
 const char* FirmwareApp::mode_name_() const
@@ -183,6 +291,8 @@ const char* FirmwareApp::mode_name_() const
             return "detached_grace_hold";
         case DeviceMode::detached_blank:
             return "detached_blank";
+        case DeviceMode::detached_background:
+            return "detached_background";
     }
     return "unknown";
 }

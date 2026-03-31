@@ -15,6 +15,7 @@ enum class DeviceMode : uint8_t {
     attached_controlled,
     detached_grace_hold,
     detached_blank,
+    detached_background,
 };
 
 class FirmwareApp {
@@ -29,7 +30,9 @@ private:
     void enter_attached_controlled_();
     void enter_detached_grace_hold_(const char* reason);
     void enter_detached_blank_(const char* reason);
+    void enter_detached_background_();
     void tick_detached_mode_();
+    bool try_start_background_();
     const char* mode_name_() const;
     void schedule_reboot();
     void reboot_if_due();

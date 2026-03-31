@@ -31,9 +31,6 @@ void BackgroundStore::begin()
             static_cast<unsigned long>(LittleFS.totalBytes()),
             static_cast<unsigned long>(LittleFS.usedBytes())
         );
-        if (LittleFS.exists(kBackgroundTempPath)) {
-            LittleFS.remove(kBackgroundTempPath);
-        }
     }
 
     _preferences_ready = _preferences.begin(kBackgroundNamespace, false);
@@ -169,10 +166,6 @@ void BackgroundStore::load_metadata_()
 
     const bool present = _preferences.getBool(kBackgroundPresentKey, false);
     if (!present) {
-        if (_fs_ready && LittleFS.exists(kBackgroundPath)) {
-            log_line("[bg] removing orphaned background file");
-            LittleFS.remove(kBackgroundPath);
-        }
         return;
     }
 
