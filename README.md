@@ -11,7 +11,7 @@ cmake -B build
 cmake --build build
 ```
 
-Requires C++17 and Python 3 (for test fixture generation).
+Requires C++11 and Python 3 (for test fixture generation).
 
 ## Test
 

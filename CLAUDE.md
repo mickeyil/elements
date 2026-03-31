@@ -18,6 +18,10 @@ cd build && ctest          # or: cmake --build build && cd build && ctest
 ./build/test_colors
 ./build/test_compositor
 ./build/test_animations
+./build/test_playback_device
+./build/test_esp_simulated
+./build/test_sim_controller
+./build/test_background_crc
 
 # Valgrind memcheck (if available; also registered as ctest targets)
 valgrind --leak-check=full --error-exitcode=1 ./build/test_engine
@@ -74,6 +78,7 @@ DSL (.py) → Python Compiler → Binary Blob → C++ Decoder → Program struct
 ```
 
 ### C++ runtime (`src/`)
+- **`playback_device.h/cpp`** — Abstract base class for devices. State machine (IDLE→LOADED→PLAYING→PAUSED→ENDED), blob loading via decoder, tick loop, sync offset management. `reset_for_detach()` invalidates runtime without presenting. `present_black_frame()` pushes black to output.
 - **`decoder.h/cpp`** — Decodes binary blob into a `Program` struct tree (`Program` → `LayerDef[]` → `AnimationEvent[]`). All memory arena-allocated at load time.
 - **`engine.h/cpp`** — Drives playback. Each layer has a cursor that monotonically advances through events. Creates `Animation*` instances on-demand via `create_animation()` factory. Takes `float t` (seconds) externally — no internal clock.
 - **`compositor.h/cpp`** — Blends active layer buffers into the `Strip` output using per-pixel alpha. Layers composite bottom-up (index 0 = bottom). Optional gamma correction.
@@ -81,6 +86,25 @@ DSL (.py) → Python Compiler → Binary Blob → C++ Decoder → Program struct
 - **`anim_wave.h`, `anim_spark.h`, `anim_shift.h`, `anim_paint.h`** — Concrete animation subclasses. Header-only. `AnimShift` is stateful (uses a work buffer from `BufferPool`).
 - **`colors.h/cpp`** — `hsva_t` (float HSVA) and `rgb_t` (uint8 RGB) types, HSV→RGB conversion, gamma correction.
 - **`strip.h`** — Thin wrapper over a raw RGB byte buffer (maps to FastLED's CRGB array).
+- **`background_crc.h/cpp`** — CRC32 (IEEE/zlib-compatible) for background blob validation.
+
+### ESP32 firmware (`src/firmware/`)
+- **`firmware_app.h/cpp`** — Top-level orchestrator. Owns WiFi, discovery, connection, device, and background store. Manages `DeviceMode` state machine: `attached_controlled` → `detached_grace_hold` → `detached_blank` → `detached_background`. On detach: holds last frame, then blanks, then plays background if available. On reattach: controller takes over.
+- **`esp_device.h/cpp`** — `PlaybackDevice` subclass: FastLED output, `esp_timer_get_time()` clock.
+- **`controller_connection.h/cpp`** — TCP command parser, ACK responses, connection state machine. Handles all wire commands including `STORE_BACKGROUND` and `CLEAR_BACKGROUND`.
+- **`background_store.h/cpp`** — Persistent background blob storage. Metadata in NVS/Preferences, blob bytes in LittleFS. CRC32-validated, survives reboots.
+- **`discovery_service.h/cpp`** — UDP HELLO broadcasts, sync probe responses.
+- **`wifi_manager.h/cpp`** — WiFi connection with credential caching (NVS).
+- **`device_identity.h/cpp`** — MAC-based UID, random boot token.
+- **`wire_constants.h`** — Shared protocol constants (ports, command codes, timeouts).
+- **`diagnostics.h/cpp`** — Serial logging, periodic status dumps with mode.
+
+### Python controller (`controller/elemctl/`)
+- **`controller.py`** — Session state machine. Owns canonical session timebase (`_play_t0_ns`), retained session with per-participant state (attached/serving), safe-interval-based rejoin, observer frame suspension when strips are uncovered.
+- **`service.py`** — Core service logic: command handlers, compilation, device lifecycle, sync-gated live resume, background provisioning.
+- **`network_device.py`** — TCP/UDP device transport. Commands include `store_background()`, `clear_background()`.
+- **`clock_sync.py`** — NTP-like sync: probe, filter, correct.
+- **`wire.py`** — Wire protocol encode/decode for all commands.
 
 ### Python compiler (`compiler/elements/`)
 - **`dsl.py`** — User-facing DSL: `strip()`, `wave()`, `shift()`, `spark()`, `paint()`, `build()`. Uses a hidden global `_ProgramBuilder`.
@@ -89,11 +113,12 @@ DSL (.py) → Python Compiler → Binary Blob → C++ Decoder → Program struct
 - **`types.py`** — Shared types: `AnimDef`, `StripDef`, `PixelGroup`, `SecMarker`, constants.
 
 ### Key design invariants
+- Controller owns canonical session time — devices follow, not the authority
+- Session survives device detach — participants tracked as session-member / transport-attached / actively-serving
 - Single cursor per layer, monotonically advancing — O(1) per layer per frame
 - `source_layer < dependent_layer` ordering (compiler-enforced)
 - `SOURCE_NONE = 0xFF` sentinel when an event has no source dependency
 - Per-pixel alpha blending (alpha lives in `hsva_t`, not per-layer)
-- Engine tick pseudocode: for each layer, advance cursor past expired events, create animation instance if entering new event, render, scatter-copy if remapped
 
 ### Test fixture dependency
 C++ decoder and engine tests load `test/fixtures/test_animation.bin`, auto-generated by `test/fixtures/generate.py` (requires the Python compiler). CMake runs this automatically if python3 is found.

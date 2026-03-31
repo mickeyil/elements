@@ -108,9 +108,37 @@ The controller scans an animations directory for `.py` programs, extracts `BEAT`
 - **epoch** — increments on seek/jump/restart. Clients drop frames from old epochs.
 - **gen** — u16 on LOAD/JUMP commands, echoed by devices on UDP frames. Controller filters stale in-flight frames by gen mismatch.
 
+### Controller-Owned Session Timebase
+
+The controller owns the canonical show clock via `_play_t0_ns` — it does not derive time from devices. All playback decisions (current_t_rel, pause position, end-of-program, loop restart) use `_session_t_rel(now)`. Devices follow the controller's timeline; they are not the authority for show progress.
+
+### Retained Sessions and Participant State
+
+A session survives individual device disconnects. Each participant has three states:
+
+- **session member** — part of the retained session (in `_active_strips`)
+- **transport attached** — TCP connection is up (SET_PROFILE + ATTACH succeeded)
+- **actively serving** — loaded with the session blob and executing playback commands
+
+When a device disconnects, it's marked detached (not attached, not serving) but stays a session member. The session continues on the controller-owned clock. Observer frames suspend when any manifest strip has no device actively serving.
+
+When a device reconnects, it's marked transport-attached. Live resume loads the retained session blob and issues state-appropriate commands. For ESP32 devices in PLAYING or PAUSED sessions, resume waits until a sync correction has been sent for the current boot token. In LOADED and STOPPED, ESP32 devices rejoin immediately (no sync-sensitive commands).
+
+| Session state | Action |
+|---------------|--------|
+| PLAYING | LOAD + JUMP to safe point + RESUME |
+| PAUSED | LOAD + JUMP to paused position |
+| LOADED | LOAD only |
+| STOPPED | LOAD + STOP |
+| ENDED | No resume (v1 policy) |
+
+### Background Provisioning
+
+The controller can provision a background blob to an ESP32 device via `provision_background`. This stores the currently loaded session's compiled blob as the device's persistent fallback animation. The device attempts to play it at boot (before WiFi/discovery, self-applying the stored strip_length as its hardware profile if none is set) and resumes it after controller detach (grace hold → blank → background). Controller attachment preempts background playback. `clear_background` removes the stored blob.
+
 ## Safe Intervals & Seek
 
-The compiler identifies time ranges where no event carries prior state, making engine reset safe. The controller snaps seek requests to the nearest safe interval and uses JUMP (O(1) on all devices). Debug seek (simulator only) replays from t=0 for arbitrary precision.
+The compiler identifies time ranges where no event carries prior state, making engine reset safe. The controller snaps seek requests to the nearest safe interval and uses JUMP (O(1) on all devices). Debug seek (simulator only) replays from t=0 for arbitrary precision. Live resume uses a forward-looking safe-point search (next safe interval at or after current time).
 
 ## Key Files
 

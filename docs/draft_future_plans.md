@@ -4,11 +4,11 @@ Unimplemented or partially-implemented features, extracted from earlier design d
 
 ---
 
-## Ambient Mode
+## Ambient Mode — Implemented
 
-Standalone playback of pre-programmed background animations. A bytecode program that loops indefinitely, stored on device flash (LittleFS) for power-on default. Can be replaced anytime via LOAD. Think: slow color waves, gentle breathing, gradient sweeps.
+Standalone playback of pre-programmed background animations. A compiled strip blob stored on device flash (LittleFS) that loops indefinitely at boot and after controller detach. Provisioned via `STORE_BACKGROUND` command from the controller. Cleared via `CLEAR_BACKGROUND`.
 
-Not yet implemented — devices currently require a controller connection to receive programs.
+Current behavior: at boot, the device attempts background startup before WiFi/discovery bring-up, self-applying the stored strip_length as its hardware profile if none is set. Controller attachment preempts background. After detach: grace hold (5s) → blank → background resumes. Background loops locally without controller involvement.
 
 ---
 
@@ -88,21 +88,26 @@ The compiler knows the max concurrent animations. The engine could pre-allocate 
 
 ---
 
-## Milestones from Roadmap (as of 2026-03-29)
+## Completed Infrastructure Milestones
 
-### Milestone A: First real ESP32 end-to-end playback
-Goal: one real ESP32 device fully working through the controller path. Firmware, controller connection, LOAD/PLAY on real LEDs, disconnect recovery.
+The following milestones from the detach/fallback/rejoin roadmap have been implemented:
 
-Status: firmware and controller code is implemented; hardware validation in progress.
+- **Controller-owned session timebase** — controller owns the canonical show clock, no longer derives time from devices
+- **Retained sessions + per-device detach** — session survives device disconnects, three-state participant model (member/attached/serving)
+- **Firmware detached-mode behavior** — grace hold → blank on controller loss
+- **Background provisioning + runtime** — persistent background blob storage (LittleFS), auto-play at boot and after detach
+- **Snap-to-safe rejoin** — detached devices automatically rejoin at a safe point when they reconnect, sync-gated for ESP32
 
-### Milestone B: Real-hardware diagnostics and operator UX
+## Remaining Feature Milestones
+
+### Real-hardware diagnostics and operator UX
 Better per-device diagnostics, clearer status surfaces, targeted hardware smoke tests, device provisioning UX (short suffix labels).
 
-### Milestone C: Web control parity
+### Web control parity
 Browser-side playback/session controls, program/config mutations from the browser.
 
-### Milestone D: Clock sync validation
+### Clock sync validation
 Validate the implemented sync protocol on real hardware. Tune filter parameters under real WiFi conditions.
 
-### Milestone E: Audio-player integration
+### Audio-player integration
 Implement the controller ↔ audio contract, align audio with playback/session control.

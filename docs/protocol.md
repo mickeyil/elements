@@ -42,6 +42,8 @@ Reliable channel for commands and ACKs. Controller opens a persistent connection
 | `0x13` | PAUSE | _(none)_ | Freeze playback. Keep last frame displayed. |
 | `0x14` | RESUME | `t0: i64` | Resume from pause with new time origin. No engine reset. |
 | `0x15` | STOP | _(none)_ | Clear to black, reset to t=0, stay LOADED. |
+| `0x16` | STORE_BACKGROUND | `strip_length: u16, crc32: u32, blob: bytes` | Persist a background blob to device flash (LittleFS). |
+| `0x17` | CLEAR_BACKGROUND | _(none)_ | Remove the stored background blob and metadata. |
 | `0x03` | SYNC_RESULT | `seq: u16, boot_token: u32, offset: i64` | Apply clock correction. |
 | `0x22` | DEBUG_SEEK | `t_rel: f32` | Simulator-only: replay from t=0 to target. |
 | `0x30` | REBOOT | _(none)_ | Graceful device reboot. |
@@ -57,7 +59,7 @@ Reliable channel for commands and ACKs. Controller opens a persistent connection
 
 Status: `0` = OK, `1` = error, `2` = wrong state (e.g. LOAD before CONFIGURE).
 
-Devices ACK after SET_PROFILE and LOAD. Other commands are fire-and-forget (TCP guarantees delivery).
+Devices ACK after SET_PROFILE, ATTACH, LOAD, STORE_BACKGROUND, CLEAR_BACKGROUND, and REBOOT. Other commands are fire-and-forget (TCP guarantees delivery).
 
 ### Handshake Sequence
 
@@ -197,8 +199,9 @@ Server replies, then sends a snapshot with full current state (devices, programs
 
 ```
 load, load_program, load_scene, play, pause, stop, seek, debug_seek,
-status, rescan_programs, publish_program, add_device, edit_device,
-remove_device, reboot_device, shutdown
+status, rescan_programs, publish_program, provision_background,
+clear_background, add_device, edit_device, remove_device,
+reboot_device, shutdown
 ```
 
 Each command carries an `id` that the controller echoes in the reply. Replies are sent after the controller has finished all work for the command.
@@ -210,9 +213,11 @@ Each command carries an `id` that the controller echoes in the reply. Replies ar
 {"type": "event", "event": "state", "state": "playing", "epoch": 1}
 {"type": "event", "event": "device_status", "source": "connectivity", "device_uid": "sim-1", "connected": true}
 {"type": "event", "event": "device_status", "source": "clock", "device_uid": "esp32-246f28b5f190", "clock_state": "synced", ...}
+{"type": "event", "event": "device_detached", "device_id": 1, "device_uid": "sim-1", "strip": "main", ...}
+{"type": "event", "event": "device_rejoined", "device_id": 1, "device_uid": "sim-1", "strip": "main", ...}
 ```
 
-`device_status.source` distinguishes connectivity transitions from clock-sync status updates. Clients that only care about per-device deltas may ignore it; transcript-style clients should use it to avoid labeling clock updates as reconnects.
+`device_status.source` distinguishes connectivity transitions from clock-sync status updates. `device_detached` fires when a session participant disconnects without aborting the session. `device_rejoined` fires when a detached participant completes live resume and is actively serving again.
 
 ### Program Frames (Binary, kind=0x02)
 

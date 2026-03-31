@@ -49,7 +49,7 @@ Any event can declare `source_layer` to read another layer's pixel buffer. The e
                └────────── LOAD ───────────────────┘
 ```
 
-LOAD tears down any current program and replaces it. PAUSE/RESUME preserve engine state. STOP clears to black, resets to t=0, stays LOADED. JUMP resets the engine and seeks to a safe time.
+LOAD tears down any current program and replaces it. PAUSE/RESUME preserve engine state. STOP clears to black, resets to t=0, stays LOADED. JUMP resets the engine and seeks to a safe time. `reset_for_detach()` invalidates program/sync/buffer without presenting (LEDs hold last frame). `present_black_frame()` pushes a black frame to output without changing state.
 
 ## Firmware Architecture (ESP32)
 
@@ -57,14 +57,49 @@ Entry point: `src/firmware/main.cpp` → `FirmwareApp.begin()` / `run_once()`.
 
 | File | Role |
 |------|------|
-| `firmware_app.h/cpp` | Orchestrator: WiFi, discovery, TCP, device lifecycle |
+| `firmware_app.h/cpp` | Orchestrator: WiFi, discovery, TCP, device lifecycle, detached-mode policy |
 | `esp_device.h/cpp` | `PlaybackDevice` subclass: FastLED output, `esp_timer_get_time()` clock |
 | `controller_connection.h/cpp` | TCP command parser, ACK responses, state machine |
+| `background_store.h/cpp` | Persistent background blob storage (LittleFS + NVS metadata) |
 | `discovery_service.h/cpp` | UDP HELLO broadcasts, sync probe responses |
 | `wifi_manager.h/cpp` | WiFi connection with credential caching (NVS) |
 | `device_identity.h/cpp` | MAC-based UID, random boot token |
 | `wire_constants.h` | Shared protocol constants (ports, command codes, timeouts) |
-| `diagnostics.h/cpp` | Serial logging, periodic status dumps |
+| `diagnostics.h/cpp` | Serial logging, periodic status dumps with mode |
+
+## App-Level Device Modes
+
+`FirmwareApp` owns an explicit mode state machine that governs visible behavior independent of the playback runtime:
+
+```
+               attach                          controller disconnect
+  ┌───────────────────────────────┐         ┌───────────────────────┐
+  │                               │         │                       ▼
+  │   attached_controlled ────────┘    detached_grace_hold ──► detached_blank
+  │         ▲                                                       │
+  │         │                                                       ▼
+  │         └───────────────────────────────────────── detached_background
+  │                          attach                    (if background blob
+  └────────────────────────────────────────────────     is available)
+```
+
+- **attached_controlled** — controller owns playback via LOAD/START/JUMP/etc.
+- **detached_grace_hold** — hold last visible frame for 5 seconds after controller loss
+- **detached_blank** — push black, wait (transition state if background is available)
+- **detached_background** — play stored background blob locally, loop on ENDED
+
+On boot, the device attempts background startup before WiFi/discovery bring-up. If a valid stored blob exists, the device self-applies the stored strip_length as its hardware profile (if no profile is set yet) and starts playback. If the device already has a profile from a prior SET_PROFILE, background only plays if the profile matches. Controller attachment later preempts background playback.
+
+## Background Artifact Storage
+
+One compiled strip blob per device, persisted in LittleFS with metadata in NVS:
+
+- **Blob file**: `/background.bin` (written via atomic rename from `.tmp`)
+- **Metadata**: `present`, `strip_length`, `blob_len`, `crc32` (IEEE/zlib-compatible)
+- **Provisioned** via `STORE_BACKGROUND` command from the controller
+- **Cleared** via `CLEAR_BACKGROUND` command
+- **Validated** on boot: CRC re-checked against stored file; cleared if corrupt
+- **Profile-aware**: only plays if device strip_length matches the blob's compiled strip_length
 
 ## Shared C++ Core (`src/`)
 
