@@ -437,6 +437,7 @@ class WebRelay:
                 'playback_state': 'loaded',
                 'duration': msg.get('duration'),
                 'current_t_rel': 0.0,
+                'observer_suspended': msg.get('observer_suspended'),
                 'safe_intervals': msg.get('safe_intervals', []),
                 'strips': msg.get('strips', []),
             }
@@ -448,6 +449,8 @@ class WebRelay:
                 session['playback_state'] = msg.get('state')
                 if 'epoch' in msg:
                     session['epoch'] = msg.get('epoch')
+                if 'observer_suspended' in msg:
+                    session['observer_suspended'] = msg.get('observer_suspended')
             return
 
         if event == 'loop':
@@ -455,6 +458,8 @@ class WebRelay:
             if isinstance(session, dict):
                 session['epoch'] = msg.get('epoch')
                 session['current_t_rel'] = 0.0
+                if 'observer_suspended' in msg:
+                    session['observer_suspended'] = msg.get('observer_suspended')
             return
 
         if event == 'device_status':
@@ -469,6 +474,13 @@ class WebRelay:
                             dev['connected'] = bool(msg.get('connected'))
                         if 'last_seen' in msg:
                             dev['last_seen'] = msg.get('last_seen')
+                        for key in (
+                            'session_role',
+                            'reported',
+                            'reported_at',
+                        ):
+                            if key in msg:
+                                dev[key] = copy.deepcopy(msg.get(key))
                         for key in (
                             'clock_state',
                             'clock_offset_ms',

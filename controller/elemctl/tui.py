@@ -156,6 +156,7 @@ class SessionStripTargetEntry:
     device_id: int | None
     device_uid: str
     length: int | None
+    session_role: str | None = None
 
 
 @dataclass(frozen=True)
@@ -172,6 +173,7 @@ class SessionInfo:
     epoch: int | None = None
     current_t_rel: float | None = None
     duration: float | None = None
+    observer_suspended: bool | None = None
     safe_intervals: list[tuple[float, float]] | None = None
     strips: list[SessionStripEntry] | None = None
 
@@ -726,6 +728,11 @@ def _session_strip_from_dict(data: dict) -> SessionStripEntry | None:
                 device_id=_normalize_length(item.get('device_id')),
                 device_uid=device_uid,
                 length=_normalize_length(item.get('length')),
+                session_role=(
+                    item.get('session_role')
+                    if isinstance(item.get('session_role'), str)
+                    else None
+                ),
             ))
     return SessionStripEntry(
         name=name,
@@ -772,6 +779,11 @@ def _session_info_from_dict(data: dict) -> SessionInfo:
         epoch=_normalize_length(data.get('epoch')),
         current_t_rel=_normalize_optional_float(data.get('current_t_rel')),
         duration=_normalize_optional_float(data.get('duration')),
+        observer_suspended=(
+            bool(data.get('observer_suspended'))
+            if 'observer_suspended' in data
+            else None
+        ),
         safe_intervals=_safe_intervals_from_message(data),
         strips=_session_strips_from_message(data),
     )
@@ -810,6 +822,11 @@ def _session_update_from_message(msg: dict) -> SessionStateUpdate | None:
                 epoch=_normalize_length(msg.get('epoch')),
                 current_t_rel=0.0,
                 duration=_normalize_optional_float(msg.get('duration')),
+                observer_suspended=(
+                    bool(msg.get('observer_suspended'))
+                    if 'observer_suspended' in msg
+                    else None
+                ),
                 safe_intervals=_safe_intervals_from_message(msg),
                 strips=_session_strips_from_message(msg),
             ),
@@ -822,6 +839,11 @@ def _session_update_from_message(msg: dict) -> SessionStateUpdate | None:
                 session_id=_normalize_length(msg.get('session_id')),
                 playback_state=msg.get('state') if isinstance(msg.get('state'), str) else None,
                 epoch=_normalize_length(msg.get('epoch')),
+                observer_suspended=(
+                    bool(msg.get('observer_suspended'))
+                    if 'observer_suspended' in msg
+                    else None
+                ),
             ),
         )
 
@@ -833,6 +855,11 @@ def _session_update_from_message(msg: dict) -> SessionStateUpdate | None:
                 playback_state='playing',
                 epoch=_normalize_length(msg.get('epoch')),
                 current_t_rel=0.0,
+                observer_suspended=(
+                    bool(msg.get('observer_suspended'))
+                    if 'observer_suspended' in msg
+                    else None
+                ),
             ),
         )
 
@@ -1045,6 +1072,18 @@ def _format_controller_event(msg: dict) -> list[str]:
         if isinstance(length, int) and not isinstance(length, bool):
             return [f'device {uid} {status} ({strip}, {length} LEDs)']
         return [f'device {uid} {status} ({strip})']
+
+    if event == 'device_detached':
+        uid = msg.get('device_uid', '?')
+        strip = msg.get('strip', '?')
+        reason = msg.get('reason', '?')
+        return [f'device {uid} detached from session ({strip}, reason={reason})']
+
+    if event == 'device_rejoined':
+        uid = msg.get('device_uid', '?')
+        strip = msg.get('strip', '?')
+        state = msg.get('state', '?')
+        return [f'device {uid} rejoined session ({strip}, state={state})']
 
     if event == 'session_start':
         sid = msg.get('session_id', '?')
@@ -1431,6 +1470,11 @@ class TuiApp:
                 incoming.duration
                 if incoming.duration is not None
                 else base.duration
+            ),
+            observer_suspended=(
+                incoming.observer_suspended
+                if incoming.observer_suspended is not None
+                else base.observer_suspended
             ),
             safe_intervals=(
                 incoming.safe_intervals
@@ -2648,14 +2692,22 @@ class TuiApp:
                     f'{strip.name} ({strip.length if strip.length is not None else "?"})'
                     if not strip.targets else
                     f'{strip.name} ({strip.length if strip.length is not None else "?"}) '
-                    f'[{", ".join(target.device_uid for target in strip.targets)}]'
+                    f'[{", ".join(self._format_session_target(target) for target in strip.targets)}]'
                 )
                 for strip in strips
             )
             lines.append(f'Strips: {strip_summary}')
         safe_intervals = session.safe_intervals or []
+        if session.observer_suspended:
+            lines.append('Observer: suspended')
         lines.append(f'Safe intervals: {len(safe_intervals)}')
         return '\n'.join(lines)
+
+    @staticmethod
+    def _format_session_target(target: SessionStripTargetEntry) -> str:
+        if target.session_role:
+            return f'{target.device_uid}:{target.session_role}'
+        return target.device_uid
 
     def _open_session_manager(
         self,

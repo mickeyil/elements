@@ -164,6 +164,22 @@ class TestFormatEvent:
         result = format_event(KIND_JSON, _json_payload(msg))
         assert result == ['device sim-2 disconnected (strip_b, 20 LEDs)']
 
+    def test_device_detached(self):
+        msg = {
+            'type': 'event', 'event': 'device_detached',
+            'device_uid': 'esp-1', 'strip': 'ring8', 'reason': 'heartbeat timeout',
+        }
+        result = format_event(KIND_JSON, _json_payload(msg))
+        assert result == ['device esp-1 detached from session (ring8, reason=heartbeat timeout)']
+
+    def test_device_rejoined(self):
+        msg = {
+            'type': 'event', 'event': 'device_rejoined',
+            'device_uid': 'esp-1', 'strip': 'ring8', 'state': 'playing',
+        }
+        result = format_event(KIND_JSON, _json_payload(msg))
+        assert result == ['device esp-1 rejoined session (ring8, state=playing)']
+
     def test_clock_device_status_is_silent(self):
         msg = {
             'type': 'event', 'event': 'device_status',
@@ -2911,7 +2927,7 @@ class TestSessionCommands:
             if app._log_fp is not None:
                 app._log_fp.close()
 
-    def test_session_summary_shows_target_device_uids(self, tmp_path):
+    def test_session_summary_shows_target_device_roles_and_observer_state(self, tmp_path):
         app = TuiApp(
             '/tmp/elemctl.sock',
             log_file=str(tmp_path / 'tui.log'),
@@ -2922,13 +2938,14 @@ class TestSessionCommands:
             epoch=0,
             current_t_rel=0.0,
             duration=8.0,
+            observer_suspended=True,
             safe_intervals=[(0.0, 0.0)],
             strips=[SessionStripEntry(
                 'main',
                 60,
                 targets=[
-                    SessionStripTargetEntry(1, 'sim-144', 60),
-                    SessionStripTargetEntry(2, 'esp-144', 60),
+                    SessionStripTargetEntry(1, 'sim-144', 60, 'serving'),
+                    SessionStripTargetEntry(2, 'esp-144', 60, 'detached'),
                 ],
             )],
         )
@@ -2939,8 +2956,9 @@ class TestSessionCommands:
             if app._log_fp is not None:
                 app._log_fp.close()
 
-        assert 'sim-144' in summary
-        assert 'esp-144' in summary
+        assert 'sim-144:serving' in summary
+        assert 'esp-144:detached' in summary
+        assert 'Observer: suspended' in summary
 
     def test_session_play_sends_play_command(self, tmp_path):
         app = TuiApp(

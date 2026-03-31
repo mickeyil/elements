@@ -445,6 +445,16 @@ class Controller:
         idx = self._active_index_for_device(device)
         return idx is not None and self._serving_active[idx]
 
+    def session_role_for(self, device: ControllerDevice) -> str | None:
+        idx = self._active_index_for_device(device)
+        if idx is None:
+            return None
+        if self._serving_active[idx]:
+            return 'serving'
+        if self._attached_active[idx]:
+            return 'attached'
+        return 'detached'
+
     def session_artifact_for(self, device: ControllerDevice) -> tuple[bytes, int] | None:
         idx = self._active_index_for_device(device)
         if idx is None:

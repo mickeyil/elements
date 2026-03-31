@@ -1111,6 +1111,7 @@ sp.schedule(s.pixels(f'0-{s.length - 1}'), at=0, duration=sec(0.5))
                         'device_uid': 'sim-1',
                         'device_type': 'sim',
                         'length': 5,
+                        'session_role': 'serving',
                     }
                 ],
             }
@@ -1174,8 +1175,8 @@ sp.schedule(s.pixels(f'0-{s.length - 1}'), at=0, duration=sec(0.5))
                 'name': 'main',
                 'length': 144,
                 'targets': [
-                    {'device_id': 1, 'device_uid': 'sim-144', 'device_type': 'sim', 'length': 144},
-                    {'device_id': 2, 'device_uid': 'esp-144', 'device_type': 'esp32', 'length': 144},
+                    {'device_id': 1, 'device_uid': 'sim-144', 'device_type': 'sim', 'length': 144, 'session_role': 'serving'},
+                    {'device_id': 2, 'device_uid': 'esp-144', 'device_type': 'esp32', 'length': 144, 'session_role': 'serving'},
                 ],
             }
         ]
@@ -1188,8 +1189,8 @@ sp.schedule(s.pixels(f'0-{s.length - 1}'), at=0, duration=sec(0.5))
                 'name': 'main',
                 'length': 144,
                 'targets': [
-                    {'device_id': 1, 'device_uid': 'sim-144', 'device_type': 'sim', 'length': 144},
-                    {'device_id': 2, 'device_uid': 'esp-144', 'device_type': 'esp32', 'length': 144},
+                    {'device_id': 1, 'device_uid': 'sim-144', 'device_type': 'sim', 'length': 144, 'session_role': 'serving'},
+                    {'device_id': 2, 'device_uid': 'esp-144', 'device_type': 'esp32', 'length': 144, 'session_role': 'serving'},
                 ],
             }
         ]
@@ -1357,16 +1358,16 @@ sp.schedule(s.pixels(f'0-{s.length - 1}'), at=0, duration=sec(0.5))
                 'name': 'left',
                 'length': 5,
                 'targets': [
-                    {'device_id': 1, 'device_uid': 'sim-left', 'device_type': 'sim', 'length': 5},
-                    {'device_id': 2, 'device_uid': 'esp-left', 'device_type': 'esp32', 'length': 5},
+                    {'device_id': 1, 'device_uid': 'sim-left', 'device_type': 'sim', 'length': 5, 'session_role': 'serving'},
+                    {'device_id': 2, 'device_uid': 'esp-left', 'device_type': 'esp32', 'length': 5, 'session_role': 'serving'},
                 ],
             },
             {
                 'name': 'right',
                 'length': 5,
                 'targets': [
-                    {'device_id': 3, 'device_uid': 'sim-right', 'device_type': 'sim', 'length': 5},
-                    {'device_id': 4, 'device_uid': 'esp-right', 'device_type': 'esp32', 'length': 5},
+                    {'device_id': 3, 'device_uid': 'sim-right', 'device_type': 'sim', 'length': 5, 'session_role': 'serving'},
+                    {'device_id': 4, 'device_uid': 'esp-right', 'device_type': 'esp32', 'length': 5, 'session_role': 'serving'},
                 ],
             },
         ]
@@ -1399,7 +1400,7 @@ sp.schedule(s.pixels('0-4'), at=0, duration=sec(0.5))
                 'name': 'main',
                 'length': 5,
                 'targets': [
-                    {'device_id': 1, 'device_uid': 'esp-main', 'device_type': 'esp32', 'length': 10},
+                    {'device_id': 1, 'device_uid': 'esp-main', 'device_type': 'esp32', 'length': 10, 'session_role': 'serving'},
                 ],
             }
         ]
@@ -1706,24 +1707,24 @@ class TestSceneLoading:
                 'name': 'main',
                 'length': 144,
                 'targets': [
-                    {'device_id': 1, 'device_uid': 'sim-144', 'device_type': 'sim', 'length': 144},
-                    {'device_id': 2, 'device_uid': 'esp-144', 'device_type': 'esp32', 'length': 144},
+                    {'device_id': 1, 'device_uid': 'sim-144', 'device_type': 'sim', 'length': 144, 'session_role': 'serving'},
+                    {'device_id': 2, 'device_uid': 'esp-144', 'device_type': 'esp32', 'length': 144, 'session_role': 'serving'},
                 ],
             },
             {
                 'name': 'left',
                 'length': 5,
                 'targets': [
-                    {'device_id': 3, 'device_uid': 'sim-left', 'device_type': 'sim', 'length': 5},
-                    {'device_id': 4, 'device_uid': 'esp-left', 'device_type': 'esp32', 'length': 5},
+                    {'device_id': 3, 'device_uid': 'sim-left', 'device_type': 'sim', 'length': 5, 'session_role': 'serving'},
+                    {'device_id': 4, 'device_uid': 'esp-left', 'device_type': 'esp32', 'length': 5, 'session_role': 'serving'},
                 ],
             },
             {
                 'name': 'right',
                 'length': 5,
                 'targets': [
-                    {'device_id': 5, 'device_uid': 'sim-right', 'device_type': 'sim', 'length': 5},
-                    {'device_id': 6, 'device_uid': 'esp-right', 'device_type': 'esp32', 'length': 5},
+                    {'device_id': 5, 'device_uid': 'sim-right', 'device_type': 'sim', 'length': 5, 'session_role': 'serving'},
+                    {'device_id': 6, 'device_uid': 'esp-right', 'device_type': 'esp32', 'length': 5, 'session_role': 'serving'},
                 ],
             },
         ]
@@ -1758,12 +1759,12 @@ class TestSceneLoading:
             {
                 'name': 'main',
                 'length': 144,
-                'targets': [{'device_id': 1, 'device_uid': 'sim-144', 'device_type': 'sim', 'length': 144}],
+                'targets': [{'device_id': 1, 'device_uid': 'sim-144', 'device_type': 'sim', 'length': 144, 'session_role': 'serving'}],
             },
             {
                 'name': 'main',
                 'length': 144,
-                'targets': [{'device_id': 2, 'device_uid': 'esp-144', 'device_type': 'esp32', 'length': 144}],
+                'targets': [{'device_id': 2, 'device_uid': 'esp-144', 'device_type': 'esp32', 'length': 144, 'session_role': 'serving'}],
             },
         ]
 
@@ -3253,6 +3254,13 @@ class TestPresenceEvents:
         assert error_events == []
         assert detach_events[0]['device_id'] == 1
         assert detach_events[0]['reason'] == 'disconnected'
+        assert detach_events[0]['session_role'] == 'detached'
+        assert detach_events[0]['observer_suspended'] is True
+        disconnect_status = next(
+            e for e in events
+            if e.get('event') == 'device_status' and e.get('source') == 'connectivity'
+        )
+        assert disconnect_status['session_role'] == 'detached'
         assert svc._controller.state == ControllerState.PLAYING
         assert svc._controller.uses_device(fakes[0]) is True
         assert fakes[0].close_calls == 1
@@ -4652,6 +4660,44 @@ class TestBackgroundProvisioning:
 
 
 class TestReportedDeviceStatus:
+    def test_snapshot_includes_session_role_and_observer_state(self):
+        clock = _FakeClock()
+        svc, fakes = _make_service(fake_devices=[_FrameProducingDevice()], clock=clock)
+
+        svc.handle_cmd({
+            'id': 1, 'cmd': 'load',
+            'source': _SIMPLE_DSL, 'beat': 1.0, 'duration': 5.0,
+        })
+
+        snap = svc.build_snapshot()
+        assert snap['devices'][0]['session_role'] == 'serving'
+        assert snap['session']['observer_suspended'] is False
+        assert snap['session']['strips'][0]['targets'][0]['session_role'] == 'serving'
+
+        def stay_disconnected():
+            fakes[0].ensure_connected_calls += 1
+            return False
+
+        fakes[0].ensure_connected = stay_disconnected
+        fakes[0].is_connected = False
+        clock.now += 1_000_000_000
+        json_msgs, _ = svc.tick_once()
+        events = _decode_json_msgs(json_msgs)
+
+        disconnect_status = next(
+            e for e in events
+            if e.get('event') == 'device_status' and e.get('source') == 'connectivity'
+        )
+        detach_event = next(e for e in events if e.get('event') == 'device_detached')
+        assert disconnect_status['session_role'] == 'detached'
+        assert detach_event['session_role'] == 'detached'
+        assert detach_event['observer_suspended'] is True
+
+        snap = svc.build_snapshot()
+        assert snap['devices'][0]['session_role'] == 'detached'
+        assert snap['session']['observer_suspended'] is True
+        assert snap['session']['strips'][0]['targets'][0]['session_role'] == 'detached'
+
     def test_query_device_status_command_updates_snapshot_and_emits_event(self):
         wall_clock = _FakeWallClock(42.0)
         svc, fakes = _make_service(wall_clock=wall_clock)

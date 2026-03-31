@@ -59,6 +59,7 @@ _STRIP_ID_RE = re.compile(r'^[A-Za-z0-9_-]+$')
 _ESP32_CANONICAL_UID_RE = re.compile(r'^esp32-([0-9a-f]{12})$')
 _ESP32_FULL_HEX_RE = re.compile(r'^[0-9a-f]{12}$')
 _ESP32_SHORT_HEX_RE = re.compile(r'^[0-9a-f]{6}$')
+_SESSION_ROLE_AUTO = object()
 
 
 class ControllerService:
@@ -676,6 +677,7 @@ class ControllerService:
                 'playback_state': ctrl.state.name.lower(),
                 'duration': ctrl.duration,
                 'current_t_rel': ctrl.current_t_rel,
+                'observer_suspended': not ctrl.program_frame_stream_enabled,
                 'safe_intervals': [list(iv) for iv in ctrl.safe_intervals],
                 'strips': self._session_strips_to_wire(ctrl),
             }
@@ -871,8 +873,17 @@ class ControllerService:
                 if connected:
                     self._controller.mark_transport_attached(dev)
                     newly_connected.append((dc, dev))
+                session_role = _SESSION_ROLE_AUTO
+                if not connected and self._controller.uses_device(dev):
+                    session_role = 'detached'
                 status_events.append(
-                    self._device_status_event(dc, dev, now_ns, source='connectivity')
+                    self._device_status_event(
+                        dc,
+                        dev,
+                        now_ns,
+                        source='connectivity',
+                        session_role=session_role,
+                    )
                 )
                 if not connected and self._controller.uses_device(dev):
                     reason = self._disconnect_reasons.get(dc.device_id) or 'disconnected'
@@ -894,8 +905,17 @@ class ControllerService:
             self._set_disconnect_reason(dc.device_id, 'heartbeat timeout')
             self._disconnect_transport(dev)
 
-    def _device_status_payload(self, dc: DeviceConfig, dev, now_ns: int) -> dict[str, object]:
+    def _device_status_payload(
+        self,
+        dc: DeviceConfig,
+        dev,
+        now_ns: int,
+        *,
+        session_role=_SESSION_ROLE_AUTO,
+    ) -> dict[str, object]:
         reported = self._reported_status.get(dc.device_id)
+        if session_role is _SESSION_ROLE_AUTO:
+            session_role = self._controller.session_role_for(dev)
         return {
             'device_id': dc.device_id,
             'device_uid': dc.device_uid,
@@ -904,6 +924,7 @@ class ControllerService:
             'device_type': dc.device_type,
             'connected': self._is_connected(dev),
             'last_seen': self._last_seen.get(dc.device_id),
+            'session_role': session_role,
             'reported': copy.deepcopy(reported) if reported is not None else None,
             'reported_at': self._reported_at.get(dc.device_id),
             **self._clock_status_for_device(dc, now_ns),
@@ -916,12 +937,18 @@ class ControllerService:
         now_ns: int,
         *,
         source: str,
+        session_role=_SESSION_ROLE_AUTO,
     ) -> dict[str, object]:
         return {
             'type': 'event',
             'event': 'device_status',
             'source': source,
-            **self._device_status_payload(dc, dev, now_ns),
+            **self._device_status_payload(
+                dc,
+                dev,
+                now_ns,
+                session_role=session_role,
+            ),
         }
 
     def _device_detached_event(
@@ -939,6 +966,8 @@ class ControllerService:
             'device_type': dc.device_type,
             'session_id': self._controller.session_id,
             'state': self._controller.state.name.lower(),
+            'session_role': 'detached',
+            'observer_suspended': not self._controller.program_frame_stream_enabled,
             'reason': reason,
         }
 
@@ -953,6 +982,8 @@ class ControllerService:
             'device_type': dc.device_type,
             'session_id': self._controller.session_id,
             'state': self._controller.state.name.lower(),
+            'session_role': 'serving',
+            'observer_suspended': not self._controller.program_frame_stream_enabled,
         }
 
     def _refresh_reported_status(
@@ -1323,6 +1354,7 @@ class ControllerService:
                 'session_id': evt.session_id,
                 'epoch': evt.epoch,
                 'duration': ctrl.duration,
+                'observer_suspended': not ctrl.program_frame_stream_enabled,
                 'safe_intervals': [list(iv) for iv in ctrl.safe_intervals],
                 'strips': self._session_strips_to_wire(ctrl),
             }
@@ -1333,6 +1365,7 @@ class ControllerService:
                 'state': evt.state.name.lower(),
                 'epoch': evt.epoch,
                 'session_id': evt.session_id,
+                'observer_suspended': not self._controller.program_frame_stream_enabled,
             }
         if kind == ControllerEvent.Kind.LOOPED:
             return {
@@ -1340,6 +1373,7 @@ class ControllerService:
                 'event': 'loop',
                 'epoch': evt.epoch,
                 'session_id': evt.session_id,
+                'observer_suspended': not self._controller.program_frame_stream_enabled,
             }
         if kind == ControllerEvent.Kind.ERROR:
             return {
@@ -1720,11 +1754,13 @@ class ControllerService:
                 if not (0 <= index < len(self._device_configs)):
                     raise RuntimeError(f'session target index out of range: {index}')
                 dc = self._device_configs[index]
+                dev = self._devices[index]
                 targets.append({
                     'device_id': dc.device_id,
                     'device_uid': dc.device_uid,
                     'device_type': dc.device_type,
                     'length': dc.length,
+                    'session_role': ctrl.session_role_for(dev),
                 })
             wire.append({
                 'name': name,

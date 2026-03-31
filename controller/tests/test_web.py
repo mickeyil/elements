@@ -88,6 +88,84 @@ def test_programs_updated_refreshes_cached_snapshot_programs():
     ]
 
 
+def test_device_status_event_updates_reported_and_session_role():
+    relay = WebRelay('/tmp/elemctl.sock', '127.0.0.1', 8080)
+    relay._snapshot = {
+        'type': 'event',
+        'event': 'snapshot',
+        'protocol_version': PROTOCOL_VERSION,
+        'online_count': 1,
+        'expected_count': 1,
+        'session': None,
+        'devices': [{
+            'device_id': 1,
+            'connected': True,
+            'session_role': 'serving',
+            'reported': None,
+            'reported_at': None,
+        }],
+        'programs': [],
+    }
+
+    relay._apply_json_message({
+        'type': 'event',
+        'event': 'device_status',
+        'source': 'reported',
+        'device_id': 1,
+        'connected': False,
+        'session_role': 'detached',
+        'reported': {
+            'mode': 'detached_background',
+            'background_present': True,
+        },
+        'reported_at': 123.5,
+    })
+
+    device = relay._snapshot['devices'][0]
+    assert device['connected'] is False
+    assert device['session_role'] == 'detached'
+    assert device['reported'] == {
+        'mode': 'detached_background',
+        'background_present': True,
+    }
+    assert device['reported_at'] == 123.5
+    assert relay._snapshot['online_count'] == 0
+
+
+def test_session_events_update_observer_suspended():
+    relay = WebRelay('/tmp/elemctl.sock', '127.0.0.1', 8080)
+    relay._apply_json_message({
+        'type': 'event',
+        'event': 'session_start',
+        'session_id': 7,
+        'epoch': 0,
+        'duration': 4.0,
+        'observer_suspended': True,
+        'safe_intervals': [],
+        'strips': [],
+    })
+
+    assert relay._snapshot['session']['observer_suspended'] is True
+
+    relay._apply_json_message({
+        'type': 'event',
+        'event': 'state',
+        'session_id': 7,
+        'state': 'playing',
+        'observer_suspended': False,
+    })
+    assert relay._snapshot['session']['observer_suspended'] is False
+
+    relay._apply_json_message({
+        'type': 'event',
+        'event': 'loop',
+        'session_id': 7,
+        'epoch': 1,
+        'observer_suspended': True,
+    })
+    assert relay._snapshot['session']['observer_suspended'] is True
+
+
 def test_web_relay_initial_snapshot_includes_layouts():
     layouts = {'sim-1': {'rows': [[1, 2], [None, 3]]}}
     relay = WebRelay('/tmp/elemctl.sock', '127.0.0.1', 8080, layouts)
