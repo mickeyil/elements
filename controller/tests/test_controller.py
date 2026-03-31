@@ -1248,6 +1248,38 @@ class TestAbortAndFrameStream:
         assert ctrl.load(manifest, target_groups=[[0, 1]])
         assert ctrl.program_frame_stream_enabled is False
 
+    def test_detach_keeps_session_membership_but_suspends_unserved_stream(self):
+        f = DualFixture()
+        ctrl = Controller(f.strips(), clock=f.clock)
+        assert ctrl.load(f.manifest())
+        assert ctrl.program_frame_stream_enabled is True
+
+        assert ctrl.detach_device(f.left) is True
+        assert ctrl.uses_device(f.left) is True
+        assert ctrl.program_frame_stream_enabled is False
+
+        assert ctrl.mark_transport_attached(f.left) is True
+        assert ctrl.program_frame_stream_enabled is False
+
+    def test_detaching_one_mirror_keeps_slot_served(self):
+        f = MirrorFixture()
+        ctrl = Controller(f.strips(), clock=f.clock)
+        assert ctrl.load(f.manifest(), target_groups=[[0, 1]])
+        assert ctrl.program_frame_stream_enabled is True
+
+        assert ctrl.detach_device(f.sim) is True
+        assert ctrl.program_frame_stream_enabled is True
+
+        f.set_time(0.0)
+        ctrl.play()
+        ctrl.drain_events()
+
+        f.set_time(0.5)
+        ctrl.tick_once()
+        frames = ctrl.drain_program_frames()
+        assert len(frames) == 1
+        assert frames[0].t_rel == pytest.approx(0.5)
+
     def test_abort_from_playing_resets_runtime_without_resetting_identity(self):
         f = DualFixture()
         ctrl = Controller(f.strips(), clock=f.clock)
@@ -1319,6 +1351,45 @@ class TestAbortAndFrameStream:
         assert ctrl.drain_program_frames() == []
         assert sim.drain_frames() == []
         assert esp.drain_frames() == []
+
+    def test_zero_serving_participants_can_still_end(self):
+        f = DualFixture()
+        ctrl = Controller(f.strips(), clock=f.clock)
+        assert ctrl.load(f.manifest())
+
+        f.set_time(0.0)
+        ctrl.play()
+        ctrl.drain_events()
+
+        assert ctrl.detach_device(f.left) is True
+        assert ctrl.detach_device(f.right) is True
+        assert ctrl.program_frame_stream_enabled is False
+
+        f.set_time(5.1)
+        ctrl.tick_once()
+
+        assert ctrl.state == ControllerState.ENDED
+        assert has_state_event(ctrl.drain_events(), ControllerState.ENDED)
+
+    def test_zero_serving_participants_can_still_loop(self):
+        f = DualFixture()
+        ctrl = Controller(f.strips(), clock=f.clock)
+        assert ctrl.load(f.manifest(), loop=True)
+
+        f.set_time(0.0)
+        ctrl.play()
+        epoch_before = ctrl.epoch
+        ctrl.drain_events()
+
+        assert ctrl.detach_device(f.left) is True
+        assert ctrl.detach_device(f.right) is True
+
+        f.set_time(5.1)
+        ctrl.tick_once()
+
+        assert ctrl.state == ControllerState.PLAYING
+        assert ctrl.epoch == epoch_before + 1
+        assert has_event(ctrl.drain_events(), ControllerEvent.Kind.LOOPED)
 
     def test_tick_once_drains_and_discards_inactive_device_frames(self):
         now_ns = [0]

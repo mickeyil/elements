@@ -92,6 +92,8 @@ class Controller:
 
         self._active_strips: list[StripConfig] = []
         self._slot_for_active: list[int] = []
+        self._attached_active: list[bool] = []
+        self._serving_active: list[bool] = []
         self._session_manifest_strips: list[tuple[str, int]] = []
         self._session_target_groups: list[list[int]] = []
         self._expected_gen: list[int] = []
@@ -284,13 +286,12 @@ class Controller:
         self._program_frames = []
         self._active_strips = new_active_strips
         self._slot_for_active = new_slot_for_active
+        self._attached_active = [True] * len(self._active_strips)
+        self._serving_active = [True] * len(self._active_strips)
         self._session_manifest_strips = new_session_manifest_strips
         self._session_target_groups = new_session_target_groups
         self._expected_gen = [self._gen] * len(self._active_strips)
-        self._program_frame_stream_enabled = all(
-            s.device.produces_program_frames()
-            for s in self._active_strips
-        )
+        self._recompute_program_frame_stream_enabled()
 
         self._state = ControllerState.LOADED
         for strip in stale_previous_strips:
@@ -303,7 +304,7 @@ class Controller:
         if self._state == ControllerState.IDLE:
             return
 
-        for s in self._active_strips:
+        for _, s in self._iter_serving_strips():
             if getattr(s.device, 'is_connected', True):
                 s.device.stop()
 
@@ -319,7 +320,7 @@ class Controller:
         if self._state == ControllerState.PAUSED:
             now = self._clock()
             t0 = now - int(self._paused_t_rel * 1e9)
-            for s in self._active_strips:
+            for _, s in self._iter_serving_strips():
                 s.device.resume(t0)
             self._play_t0_ns = t0
             self._state = ControllerState.PLAYING
@@ -328,7 +329,7 @@ class Controller:
 
         # From LOADED, STOPPED, or ENDED
         t0 = self._clock()
-        for s in self._active_strips:
+        for _, s in self._iter_serving_strips():
             s.device.start(t0)
         self._play_t0_ns = t0
         self._epoch += 1
@@ -340,7 +341,7 @@ class Controller:
             return
 
         now = self._clock()
-        for s in self._active_strips:
+        for _, s in self._iter_serving_strips():
             s.device.pause(now)
 
         self._paused_t_rel = self._session_t_rel(now)
@@ -362,11 +363,11 @@ class Controller:
 
         self._epoch += 1
         self._advance_gen()
+        self._expected_gen = [self._gen] * len(self._active_strips)
         now = self._clock()
         t0 = now - int(snapped * 1e9)
-        for i, s in enumerate(self._active_strips):
+        for i, s in self._iter_serving_strips():
             s.device.jump(t0, snapped, self._gen)
-            self._expected_gen[i] = self._gen
         self._play_t0_ns = t0
         self._buckets.clear()
 
@@ -379,7 +380,7 @@ class Controller:
         if self._state in (ControllerState.IDLE, ControllerState.STOPPED):
             return
 
-        for s in self._active_strips:
+        for _, s in self._iter_serving_strips():
             if not s.device.supports_debug_seek():
                 self._queue_event(
                     ControllerEvent.Kind.ERROR,
@@ -390,7 +391,7 @@ class Controller:
         target_t_rel = self._clamp_t_rel(t_rel)
         self._epoch += 1
         now = self._clock()
-        for s in self._active_strips:
+        for _, s in self._iter_serving_strips():
             s.device.debug_seek(target_t_rel, now)
         self._play_t0_ns = now - int(target_t_rel * 1e9)
         self._buckets.clear()
@@ -406,11 +407,32 @@ class Controller:
         if self._state == ControllerState.IDLE:
             return
 
-        for s in self._active_strips:
+        for _, s in self._iter_serving_strips():
             s.device.stop()
         self._buckets.clear()
         self._state = ControllerState.STOPPED
         self._queue_event(ControllerEvent.Kind.STATE_CHANGED)
+
+    def detach_device(self, device: ControllerDevice) -> bool:
+        idx = self._active_index_for_device(device)
+        if idx is None:
+            return False
+        was_serving = self._serving_active[idx]
+        self._attached_active[idx] = False
+        self._serving_active[idx] = False
+        self._buckets.clear()
+        self._recompute_program_frame_stream_enabled()
+        return was_serving
+
+    def mark_transport_attached(self, device: ControllerDevice) -> bool:
+        idx = self._active_index_for_device(device)
+        if idx is None:
+            return False
+        if self._attached_active[idx]:
+            return False
+        self._attached_active[idx] = True
+        self._recompute_program_frame_stream_enabled()
+        return True
 
     # ------------------------------------------------------------------
     # Tick
@@ -434,7 +456,7 @@ class Controller:
             if dev_oid not in drained_by_device:
                 drained_by_device[dev_oid] = s.device.drain_frames()
 
-        for i, s in enumerate(self._active_strips):
+        for i, s in self._iter_serving_strips():
             dev_oid = id(s.device)
             drained = drained_by_device.get(dev_oid, [])
             if not self._program_frame_stream_enabled:
@@ -472,27 +494,26 @@ class Controller:
                 complete.append(fi)
         for fi in complete:
             del self._buckets[fi]
+        if not self._program_frame_stream_enabled:
+            self._buckets.clear()
 
         # 4. End-of-program detection (controller-inferred, not device-reported)
         if self._state == ControllerState.PLAYING:
-            all_past_end = (
-                bool(self._active_strips)
-                and self._session_t_rel(now) >= self._duration
-            )
+            all_past_end = self._session_t_rel(now) >= self._duration
             if all_past_end:
                 if self._loop:
                     self._epoch += 1
                     self._advance_gen()
+                    self._expected_gen = [self._gen] * len(self._active_strips)
                     self._buckets.clear()
                     now = self._clock()
                     self._play_t0_ns = now
                     # Devices are ENDED here. jump() transitions ENDED→PAUSED,
                     # so resume() is needed to restart playback. This differs
                     # from seek-while-PLAYING where jump() keeps devices PLAYING.
-                    for i, s in enumerate(self._active_strips):
+                    for _, s in self._iter_serving_strips():
                         s.device.jump(now, 0.0, self._gen)
                         s.device.resume(now)
-                        self._expected_gen[i] = self._gen
                     self._queue_event(ControllerEvent.Kind.LOOPED)
                 else:
                     self._state = ControllerState.ENDED
@@ -555,6 +576,8 @@ class Controller:
         self._safe_intervals = []
         self._active_strips = []
         self._slot_for_active = []
+        self._attached_active = []
+        self._serving_active = []
         self._session_manifest_strips = []
         self._session_target_groups = []
         self._expected_gen = []
@@ -563,7 +586,7 @@ class Controller:
         self._program_frame_stream_enabled = False
 
     def uses_device(self, device: ControllerDevice) -> bool:
-        return any(s.device is device for s in self._active_strips)
+        return self._active_index_for_device(device) is not None
 
     def _session_t_rel(self, now: int) -> float:
         if self._state == ControllerState.PLAYING:
@@ -576,6 +599,33 @@ class Controller:
 
     def _clamp_t_rel(self, t_rel: float) -> float:
         return max(0.0, min(t_rel, self._duration))
+
+    def _active_index_for_device(self, device: ControllerDevice) -> int | None:
+        for i, strip in enumerate(self._active_strips):
+            if strip.device is device:
+                return i
+        return None
+
+    def _iter_serving_strips(self):
+        for i, strip in enumerate(self._active_strips):
+            if self._serving_active[i]:
+                yield i, strip
+
+    def _recompute_program_frame_stream_enabled(self) -> None:
+        if not self._active_strips or not self._session_manifest_strips:
+            self._program_frame_stream_enabled = False
+            return
+        if not all(s.device.produces_program_frames() for s in self._active_strips):
+            self._program_frame_stream_enabled = False
+            return
+        served_slots = {
+            self._slot_for_active[i]
+            for i, serving in enumerate(self._serving_active)
+            if serving
+        }
+        self._program_frame_stream_enabled = (
+            len(served_slots) == len(self._session_manifest_strips)
+        )
 
     def _max_current_t_rel(self, now: int) -> float:
         if not self._active_strips:

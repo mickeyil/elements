@@ -78,6 +78,7 @@ class _FakeDevice:
         self.pause_calls = 0
         self.resume_calls = 0
         self.stop_calls = 0
+        self.close_calls = 0
         self.reboot_calls = 0
         self.sync_results: list[tuple[int, int, int]] = []
 
@@ -169,6 +170,8 @@ class _FakeDevice:
         self.is_connected = False
 
     def close(self):
+        self.close_calls += 1
+        self.is_connected = False
         self._state = DeviceState.IDLE
 
 
@@ -231,7 +234,6 @@ class _AddressableFakeDevice(_FakeDevice):
         super().__init__()
         self._host = ''
         self._tcp_port = 0
-        self.close_calls = 0
 
     def update_address(self, host, tcp_port):
         changed = host != self._host or tcp_port != self._tcp_port
@@ -240,8 +242,6 @@ class _AddressableFakeDevice(_FakeDevice):
         return changed
 
     def close(self):
-        self.close_calls += 1
-        self.is_connected = False
         super().close()
 
 
@@ -3184,44 +3184,49 @@ class TestPresenceEvents:
             'controller events must appear before device_status'
         )
 
-    def test_active_disconnect_aborts_runtime_same_tick(self):
+    def test_active_disconnect_detaches_runtime_same_tick(self):
         clock = _FakeClock()
         svc, fakes = _make_service(clock=clock)
 
         svc.handle_cmd({
             'id': 1, 'cmd': 'load',
-            'source': _SIMPLE_DSL, 'beat': 1.0, 'duration': 0.5,
+            'source': _SIMPLE_DSL, 'beat': 1.0, 'duration': 5.0,
         })
         svc.handle_cmd({'id': 2, 'cmd': 'play'})
         svc.tick_once()  # drain initial load/play events
 
+        def stay_disconnected():
+            fakes[0].ensure_connected_calls += 1
+            return False
+
+        fakes[0].ensure_connected = stay_disconnected
         fakes[0].is_connected = False
         clock.now += 1_000_000_000
         json_msgs, _ = svc.tick_once()
         events = _decode_json_msgs(json_msgs)
 
-        error_indices = [
-            i for i, e in enumerate(events)
-            if e.get('event') == 'error'
-        ]
-        idle_indices = [
-            i for i, e in enumerate(events)
-            if e.get('event') == 'state' and e.get('state') == 'idle'
+        detach_events = [
+            e for e in events
+            if e.get('event') == 'device_detached'
         ]
         status_indices = [
             i for i, e in enumerate(events)
             if e.get('event') == 'device_status'
         ]
+        error_events = [e for e in events if e.get('event') == 'error']
 
-        assert error_indices, 'expected abort error event'
-        assert idle_indices, 'expected idle state event after abort'
+        assert len(detach_events) == 1
         assert status_indices, 'expected device_status disconnect event'
-        assert max(error_indices + idle_indices) < min(status_indices)
-        assert events[error_indices[0]]['message'] == 'active device disconnected: id=1:disconnected'
-        assert svc._controller.state == ControllerState.IDLE
-        assert fakes[0].ensure_connected_calls == 0
+        assert error_events == []
+        assert detach_events[0]['device_id'] == 1
+        assert detach_events[0]['reason'] == 'disconnected'
+        assert svc._controller.state == ControllerState.PLAYING
+        assert svc._controller.uses_device(fakes[0]) is True
+        assert fakes[0].close_calls == 1
+        assert fakes[0]._state == DeviceState.IDLE
+        assert fakes[0].ensure_connected_calls == 1
 
-    def test_multiple_active_disconnects_abort_once(self):
+    def test_multiple_active_disconnects_detach_without_abort(self):
         config = Config(frame_port=1, devices=[
             DeviceConfig(1, 'sim-left', 'sim', '127.0.0.1', 9001, 'left', 5),
             DeviceConfig(2, 'sim-right', 'sim', '127.0.0.1', 9002, 'right', 5),
@@ -3238,7 +3243,7 @@ class TestPresenceEvents:
 
         svc.handle_cmd({
             'id': 1, 'cmd': 'load',
-            'source': _LEFT_RIGHT_DSL, 'beat': 1.0, 'duration': 0.5,
+            'source': _LEFT_RIGHT_DSL, 'beat': 1.0, 'duration': 5.0,
         })
         svc.handle_cmd({'id': 2, 'cmd': 'play'})
         svc.tick_once()  # drain initial load/play events
@@ -3250,20 +3255,16 @@ class TestPresenceEvents:
         json_msgs, _ = svc.tick_once()
         events = _decode_json_msgs(json_msgs)
 
-        error_events = [e for e in events if e.get('event') == 'error']
-        idle_events = [
-            e for e in events
-            if e.get('event') == 'state' and e.get('state') == 'idle'
-        ]
+        detach_events = [e for e in events if e.get('event') == 'device_detached']
         status_events = [e for e in events if e.get('event') == 'device_status']
+        error_events = [e for e in events if e.get('event') == 'error']
 
-        assert len(error_events) == 1
-        assert len(idle_events) == 1
+        assert len(detach_events) == 2
         assert len(status_events) == 2
-        assert error_events[0]['message'] == (
-            'active device disconnected: id=1:disconnected; id=2:disconnected'
-        )
-        assert svc._controller.state == ControllerState.IDLE
+        assert error_events == []
+        assert {e['device_id'] for e in detach_events} == {1, 2}
+        assert svc._controller.state == ControllerState.PLAYING
+        assert all(fake.close_calls == 1 for fake in fakes)
 
 
 class TestProbeAllBaseline:
