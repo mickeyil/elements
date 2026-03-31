@@ -10,6 +10,7 @@ find_package(Git QUIET)
 # ---------------------------------------------------------------------------
 
 add_library(elements_core STATIC
+    src/background_crc.cpp
     src/decoder.cpp
     src/engine.cpp
     src/compositor.cpp
@@ -85,6 +86,9 @@ if(BUILD_TESTS)
     add_executable(test_sim_controller test/test_sim_controller.cpp)
     target_link_libraries(test_sim_controller elements_core Catch2::Catch2WithMain)
 
+    add_executable(test_background_crc test/test_background_crc.cpp)
+    target_link_libraries(test_background_crc elements_core Catch2::Catch2WithMain)
+
     # Auto-generate test fixtures if missing
     find_program(PYTHON3 python3)
     if(PYTHON3)
@@ -141,6 +145,8 @@ if(BUILD_TESTS)
     add_test(NAME test_esp_simulated COMMAND test_esp_simulated
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_sim_controller COMMAND test_sim_controller
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    add_test(NAME test_background_crc COMMAND test_background_crc
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
     # Valgrind memcheck (optional)

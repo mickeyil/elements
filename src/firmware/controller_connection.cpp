@@ -28,10 +28,15 @@ ControllerConnection::ControllerConnection()
 {
 }
 
-void ControllerConnection::begin(ESPDevice& device, const DeviceIdentity& identity)
+void ControllerConnection::begin(
+    ESPDevice& device,
+    const DeviceIdentity& identity,
+    BackgroundStore& background_store
+)
 {
     _device = &device;
     _identity = &identity;
+    _background_store = &background_store;
 }
 
 void ControllerConnection::start_if_needed()
@@ -193,6 +198,18 @@ int ControllerConnection::poll_commands_(ConnectionPollResult& result)
 
             case kCmdLoad:
                 if (!handle_load_(payload, payload_len)) {
+                    return -1;
+                }
+                break;
+
+            case kCmdStoreBackground:
+                if (!handle_store_background_(payload, payload_len)) {
+                    return -1;
+                }
+                break;
+
+            case kCmdClearBackground:
+                if (!handle_clear_background_()) {
                     return -1;
                 }
                 break;
@@ -474,6 +491,42 @@ bool ControllerConnection::handle_load_(const uint8_t* payload, uint32_t payload
         static_cast<unsigned long>(blob_len),
         ok ? "ok" : "decode-failed"
     );
+    return send_ack_(ok ? kAckOk : kAckError);
+}
+
+bool ControllerConnection::handle_store_background_(const uint8_t* payload, uint32_t payload_len)
+{
+    if (!is_attached() || _background_store == nullptr) {
+        return send_ack_(kAckWrongState);
+    }
+    if (payload_len < 6) {
+        return send_ack_(kAckError);
+    }
+
+    uint16_t strip_length = 0;
+    uint32_t expected_crc32 = 0;
+    memcpy(&strip_length, payload, 2);
+    memcpy(&expected_crc32, payload + 2, 4);
+    const uint8_t* blob = payload + 6;
+    const size_t blob_len = payload_len - 6;
+    const bool ok = _background_store->store(blob, blob_len, strip_length, expected_crc32);
+    log_line(
+        "[tcp] store_background strip_length=%u bytes=%lu crc32=%08lx status=%s",
+        static_cast<unsigned>(strip_length),
+        static_cast<unsigned long>(blob_len),
+        static_cast<unsigned long>(expected_crc32),
+        ok ? "ok" : "failed"
+    );
+    return send_ack_(ok ? kAckOk : kAckError);
+}
+
+bool ControllerConnection::handle_clear_background_()
+{
+    if (!is_attached() || _background_store == nullptr) {
+        return send_ack_(kAckWrongState);
+    }
+    const bool ok = _background_store->clear();
+    log_line("[tcp] clear_background status=%s", ok ? "ok" : "failed");
     return send_ack_(ok ? kAckOk : kAckError);
 }
 

@@ -13,6 +13,7 @@ import logging
 import math
 import re
 import time
+import zlib
 
 from elements.types import CompiledManifest, CompiledStripArtifact
 
@@ -150,8 +151,10 @@ class ControllerService:
             'play': self._cmd_play,
             'pause': self._cmd_pause,
             'publish_program': self._cmd_publish_program,
+            'provision_background': self._cmd_provision_background,
             'reboot_device': self._cmd_reboot_device,
             'rescan_programs': self._cmd_rescan_programs,
+            'clear_background': self._cmd_clear_background,
             'seek': self._cmd_seek,
             'debug_seek': self._cmd_debug_seek,
             'stop': self._cmd_stop,
@@ -280,6 +283,63 @@ class ControllerService:
             'programs': programs,
         })
         return {'program': self._program_to_dict(entry)}
+
+    def _cmd_provision_background(self, cmd: dict) -> dict:
+        device_uid = cmd.get('device_uid')
+        if not isinstance(device_uid, str) or not device_uid:
+            raise ValueError("missing 'device_uid' field")
+
+        entry = self._uid_to_device.get(device_uid)
+        if entry is None:
+            raise ValueError(f'device not found: {device_uid}')
+
+        dc, dev = entry
+        if dc.device_type != 'esp32':
+            raise ValueError('background provisioning is only supported for esp32 devices')
+        if not self._is_connected(dev):
+            raise ValueError('device is not currently connected')
+
+        artifact = self._controller.session_artifact_for(dev)
+        if artifact is None:
+            raise ValueError('device is not part of the current retained session')
+        blob, strip_length = artifact
+        crc32 = zlib.crc32(blob) & 0xFFFFFFFF
+
+        store_background = getattr(dev, 'store_background', None)
+        if not callable(store_background):
+            raise ValueError('device transport does not support background provisioning')
+        if not store_background(blob, strip_length, crc32):
+            raise ValueError(f'background provisioning failed: {device_uid}')
+
+        return {
+            'device_uid': dc.device_uid,
+            'strip_length': strip_length,
+            'blob_len': len(blob),
+            'crc32': crc32,
+        }
+
+    def _cmd_clear_background(self, cmd: dict) -> dict:
+        device_uid = cmd.get('device_uid')
+        if not isinstance(device_uid, str) or not device_uid:
+            raise ValueError("missing 'device_uid' field")
+
+        entry = self._uid_to_device.get(device_uid)
+        if entry is None:
+            raise ValueError(f'device not found: {device_uid}')
+
+        dc, dev = entry
+        if dc.device_type != 'esp32':
+            raise ValueError('background provisioning is only supported for esp32 devices')
+        if not self._is_connected(dev):
+            raise ValueError('device is not currently connected')
+
+        clear_background = getattr(dev, 'clear_background', None)
+        if not callable(clear_background):
+            raise ValueError('device transport does not support background provisioning')
+        if not clear_background():
+            raise ValueError(f'background clear failed: {device_uid}')
+
+        return {'device_uid': dc.device_uid}
 
     def _cmd_play(self, cmd: dict) -> dict:
         self._controller.play()

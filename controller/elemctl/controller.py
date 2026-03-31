@@ -445,6 +445,21 @@ class Controller:
         idx = self._active_index_for_device(device)
         return idx is not None and self._serving_active[idx]
 
+    def session_artifact_for(self, device: ControllerDevice) -> tuple[bytes, int] | None:
+        idx = self._active_index_for_device(device)
+        if idx is None:
+            return None
+        slot = self._slot_for_active[idx]
+        if not (0 <= slot < len(self._session_artifacts)):
+            return None
+        if not (0 <= slot < len(self._session_manifest_strips)):
+            return None
+        blob = self._session_artifacts[slot]
+        if not blob:
+            return None
+        _strip_id, strip_length = self._session_manifest_strips[slot]
+        return blob, strip_length
+
     def live_resume_device(
         self,
         device: ControllerDevice,

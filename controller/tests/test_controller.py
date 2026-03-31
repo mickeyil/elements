@@ -1441,6 +1441,22 @@ class TestAbortAndFrameStream:
 
 
 class TestLiveResume:
+    def test_session_artifact_for_returns_blob_and_manifest_length(self):
+        f = DualFixture()
+        ctrl = Controller(f.strips(), clock=f.clock)
+        manifest = CompiledManifest(
+            duration=5.0,
+            strips=[
+                CompiledStripArtifact("left", 3, b"\x11\x22"),
+                CompiledStripArtifact("right", 4, b"\x33\x44"),
+            ],
+            safe_intervals=[],
+        )
+        assert ctrl.load(manifest)
+
+        assert ctrl.session_artifact_for(f.left) == (b"\x11\x22", 3)
+        assert ctrl.session_artifact_for(f.right) == (b"\x33\x44", 4)
+
     def test_live_resume_keeps_session_artifacts_and_uses_current_safe_time(self):
         f = DualFixture()
         ctrl = Controller(f.strips(), clock=f.clock)

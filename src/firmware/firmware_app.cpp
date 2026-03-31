@@ -27,8 +27,9 @@ void FirmwareApp::begin()
     log_line("[boot] boot_token=%lu", static_cast<unsigned long>(_identity.boot_token));
     log_line("[mode] %s", mode_name_());
 
+    _background_store.begin();
     _discovery.begin(_identity);
-    _connection.begin(_device, _identity);
+    _connection.begin(_device, _identity, _background_store);
     _wifi.begin();
 
     if (_wifi.is_ready()) {

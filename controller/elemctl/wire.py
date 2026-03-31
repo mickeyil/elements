@@ -23,6 +23,8 @@ CMD_JUMP = 0x12
 CMD_PAUSE = 0x13
 CMD_RESUME = 0x14
 CMD_STOP = 0x15
+CMD_STORE_BACKGROUND = 0x16
+CMD_CLEAR_BACKGROUND = 0x17
 CMD_REBOOT = 0x30
 CMD_DEBUG_SEEK = 0x22
 CMD_ACK = 0x80
@@ -31,6 +33,7 @@ ACK_ERROR = 1
 ACK_WRONG_STATE = 2
 MAX_WIRE_MESSAGE_BYTES = 256 * 1024
 MAX_LOAD_BLOB_BYTES = MAX_WIRE_MESSAGE_BYTES - 3  # cmd(u8) + gen(u16)
+MAX_STORE_BACKGROUND_BLOB_BYTES = MAX_WIRE_MESSAGE_BYTES - 7  # cmd + strip_length + crc32
 
 # UDP frame header: device_id(u16) + gen(u16) + frame_index(u32) + t_rel(f32)
 UDP_FRAME_HEADER = struct.Struct('<HHIf')
@@ -59,6 +62,23 @@ def encode_set_profile(strip_length: int) -> bytes:
 
 def encode_attach(device_id: int, frame_port: int) -> bytes:
     return struct.pack('<IBHH', 5, CMD_ATTACH, device_id, frame_port)
+
+
+def encode_store_background(strip_length: int, crc32: int, blob: bytes) -> bytes:
+    _require_u16('strip_length', strip_length)
+    if not (0 <= crc32 <= 0xFFFFFFFF):
+        raise ValueError(f'crc32 must fit in u32, got {crc32}')
+    if len(blob) > MAX_STORE_BACKGROUND_BLOB_BYTES:
+        raise ValueError(
+            'compiled background blob too large for wire protocol: '
+            f'{len(blob)} > {MAX_STORE_BACKGROUND_BLOB_BYTES}'
+        )
+    payload = struct.pack('<HI', strip_length, crc32) + blob
+    return struct.pack('<IB', 1 + len(payload), CMD_STORE_BACKGROUND) + payload
+
+
+def encode_clear_background() -> bytes:
+    return struct.pack('<IB', 1, CMD_CLEAR_BACKGROUND)
 
 
 def encode_sync_req(seq: int, boot_token: int, t1_us: int) -> bytes:

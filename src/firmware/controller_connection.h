@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "background_store.h"
 #include "device_identity.h"
 #include "hardware_profile.h"
 
@@ -41,7 +42,7 @@ class ControllerConnection {
 public:
     ControllerConnection();
 
-    void begin(ESPDevice& device, const DeviceIdentity& identity);
+    void begin(ESPDevice& device, const DeviceIdentity& identity, BackgroundStore& background_store);
     void start_if_needed();
     void flush_active_client();
     void stop(const char* reason = nullptr);
@@ -64,6 +65,8 @@ private:
     bool handle_attach_(const uint8_t* payload, uint32_t payload_len);
     void handle_sync_result_(const uint8_t* payload, uint32_t payload_len);
     bool handle_load_(const uint8_t* payload, uint32_t payload_len);
+    bool handle_store_background_(const uint8_t* payload, uint32_t payload_len);
+    bool handle_clear_background_();
     void handle_start_(const uint8_t* payload, uint32_t payload_len);
     void handle_jump_(const uint8_t* payload, uint32_t payload_len);
     void handle_pause_();
@@ -73,6 +76,7 @@ private:
 
     const DeviceIdentity* _identity = nullptr;
     ESPDevice* _device = nullptr;
+    BackgroundStore* _background_store = nullptr;
     WiFiServer _tcp_server;
     WiFiClient _tcp_client;
     ConnectionState _state = ConnectionState::stopped;

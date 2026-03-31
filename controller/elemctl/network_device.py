@@ -19,6 +19,7 @@ from .wire import (
     ACK_OK,
     ACK_WRONG_STATE,
     encode_attach,
+    encode_clear_background,
     encode_debug_seek,
     encode_jump,
     encode_load,
@@ -26,6 +27,7 @@ from .wire import (
     encode_reboot,
     encode_resume,
     encode_set_profile,
+    encode_store_background,
     encode_sync_result,
     encode_start,
     encode_stop,
@@ -117,6 +119,41 @@ class NetworkDevice:
         self._reset_runtime_caches()
         self._state = DeviceState.IDLE
         return False
+
+    def store_background(self, blob: bytes, strip_length: int, crc32: int) -> bool:
+        if not self._connected and not self._connect(
+            connect_timeout_s=_COMMAND_CONNECT_TIMEOUT,
+            ack_timeout_s=_HANDSHAKE_ACK_TIMEOUT,
+        ):
+            return False
+
+        msg = encode_store_background(strip_length, crc32, blob)
+        if not self._send(msg):
+            return False
+
+        status = self._recv_ack(timeout_s=_COMMAND_ACK_TIMEOUT)
+        if status is None:
+            if self._connected:
+                self.close()
+            return False
+        return status == ACK_OK
+
+    def clear_background(self) -> bool:
+        if not self._connected and not self._connect(
+            connect_timeout_s=_COMMAND_CONNECT_TIMEOUT,
+            ack_timeout_s=_HANDSHAKE_ACK_TIMEOUT,
+        ):
+            return False
+
+        if not self._send(encode_clear_background()):
+            return False
+
+        status = self._recv_ack(timeout_s=_COMMAND_ACK_TIMEOUT)
+        if status is None:
+            if self._connected:
+                self.close()
+            return False
+        return status == ACK_OK
 
     def start(self, t0_ns: int) -> None:
         t0_us = t0_ns // 1000

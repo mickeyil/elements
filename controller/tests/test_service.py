@@ -81,6 +81,10 @@ class _FakeDevice:
         self.close_calls = 0
         self.reboot_calls = 0
         self.sync_results: list[tuple[int, int, int]] = []
+        self.store_background_calls: list[tuple[bytes, int, int]] = []
+        self.clear_background_calls = 0
+        self.store_background_ok = True
+        self.clear_background_ok = True
 
     def load(self, blob, gen):
         self.load_calls += 1
@@ -122,6 +126,14 @@ class _FakeDevice:
     def send_sync_result(self, seq: int, boot_token: int, offset_us: int):
         self.sync_results.append((seq, boot_token, offset_us))
         return True
+
+    def store_background(self, blob: bytes, strip_length: int, crc32: int) -> bool:
+        self.store_background_calls.append((bytes(blob), strip_length, crc32))
+        return self.store_background_ok
+
+    def clear_background(self) -> bool:
+        self.clear_background_calls += 1
+        return self.clear_background_ok
 
     def tick_once(self, now_ns):
         pass
@@ -4536,6 +4548,85 @@ class TestHandleDebugSeek:
         events = _decode_json_msgs(json_msgs)
         errors = [e for e in events if e.get('event') == 'error']
         assert len(errors) >= 1
+
+
+class TestBackgroundProvisioning:
+    def test_provision_background_uses_retained_session_artifact(self):
+        config = Config(frame_port=1, devices=[
+            DeviceConfig(1, 'esp-1', 'esp32', '127.0.0.1', 9001, 'main', 10),
+        ])
+        fake = _FakeDevice()
+        svc = ControllerService(
+            config,
+            receiver_factory=_NoopReceiver,
+            device_factory=_make_fake_factory([fake]),
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir),
+        )
+
+        manifest = CompiledManifest(
+            duration=1.0,
+            strips=[CompiledStripArtifact('main', 5, b'123456789')],
+            safe_intervals=[],
+        )
+        assert svc._controller.load(manifest) is True
+
+        reply = svc.handle_cmd({
+            'id': 1,
+            'cmd': 'provision_background',
+            'device_uid': 'esp-1',
+        })
+
+        assert reply['ok'] is True
+        assert reply['result'] == {
+            'device_uid': 'esp-1',
+            'strip_length': 5,
+            'blob_len': 9,
+            'crc32': 0xCBF43926,
+        }
+        assert fake.store_background_calls == [(b'123456789', 5, 0xCBF43926)]
+
+    def test_provision_background_rejects_device_outside_current_session(self):
+        config = Config(frame_port=1, devices=[
+            DeviceConfig(1, 'esp-1', 'esp32', '127.0.0.1', 9001, 'main', 10),
+        ])
+        fake = _FakeDevice()
+        svc = ControllerService(
+            config,
+            receiver_factory=_NoopReceiver,
+            device_factory=_make_fake_factory([fake]),
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir),
+        )
+
+        reply = svc.handle_cmd({
+            'id': 1,
+            'cmd': 'provision_background',
+            'device_uid': 'esp-1',
+        })
+
+        assert reply['ok'] is False
+        assert 'current retained session' in reply['error']
+
+    def test_clear_background_dispatches_to_device(self):
+        config = Config(frame_port=1, devices=[
+            DeviceConfig(1, 'esp-1', 'esp32', '127.0.0.1', 9001, 'main', 10),
+        ])
+        fake = _FakeDevice()
+        svc = ControllerService(
+            config,
+            receiver_factory=_NoopReceiver,
+            device_factory=_make_fake_factory([fake]),
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir),
+        )
+
+        reply = svc.handle_cmd({
+            'id': 1,
+            'cmd': 'clear_background',
+            'device_uid': 'esp-1',
+        })
+
+        assert reply['ok'] is True
+        assert reply['result'] == {'device_uid': 'esp-1'}
+        assert fake.clear_background_calls == 1
 
 
 class TestUdsFrameDelivery:

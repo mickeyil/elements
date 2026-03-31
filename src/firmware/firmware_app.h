@@ -2,6 +2,7 @@
 
 #include <cstdint>
 
+#include "background_store.h"
 #include "controller_connection.h"
 #include "device_identity.h"
 #include "discovery_service.h"
@@ -36,6 +37,7 @@ private:
     WifiManager _wifi;
     DiscoveryService _discovery;
     ControllerConnection _connection;
+    BackgroundStore _background_store;
     ESPDevice _device;
     DeviceIdentity _identity;
     uint32_t _last_status_ms = 0;

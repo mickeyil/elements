@@ -4,6 +4,7 @@ import logging
 import socket
 import struct
 import threading
+import zlib
 
 import pytest
 
@@ -23,6 +24,8 @@ from elemctl.wire import (
     CMD_JUMP,
     CMD_LOAD,
     CMD_PAUSE,
+    CMD_STORE_BACKGROUND,
+    CMD_CLEAR_BACKGROUND,
     CMD_REBOOT,
     CMD_RESUME,
     CMD_SYNC_RESULT,
@@ -33,10 +36,12 @@ from elemctl.wire import (
     SYNC_RESP,
     UDP_FRAME_HEADER,
     encode_attach,
+    encode_clear_background,
     encode_jump,
     encode_load,
     encode_reboot,
     encode_set_profile,
+    encode_store_background,
     encode_sync_req,
     encode_start,
     parse_ack,
@@ -362,6 +367,25 @@ class TestWireEncoding:
     def test_parse_udp_frame_too_short(self):
         assert parse_udp_frame(b'\x00\x01') is None
 
+    def test_encode_store_background(self):
+        msg = encode_store_background(strip_length=5, crc32=0x12345678, blob=b'\xAA\xBB')
+        length = struct.unpack_from('<I', msg, 0)[0]
+        assert length == 1 + 2 + 4 + 2
+        assert msg[4] == CMD_STORE_BACKGROUND
+        strip_length, crc32 = struct.unpack_from('<HI', msg, 5)
+        assert strip_length == 5
+        assert crc32 == 0x12345678
+        assert msg[11:] == b'\xAA\xBB'
+
+    def test_encode_clear_background(self):
+        msg = encode_clear_background()
+        length = struct.unpack_from('<I', msg, 0)[0]
+        assert length == 1
+        assert msg[4] == CMD_CLEAR_BACKGROUND
+
+    def test_python_crc32_matches_standard_check_vector(self):
+        assert zlib.crc32(b"123456789") & 0xFFFFFFFF == 0xCBF43926
+
 
 # =========================================================================
 # 2. Connection
@@ -645,6 +669,51 @@ class TestReboot:
         t = threading.Thread(target=server_side, daemon=True)
         t.start()
         assert dev.send_sync_result(5, 1234, -2200) is True
+        t.join(timeout=3.0)
+
+    def test_store_background_writes_tcp_command(self, endpoint, receiver):
+        dev = _make_device(endpoint, receiver, device_type='esp32')
+
+        def server_side():
+            endpoint.accept()
+            _expect_handshake(
+                endpoint,
+                device_id=dev._device_id,
+                strip_length=dev._strip_length,
+                frame_port=dev._frame_port,
+            )
+            cmd_type, payload = endpoint.read_command()
+            assert cmd_type == CMD_STORE_BACKGROUND
+            strip_length, crc32 = struct.unpack('<HI', payload[:6])
+            assert strip_length == 5
+            assert crc32 == 0xCBF43926
+            assert payload[6:] == b"123456789"
+            endpoint.send_ack(ACK_OK)
+
+        t = threading.Thread(target=server_side, daemon=True)
+        t.start()
+        assert dev.store_background(b"123456789", 5, 0xCBF43926) is True
+        t.join(timeout=3.0)
+
+    def test_clear_background_writes_tcp_command(self, endpoint, receiver):
+        dev = _make_device(endpoint, receiver, device_type='esp32')
+
+        def server_side():
+            endpoint.accept()
+            _expect_handshake(
+                endpoint,
+                device_id=dev._device_id,
+                strip_length=dev._strip_length,
+                frame_port=dev._frame_port,
+            )
+            cmd_type, payload = endpoint.read_command()
+            assert cmd_type == CMD_CLEAR_BACKGROUND
+            assert payload == b''
+            endpoint.send_ack(ACK_OK)
+
+        t = threading.Thread(target=server_side, daemon=True)
+        t.start()
+        assert dev.clear_background() is True
         t.join(timeout=3.0)
 
     def test_reload_ack_failure_resets_state(self, endpoint, receiver):
