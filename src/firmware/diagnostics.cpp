@@ -34,6 +34,7 @@ void log_line(const char* fmt, ...)
 
 void maybe_log_status(
     uint32_t& last_status_ms,
+    const char* mode,
     const WifiSnapshot& wifi,
     const DiscoverySnapshot& discovery,
     const ConnectionSnapshot& connection
@@ -48,8 +49,9 @@ void maybe_log_status(
     const String ip = wifi.ready ? wifi.local_ip.toString() : String("-");
     const unsigned long uptime_s = now / 1000;
     log_line(
-        "[status] up=%lus wifi=%s ip=%s ctrl=%s att=%s tries=%lu ok=%lu hellos=%lu tcp=%lu/%lu load=%lu start=%lu stop=%lu",
+        "[status] up=%lus mode=%s wifi=%s ip=%s ctrl=%s att=%s tries=%lu ok=%lu hellos=%lu tcp=%lu/%lu load=%lu start=%lu stop=%lu",
         uptime_s,
+        mode,
         wifi.ready ? "up" : "down",
         ip.c_str(),
         yes_no(connection_has_client_(connection.state)),

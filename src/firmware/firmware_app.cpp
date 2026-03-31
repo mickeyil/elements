@@ -7,6 +7,11 @@
 #include "wire_constants.h"
 
 namespace firmware {
+namespace {
+
+static constexpr uint32_t kDetachGraceHoldMs = 5000;
+
+}  // namespace
 
 void FirmwareApp::begin()
 {
@@ -20,6 +25,7 @@ void FirmwareApp::begin()
     log_line("[boot] build=%s %s", __DATE__, __TIME__);
     log_line("[boot] uid=%s", _identity.uid.c_str());
     log_line("[boot] boot_token=%lu", static_cast<unsigned long>(_identity.boot_token));
+    log_line("[mode] %s", mode_name_());
 
     _discovery.begin(_identity);
     _connection.begin(_device, _identity);
@@ -41,6 +47,7 @@ void FirmwareApp::run_once()
     if (_reboot_pending) {
         maybe_log_status(
             _last_status_ms,
+            mode_name_(),
             _wifi.snapshot(),
             _discovery.snapshot(),
             _connection.snapshot()
@@ -62,6 +69,7 @@ void FirmwareApp::run_once()
             schedule_reboot();
             maybe_log_status(
                 _last_status_ms,
+                mode_name_(),
                 _wifi.snapshot(),
                 _discovery.snapshot(),
                 _connection.snapshot()
@@ -75,11 +83,15 @@ void FirmwareApp::run_once()
     _discovery.poll();
 
     if (_connection.is_attached()) {
+        enter_attached_controlled_();
         _device.tick_once();
+    } else {
+        tick_detached_mode_();
     }
 
     maybe_log_status(
         _last_status_ms,
+        mode_name_(),
         _wifi.snapshot(),
         _discovery.snapshot(),
         _connection.snapshot()
@@ -105,6 +117,73 @@ void FirmwareApp::invalidate_controller_runtime_(const char* reason, bool stop_t
         _connection.stop(reason);
     }
     _device.reset_for_detach();
+    if (_mode == DeviceMode::attached_controlled) {
+        enter_detached_grace_hold_(reason);
+    }
+}
+
+void FirmwareApp::enter_attached_controlled_()
+{
+    if (_mode == DeviceMode::attached_controlled) {
+        return;
+    }
+    _mode = DeviceMode::attached_controlled;
+    _detach_hold_deadline_ms = 0;
+    log_line("[mode] attached_controlled");
+}
+
+void FirmwareApp::enter_detached_grace_hold_(const char* reason)
+{
+    if (_mode != DeviceMode::attached_controlled) {
+        return;
+    }
+    _mode = DeviceMode::detached_grace_hold;
+    _detach_hold_deadline_ms = millis() + kDetachGraceHoldMs;
+    if (reason != nullptr && reason[0] != '\0') {
+        log_line("[mode] detached_grace_hold reason=%s", reason);
+    } else {
+        log_line("[mode] detached_grace_hold");
+    }
+}
+
+void FirmwareApp::enter_detached_blank_(const char* reason)
+{
+    if (_mode == DeviceMode::detached_blank) {
+        return;
+    }
+    _device.present_black_frame();
+    _mode = DeviceMode::detached_blank;
+    _detach_hold_deadline_ms = 0;
+    if (reason != nullptr && reason[0] != '\0') {
+        log_line("[mode] detached_blank reason=%s", reason);
+    } else {
+        log_line("[mode] detached_blank");
+    }
+}
+
+void FirmwareApp::tick_detached_mode_()
+{
+    if (_mode != DeviceMode::detached_grace_hold) {
+        return;
+    }
+    const uint32_t now = millis();
+    if (static_cast<int32_t>(now - _detach_hold_deadline_ms) < 0) {
+        return;
+    }
+    enter_detached_blank_("grace expired");
+}
+
+const char* FirmwareApp::mode_name_() const
+{
+    switch (_mode) {
+        case DeviceMode::attached_controlled:
+            return "attached_controlled";
+        case DeviceMode::detached_grace_hold:
+            return "detached_grace_hold";
+        case DeviceMode::detached_blank:
+            return "detached_blank";
+    }
+    return "unknown";
 }
 
 void FirmwareApp::schedule_reboot()

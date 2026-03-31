@@ -188,6 +188,12 @@ void PlaybackDevice::reset_for_detach()
     clear_queued_runtime_outputs();
 }
 
+void PlaybackDevice::present_black_frame()
+{
+    clear_render_buffer_();
+    output_frame(0.0f);
+}
+
 bool PlaybackDevice::tick_once()
 {
     if (_state == DeviceState::IDLE || _state == DeviceState::ENDED)

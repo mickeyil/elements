@@ -33,6 +33,7 @@ public:
     void handle_sync_result(int64_t offset);
     void clear_sync();
     void reset_for_detach();
+    void present_black_frame();
 
     // Per-frame tick — call in main loop
     bool tick_once();

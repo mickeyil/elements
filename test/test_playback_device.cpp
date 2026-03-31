@@ -238,6 +238,33 @@ TEST_CASE("handle_stop and reset_for_detach remain distinct", "[playback][profil
     CHECK(detach_dev.output_frame_count == detach_frames_before);
 }
 
+TEST_CASE("present_black_frame presents once without changing detach semantics", "[playback][profile]") {
+    QueueingTestDevice dev(5);
+    auto blob = load_blob(SHIFT_FIXTURE);
+
+    REQUIRE(dev.handle_load(blob.data(), blob.size(), 1));
+    dev.queued_telemetry.clear();
+    dev.set_time(0);
+    dev.handle_start(0);
+    dev.set_time(1'000'000);
+    REQUIRE(dev.tick_once());
+    REQUIRE(dev.queued_frames.size() == 1);
+
+    dev.reset_for_detach();
+    CHECK(dev.state() == DeviceState::IDLE);
+    CHECK(dev.queued_frames.empty());
+    CHECK(dev.queued_telemetry.empty());
+
+    dev.present_black_frame();
+    REQUIRE(dev.queued_frames.size() == 1);
+    CHECK(dev.queued_frames[0] == Catch::Approx(0.0f));
+    CHECK(dev.queued_telemetry.empty());
+    CHECK(dev.state() == DeviceState::IDLE);
+    for (int i = 0; i < 5 * 3; i++) {
+        CHECK(dev.rgb_data()[i] == 0);
+    }
+}
+
 TEST_CASE("State machine: IDLE → LOADED → PLAYING → ENDED", "[playback]") {
     TestDevice dev(5);
     CHECK(dev.state() == DeviceState::IDLE);

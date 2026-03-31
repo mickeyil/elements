@@ -176,6 +176,37 @@ TEST_CASE("Profile change and detach clear queued simulator outputs", "[espsim][
     CHECK(dev.drain_telemetry().empty());
 }
 
+TEST_CASE("present_black_frame emits one black simulator frame after detach", "[espsim][profile]") {
+    ControlledESPSimulated dev(5);
+    auto blob = load_blob(SHIFT_FIXTURE);
+
+    REQUIRE(dev.handle_load(blob.data(), blob.size(), 1));
+    dev.drain_telemetry();
+
+    dev.set_time(0);
+    dev.handle_start(0);
+    dev.drain_telemetry();
+    dev.set_time(1'000'000);
+    REQUIRE(dev.tick_once());
+    REQUIRE(dev.drain_frames().size() == 1);
+
+    dev.reset_for_detach();
+    CHECK(dev.state() == DeviceState::IDLE);
+    CHECK(dev.drain_frames().empty());
+    CHECK(dev.drain_telemetry().empty());
+
+    dev.present_black_frame();
+    auto frames = dev.drain_frames();
+    REQUIRE(frames.size() == 1);
+    CHECK(frames[0].t_rel == Catch::Approx(0.0f));
+    REQUIRE(frames[0].rgb.size() == 15);
+    for (uint8_t value : frames[0].rgb) {
+        CHECK(value == 0);
+    }
+    CHECK(dev.drain_telemetry().empty());
+    CHECK(dev.state() == DeviceState::IDLE);
+}
+
 TEST_CASE("Reload clears stale queued simulator outputs", "[espsim][load]") {
     ControlledESPSimulated dev(5);
     auto blob = load_blob(SHIFT_FIXTURE);
