@@ -18,7 +18,7 @@ _repo = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_repo / 'compiler'))
 
 from elemctl.config import Config, DeviceConfig, MAX_DEVICE_PIXELS, load_config, load_config_obj
-from elemctl.clock_sync import ClockSyncPollResult
+from elemctl.clock_sync import ClockSyncPollResult, SyncUpdate
 from elemctl.controller import ControllerState
 from elemctl.device import DeviceState
 from elemctl.library import ProgramEntry
@@ -3289,6 +3289,189 @@ class TestProbeAllBaseline:
         assert status_events == [], (
             'probe_all() should sync baseline — no spurious transition event'
         )
+
+
+class TestDeviceRejoin:
+    def test_playing_sim_rejoins_after_reconnect(self):
+        clock = _FakeClock()
+        svc, fakes = _make_service(clock=clock)
+
+        svc.handle_cmd({
+            'id': 1, 'cmd': 'load',
+            'source': _GAP_DSL, 'beat': 1.0, 'duration': 1.0,
+        })
+        svc.handle_cmd({'id': 2, 'cmd': 'play'})
+        svc.tick_once()
+
+        svc._last_probe_ns[1] = -1_000_000_000
+        fakes[0].is_connected = False
+        clock.now = 250_000_000
+        json_msgs, _ = svc.tick_once()
+        events = _decode_json_msgs(json_msgs)
+
+        assert [e['event'] for e in events if e.get('event') in (
+            'device_status', 'device_detached', 'device_rejoined'
+        )] == [
+            'device_detached',
+            'device_status',
+            'device_status',
+            'device_rejoined',
+        ]
+        assert fakes[0].load_calls == 2
+        assert fakes[0].jump_calls == 1
+        assert fakes[0].resume_calls == 1
+        assert svc._controller.is_device_attached(fakes[0]) is True
+        assert svc._controller.is_device_serving(fakes[0]) is True
+
+    def test_playing_esp_waits_for_sync_ready_before_rejoining(self):
+        clock = _FakeClock()
+        fake_sync = _FakeClockSyncManager()
+        fakes = [_FakeDevice()]
+        config = Config(frame_port=1, devices=[
+            DeviceConfig(1, 'esp-1', 'esp32', '127.0.0.1', 9001, 'test', 5),
+        ])
+        svc = ControllerService(
+            config,
+            receiver_factory=_NoopReceiver,
+            device_factory=_make_fake_factory(fakes),
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir),
+            clock=clock,
+            clock_sync_factory=lambda sync_port, clock_ns: fake_sync,
+        )
+
+        svc.handle_cmd({
+            'id': 1, 'cmd': 'load',
+            'source': _GAP_DSL, 'beat': 1.0, 'duration': 1.0,
+        })
+        svc.handle_cmd({'id': 2, 'cmd': 'play'})
+        svc.tick_once()
+
+        svc._last_probe_ns[1] = -1_000_000_000
+        fakes[0].is_connected = False
+        clock.now = 250_000_000
+        json_msgs, _ = svc.tick_once()
+        events = _decode_json_msgs(json_msgs)
+
+        assert [e for e in events if e.get('event') == 'device_rejoined'] == []
+        assert svc._controller.is_device_attached(fakes[0]) is True
+        assert svc._controller.is_device_serving(fakes[0]) is False
+
+        fake_sync.pending_updates.append(SyncUpdate(
+            device_id=1,
+            clock_state='settling',
+            clock_offset_us=None,
+            rtt_us=1_000,
+            send_correction=True,
+            seq=7,
+            boot_token=123,
+            correction_offset_us=500,
+        ))
+        clock.now = 300_000_000
+        json_msgs, _ = svc.tick_once()
+        events = _decode_json_msgs(json_msgs)
+
+        rejoined = [e for e in events if e.get('event') == 'device_rejoined']
+        assert len(rejoined) == 1
+        assert fakes[0].sync_results == [(7, 123, 500)]
+        assert fakes[0].load_calls == 2
+        assert fakes[0].jump_calls == 1
+        assert fakes[0].resume_calls == 1
+        assert svc._controller.is_device_serving(fakes[0]) is True
+
+    def test_paused_rejoin_loads_and_jumps_without_resume(self):
+        clock = _FakeClock()
+        svc, fakes = _make_service(clock=clock)
+
+        svc.handle_cmd({
+            'id': 1, 'cmd': 'load',
+            'source': _SIMPLE_DSL, 'beat': 1.0, 'duration': 5.0,
+        })
+        svc.handle_cmd({'id': 2, 'cmd': 'play'})
+        clock.now = 200_000_000
+        svc.tick_once()
+        svc.handle_cmd({'id': 3, 'cmd': 'pause'})
+        svc.tick_once()
+
+        svc._last_probe_ns[1] = -1_000_000_000
+        fakes[0].is_connected = False
+        clock.now = 300_000_000
+        json_msgs, _ = svc.tick_once()
+        events = _decode_json_msgs(json_msgs)
+
+        rejoined = [e for e in events if e.get('event') == 'device_rejoined']
+        assert len(rejoined) == 1
+        assert fakes[0].load_calls == 2
+        assert fakes[0].jump_calls == 1
+        assert fakes[0].resume_calls == 0
+        assert svc._controller.state == ControllerState.PAUSED
+        assert svc._controller.is_device_serving(fakes[0]) is True
+
+    def test_loaded_rejoin_reloads_without_jump_or_resume(self):
+        clock = _FakeClock()
+        svc, fakes = _make_service(clock=clock)
+
+        svc.handle_cmd({
+            'id': 1, 'cmd': 'load',
+            'source': _SIMPLE_DSL, 'beat': 1.0, 'duration': 5.0,
+        })
+        svc.tick_once()
+
+        svc._last_probe_ns[1] = -1_000_000_000
+        fakes[0].is_connected = False
+        json_msgs, _ = svc.tick_once()
+        events = _decode_json_msgs(json_msgs)
+
+        assert len([e for e in events if e.get('event') == 'device_rejoined']) == 1
+        assert fakes[0].load_calls == 2
+        assert fakes[0].jump_calls == 0
+        assert fakes[0].resume_calls == 0
+        assert fakes[0].start_calls == 0
+
+    def test_stopped_rejoin_reloads_and_restores_stop_state(self):
+        clock = _FakeClock()
+        svc, fakes = _make_service(clock=clock)
+
+        svc.handle_cmd({
+            'id': 1, 'cmd': 'load',
+            'source': _SIMPLE_DSL, 'beat': 1.0, 'duration': 5.0,
+        })
+        svc.handle_cmd({'id': 2, 'cmd': 'stop'})
+        svc.tick_once()
+
+        svc._last_probe_ns[1] = -1_000_000_000
+        fakes[0].is_connected = False
+        json_msgs, _ = svc.tick_once()
+        events = _decode_json_msgs(json_msgs)
+
+        assert len([e for e in events if e.get('event') == 'device_rejoined']) == 1
+        assert fakes[0].load_calls == 2
+        assert fakes[0].stop_calls == 2
+        assert svc._controller.state == ControllerState.STOPPED
+        assert svc._controller.is_device_serving(fakes[0]) is True
+
+    def test_ended_device_reconnect_does_not_rejoin(self):
+        clock = _FakeClock()
+        svc, fakes = _make_service(clock=clock)
+
+        svc.handle_cmd({
+            'id': 1, 'cmd': 'load',
+            'source': _SIMPLE_DSL, 'beat': 1.0, 'duration': 0.5,
+        })
+        svc.handle_cmd({'id': 2, 'cmd': 'play'})
+        svc.tick_once()
+
+        clock.now = 600_000_000
+        svc.tick_once()
+        assert svc._controller.state == ControllerState.ENDED
+
+        svc._last_probe_ns[1] = -1_000_000_000
+        fakes[0].is_connected = False
+        json_msgs, _ = svc.tick_once()
+        events = _decode_json_msgs(json_msgs)
+
+        assert [e for e in events if e.get('event') == 'device_rejoined'] == []
+        assert svc._controller.is_device_attached(fakes[0]) is True
+        assert svc._controller.is_device_serving(fakes[0]) is False
 
 
 class TestLastSeenReconciliation:

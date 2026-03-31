@@ -1440,6 +1440,112 @@ class TestAbortAndFrameStream:
         assert ctrl.uses_device(other) is False
 
 
+class TestLiveResume:
+    def test_live_resume_keeps_session_artifacts_and_uses_current_safe_time(self):
+        f = DualFixture()
+        ctrl = Controller(f.strips(), clock=f.clock)
+        manifest = CompiledManifest(
+            duration=5.0,
+            strips=[
+                CompiledStripArtifact("left", 5, b"\x11"),
+                CompiledStripArtifact("right", 5, b"\x22"),
+            ],
+            safe_intervals=[(1.0, 1.5), (3.0, 3.5)],
+        )
+        assert ctrl.load(manifest)
+        assert ctrl._session_artifacts == [b"\x11", b"\x22"]
+
+        f.set_time(0.0)
+        ctrl.play()
+        ctrl.drain_events()
+
+        assert ctrl.detach_device(f.right) is True
+        assert ctrl.mark_transport_attached(f.right) is True
+        assert ctrl.is_device_attached(f.right) is True
+        assert ctrl.is_device_serving(f.right) is False
+
+        f.set_time(1.25)
+        assert ctrl.live_resume_device(f.right, f.clock()) is True
+
+        assert ctrl.is_device_serving(f.right) is True
+        assert f.right.load_calls == 2
+        assert f.right.jump_calls == 1
+        assert f.right.resume_calls == 1
+        assert f.right.current_t_rel(f.clock()) == pytest.approx(1.25)
+
+    def test_live_resume_uses_next_safe_interval_start(self):
+        f = DualFixture()
+        ctrl = Controller(f.strips(), clock=f.clock)
+        manifest = CompiledManifest(
+            duration=5.0,
+            strips=[
+                CompiledStripArtifact("left", 5, b"\x00"),
+                CompiledStripArtifact("right", 5, b"\x00"),
+            ],
+            safe_intervals=[(1.0, 1.5), (3.0, 3.5)],
+        )
+        assert ctrl.load(manifest)
+
+        f.set_time(0.0)
+        ctrl.play()
+        ctrl.drain_events()
+
+        assert ctrl.detach_device(f.right) is True
+        assert ctrl.mark_transport_attached(f.right) is True
+
+        f.set_time(2.0)
+        assert ctrl.live_resume_device(f.right, f.clock()) is True
+        assert f.right.current_t_rel(f.clock()) == pytest.approx(3.0)
+
+    def test_live_resume_past_last_safe_interval_leaves_device_not_serving(self):
+        f = DualFixture()
+        ctrl = Controller(f.strips(), clock=f.clock)
+        manifest = CompiledManifest(
+            duration=5.0,
+            strips=[
+                CompiledStripArtifact("left", 5, b"\x00"),
+                CompiledStripArtifact("right", 5, b"\x00"),
+            ],
+            safe_intervals=[(1.0, 1.5)],
+        )
+        assert ctrl.load(manifest)
+
+        f.set_time(0.0)
+        ctrl.play()
+        ctrl.drain_events()
+
+        assert ctrl.detach_device(f.right) is True
+        assert ctrl.mark_transport_attached(f.right) is True
+
+        f.set_time(2.0)
+        assert ctrl.live_resume_device(f.right, f.clock()) is False
+        assert ctrl.is_device_serving(f.right) is False
+        assert f.right.load_calls == 1
+
+    def test_live_resume_from_paused_loads_and_jumps_without_resume(self):
+        f = DualFixture()
+        ctrl = Controller(f.strips(), clock=f.clock)
+        assert ctrl.load(f.manifest())
+
+        f.set_time(0.0)
+        ctrl.play()
+        ctrl.drain_events()
+        f.set_time(1.2)
+        ctrl.pause()
+        ctrl.drain_events()
+
+        assert ctrl.detach_device(f.right) is True
+        assert ctrl.mark_transport_attached(f.right) is True
+
+        assert ctrl.live_resume_device(f.right, f.clock()) is True
+        assert ctrl.is_device_serving(f.right) is True
+        assert f.right.load_calls == 2
+        assert f.right.jump_calls == 1
+        assert f.right.resume_calls == 0
+        assert f.right.state() == DeviceState.PAUSED
+        assert f.right.current_t_rel(f.clock()) == pytest.approx(ctrl.current_t_rel)
+
+
 # =========================================================================
 # 10. Events
 # =========================================================================

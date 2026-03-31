@@ -117,6 +117,7 @@ class ControllerService:
         self._last_activity_source: dict[int, str | None] = {}
         self._last_seen: dict[int, float | None] = {}
         self._disconnect_reasons: dict[int, str | None] = {}
+        self._sync_ready_boot_token: dict[int, int | None] = {}
 
         animations_dir = resolve_runtime_path(
             None,
@@ -465,16 +466,7 @@ class ControllerService:
         session_disconnects.extend(new_disconnects)
         detach_events.extend(self._commit_session_disconnects(new_disconnects))
 
-        json_msgs: list[bytes] = []
-        while self._service_events:
-            json_msgs.append(encode_json(self._service_events.pop(0)))
-        for evt in self._controller.drain_events():
-            json_msgs.append(encode_json(self._event_to_dict(evt)))
-        for event in detach_events:
-            json_msgs.append(encode_json(event))
-        for event in status_events:
-            json_msgs.append(encode_json(event))
-
+        clock_events: list[dict[str, object]] = []
         for update in sync_result.status_updates:
             entry = self._device_id_to_device.get(update.device_id)
             if entry is None:
@@ -490,7 +482,12 @@ class ControllerService:
                 and update.boot_token is not None
                 and update.correction_offset_us is not None
             ):
-                send_sync_result(update.seq, update.boot_token, update.correction_offset_us)
+                if send_sync_result(
+                    update.seq,
+                    update.boot_token,
+                    update.correction_offset_us,
+                ):
+                    self._sync_ready_boot_token[dc.device_id] = update.boot_token
             offset_label = (
                 f'{update.clock_offset_us / 1000.0:.1f}ms'
                 if update.clock_offset_us is not None
@@ -525,9 +522,25 @@ class ControllerService:
                     offset_label,
                     rtt_label,
                 )
-            json_msgs.append(encode_json(
+            clock_events.append(
                 self._device_status_event(dc, dev, now_ns, source='clock')
-            ))
+            )
+
+        rejoin_events = self._maybe_rejoin_devices(now_ns)
+
+        json_msgs: list[bytes] = []
+        while self._service_events:
+            json_msgs.append(encode_json(self._service_events.pop(0)))
+        for evt in self._controller.drain_events():
+            json_msgs.append(encode_json(self._event_to_dict(evt)))
+        for event in detach_events:
+            json_msgs.append(encode_json(event))
+        for event in status_events:
+            json_msgs.append(encode_json(event))
+        for event in clock_events:
+            json_msgs.append(encode_json(event))
+        for event in rejoin_events:
+            json_msgs.append(encode_json(event))
 
         self._clock_sync.send_due_probes(self._sync_targets(), now_ns)
 
@@ -812,6 +825,19 @@ class ControllerService:
             'reason': reason,
         }
 
+    def _device_rejoined_event(self, dc: DeviceConfig) -> dict[str, object]:
+        return {
+            'type': 'event',
+            'event': 'device_rejoined',
+            'device_id': dc.device_id,
+            'device_uid': dc.device_uid,
+            'strip': dc.strip_id,
+            'length': dc.length,
+            'device_type': dc.device_type,
+            'session_id': self._controller.session_id,
+            'state': self._controller.state.name.lower(),
+        }
+
     def _commit_session_disconnects(
         self,
         disconnects: list[tuple[DeviceConfig, object, str]],
@@ -827,10 +853,34 @@ class ControllerService:
     def _handle_clock_connectivity_transition(self, dc: DeviceConfig, connected: bool) -> None:
         if dc.device_type != 'esp32':
             return
+        self._sync_ready_boot_token[dc.device_id] = None
         if connected:
             self._clock_sync.on_connected(dc.device_id)
             return
         self._clock_sync.on_disconnected(dc.device_id)
+
+    def _maybe_rejoin_devices(self, now_ns: int) -> list[dict[str, object]]:
+        rejoin_events: list[dict[str, object]] = []
+        state = self._controller.state
+        if state in (ControllerState.IDLE, ControllerState.ENDED):
+            return rejoin_events
+
+        for dc, dev in self._iter_devices():
+            if not self._controller.uses_device(dev):
+                continue
+            if not self._controller.is_device_attached(dev):
+                continue
+            if self._controller.is_device_serving(dev):
+                continue
+            if (
+                dc.device_type == 'esp32'
+                and state in (ControllerState.PLAYING, ControllerState.PAUSED)
+                and self._sync_ready_boot_token.get(dc.device_id) is None
+            ):
+                continue
+            if self._controller.live_resume_device(dev, now_ns):
+                rejoin_events.append(self._device_rejoined_event(dc))
+        return rejoin_events
 
     def _sync_targets(self) -> list[tuple[int, str]]:
         targets: list[tuple[int, str]] = []
@@ -1200,6 +1250,7 @@ class ControllerService:
         new_last_activity_source: dict[int, str | None] = {}
         new_last_seen: dict[int, float | None] = {}
         new_disconnect_reasons: dict[int, str | None] = {}
+        new_sync_ready_boot_token: dict[int, int | None] = {}
         now_ns = self._clock()
         now_wall = self._wall_clock()
 
@@ -1222,6 +1273,11 @@ class ControllerService:
                 new_last_activity_source[dc.device_id] = preserved_source
                 new_last_seen[dc.device_id] = preserved_last_seen
                 new_disconnect_reasons[dc.device_id] = None
+                new_sync_ready_boot_token[dc.device_id] = (
+                    self._sync_ready_boot_token.get(old_dc.device_id)
+                    if self._is_connected(dev)
+                    else None
+                )
                 continue
 
             if existing is not None:
@@ -1235,6 +1291,7 @@ class ControllerService:
             new_last_activity_source[dc.device_id] = None
             new_last_seen[dc.device_id] = now_wall if self._is_connected(dev) else None
             new_disconnect_reasons[dc.device_id] = None
+            new_sync_ready_boot_token[dc.device_id] = None
 
         for _old_dc, dev in current_by_uid.values():
             dev.close()
@@ -1248,6 +1305,7 @@ class ControllerService:
         self._last_activity_source = new_last_activity_source
         self._last_seen = new_last_seen
         self._disconnect_reasons = new_disconnect_reasons
+        self._sync_ready_boot_token = new_sync_ready_boot_token
         self._uid_to_device = {
             dc.device_uid: (dc, dev)
             for dc, dev in zip(self._device_configs, self._devices)

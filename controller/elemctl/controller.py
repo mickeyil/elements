@@ -96,6 +96,7 @@ class Controller:
         self._serving_active: list[bool] = []
         self._session_manifest_strips: list[tuple[str, int]] = []
         self._session_target_groups: list[list[int]] = []
+        self._session_artifacts: list[bytes] = []
         self._expected_gen: list[int] = []
         self._buckets: dict[int, _Bucket] = {}
 
@@ -243,6 +244,7 @@ class Controller:
 
         new_session_manifest_strips = [(ms.strip_id, ms.length) for ms in manifest.strips]
         new_session_target_groups = [list(group) for group in target_groups]
+        new_session_artifacts = [bytes(ms.blob) for ms in manifest.strips]
         prev_active_strips = list(self._active_strips)
         prev_active_device_ids = {id(s.device) for s in prev_active_strips}
         overlaps_previous_session = bool(prev_active_device_ids & new_active_device_ids)
@@ -290,6 +292,7 @@ class Controller:
         self._serving_active = [True] * len(self._active_strips)
         self._session_manifest_strips = new_session_manifest_strips
         self._session_target_groups = new_session_target_groups
+        self._session_artifacts = new_session_artifacts
         self._expected_gen = [self._gen] * len(self._active_strips)
         self._recompute_program_frame_stream_enabled()
 
@@ -431,6 +434,56 @@ class Controller:
         if self._attached_active[idx]:
             return False
         self._attached_active[idx] = True
+        self._recompute_program_frame_stream_enabled()
+        return True
+
+    def is_device_attached(self, device: ControllerDevice) -> bool:
+        idx = self._active_index_for_device(device)
+        return idx is not None and self._attached_active[idx]
+
+    def is_device_serving(self, device: ControllerDevice) -> bool:
+        idx = self._active_index_for_device(device)
+        return idx is not None and self._serving_active[idx]
+
+    def live_resume_device(
+        self,
+        device: ControllerDevice,
+        now_ns: int | None = None,
+    ) -> bool:
+        idx = self._active_index_for_device(device)
+        if idx is None or not self._attached_active[idx] or self._serving_active[idx]:
+            return False
+        if self._state in (ControllerState.IDLE, ControllerState.ENDED):
+            return False
+
+        target_t_rel: float | None = None
+        if self._state == ControllerState.PLAYING:
+            if now_ns is None:
+                now_ns = self._clock()
+            target_t_rel = self._find_rejoin_safe_point(self._session_t_rel(now_ns))
+            if target_t_rel is None:
+                return False
+        elif self._state == ControllerState.PAUSED:
+            target_t_rel = self._paused_t_rel
+
+        blob = self._session_artifacts[self._slot_for_active[idx]]
+        if not device.load(blob, self._gen):
+            return False
+
+        if self._state == ControllerState.STOPPED:
+            device.stop()
+        elif self._state in (ControllerState.PLAYING, ControllerState.PAUSED):
+            assert target_t_rel is not None
+            if now_ns is None:
+                now_ns = self._clock()
+            t0 = now_ns - int(target_t_rel * 1e9)
+            device.jump(t0, target_t_rel, self._gen)
+            if self._state == ControllerState.PLAYING:
+                device.resume(t0)
+
+        self._serving_active[idx] = True
+        self._expected_gen[idx] = self._gen
+        self._buckets.clear()
         self._recompute_program_frame_stream_enabled()
         return True
 
@@ -580,6 +633,7 @@ class Controller:
         self._serving_active = []
         self._session_manifest_strips = []
         self._session_target_groups = []
+        self._session_artifacts = []
         self._expected_gen = []
         self._buckets.clear()
         self._program_frames = []
@@ -631,6 +685,16 @@ class Controller:
         if not self._active_strips:
             return 0.0
         return max(s.device.current_t_rel(now) for s in self._active_strips)
+
+    def _find_rejoin_safe_point(self, t_rel: float) -> float | None:
+        if not self._safe_intervals:
+            return None
+        for lo, hi in self._safe_intervals:
+            if lo <= t_rel < hi:
+                return t_rel
+            if lo > t_rel:
+                return lo
+        return None
 
     def _snap_to_safe(self, t_rel: float) -> float:
         if not self._safe_intervals:
