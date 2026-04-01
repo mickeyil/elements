@@ -123,6 +123,34 @@ class TestIntegration:
         finally:
             receiver.close()
 
+    def test_query_device_status(self, sim_process):
+        tcp_port, frame_port = sim_process.tcp_port, sim_process.frame_port
+
+        receiver = UdpFrameReceiver(frame_port)
+
+        dev = NetworkDevice(
+            device_id=42,
+            host='127.0.0.1',
+            tcp_port=tcp_port,
+            device_type='sim',
+            strip_length=STRIP_LENGTH,
+            frame_port=frame_port,
+            udp_receiver=receiver,
+        )
+
+        try:
+            assert dev.query_device_status() == {
+                'mode': 'attached_controlled',
+                'profile_present': True,
+                'profile_strip_length': STRIP_LENGTH,
+                'background_present': False,
+                'background_strip_length': 0,
+                'background_blob_len': 0,
+                'background_crc32': 0,
+            }
+        finally:
+            receiver.close()
+
     def test_pause_resume(self, sim_process):
         tcp_port, frame_port = sim_process.tcp_port, sim_process.frame_port
 

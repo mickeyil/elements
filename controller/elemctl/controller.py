@@ -706,11 +706,6 @@ class Controller:
             len(served_slots) == len(self._session_manifest_strips)
         )
 
-    def _max_current_t_rel(self, now: int) -> float:
-        if not self._active_strips:
-            return 0.0
-        return max(s.device.current_t_rel(now) for s in self._active_strips)
-
     def _find_rejoin_safe_point(self, t_rel: float) -> float | None:
         if not self._safe_intervals:
             return None

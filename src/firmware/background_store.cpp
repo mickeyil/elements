@@ -117,22 +117,52 @@ bool BackgroundStore::store(
 
 bool BackgroundStore::clear()
 {
-    if (_fs_ready) {
-        if (LittleFS.exists(kBackgroundTempPath)) {
-            LittleFS.remove(kBackgroundTempPath);
-        }
-        if (LittleFS.exists(kBackgroundPath)) {
-            LittleFS.remove(kBackgroundPath);
-        }
+    if (!ready()) {
+        return false;
     }
-    if (_preferences_ready) {
-        _preferences.remove(kBackgroundPresentKey);
-        _preferences.remove(kBackgroundStripLengthKey);
-        _preferences.remove(kBackgroundBlobLenKey);
-        _preferences.remove(kBackgroundCrcKey);
+
+    const BackgroundMetadata old = _metadata;
+    bool ok = true;
+
+    if (LittleFS.exists(kBackgroundTempPath) && !LittleFS.remove(kBackgroundTempPath)) {
+        log_line("[bg] failed to remove temp background file");
+        ok = false;
     }
-    reset_metadata_();
-    return ready();
+    if (LittleFS.exists(kBackgroundPath) && !LittleFS.remove(kBackgroundPath)) {
+        log_line("[bg] failed to remove background file");
+        ok = false;
+    }
+
+    if (_preferences.getBool(kBackgroundPresentKey, false) &&
+        !_preferences.remove(kBackgroundPresentKey)) {
+        log_line("[bg] failed to clear background present flag");
+        ok = false;
+    }
+    if (_preferences.getUShort(kBackgroundStripLengthKey, 0) != 0 &&
+        !_preferences.remove(kBackgroundStripLengthKey)) {
+        log_line("[bg] failed to clear background strip length");
+        ok = false;
+    }
+    if (_preferences.getUInt(kBackgroundBlobLenKey, 0) != 0 &&
+        !_preferences.remove(kBackgroundBlobLenKey)) {
+        log_line("[bg] failed to clear background blob length");
+        ok = false;
+    }
+    if (_preferences.getUInt(kBackgroundCrcKey, 0) != 0 &&
+        !_preferences.remove(kBackgroundCrcKey)) {
+        log_line("[bg] failed to clear background crc32");
+        ok = false;
+    }
+
+    if (ok) {
+        reset_metadata_();
+    } else if (!LittleFS.exists(kBackgroundPath) ||
+               !_preferences.getBool(kBackgroundPresentKey, false)) {
+        reset_metadata_();
+    } else {
+        _metadata = old;
+    }
+    return ok;
 }
 
 bool BackgroundStore::read_blob(uint8_t* out, size_t out_len) const

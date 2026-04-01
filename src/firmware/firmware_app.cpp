@@ -137,6 +137,9 @@ void FirmwareApp::invalidate_controller_runtime_(const char* reason, bool stop_t
     if (stop_transport) {
         _connection.stop(reason);
     }
+    if (_mode == DeviceMode::detached_background) {
+        return;
+    }
     _device.reset_for_detach();
     if (_mode == DeviceMode::attached_controlled) {
         enter_detached_grace_hold_(reason);

@@ -2610,7 +2610,7 @@ class TestConfigMutations:
         })
 
         assert reply['ok'] is False
-        assert 'idle or stopped' in reply['error']
+        assert 'controller must be idle' in reply['error']
 
         reply2 = svc.handle_cmd({
             'id': 3,
@@ -2622,7 +2622,22 @@ class TestConfigMutations:
         })
 
         assert reply2['ok'] is False
-        assert 'idle or stopped' in reply2['error']
+        assert 'controller must be idle' in reply2['error']
+
+    def test_mutation_quiescence_is_idle_only(self):
+        svc, _ = _make_service()
+
+        assert svc._mutation_is_quiescent() is True
+
+        for state in (
+            ControllerState.LOADED,
+            ControllerState.STOPPED,
+            ControllerState.PLAYING,
+            ControllerState.PAUSED,
+            ControllerState.ENDED,
+        ):
+            svc._controller._state = state
+            assert svc._mutation_is_quiescent() is False
 
     def test_save_failure_leaves_runtime_state_unchanged(self, monkeypatch, tmp_path):
         config = _make_config()
@@ -4595,7 +4610,7 @@ class TestBackgroundProvisioning:
 
         manifest = CompiledManifest(
             duration=1.0,
-            strips=[CompiledStripArtifact('main', 5, b'123456789')],
+            strips=[CompiledStripArtifact('main', 10, b'123456789')],
             safe_intervals=[],
         )
         assert svc._controller.load(manifest) is True
@@ -4609,11 +4624,40 @@ class TestBackgroundProvisioning:
         assert reply['ok'] is True
         assert reply['result'] == {
             'device_uid': 'esp-1',
-            'strip_length': 5,
+            'strip_length': 10,
             'blob_len': 9,
             'crc32': 0xCBF43926,
         }
-        assert fake.store_background_calls == [(b'123456789', 5, 0xCBF43926)]
+        assert fake.store_background_calls == [(b'123456789', 10, 0xCBF43926)]
+
+    def test_provision_background_rejects_strip_length_mismatch(self):
+        config = Config(frame_port=1, devices=[
+            DeviceConfig(1, 'esp-1', 'esp32', '127.0.0.1', 9001, 'main', 10),
+        ])
+        fake = _FakeDevice()
+        svc = ControllerService(
+            config,
+            receiver_factory=_NoopReceiver,
+            device_factory=_make_fake_factory([fake]),
+            library_factory=lambda animations_dir: _FakeLibrary(animations_dir),
+        )
+
+        manifest = CompiledManifest(
+            duration=1.0,
+            strips=[CompiledStripArtifact('main', 5, b'123456789')],
+            safe_intervals=[],
+        )
+        assert svc._controller.load(manifest) is True
+
+        reply = svc.handle_cmd({
+            'id': 1,
+            'cmd': 'provision_background',
+            'device_uid': 'esp-1',
+        })
+
+        assert reply['ok'] is False
+        assert 'does not match device configured length' in reply['error']
+        assert fake.store_background_calls == []
 
     def test_provision_background_rejects_device_outside_current_session(self):
         config = Config(frame_port=1, devices=[
@@ -4791,7 +4835,7 @@ class TestReportedDeviceStatus:
 
         manifest = CompiledManifest(
             duration=1.0,
-            strips=[CompiledStripArtifact('main', 5, b'123456789')],
+            strips=[CompiledStripArtifact('main', 10, b'123456789')],
             safe_intervals=[],
         )
         assert svc._controller.load(manifest) is True
@@ -4804,7 +4848,7 @@ class TestReportedDeviceStatus:
         })['ok'] is True
         snap = svc.build_snapshot()
         assert snap['devices'][0]['reported']['background_present'] is True
-        assert snap['devices'][0]['reported']['background_strip_length'] == 5
+        assert snap['devices'][0]['reported']['background_strip_length'] == 10
         assert snap['devices'][0]['reported']['background_blob_len'] == 9
         assert snap['devices'][0]['reported']['background_crc32'] == 0xCBF43926
         assert snap['devices'][0]['reported_at'] == pytest.approx(8.0)

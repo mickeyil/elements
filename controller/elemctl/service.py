@@ -307,6 +307,11 @@ class ControllerService:
         if artifact is None:
             raise ValueError('device is not part of the current retained session')
         blob, strip_length = artifact
+        if strip_length != dc.length:
+            raise ValueError(
+                f'background artifact strip length ({strip_length}) does not match '
+                f'device configured length ({dc.length})'
+            )
         crc32 = zlib.crc32(blob) & 0xFFFFFFFF
 
         store_background = getattr(dev, 'store_background', None)
@@ -1587,17 +1592,13 @@ class ControllerService:
         ).hexdigest()
 
     def _mutation_is_quiescent(self) -> bool:
-        return self._controller.state in {
-            ControllerState.IDLE,
-            ControllerState.STOPPED,
-            ControllerState.ENDED,
-        }
+        return self._controller.state == ControllerState.IDLE
 
     def _require_mutation_quiescent(self) -> None:
         if not self._mutation_is_quiescent():
             state = self._controller.state.name.lower()
             raise ValueError(
-                f'controller must be idle or stopped before changing devices (current state: {state})'
+                f'controller must be idle before changing devices (current state: {state})'
             )
         if self._config_path is None:
             raise ValueError('config path unavailable')

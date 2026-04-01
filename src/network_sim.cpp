@@ -37,12 +37,15 @@ static constexpr uint8_t CMD_JUMP       = 0x12;
 static constexpr uint8_t CMD_PAUSE      = 0x13;
 static constexpr uint8_t CMD_RESUME     = 0x14;
 static constexpr uint8_t CMD_STOP       = 0x15;
+static constexpr uint8_t CMD_QUERY_DEVICE_STATUS = 0x18;
 static constexpr uint8_t CMD_DEBUG_SEEK = 0x22;
 static constexpr uint8_t CMD_DEBUG_STEP = 0x23;
 static constexpr uint8_t CMD_ACK        = 0x80;
 static constexpr uint8_t ACK_OK         = 0;
 static constexpr uint8_t ACK_ERROR      = 1;
 static constexpr uint8_t ACK_WRONG_STATE = 2;
+static constexpr uint8_t DEVICE_MODE_ATTACHED_CONTROLLED = 0;
+static constexpr uint8_t DEVICE_STATUS_FLAG_PROFILE_PRESENT = 0x01;
 
 static volatile sig_atomic_t g_running = 1;
 
@@ -94,6 +97,19 @@ static void send_ack(int tcp_fd, uint8_t status)
     buf[4] = CMD_ACK;
     buf[5] = status;
     send_all(tcp_fd, buf, 6);
+}
+
+static void send_ack_with_payload(int tcp_fd, uint8_t status, const void* payload, size_t payload_len)
+{
+    std::vector<uint8_t> buf(6 + payload_len);
+    const uint32_t len = static_cast<uint32_t>(2 + payload_len);
+    memcpy(buf.data(), &len, 4);
+    buf[4] = CMD_ACK;
+    buf[5] = status;
+    if (payload_len > 0) {
+        memcpy(buf.data() + 6, payload, payload_len);
+    }
+    send_all(tcp_fd, buf.data(), buf.size());
 }
 
 // ---------------------------------------------------------------------------
@@ -274,6 +290,26 @@ static int poll_tcp_commands(int tcp_fd,
             size_t blob_len = payload_len - 2;
             bool ok = device.handle_load(blob, blob_len, gen);
             send_ack(tcp_fd, ok ? ACK_OK : ACK_ERROR);
+            break;
+        }
+        case CMD_QUERY_DEVICE_STATUS: {
+            if (!state.attached) {
+                send_ack(tcp_fd, ACK_WRONG_STATE);
+                break;
+            }
+
+            uint8_t response[14] = {};
+            uint8_t flags = 0;
+            uint16_t profile_strip_length = 0;
+            if (device.has_hardware_profile()) {
+                flags |= DEVICE_STATUS_FLAG_PROFILE_PRESENT;
+                profile_strip_length = device.strip_length();
+            }
+
+            response[0] = DEVICE_MODE_ATTACHED_CONTROLLED;
+            response[1] = flags;
+            memcpy(response + 2, &profile_strip_length, sizeof(profile_strip_length));
+            send_ack_with_payload(tcp_fd, ACK_OK, response, sizeof(response));
             break;
         }
         case CMD_START: {
