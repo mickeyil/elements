@@ -120,7 +120,7 @@ A session survives individual device disconnects. Each participant has three sta
 - **transport attached** — TCP connection is up (SET_PROFILE + ATTACH succeeded)
 - **actively serving** — loaded with the session blob and executing playback commands
 
-When a device disconnects, it's marked detached (not attached, not serving) but stays a session member. The session continues on the controller-owned clock. Observer frames suspend when any manifest strip has no device actively serving.
+When a device disconnects, it's marked detached (not attached, not serving) but stays a session member. The session continues on the controller-owned clock. Observer frames suspend when any manifest strip has no actively serving, frame-producing participant.
 
 When a device reconnects, it's marked transport-attached. Live resume loads the retained session blob and issues state-appropriate commands. For ESP32 devices in PLAYING or PAUSED sessions, resume waits until a sync correction has been sent for the current boot token. In LOADED and STOPPED, ESP32 devices rejoin immediately (no sync-sensitive commands).
 

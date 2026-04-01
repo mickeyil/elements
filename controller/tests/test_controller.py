@@ -26,6 +26,7 @@ class MockDevice:
         strip_length: int = 5,
         *,
         produces_program_frames: bool = True,
+        frame_byte: int = 0x00,
     ):
         self._state = DeviceState.IDLE
         self._gen = 0
@@ -34,6 +35,7 @@ class MockDevice:
         self._duration_sec = duration
         self._strip_length = strip_length
         self._produces_program_frames = produces_program_frames
+        self._frame_byte = frame_byte & 0xFF
         self._last_t_rel = 0.0
         self._frames: list[DeviceFrame] = []
         self.load_should_fail = False
@@ -79,7 +81,7 @@ class MockDevice:
                 gen=self._gen,
                 frame_index=0,
                 t_rel=t_rel,
-                rgb=b'\x00' * (self._strip_length * 3),
+                rgb=bytes([self._frame_byte]) * (self._strip_length * 3),
             ))
             self._frame_index = 1
             self._state = DeviceState.PAUSED
@@ -115,7 +117,7 @@ class MockDevice:
             gen=self._gen,
             frame_index=self._frame_index,
             t_rel=t_rel,
-            rgb=b'\x00' * (self._strip_length * 3),
+            rgb=bytes([self._frame_byte]) * (self._strip_length * 3),
         ))
         self._frame_index += 1
 
@@ -147,7 +149,7 @@ class MockDevice:
             gen=self._gen,
             frame_index=0,
             t_rel=t_rel,
-            rgb=b'\x00' * (self._strip_length * 3),
+            rgb=bytes([self._frame_byte]) * (self._strip_length * 3),
         ))
         self._frame_index = 1
         if self._state == DeviceState.PLAYING:
@@ -280,8 +282,8 @@ class DualFixture:
 
 class MirrorFixture:
     def __init__(self):
-        self.sim = MockDevice(duration=5.0)
-        self.esp = MockDevice(duration=5.0)
+        self.sim = MockDevice(duration=5.0, produces_program_frames=True)
+        self.esp = MockDevice(duration=5.0, produces_program_frames=False)
         self.bench = MockDevice(duration=5.0)
         self._now_ns = 0
 
@@ -308,10 +310,10 @@ class MirrorFixture:
 
 class MirroredDualFixture:
     def __init__(self):
-        self.left_sim = MockDevice(duration=5.0)
-        self.left_esp = MockDevice(duration=5.0)
-        self.right_sim = MockDevice(duration=5.0)
-        self.right_esp = MockDevice(duration=5.0)
+        self.left_sim = MockDevice(duration=5.0, produces_program_frames=True)
+        self.left_esp = MockDevice(duration=5.0, produces_program_frames=False)
+        self.right_sim = MockDevice(duration=5.0, produces_program_frames=True)
+        self.right_esp = MockDevice(duration=5.0, produces_program_frames=False)
         self._now_ns = 0
 
     def clock(self) -> int:
@@ -1228,14 +1230,14 @@ class TestAbortAndFrameStream:
         assert ctrl.load(f.manifest())
         assert ctrl.program_frame_stream_enabled is True
 
-    def test_program_frame_stream_disabled_for_mixed_runtime(self):
+    def test_program_frame_stream_enabled_for_mixed_mirror(self):
         now_ns = [0]
-        sim = MockDevice(produces_program_frames=True)
-        esp = MockDevice(produces_program_frames=False)
+        esp = MockDevice(produces_program_frames=False, frame_byte=0x22)
+        sim = MockDevice(produces_program_frames=True, frame_byte=0x11)
         ctrl = Controller(
             [
-                StripConfig("main", 5, sim),
                 StripConfig("main", 5, esp),
+                StripConfig("main", 5, sim),
             ],
             clock=lambda: now_ns[0],
         )
@@ -1246,7 +1248,18 @@ class TestAbortAndFrameStream:
         )
 
         assert ctrl.load(manifest, target_groups=[[0, 1]])
-        assert ctrl.program_frame_stream_enabled is False
+        assert ctrl.program_frame_stream_enabled is True
+
+        now_ns[0] = _sec(0.0)
+        ctrl.play()
+        ctrl.drain_events()
+
+        now_ns[0] = _sec(1.0)
+        ctrl.tick_once()
+
+        frames = ctrl.drain_program_frames()
+        assert len(frames) == 1
+        assert frames[0].strips == [bytes([0x11]) * 15]
 
     def test_detach_keeps_session_membership_but_suspends_unserved_stream(self):
         f = DualFixture()
@@ -1261,13 +1274,22 @@ class TestAbortAndFrameStream:
         assert ctrl.mark_transport_attached(f.left) is True
         assert ctrl.program_frame_stream_enabled is False
 
-    def test_detaching_one_mirror_keeps_slot_served(self):
+    def test_detaching_frame_producing_mirror_suspends_observer_stream(self):
         f = MirrorFixture()
         ctrl = Controller(f.strips(), clock=f.clock)
         assert ctrl.load(f.manifest(), target_groups=[[0, 1]])
         assert ctrl.program_frame_stream_enabled is True
 
         assert ctrl.detach_device(f.sim) is True
+        assert ctrl.program_frame_stream_enabled is False
+
+    def test_detaching_non_frame_mirror_keeps_slot_served(self):
+        f = MirrorFixture()
+        ctrl = Controller(f.strips(), clock=f.clock)
+        assert ctrl.load(f.manifest(), target_groups=[[0, 1]])
+        assert ctrl.program_frame_stream_enabled is True
+
+        assert ctrl.detach_device(f.esp) is True
         assert ctrl.program_frame_stream_enabled is True
 
         f.set_time(0.0)
@@ -1323,24 +1345,30 @@ class TestAbortAndFrameStream:
         assert ctrl.state == ControllerState.IDLE
         assert ctrl.drain_events() == []
 
-    def test_tick_once_drains_and_discards_frames_when_session_stream_disabled(self):
+    def test_tick_once_drains_and_discards_frames_when_any_logical_strip_lacks_frame_source(self):
         now_ns = [0]
-        sim = MockDevice(produces_program_frames=True)
-        esp = MockDevice(produces_program_frames=False)
+        left_sim = MockDevice(produces_program_frames=True)
+        left_esp = MockDevice(produces_program_frames=False)
+        right_esp = MockDevice(produces_program_frames=False)
         ctrl = Controller(
             [
-                StripConfig("main", 5, sim),
-                StripConfig("main", 5, esp),
+                StripConfig("left", 5, left_sim),
+                StripConfig("left", 5, left_esp),
+                StripConfig("right", 5, right_esp),
             ],
             clock=lambda: now_ns[0],
         )
         manifest = CompiledManifest(
             duration=5.0,
-            strips=[CompiledStripArtifact("main", 5, b'\x00')],
+            strips=[
+                CompiledStripArtifact("left", 5, b'\x00'),
+                CompiledStripArtifact("right", 5, b'\x00'),
+            ],
             safe_intervals=[],
         )
 
-        assert ctrl.load(manifest, target_groups=[[0, 1]])
+        assert ctrl.load(manifest, target_groups=[[0, 1], [2]])
+        assert ctrl.program_frame_stream_enabled is False
         now_ns[0] = _sec(0.0)
         ctrl.play()
         ctrl.drain_events()
@@ -1349,8 +1377,9 @@ class TestAbortAndFrameStream:
         ctrl.tick_once()
 
         assert ctrl.drain_program_frames() == []
-        assert sim.drain_frames() == []
-        assert esp.drain_frames() == []
+        assert left_sim.drain_frames() == []
+        assert left_esp.drain_frames() == []
+        assert right_esp.drain_frames() == []
 
     def test_zero_serving_participants_can_still_end(self):
         f = DualFixture()

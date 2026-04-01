@@ -534,7 +534,7 @@ class Controller:
             if dev_oid not in drained_by_device:
                 drained_by_device[dev_oid] = s.device.drain_frames()
 
-        for i, s in self._iter_serving_strips():
+        for i, s in self._iter_serving_frame_strips():
             dev_oid = id(s.device)
             drained = drained_by_device.get(dev_oid, [])
             if not self._program_frame_stream_enabled:
@@ -690,17 +690,18 @@ class Controller:
             if self._serving_active[i]:
                 yield i, strip
 
+    def _iter_serving_frame_strips(self):
+        for i, strip in self._iter_serving_strips():
+            if strip.device.produces_program_frames():
+                yield i, strip
+
     def _recompute_program_frame_stream_enabled(self) -> None:
         if not self._active_strips or not self._session_manifest_strips:
             self._program_frame_stream_enabled = False
             return
-        if not all(s.device.produces_program_frames() for s in self._active_strips):
-            self._program_frame_stream_enabled = False
-            return
         served_slots = {
             self._slot_for_active[i]
-            for i, serving in enumerate(self._serving_active)
-            if serving
+            for i, _ in self._iter_serving_frame_strips()
         }
         self._program_frame_stream_enabled = (
             len(served_slots) == len(self._session_manifest_strips)
