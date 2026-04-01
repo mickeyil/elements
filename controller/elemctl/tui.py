@@ -1,4 +1,4 @@
-"""Minimal TUI shell for elemctl — connects to the controller service over UDS.
+"""Minimal TUI shell for elemctl — connects to the controller service over a unix socket.
 
 Usage: python -m elemctl.tui [--socket PATH]
 """
@@ -44,8 +44,8 @@ from .config import (
     MAX_DEVICE_PIXELS,
     DEFAULT_SOCKET_PATH,
 )
-from .uds_client import UdsClient
-from .uds_wire import KIND_FRAME, KIND_JSON, parse_json_payload
+from .controller_client import ControllerClient
+from .controller_protocol import KIND_FRAME, KIND_JSON, parse_json_payload
 from .version import get_runtime_version
 
 
@@ -991,7 +991,7 @@ def _decode_tui_message(kind: int, payload: bytes) -> tuple[list[str] | None, li
 
 
 def format_event(kind: int, payload: bytes) -> list[str] | None:
-    """Format a UDS message as transcript line(s). Returns None for frames."""
+    """Format a controller-protocol message as transcript line(s). Returns None for frames."""
     lines, _ = _decode_tui_message(kind, payload)
     return lines
 
@@ -1121,7 +1121,7 @@ class TuiApp:
         self._socket_path = socket_path
         self._newdevice_dialog: NewDeviceDialogState | None = None
         self._active_modal: object | None = None
-        self._client: UdsClient | None = None
+        self._client: ControllerClient | None = None
         self._client_lock = threading.Lock()
         self._shutdown = threading.Event()
         self._next_id = 1
@@ -3321,7 +3321,7 @@ class TuiApp:
             client = self._get_client()
             if client is None:
                 try:
-                    client = UdsClient(self._socket_path)
+                    client = ControllerClient(self._socket_path)
                 except (ConnectionError, OSError):
                     if not waiting_logged:
                         self._enqueue_log(format_transcript_line(
@@ -3375,15 +3375,15 @@ class TuiApp:
                     for line in lines:
                         self._enqueue_log(format_transcript_line(line))
 
-    def _get_client(self) -> UdsClient | None:
+    def _get_client(self) -> ControllerClient | None:
         with self._client_lock:
             return self._client
 
-    def _set_client(self, client: UdsClient) -> None:
+    def _set_client(self, client: ControllerClient) -> None:
         with self._client_lock:
             self._client = client
 
-    def _drop_client(self, client: UdsClient) -> bool:
+    def _drop_client(self, client: ControllerClient) -> bool:
         with self._client_lock:
             if self._client is not client:
                 return False
@@ -3476,7 +3476,7 @@ def main() -> None:
     )
     parser.add_argument(
         '--socket', default=DEFAULT_SOCKET_PATH,
-        help='UDS socket path (default: %(default)s)',
+        help='unix socket path (default: %(default)s)',
     )
     parser.add_argument(
         '--log-dir', default=None,

@@ -1,6 +1,6 @@
 # Controller
 
-The controller is a long-running Python service on the base station. It compiles DSL programs into binary blobs, routes them to devices, orchestrates playback, and exposes a control API over a Unix Domain Socket.
+The controller is a long-running Python service on the base station. It compiles DSL programs into binary blobs, routes them to devices, orchestrates playback, and exposes a controller API over a unix socket.
 
 ## System Overview
 
@@ -9,8 +9,9 @@ The controller is a long-running Python service on the base station. It compiles
 │                  Base Station                    │
 │                                                  │
 │  ┌────────────────┐       ┌──────────────────┐  │
-│  │   Controller    │  UDS  │   TUI / Web      │  │
-│  │  (compiles,     │◄─────►│  (clients)       │  │
+│  │   Controller    │ unix │   TUI / Web      │  │
+│  │  (compiles,     │socket│  (clients)       │  │
+│  │                 │◄─────►│                  │  │
 │  │   routes blobs, │       └──────────────────┘  │
 │  │   manages       │                             │
 │  │   sessions)     │                             │
@@ -35,7 +36,7 @@ The controller is a long-running Python service on the base station. It compiles
 6. **Manages sessions** — tracks session_id (per load), epoch (per discontinuity), generation counter (for stale frame filtering)
 7. **Owns config** — reads/writes the static config file, handles add/edit/remove device mutations
 8. **Syncs clocks** — probes ESP32 devices via UDP, filters samples, sends corrections over TCP
-9. **Serves control API** — UDS socket with writer (TUI) and observer (web) roles
+9. **Serves controller API** — unix socket with writer (TUI) and observer (web) roles
 
 ## Config
 
@@ -145,7 +146,7 @@ The compiler identifies time ranges where no event carries prior state, making e
 | File | Role |
 |------|------|
 | `controller/elemctl/service.py` | Core service logic: command handlers, compilation, device lifecycle |
-| `controller/elemctl/server.py` | UDS socket server, client management, tick loop |
+| `controller/elemctl/server.py` | Unix socket server, client management, tick loop |
 | `controller/elemctl/controller.py` | Python controller state machine (mirrors C++ SimController) |
 | `controller/elemctl/network_device.py` | TCP/UDP device transport (lazy connect, optimistic state) |
 | `controller/elemctl/config.py` | Config loading and validation |
@@ -153,8 +154,8 @@ The compiler identifies time ranges where no event carries prior state, making e
 | `controller/elemctl/discovery.py` | UDP HELLO packet parsing and matching |
 | `controller/elemctl/clock_sync.py` | NTP-like sync: probe, filter, correct |
 | `controller/elemctl/udp_receiver.py` | Shared UDP socket, per-device-id frame routing |
-| `controller/elemctl/wire.py` | Wire protocol encode/decode |
-| `controller/elemctl/uds_wire.py` | UDS protocol encode/decode |
+| `controller/elemctl/device_protocol.py` | Device protocol encode/decode |
+| `controller/elemctl/controller_protocol.py` | Controller protocol encode/decode |
 | `controller/elemctl/library.py` | Program catalog, metadata extraction, artifact cache |
 | `controller/elemctl/tui.py` | Interactive terminal UI (writer client) |
 | `controller/elemctl/run.py` | Standalone playback runner (no persistent service) |

@@ -1,4 +1,4 @@
-"""Tests for ControllerService and UdsServer."""
+"""Tests for ControllerService and ControllerServer."""
 
 import copy
 import hashlib
@@ -24,13 +24,13 @@ from elemctl.device import DeviceState
 from elemctl.library import ProgramEntry
 from elemctl.program_metadata import extract_metadata, extract_strips
 from elemctl.service import ControllerService
-from elemctl.server import UdsServer
-from elemctl.uds_wire import (
+from elemctl.server import ControllerServer
+from elemctl.controller_protocol import (
     KIND_FRAME,
     KIND_JSON,
     PROTOCOL_VERSION,
     ROLE_OBSERVER,
-    UdsReader,
+    ProtocolReader,
     encode_json,
     parse_json_payload,
 )
@@ -2908,10 +2908,10 @@ class TestPresenceSnapshot:
 
 
 def _decode_json_msgs(json_msgs):
-    """Decode list of UDS-encoded bytes into dicts."""
+    """Decode a list of controller-protocol messages into dicts."""
     events = []
     for msg in json_msgs:
-        reader = UdsReader()
+        reader = ProtocolReader()
         reader.feed(msg)
         for kind, payload in reader.messages():
             if kind == KIND_JSON:
@@ -3331,7 +3331,7 @@ class TestProbeAllBaseline:
         fakes[0].is_connected = False
         svc, _ = _make_service(fake_devices=fakes)
 
-        # Simulate what UdsServer does on client connect
+        # Simulate what ControllerServer does on client connect
         svc.probe_all()
 
         # Device is now connected; snapshot should reflect that
@@ -3620,15 +3620,15 @@ class TestUnknownCommand:
 
 
 # =========================================================================
-# UDS wire format tests
+# Controller protocol tests
 # =========================================================================
 
 
-class TestUdsWire:
+class TestControllerProtocol:
     def test_json_round_trip(self):
         obj = {'foo': 'bar', 'n': 42}
         data = encode_json(obj)
-        reader = UdsReader()
+        reader = ProtocolReader()
         reader.feed(data)
         msgs = reader.messages()
         assert len(msgs) == 1
@@ -3639,7 +3639,7 @@ class TestUdsWire:
     def test_partial_feed(self):
         obj = {'key': 'value'}
         data = encode_json(obj)
-        reader = UdsReader()
+        reader = ProtocolReader()
 
         # Feed byte-by-byte
         for i in range(len(data)):
@@ -3651,7 +3651,7 @@ class TestUdsWire:
         # Last byte should have completed the message in the previous loop
         # Actually let's just verify we got the message at some point
         # Re-do: feed all at once to verify
-        reader2 = UdsReader()
+        reader2 = ProtocolReader()
         for b in data:
             reader2.feed(bytes([b]))
         all_msgs = reader2.messages()
@@ -3661,7 +3661,7 @@ class TestUdsWire:
         obj1 = {'a': 1}
         obj2 = {'b': 2}
         data = encode_json(obj1) + encode_json(obj2)
-        reader = UdsReader()
+        reader = ProtocolReader()
         reader.feed(data)
         msgs = reader.messages()
         assert len(msgs) == 2
@@ -3669,10 +3669,10 @@ class TestUdsWire:
         assert parse_json_payload(msgs[1][1]) == obj2
 
     def test_frame_encoding(self):
-        from elemctl.uds_wire import encode_frame
+        from elemctl.controller_protocol import encode_frame
         rgb = b'\xff\x00\x00' * 5  # 5 red pixels
         data = encode_frame(42, 1.5, [rgb])
-        reader = UdsReader()
+        reader = ProtocolReader()
         reader.feed(data)
         msgs = reader.messages()
         assert len(msgs) == 1
@@ -3690,7 +3690,7 @@ class TestUdsWire:
         valid = encode_json({'ok': True})
         # Craft a zero-length frame: [u32 length=0]
         bad = struct.pack('<I', 0)
-        reader = UdsReader()
+        reader = ProtocolReader()
         reader.feed(bad + valid)
         msgs = reader.messages()
         assert len(msgs) == 1
@@ -3700,11 +3700,11 @@ class TestUdsWire:
 
 
 # =========================================================================
-# Part B: UDS integration tests
+# Part B: Controller API integration tests
 # =========================================================================
 
 
-from .uds_helpers import UdsClient, wait_for_socket as _wait_for_socket
+from .controller_helpers import ControllerClient, wait_for_socket as _wait_for_socket
 
 
 def _json_dicts(messages):
@@ -3716,8 +3716,8 @@ def _snapshot_from_messages(messages):
 
 
 @pytest.fixture()
-def uds_service(tmp_path):
-    """Start a UdsServer in a daemon thread, yield socket path."""
+def controller_api(tmp_path):
+    """Start a ControllerServer in a daemon thread, yield socket path."""
     socket_path = str(tmp_path / 'test.sock')
     config = _make_config()
     fakes = [_FakeDevice()]
@@ -3726,7 +3726,7 @@ def uds_service(tmp_path):
         receiver_factory=_NoopReceiver,
         device_factory=_make_fake_factory(fakes),
     )
-    server = UdsServer(svc, socket_path)
+    server = ControllerServer(svc, socket_path)
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
 
@@ -3738,10 +3738,10 @@ def uds_service(tmp_path):
     assert not thread.is_alive(), 'server thread did not exit after shutdown'
 
 
-class TestUdsConnectSnapshot:
-    def test_connect_receives_snapshot(self, uds_service):
-        socket_path, _, _ = uds_service
-        client = UdsClient(socket_path)
+class TestControllerApiConnect:
+    def test_connect_receives_snapshot(self, controller_api):
+        socket_path, _, _ = controller_api
+        client = ControllerClient(socket_path)
         try:
             msgs = client.recv_messages(timeout=1.0)
             snap = _snapshot_from_messages(msgs)
@@ -3761,12 +3761,12 @@ class TestUdsConnectSnapshot:
             receiver_factory=_NoopReceiver,
             device_factory=_make_fake_factory(fakes),
         )
-        server = UdsServer(svc, socket_path)
+        server = ControllerServer(svc, socket_path)
         thread = threading.Thread(target=server.run, daemon=True)
         thread.start()
         assert _wait_for_socket(socket_path)
 
-        client = UdsClient(socket_path)
+        client = ControllerClient(socket_path)
         try:
             msgs = client.recv_messages(timeout=1.0)
             snap = _snapshot_from_messages(msgs)
@@ -3780,10 +3780,10 @@ class TestUdsConnectSnapshot:
             assert not thread.is_alive(), 'server thread did not exit'
 
 
-class TestUdsLoadPlayRoundTrip:
-    def test_load_play(self, uds_service):
-        socket_path, _, _ = uds_service
-        client = UdsClient(socket_path)
+class TestControllerApiLoadPlay:
+    def test_load_play(self, controller_api):
+        socket_path, _, _ = controller_api
+        client = ControllerClient(socket_path)
         try:
             # Drain snapshot
             client.recv_messages(timeout=0.5)
@@ -3809,7 +3809,7 @@ class TestUdsLoadPlayRoundTrip:
             client.close()
 
 
-class TestUdsShutdown:
+class TestControllerApiShutdown:
     def test_shutdown_stops_server(self, tmp_path):
         socket_path = str(tmp_path / 'test.sock')
         config = _make_config()
@@ -3819,12 +3819,12 @@ class TestUdsShutdown:
             receiver_factory=_NoopReceiver,
             device_factory=_make_fake_factory(fakes),
         )
-        server = UdsServer(svc, socket_path)
+        server = ControllerServer(svc, socket_path)
         thread = threading.Thread(target=server.run, daemon=True)
         thread.start()
         assert _wait_for_socket(socket_path)
 
-        client = UdsClient(socket_path)
+        client = ControllerClient(socket_path)
         try:
             client.recv_messages(timeout=0.5)
             client.send_cmd({'id': 1, 'cmd': 'shutdown'})
@@ -3836,11 +3836,11 @@ class TestUdsShutdown:
         assert not thread.is_alive(), 'server thread did not exit'
 
 
-class TestUdsReconnect:
-    def test_reconnect_gets_fresh_snapshot(self, uds_service):
-        socket_path, _, _ = uds_service
+class TestControllerApiReconnect:
+    def test_reconnect_gets_fresh_snapshot(self, controller_api):
+        socket_path, _, _ = controller_api
         # First connection — load something
-        client1 = UdsClient(socket_path)
+        client1 = ControllerClient(socket_path)
         try:
             client1.recv_messages(timeout=0.5)
             client1.send_cmd({
@@ -3855,7 +3855,7 @@ class TestUdsReconnect:
         time.sleep(0.1)
 
         # Reconnect — should get snapshot with session
-        client2 = UdsClient(socket_path)
+        client2 = ControllerClient(socket_path)
         try:
             msgs = client2.recv_messages(timeout=1.0)
             snap = _snapshot_from_messages(msgs)
@@ -3866,11 +3866,11 @@ class TestUdsReconnect:
             client2.close()
 
 
-class TestUdsRoles:
-    def test_multiple_writers_allowed(self, uds_service):
-        socket_path, _, _ = uds_service
-        writer1 = UdsClient(socket_path)
-        writer2 = UdsClient(socket_path)
+class TestControllerApiRoles:
+    def test_multiple_writers_allowed(self, controller_api):
+        socket_path, _, _ = controller_api
+        writer1 = ControllerClient(socket_path)
+        writer2 = ControllerClient(socket_path)
         try:
             writer1.recv_messages(timeout=0.5)
             writer2.recv_messages(timeout=0.5)
@@ -3890,11 +3890,11 @@ class TestUdsRoles:
             writer2.close()
             writer1.close()
 
-    def test_multiple_observers_allowed(self, uds_service):
-        socket_path, _, _ = uds_service
-        writer = UdsClient(socket_path)
-        observer1 = UdsClient(socket_path, role=ROLE_OBSERVER)
-        observer2 = UdsClient(socket_path, role=ROLE_OBSERVER)
+    def test_multiple_observers_allowed(self, controller_api):
+        socket_path, _, _ = controller_api
+        writer = ControllerClient(socket_path)
+        observer1 = ControllerClient(socket_path, role=ROLE_OBSERVER)
+        observer2 = ControllerClient(socket_path, role=ROLE_OBSERVER)
         try:
             snap1 = _snapshot_from_messages(observer1.recv_messages(timeout=1.0))
             snap2 = _snapshot_from_messages(observer2.recv_messages(timeout=1.0))
@@ -3905,9 +3905,9 @@ class TestUdsRoles:
             observer1.close()
             writer.close()
 
-    def test_observer_command_rejected(self, uds_service):
-        socket_path, _, _ = uds_service
-        observer = UdsClient(socket_path, role=ROLE_OBSERVER)
+    def test_observer_command_rejected(self, controller_api):
+        socket_path, _, _ = controller_api
+        observer = ControllerClient(socket_path, role=ROLE_OBSERVER)
         try:
             observer.recv_messages(timeout=0.5)
             observer.send_cmd({'id': 7, 'cmd': 'status'})
@@ -3920,13 +3920,13 @@ class TestUdsRoles:
         finally:
             observer.close()
 
-    def test_writer_disconnect_does_not_block_new_writer(self, uds_service):
-        socket_path, _, _ = uds_service
-        writer1 = UdsClient(socket_path)
+    def test_writer_disconnect_does_not_block_new_writer(self, controller_api):
+        socket_path, _, _ = controller_api
+        writer1 = ControllerClient(socket_path)
         writer1.close()
         time.sleep(0.1)
 
-        writer2 = UdsClient(socket_path)
+        writer2 = ControllerClient(socket_path)
         try:
             snap = _snapshot_from_messages(writer2.recv_messages(timeout=1.0))
             assert snap['event'] == 'snapshot'
@@ -3951,12 +3951,12 @@ class TestUdsRoles:
             return real_probe_all()
 
         svc.probe_all = probe_all_spy
-        server = UdsServer(svc, socket_path)
+        server = ControllerServer(svc, socket_path)
         thread = threading.Thread(target=server.run, daemon=True)
         thread.start()
         assert _wait_for_socket(socket_path)
 
-        observer = UdsClient(socket_path, role=ROLE_OBSERVER)
+        observer = ControllerClient(socket_path, role=ROLE_OBSERVER)
         try:
             observer.recv_messages(timeout=0.5)
             assert probe_calls == 0
@@ -4867,7 +4867,7 @@ class TestReportedDeviceStatus:
         assert snap['devices'][0]['reported_at'] == pytest.approx(9.0)
 
 
-class TestUdsFrameDelivery:
+class TestControllerApiFrameDelivery:
     def test_frame_delivery(self, tmp_path):
         """After load+play, the client receives KIND_FRAME binary messages."""
         socket_path = str(tmp_path / 'test.sock')
@@ -4878,12 +4878,12 @@ class TestUdsFrameDelivery:
             receiver_factory=_NoopReceiver,
             device_factory=_make_fake_factory(fakes),
         )
-        server = UdsServer(svc, socket_path)
+        server = ControllerServer(svc, socket_path)
         thread = threading.Thread(target=server.run, daemon=True)
         thread.start()
         assert _wait_for_socket(socket_path)
 
-        client = UdsClient(socket_path)
+        client = ControllerClient(socket_path)
         try:
             # Drain snapshot
             client.recv_messages(timeout=0.5)

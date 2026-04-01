@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Minimal remote smoke/recovery probe for one ESP32 device.
 
-Uses the controller UDS API directly:
+Uses the controller API directly:
   status -> publish_program -> load_program -> play -> stop
 
 Optional reboot-first mode uses the ESP32 maintenance command, then waits for
@@ -19,8 +19,8 @@ from pathlib import Path
 _REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO / "controller"))
 
-from elemctl.uds_client import UdsClient
-from elemctl.uds_wire import KIND_JSON, parse_json_payload
+from elemctl.controller_client import ControllerClient
+from elemctl.controller_protocol import KIND_JSON, parse_json_payload
 
 
 PROGRAM_DURATION_S = 4.0
@@ -58,7 +58,7 @@ def log_step(message: str) -> None:
     print(f"[smoke] {message}", flush=True)
 
 
-def send_cmd(client: UdsClient, cmd: dict, timeout_s: float = 10.0) -> dict:
+def send_cmd(client: ControllerClient, cmd: dict, timeout_s: float = 10.0) -> dict:
     cmd_id = client.next_id()
     payload = dict(cmd)
     payload["id"] = cmd_id
@@ -85,7 +85,7 @@ def require_ok(reply: dict, action: str) -> dict:
     return reply.get("result", {})
 
 
-def fetch_status(client: UdsClient) -> dict:
+def fetch_status(client: ControllerClient) -> dict:
     return require_ok(send_cmd(client, {"cmd": "status"}), "status")
 
 
@@ -107,7 +107,7 @@ def wait_until(name: str, predicate, timeout_s: float, interval_s: float = 0.25)
     raise TimeoutError(f"timed out waiting for {name}")
 
 
-def wait_for_connected(client: UdsClient, device_uid: str, timeout_s: float) -> dict:
+def wait_for_connected(client: ControllerClient, device_uid: str, timeout_s: float) -> dict:
     def _probe():
         snapshot = fetch_status(client)
         device = find_device(snapshot, device_uid)
@@ -120,7 +120,7 @@ def wait_for_connected(client: UdsClient, device_uid: str, timeout_s: float) -> 
     return wait_until(f"{device_uid} connected", _probe, timeout_s)
 
 
-def wait_for_playing(client: UdsClient, timeout_s: float) -> dict:
+def wait_for_playing(client: ControllerClient, timeout_s: float) -> dict:
     def _probe():
         snapshot = fetch_status(client)
         session = snapshot.get("session")
@@ -131,7 +131,7 @@ def wait_for_playing(client: UdsClient, timeout_s: float) -> dict:
     return wait_until("playback_state=playing", _probe, timeout_s)
 
 
-def wait_for_stopped(client: UdsClient, timeout_s: float) -> dict:
+def wait_for_stopped(client: ControllerClient, timeout_s: float) -> dict:
     def _probe():
         snapshot = fetch_status(client)
         session = snapshot.get("session")
@@ -144,7 +144,7 @@ def wait_for_stopped(client: UdsClient, timeout_s: float) -> dict:
     return wait_until("playback_state=stopped", _probe, timeout_s)
 
 
-def reboot_and_wait(client: UdsClient, device_uid: str, timeout_s: float) -> None:
+def reboot_and_wait(client: ControllerClient, device_uid: str, timeout_s: float) -> None:
     reconnect_timeout_s = max(timeout_s, REBOOT_MIN_WAIT_TIMEOUT_S)
     log_step(f"requesting reboot for {device_uid}")
     require_ok(
@@ -157,7 +157,7 @@ def reboot_and_wait(client: UdsClient, device_uid: str, timeout_s: float) -> Non
 
 
 def run_cycle(
-    client: UdsClient,
+    client: ControllerClient,
     *,
     device_uid: str,
     strip_id: str,
@@ -216,7 +216,7 @@ def parse_args() -> argparse.Namespace:
         prog="esp32_smoke.py",
         description="Minimal remote smoke probe for one ESP32 device",
     )
-    parser.add_argument("--socket", default="/tmp/elemctl.sock", help="controller UDS path")
+    parser.add_argument("--socket", default="/tmp/elemctl.sock", help="controller unix socket path")
     parser.add_argument("--device", required=True, help="canonical target device uid")
     parser.add_argument("--strip", default="test50", help="target strip id in the controller config")
     parser.add_argument("--program-id", default="esp32_smoke", help="published program id")
@@ -238,7 +238,7 @@ def main() -> int:
     if args.play_seconds <= 0:
         raise ValueError("--play-seconds must be > 0")
 
-    client = UdsClient(args.socket)
+    client = ControllerClient(args.socket)
     try:
         if args.reboot_first:
             reboot_and_wait(client, args.device, args.wait_timeout)

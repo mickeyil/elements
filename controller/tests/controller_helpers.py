@@ -1,27 +1,27 @@
-"""Shared UDS test helpers for controller integration tests."""
+"""Shared controller integration test helpers."""
 
 import itertools
 import socket
 import time
 from pathlib import Path
 
-from elemctl.uds_wire import (
+from elemctl.controller_protocol import (
     PROTOCOL_VERSION,
     ROLE_WRITER,
-    UdsReader,
+    ProtocolReader,
     encode_json,
     parse_json_payload,
 )
 
 
-class UdsClient:
-    """Test helper for talking to a UdsServer."""
+class ControllerClient:
+    """Test helper for talking to a ControllerServer."""
 
     def __init__(self, socket_path: str, timeout: float = 2.0, role: str = ROLE_WRITER):
         self._sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self._sock.settimeout(timeout)
         self._sock.connect(socket_path)
-        self._reader = UdsReader()
+        self._reader = ProtocolReader()
         self._id_counter = itertools.count(1)
         self._prefetched: list[tuple[int, bytes]] = []
         self._send_hello(role)
@@ -88,7 +88,7 @@ class UdsClient:
 
 
 def wait_for_socket(path: str, timeout: float = 2.0) -> bool:
-    """Wait until the UDS socket file exists."""
+    """Wait until the unix socket file exists."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if Path(path).exists():

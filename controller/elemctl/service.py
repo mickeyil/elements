@@ -1,7 +1,7 @@
 """ControllerService — long-running service owning Controller + devices.
 
 Testable without sockets. Owns compilation, device lifecycle, and event
-conversion. The UDS server (server.py) delegates all logic here.
+conversion. The controller server (server.py) delegates all logic here.
 """
 
 from __future__ import annotations
@@ -48,7 +48,7 @@ from .discovery import DISCOVERY_REASON_DUPLICATE_UID, DiscoveryReceiver
 from .library import ArtifactCache, ProgramEntry, ProgramLibrary
 from .network_device import NetworkDevice
 from .udp_receiver import UdpFrameReceiver
-from .uds_wire import PROTOCOL_VERSION, encode_frame, encode_json
+from .controller_protocol import PROTOCOL_VERSION, encode_frame, encode_json
 
 log = logging.getLogger(__name__)
 
@@ -537,7 +537,7 @@ class ControllerService:
     def tick_once(self) -> tuple[list[bytes], list[bytes]]:
         """Poll receiver, tick controller, probe disconnected devices.
 
-        Returns (json_messages, frame_messages) as pre-encoded UDS bytes.
+        Returns (json_messages, frame_messages) as pre-encoded controller-protocol bytes.
         """
         self._receiver.poll()
         now_ns = self._clock()

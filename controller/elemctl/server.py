@@ -1,6 +1,6 @@
-"""UDS server for the controller service.
+"""Unix socket server for the controller service.
 
-Provides a Unix Domain Socket interface wrapping ControllerService.
+Provides a unix socket interface wrapping ControllerService.
 Role-aware, single-threaded, ~50Hz tick loop.
 """
 
@@ -24,12 +24,12 @@ from .config import (
 )
 from .service import ControllerService
 from .slogger import configure_logger
-from .uds_wire import (
+from .controller_protocol import (
     KIND_JSON,
     PROTOCOL_VERSION,
     ROLE_OBSERVER,
     ROLE_WRITER,
-    UdsReader,
+    ProtocolReader,
     encode_json,
     parse_json_payload,
 )
@@ -43,7 +43,7 @@ _TICK_INTERVAL = 0.020  # ~50Hz
 @dataclass
 class _ClientConn:
     sock: socket.socket
-    reader: UdsReader
+    reader: ProtocolReader
     desc: str | None
     role: str | None = None
     hello_ok: bool = False
@@ -130,8 +130,8 @@ def _describe_peer(conn: socket.socket) -> str | None:
     return f'pid={pid}'
 
 
-class UdsServer:
-    """Role-aware multi-client UDS server wrapping a ControllerService."""
+class ControllerServer:
+    """Role-aware multi-client unix socket server wrapping a ControllerService."""
 
     def __init__(self, service: ControllerService, socket_path: str):
         self._service = service
@@ -202,7 +202,7 @@ class UdsServer:
             conn.setblocking(False)
             client = _ClientConn(
                 sock=conn,
-                reader=UdsReader(),
+                reader=ProtocolReader(),
                 desc=_describe_peer(conn),
             )
             self._clients[conn.fileno()] = client
@@ -399,7 +399,7 @@ def main() -> None:
     """CLI entry point for elemctl server."""
     parser = argparse.ArgumentParser(
         prog='elemctl server',
-        description='Elements controller server (UDS)',
+        description='Elements controller server',
     )
     parser.add_argument(
         '--config', default=DEFAULT_CONFIG_PATH,
@@ -407,7 +407,7 @@ def main() -> None:
     )
     parser.add_argument(
         '--socket', default=DEFAULT_SOCKET_PATH,
-        help='UDS socket path (default: %(default)s)',
+        help='unix socket path (default: %(default)s)',
     )
     parser.add_argument(
         '--log-dir', default=None,
@@ -440,7 +440,7 @@ def main() -> None:
 
     service = ControllerService(config, config_path=config_path)
     socket_path = os.path.expanduser(args.socket)
-    server = UdsServer(service, socket_path)
+    server = ControllerServer(service, socket_path)
 
     def _on_signal(signum, frame):
         server.shutdown()

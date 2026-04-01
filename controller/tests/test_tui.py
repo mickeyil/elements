@@ -48,8 +48,8 @@ from elemctl.tui import (
     _SESSION_SENTINEL,
 )
 from elemctl.config import MAX_DEVICE_PIXELS
-from elemctl.uds_wire import KIND_JSON, KIND_FRAME, UdsReader, encode_json
-from elemctl.uds_client import UdsClient
+from elemctl.controller_protocol import KIND_JSON, KIND_FRAME, ProtocolReader, encode_json
+from elemctl.controller_client import ControllerClient
 
 
 # ---------------------------------------------------------------------------
@@ -602,15 +602,15 @@ class TestNewDeviceValidation:
 
 
 # ---------------------------------------------------------------------------
-# UdsClient.recv_once smoke test (socketpair, no threading)
+# ControllerClient.recv_once smoke test (socketpair, no threading)
 # ---------------------------------------------------------------------------
 
 def _make_client_pair():
-    """Create a (write_sock, UdsClient) pair over AF_UNIX socketpair."""
+    """Create a (write_sock, ControllerClient) pair over AF_UNIX socketpair."""
     a, b = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
-    client = UdsClient.__new__(UdsClient)
+    client = ControllerClient.__new__(ControllerClient)
     client._sock = b
-    client._reader = UdsReader()
+    client._reader = ProtocolReader()
     return a, b, client
 
 
@@ -650,7 +650,7 @@ class TestTuiReconnect:
             if sum('connected to /tmp/elemctl.sock' in item for item in logs) >= 2:
                 app._shutdown.set()
 
-        monkeypatch.setattr('elemctl.tui.UdsClient', FakeClient)
+        monkeypatch.setattr('elemctl.tui.ControllerClient', FakeClient)
         monkeypatch.setattr('elemctl.tui.select.select', fake_select)
         monkeypatch.setattr(app, '_enqueue_log', capture)
 
@@ -720,7 +720,7 @@ class TestBufferedConnectSnapshot:
             if isinstance(update, PanelSnapshotUpdate):
                 app._shutdown.set()
 
-        monkeypatch.setattr('elemctl.tui.UdsClient', FakeClient)
+        monkeypatch.setattr('elemctl.tui.ControllerClient', FakeClient)
         monkeypatch.setattr(app, '_enqueue_log', capture_log)
         monkeypatch.setattr(app, '_enqueue_panel_update', capture_update)
 

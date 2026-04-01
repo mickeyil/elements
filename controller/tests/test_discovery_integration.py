@@ -19,16 +19,16 @@ _repo = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_repo / 'compiler'))
 
 from elemctl.config import Config, DeviceConfig
-from elemctl.server import UdsServer
+from elemctl.server import ControllerServer
 from elemctl.service import ControllerService
-from elemctl.uds_wire import KIND_FRAME, KIND_JSON, parse_json_payload
+from elemctl.controller_protocol import KIND_FRAME, KIND_JSON, parse_json_payload
 
 from .sim_helpers import (
     find_free_udp_port,
     start_sim,
     stop_sim,
 )
-from .uds_helpers import UdsClient, wait_for_socket
+from .controller_helpers import ControllerClient, wait_for_socket
 
 STRIP_LENGTH = 10
 
@@ -71,7 +71,7 @@ def _strip_mean(rgb: bytes) -> float:
     return sum(rgb) / len(rgb)
 
 
-def _wait_for_reply(client: UdsClient, cmd_id: int,
+def _wait_for_reply(client: ControllerClient, cmd_id: int,
                     timeout: float = 5.0) -> dict:
     """Receive until we find the reply with the given id."""
     deadline = time.monotonic() + timeout
@@ -87,7 +87,7 @@ def _wait_for_reply(client: UdsClient, cmd_id: int,
     pytest.fail(f'no reply for command id={cmd_id} within {timeout}s')
 
 
-def _wait_for_online(client: UdsClient, expected: int,
+def _wait_for_online(client: ControllerClient, expected: int,
                      timeout: float = 10.0) -> list[dict]:
     """Poll status until online_count == expected. Returns device_status events."""
     deadline = time.monotonic() + timeout
@@ -120,7 +120,7 @@ def _wait_for_online(client: UdsClient, expected: int,
     return device_status_events
 
 
-def _load_play_collect(client: UdsClient, dsl: str, duration: float,
+def _load_play_collect(client: ControllerClient, dsl: str, duration: float,
                        timeout: float = 8.0):
     """Load+play, collect frames until ended or timeout.
 
@@ -194,10 +194,10 @@ def discovered(tmp_path):
     )
 
     service = ControllerService(config)
-    server = UdsServer(service, socket_path)
+    server = ControllerServer(service, socket_path)
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
-    assert wait_for_socket(socket_path), 'UDS server did not create socket'
+    assert wait_for_socket(socket_path), 'controller server did not create socket'
 
     sims = []
     client = None
@@ -215,7 +215,7 @@ def discovered(tmp_path):
         )
         sims.append(sim2)
 
-        client = UdsClient(socket_path, timeout=5.0)
+        client = ControllerClient(socket_path, timeout=5.0)
         device_status_events = _wait_for_online(client, expected=2)
     except Exception:
         if client:

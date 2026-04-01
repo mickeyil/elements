@@ -9,7 +9,7 @@ from __future__ import annotations
 import socket
 
 from .device import DeviceFrame
-from .wire import parse_udp_frame
+from .device_protocol import parse_udp_frame
 
 # 10 bytes header + 3 * max_strip_length RGB.
 # 4096 covers strips up to ~1362 LEDs.

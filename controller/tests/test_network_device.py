@@ -12,7 +12,7 @@ import elemctl.network_device as network_device_module
 from elemctl.device import DeviceFrame, DeviceState
 from elemctl.network_device import NetworkDevice
 from elemctl.udp_receiver import UdpFrameReceiver
-from elemctl.wire import (
+from elemctl.device_protocol import (
     ACK_ERROR,
     ACK_OK,
     ACK_WRONG_STATE,

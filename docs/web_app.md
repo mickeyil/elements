@@ -5,7 +5,7 @@ A Vue 3 + TypeScript browser interface served by `elemctl web`. Connects to the 
 ## Architecture
 
 ```
-Browser (Vue 3)  ◄──── HTTP / WebSocket ────►  elemctl web  ◄──── UDS (observer) ────►  Controller
+Browser (Vue 3)  ◄──── HTTP / WebSocket ────►  elemctl web  ◄──── unix socket (observer) ────►  Controller
 ```
 
 `elemctl web` is a thin relay — it does not hold playback state. The controller remains the authority. The relay forwards snapshots, events, and binary program frames to the browser, and proxies device management API calls back to the controller.

@@ -1,27 +1,27 @@
-"""Production UDS client for connecting to the controller service."""
+"""Production client for connecting to the controller service over a unix socket."""
 
 from __future__ import annotations
 
 import itertools
 import socket
 
-from .uds_wire import (
+from .controller_protocol import (
     PROTOCOL_VERSION,
     ROLE_WRITER,
-    UdsReader,
+    ProtocolReader,
     encode_json,
     parse_json_payload,
 )
 
 
-class UdsClient:
-    """Blocking UDS client. Caller gates readability via select before recv_once()."""
+class ControllerClient:
+    """Blocking controller client over a unix socket. Caller gates readability via select before recv_once()."""
 
     def __init__(self, socket_path: str, timeout: float = 2.0, role: str = ROLE_WRITER):
         self._sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self._sock.settimeout(timeout)
         self._sock.connect(socket_path)
-        self._reader = UdsReader()
+        self._reader = ProtocolReader()
         self._id_counter = itertools.count(1)
         self._prefetched: list[tuple[int, bytes]] = []
         self._send_hello(role)

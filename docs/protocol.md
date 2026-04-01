@@ -1,11 +1,11 @@
 # Protocol
 
-All communication between the controller and devices uses three transport channels. A separate UDS channel connects the controller to local clients (TUI, web relay).
+All communication between the controller and devices uses three transport channels. A separate unix socket channel connects the controller to local clients (TUI, web relay).
 
 ```
                         Controller
                        ┌──────────┐
-          TCP (cmds)   │          │  UDS
+          TCP (cmds)   │          │ unix socket
   Device ◄────────────►│          │◄──────► TUI / Web
           UDP (frames) │          │
   Device ──────────────►          │
@@ -177,7 +177,7 @@ Sync affects the next START/RESUME/JUMP — it does not re-anchor an already-pla
 
 ---
 
-## UDS Protocol (Controller ↔ Clients)
+## Controller API (over unix socket)
 
 Local Unix Domain Socket (`/tmp/elemctl.sock`). Clients connect as writer (can send commands) or observer (snapshots + events only).
 

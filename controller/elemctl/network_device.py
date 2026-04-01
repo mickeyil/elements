@@ -14,7 +14,7 @@ import time
 
 from .device import DeviceFrame, DeviceState
 from .udp_receiver import UdpFrameReceiver
-from .wire import (
+from .device_protocol import (
     ACK_ERROR,
     ACK_OK,
     ACK_WRONG_STATE,

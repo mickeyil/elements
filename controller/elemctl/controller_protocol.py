@@ -1,4 +1,4 @@
-"""UDS wire protocol encoding/decoding for controller ↔ client communication.
+"""Controller protocol encoding/decoding for controller ↔ client communication.
 
 Wire format: [u32 LE length][u8 kind][payload]
 where length covers kind + payload (not itself).
@@ -21,13 +21,13 @@ _FRAME_HEADER = struct.Struct('<If')  # frame_index(u32) + t_rel(f32)
 
 
 def encode_json(obj: dict) -> bytes:
-    """Encode a JSON-serializable dict as a length-prefixed UDS message."""
+    """Encode a JSON-serializable dict as a length-prefixed controller-protocol message."""
     payload = json.dumps(obj, separators=(',', ':')).encode('utf-8')
     return _HEADER.pack(1 + len(payload), KIND_JSON) + payload
 
 
 def encode_frame(frame_index: int, t_rel: float, strips: list[bytes]) -> bytes:
-    """Encode a program frame as a length-prefixed UDS message.
+    """Encode a program frame as a length-prefixed controller-protocol message.
 
     Payload: [u32 frame_index][f32 t_rel][rgb_0]...[rgb_N-1]
     """
@@ -42,8 +42,8 @@ def parse_json_payload(payload: bytes) -> dict:
     return json.loads(payload.decode('utf-8'))
 
 
-class UdsReader:
-    """Incremental parser for the UDS wire format.
+class ProtocolReader:
+    """Incremental parser for the controller protocol.
 
     Handles partial reads — buffers incomplete messages internally.
     """

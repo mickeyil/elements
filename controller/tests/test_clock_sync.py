@@ -8,7 +8,7 @@ import struct
 import pytest
 
 from elemctl.clock_sync import ClockSyncManager, ClockSyncPollResult
-from elemctl.wire import SYNC_REQ_STRUCT
+from elemctl.device_protocol import SYNC_REQ_STRUCT
 
 
 class _FakeClock:

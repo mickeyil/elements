@@ -7,7 +7,7 @@ import logging
 import socket
 import time
 
-from .wire import encode_sync_req, parse_sync_resp
+from .device_protocol import encode_sync_req, parse_sync_resp
 
 log = logging.getLogger(__name__)
 

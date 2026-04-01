@@ -4,7 +4,7 @@ import logging
 import signal
 import elemctl.web as web_mod
 import pytest
-from elemctl.uds_wire import PROTOCOL_VERSION
+from elemctl.controller_protocol import PROTOCOL_VERSION
 from elemctl.web import (
     WebRelay,
     _build_parser,
@@ -466,7 +466,7 @@ def test_create_device_response_forwards_add_device(monkeypatch, tmp_path):
         def close(self) -> None:
             return None
 
-    monkeypatch.setattr(web_mod, 'UdsClient', FakeClient)
+    monkeypatch.setattr(web_mod, 'ControllerClient', FakeClient)
 
     status, payload = relay._create_device_response({
         'device_type': 'sim',
@@ -508,7 +508,7 @@ def test_create_device_response_returns_503_when_controller_unavailable(monkeypa
         def __init__(self, socket_path: str, timeout: float, role: str) -> None:
             raise ConnectionError('hello failed')
 
-    monkeypatch.setattr(web_mod, 'UdsClient', FailingClient)
+    monkeypatch.setattr(web_mod, 'ControllerClient', FailingClient)
 
     status, payload = relay._create_device_response({
         'device_type': 'sim',
@@ -552,7 +552,7 @@ def test_create_device_response_returns_503_when_controller_reply_times_out(monk
         def close(self) -> None:
             return None
 
-    monkeypatch.setattr(web_mod, 'UdsClient', TimeoutClient)
+    monkeypatch.setattr(web_mod, 'ControllerClient', TimeoutClient)
     monkeypatch.setattr(web_mod, '_CONTROLLER_REPLY_TIMEOUT', 0.01)
 
     status, payload = relay._create_device_response({
@@ -598,7 +598,7 @@ def test_edit_device_response_forwards_edit_device(monkeypatch, tmp_path):
         def close(self) -> None:
             return None
 
-    monkeypatch.setattr(web_mod, 'UdsClient', FakeClient)
+    monkeypatch.setattr(web_mod, 'ControllerClient', FakeClient)
 
     status, payload = relay._edit_device_response('old-uid', {
         'device_uid': 'new-uid',
@@ -638,7 +638,7 @@ def test_edit_device_response_returns_503_when_controller_unavailable(monkeypatc
         def __init__(self, socket_path: str, timeout: float, role: str) -> None:
             raise ConnectionError('hello failed')
 
-    monkeypatch.setattr(web_mod, 'UdsClient', FailingClient)
+    monkeypatch.setattr(web_mod, 'ControllerClient', FailingClient)
 
     status, payload = relay._edit_device_response('sim-1', {
         'device_uid': 'sim-1',
@@ -682,7 +682,7 @@ def test_remove_device_response_forwards_remove_device(monkeypatch, tmp_path):
         def close(self) -> None:
             return None
 
-    monkeypatch.setattr(web_mod, 'UdsClient', FakeClient)
+    monkeypatch.setattr(web_mod, 'ControllerClient', FakeClient)
 
     status, payload = relay._remove_device_response('sim-1')
 
@@ -711,7 +711,7 @@ def test_remove_device_response_returns_503_when_controller_unavailable(monkeypa
         def __init__(self, socket_path: str, timeout: float, role: str) -> None:
             raise ConnectionError('hello failed')
 
-    monkeypatch.setattr(web_mod, 'UdsClient', FailingClient)
+    monkeypatch.setattr(web_mod, 'ControllerClient', FailingClient)
 
     status, payload = relay._remove_device_response('sim-1')
 
@@ -866,7 +866,7 @@ def test_shutdown_cancels_ws_tasks_before_waiting_for_server_close(tmp_path):
 
     async def run() -> None:
         relay._loop = Loop()  # type: ignore[assignment]
-        relay._uds_thread = Thread()  # type: ignore[assignment]
+        relay._controller_thread = Thread()  # type: ignore[assignment]
         relay._close_all_ws_clients = fake_close_all_ws_clients  # type: ignore[method-assign]
 
         ws_task = asyncio.create_task(ws_task_body())
@@ -887,7 +887,7 @@ def test_shutdown_cancels_ws_tasks_before_waiting_for_server_close(tmp_path):
     assert events[-1] == 'close-ws-clients'
 
 
-def test_uds_reader_loop_logs_controller_connect_and_disconnect(monkeypatch, tmp_path, caplog):
+def test_controller_reader_loop_logs_controller_connect_and_disconnect(monkeypatch, tmp_path, caplog):
     relay = WebRelay('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
 
     class FakeClient:
@@ -915,11 +915,11 @@ def test_uds_reader_loop_logs_controller_connect_and_disconnect(monkeypatch, tmp
         relay._stop.set()
         raise ConnectionError('controller unavailable')
 
-    monkeypatch.setattr(web_mod, 'UdsClient', fake_client)
+    monkeypatch.setattr(web_mod, 'ControllerClient', fake_client)
     monkeypatch.setattr(web_mod.select, 'select', lambda *args, **kwargs: ([123], [], []))
 
     with caplog.at_level(logging.INFO, logger='elemctl.web'):
-        relay._uds_reader_loop()
+        relay._controller_reader_loop()
 
     messages = [record.getMessage() for record in caplog.records]
     assert 'controller connected: /tmp/elemctl.sock' in messages

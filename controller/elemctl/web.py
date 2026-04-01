@@ -39,8 +39,8 @@ from .sim_layout import (
     save_layout_for_editor,
 )
 from .slogger import configure_logger
-from .uds_client import UdsClient
-from .uds_wire import (
+from .controller_client import ControllerClient
+from .controller_protocol import (
     KIND_FRAME,
     KIND_JSON,
     PROTOCOL_VERSION,
@@ -231,7 +231,7 @@ class WebRelay:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._queue: asyncio.Queue[tuple[str, object]] | None = None
         self._stop = threading.Event()
-        self._uds_thread: threading.Thread | None = None
+        self._controller_thread: threading.Thread | None = None
 
         self._controller_connected = False
         self._relay_version = relay_version
@@ -247,8 +247,8 @@ class WebRelay:
     async def run(self) -> None:
         self._loop = asyncio.get_running_loop()
         self._queue = asyncio.Queue()
-        self._uds_thread = threading.Thread(target=self._uds_reader_loop, daemon=True)
-        self._uds_thread.start()
+        self._controller_thread = threading.Thread(target=self._controller_reader_loop, daemon=True)
+        self._controller_thread.start()
 
         server = await asyncio.start_server(self._handle_http_client, self._host, self._port)
         sockets = ', '.join(str(sock.getsockname()) for sock in server.sockets or [])
@@ -303,18 +303,18 @@ class WebRelay:
         await asyncio.gather(broadcast_task, return_exceptions=True)
         await server.wait_closed()
 
-        if self._uds_thread is not None:
-            self._uds_thread.join(timeout=3.0)
+        if self._controller_thread is not None:
+            self._controller_thread.join(timeout=3.0)
         await self._close_all_ws_clients()
 
-    def _uds_reader_loop(self) -> None:
-        client: UdsClient | None = None
+    def _controller_reader_loop(self) -> None:
+        client: ControllerClient | None = None
         last_connected = False
 
         while not self._stop.is_set():
             if client is None:
                 try:
-                    client = UdsClient(
+                    client = ControllerClient(
                         self._socket_path,
                         timeout=1.0,
                         role=ROLE_OBSERVER,
@@ -332,7 +332,7 @@ class WebRelay:
                     last_connected = True
                     self._enqueue_status(True)
                 try:
-                    self._enqueue_uds_messages(client.recv_once())
+                    self._enqueue_controller_messages(client.recv_once())
                 except (ConnectionError, OSError):
                     client.close()
                     client = None
@@ -353,7 +353,7 @@ class WebRelay:
                 continue
 
             try:
-                self._enqueue_uds_messages(client.recv_once())
+                self._enqueue_controller_messages(client.recv_once())
             except (ConnectionError, OSError):
                 client.close()
                 client = None
@@ -373,7 +373,7 @@ class WebRelay:
             ('relay_status', _relay_status(connected)),
         )
 
-    def _enqueue_uds_messages(self, messages: list[tuple[int, bytes]]) -> None:
+    def _enqueue_controller_messages(self, messages: list[tuple[int, bytes]]) -> None:
         if self._loop is None or self._queue is None:
             return
         for kind, payload in messages:
@@ -987,7 +987,7 @@ class WebRelay:
 
     def _send_controller_cmd(self, cmd: dict) -> dict:
         try:
-            client = UdsClient(self._socket_path, timeout=1.5, role=ROLE_WRITER)
+            client = ControllerClient(self._socket_path, timeout=1.5, role=ROLE_WRITER)
         except (ConnectionError, OSError) as e:
             raise _HttpError(503, f'controller unavailable: {e}') from e
 
@@ -1034,7 +1034,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         '--socket', default=DEFAULT_SOCKET_PATH,
-        help='controller UDS socket path (default: %(default)s)',
+        help='controller unix socket path (default: %(default)s)',
     )
     parser.add_argument(
         '--config', default=DEFAULT_CONFIG_PATH,
