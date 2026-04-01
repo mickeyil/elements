@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 
-import { useInjectedRelayState } from '../composables/useRelayState';
+import { useInjectedServerState } from '../composables/useServerState';
 import { CELL_PX, type SimTarget } from '../lib/viewerRenderer';
 
 const {
@@ -9,7 +9,7 @@ const {
   emptyState,
   session,
   simTargets,
-} = useInjectedRelayState();
+} = useInjectedServerState();
 
 const playbackState = computed(() => session.value?.playback_state ?? 'idle');
 const sessionId = computed(() => session.value?.session_id ?? 'none');

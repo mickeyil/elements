@@ -4,16 +4,16 @@ import { RouterLink, RouterView } from 'vue-router';
 
 import IconDevices from './components/icons/IconDevices.vue';
 import IconSimulation from './components/icons/IconSimulation.vue';
-import { relayStateKey, useRelayState } from './composables/useRelayState';
+import { serverStateKey, useServerState } from './composables/useServerState';
 
-const relayState = useRelayState();
-provide(relayStateKey, relayState);
+const serverState = useServerState();
+provide(serverStateKey, serverState);
 
-const { controllerConnected, relayConnected, snapshot } = relayState;
+const { controllerConnected, serverConnected, snapshot } = serverState;
 const infoOpen = ref(false);
 
 const footerStatus = computed(() => {
-  if (!relayConnected.value) {
+  if (!serverConnected.value) {
     return { label: 'Offline', className: 'app-footer-status-offline' };
   }
   if (!controllerConnected.value) {
@@ -22,8 +22,8 @@ const footerStatus = computed(() => {
   return { label: 'Connected', className: 'app-footer-status-online' };
 });
 
-const relayVersion = computed(() => {
-  const value = snapshot.value?.relay_version;
+const serverVersion = computed(() => {
+  const value = snapshot.value?.server_version;
   return typeof value === 'string' && value ? value : 'unknown';
 });
 
@@ -100,13 +100,13 @@ onBeforeUnmount(() => {
         </button>
         <div v-if="infoOpen" class="app-footer-info-popover">
           <p class="app-footer-info-label">Version</p>
-          <p class="app-footer-info-value mono">{{ relayVersion }}</p>
+          <p class="app-footer-info-value mono">{{ serverVersion }}</p>
         </div>
       </div>
     </footer>
 
     <div
-      v-if="!relayConnected"
+      v-if="!serverConnected"
       class="app-offline-overlay"
       role="alert"
       aria-live="polite"

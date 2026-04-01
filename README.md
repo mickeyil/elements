@@ -19,6 +19,12 @@ Requires C++11 and Python 3 (for test fixture generation).
 cd build && ctest
 ```
 
+Python test suites can be run from the repo root:
+
+```bash
+pytest
+```
+
 Or run individually:
 
 ```bash
@@ -73,7 +79,7 @@ Expected result:
 
 Notes:
 - `tui` connects as the single writer client
-- `web` connects as an observer relay and can run alongside the TUI
+- `web` starts the web UI server and connects to the controller as an observer client
 
 - discovery defaults to UDP port `6040` when `controller.discovery_port` is omitted
 - set `"discovery_port": null` in the config to disable discovery explicitly
@@ -85,7 +91,7 @@ src/              C++ engine core (decoder, engine, compositor, animations)
 src/firmware/     ESP32 firmware (WiFi, TCP, discovery, LED output)
 test/             Catch2 tests
 compiler/         Python compiler (DSL → binary blob)
-controller/       Python controller service, TUI, web relay
-web_ui/           Vue 3 browser interface
+controller/       Python controller service, TUI, web UI server
+controller/web_ui/ Vue 3 browser interface source + built assets
 docs/             Documentation
 ```

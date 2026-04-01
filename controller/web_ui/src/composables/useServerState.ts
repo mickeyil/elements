@@ -55,7 +55,7 @@ export interface SessionState {
 export interface SnapshotEvent {
   devices?: SnapshotDevice[];
   layouts?: Record<string, LayoutPayload>;
-  relay_version?: string | null;
+  server_version?: string | null;
   session?: SessionState | null;
 }
 
@@ -64,8 +64,8 @@ export interface EmptyState {
   copy: string;
 }
 
-export function useRelayState() {
-  const relayConnected = ref(false);
+export function useServerState() {
+  const serverConnected = ref(false);
   const controllerConnected = ref(false);
   const snapshot = shallowRef<SnapshotEvent | null>(null);
   const session = ref<SessionState | null>(null);
@@ -268,7 +268,7 @@ export function useRelayState() {
   }
 
   function applyEvent(msg: Record<string, unknown>): void {
-    if (msg.event === 'relay_status') {
+    if (msg.event === 'server_status') {
       controllerConnected.value = Boolean(msg.controller_connected);
       return;
     }
@@ -328,14 +328,14 @@ export function useRelayState() {
   }
 
   function connect(): void {
-    relayConnected.value = false;
+    serverConnected.value = false;
 
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     ws = new WebSocket(`${proto}//${window.location.host}/ws`);
     ws.binaryType = 'arraybuffer';
 
     ws.addEventListener('open', () => {
-      relayConnected.value = true;
+      serverConnected.value = true;
     });
 
     ws.addEventListener('message', (event) => {
@@ -343,7 +343,7 @@ export function useRelayState() {
     });
 
     ws.addEventListener('close', () => {
-      relayConnected.value = false;
+      serverConnected.value = false;
       controllerConnected.value = false;
       snapshot.value = null;
       session.value = null;
@@ -380,21 +380,21 @@ export function useRelayState() {
     assignCanvas,
     controllerConnected,
     emptyState,
-    relayConnected,
+    serverConnected,
     session,
     snapshot,
     simTargets,
   };
 }
 
-export type RelayState = ReturnType<typeof useRelayState>;
+export type ServerState = ReturnType<typeof useServerState>;
 
-export const relayStateKey: InjectionKey<RelayState> = Symbol('relay-state');
+export const serverStateKey: InjectionKey<ServerState> = Symbol('server-state');
 
-export function useInjectedRelayState(): RelayState {
-  const relayState = inject(relayStateKey);
-  if (!relayState) {
-    throw new Error('Relay state is not available.');
+export function useInjectedServerState(): ServerState {
+  const serverState = inject(serverStateKey);
+  if (!serverState) {
+    throw new Error('Server state is not available.');
   }
-  return relayState;
+  return serverState;
 }

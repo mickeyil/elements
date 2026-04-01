@@ -1,4 +1,4 @@
-"""Web relay for the Elements controller."""
+"""Web UI server for the Elements controller."""
 
 from __future__ import annotations
 
@@ -52,7 +52,7 @@ from .version import get_runtime_version
 
 log = logging.getLogger(__name__)
 
-_STATIC_DIR = Path(__file__).resolve().parent / 'web_static'
+_STATIC_DIR = Path(__file__).resolve().parents[1] / 'web_ui' / 'dist'
 _STATIC_ROOT = _STATIC_DIR.resolve()
 _WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
 _FRAME_HEADER = struct.Struct('<If')
@@ -84,7 +84,7 @@ def _empty_snapshot() -> dict:
         'type': 'event',
         'event': 'snapshot',
         'protocol_version': PROTOCOL_VERSION,
-        'relay_version': None,
+        'server_version': None,
         'online_count': 0,
         'expected_count': 0,
         'session': None,
@@ -93,10 +93,10 @@ def _empty_snapshot() -> dict:
     }
 
 
-def _relay_status(connected: bool) -> dict:
+def _server_status(connected: bool) -> dict:
     return {
         'type': 'event',
-        'event': 'relay_status',
+        'event': 'server_status',
         'controller_connected': connected,
     }
 
@@ -213,7 +213,7 @@ def _tailscale_urls(port: int) -> list[str]:
     return urls
 
 
-class WebRelay:
+class WebUiServer:
     def __init__(
         self,
         socket_path: str,
@@ -222,7 +222,7 @@ class WebRelay:
         layouts: dict[str, dict] | None = None,
         sim_devices: dict[str, int] | None = None,
         layouts_dir: str = DEFAULT_LAYOUTS_PATH,
-        relay_version: str | None = None,
+        server_version: str | None = None,
     ):
         self._socket_path = socket_path
         self._host = host
@@ -234,12 +234,12 @@ class WebRelay:
         self._controller_thread: threading.Thread | None = None
 
         self._controller_connected = False
-        self._relay_version = relay_version
+        self._server_version = server_version
         self._layouts = layouts or {}
         self._sim_devices = sim_devices or {}
         self._layouts_dir = os.path.expanduser(layouts_dir)
         self._snapshot = _empty_snapshot()
-        self._snapshot['relay_version'] = self._relay_version
+        self._snapshot['server_version'] = self._server_version
         self._snapshot['layouts'] = self._layouts
         self._ws_clients: set[_WsClient] = set()
         self._ws_tasks: set[asyncio.Task] = set()
@@ -252,7 +252,7 @@ class WebRelay:
 
         server = await asyncio.start_server(self._handle_http_client, self._host, self._port)
         sockets = ', '.join(str(sock.getsockname()) for sock in server.sockets or [])
-        log.info('web relay listening on %s', sockets)
+        log.info('web UI server listening on %s', sockets)
         if server.sockets:
             sockname = server.sockets[0].getsockname()
             if isinstance(sockname, tuple) and len(sockname) >= 2:
@@ -370,7 +370,7 @@ class WebRelay:
             return
         self._loop.call_soon_threadsafe(
             self._queue.put_nowait,
-            ('relay_status', _relay_status(connected)),
+            ('server_status', _server_status(connected)),
         )
 
     def _enqueue_controller_messages(self, messages: list[tuple[int, bytes]]) -> None:
@@ -390,7 +390,7 @@ class WebRelay:
         assert self._queue is not None
         while True:
             item_type, payload = await self._queue.get()
-            if item_type == 'relay_status':
+            if item_type == 'server_status':
                 msg = payload
                 assert isinstance(msg, dict)
                 connected = bool(msg.get('controller_connected'))
@@ -398,7 +398,7 @@ class WebRelay:
                 await self._broadcast_json(msg)
                 if not connected:
                     self._snapshot = _make_disconnected_snapshot(self._snapshot)
-                    self._snapshot['relay_version'] = self._relay_version
+                    self._snapshot['server_version'] = self._server_version
                     self._snapshot['layouts'] = self._layouts
                     await self._broadcast_json(self._snapshot)
                 continue
@@ -426,7 +426,7 @@ class WebRelay:
         event = msg.get('event')
         if event == 'snapshot':
             self._snapshot = copy.deepcopy(msg)
-            self._snapshot['relay_version'] = self._relay_version
+            self._snapshot['server_version'] = self._server_version
             self._snapshot['layouts'] = self._layouts
             return
 
@@ -846,7 +846,7 @@ class WebRelay:
             self._ws_tasks.add(task)
 
         try:
-            await self._send_json(client, _relay_status(self._controller_connected))
+            await self._send_json(client, _server_status(self._controller_connected))
             await self._send_json(client, self._snapshot)
 
             while not reader.at_eof():
@@ -1030,7 +1030,7 @@ class WebRelay:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog='elemctl web',
-        description='Elements web relay and realtime viewer',
+        description='Elements web UI server and realtime viewer',
     )
     parser.add_argument(
         '--socket', default=DEFAULT_SOCKET_PATH,
@@ -1074,7 +1074,7 @@ def main() -> None:
         level='INFO',
     )
     runtime_version = get_runtime_version()
-    log.info('elements web relay started. version: %s', runtime_version)
+    log.info('elements web UI server started. version: %s', runtime_version)
     log.info('using config %s', config_path)
     Path(log_dir).mkdir(parents=True, exist_ok=True)
 
@@ -1082,7 +1082,7 @@ def main() -> None:
     layouts = load_layouts_for_devices(config.devices, layouts_dir=layouts_dir)
     sim_devices = {dc.device_uid: dc.length for dc in config.devices if dc.device_type == 'sim'}
 
-    relay = WebRelay(
+    server = WebUiServer(
         os.path.expanduser(args.socket),
         args.host,
         args.port,
@@ -1093,7 +1093,7 @@ def main() -> None:
     )
 
     try:
-        asyncio.run(relay.run())
+        asyncio.run(server.run())
     except KeyboardInterrupt:
         pass
 

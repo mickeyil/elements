@@ -29,7 +29,7 @@ The controller is a long-running Python service on the base station. It compiles
 ## What the Controller Does
 
 1. **Compiles programs** — takes DSL source, runs the Python compiler, produces per-strip blobs + metadata (duration, safe intervals)
-2. **Manages devices** — discovers devices via UDP HELLO, maintains TCP connections, sends CONFIGURE on connect
+2. **Manages devices** — discovers devices via UDP HELLO, maintains TCP connections, sends SET_PROFILE and ATTACH on connect
 3. **Routes blobs** — maps compiled strips to devices by `strip_id`, fans out to mirrored devices
 4. **Orchestrates playback** — LOAD/START/JUMP/PAUSE/RESUME/STOP across all session devices
 5. **Assembles frames** — receives per-device RGB frames over UDP, groups by frame_index, emits complete multi-strip program frames to clients
@@ -171,7 +171,7 @@ The compiler identifies time ranges where no event carries prior state, making e
 ./elemctl server --config config.json   # start controller service
 ./elemctl tui                           # connect TUI as writer
 ./elemctl sim sim-1 --config config.json # launch a simulator
-./elemctl web                           # start web relay (observer)
+./elemctl web                           # start web UI server (observer client)
 ./elemctl run program.py                # standalone: compile + play
 ```
 

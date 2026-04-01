@@ -6,7 +6,7 @@ import elemctl.web as web_mod
 import pytest
 from elemctl.controller_protocol import PROTOCOL_VERSION
 from elemctl.web import (
-    WebRelay,
+    WebUiServer,
     _build_parser,
     _device_uid_from_path,
     _encode_ws_frame,
@@ -65,8 +65,8 @@ def test_empty_snapshot_includes_programs_after_disconnect():
 
 
 def test_programs_updated_refreshes_cached_snapshot_programs():
-    relay = WebRelay('/tmp/elemctl.sock', '127.0.0.1', 8080)
-    relay._snapshot = {
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080)
+    server._snapshot = {
         'type': 'event',
         'event': 'snapshot',
         'protocol_version': PROTOCOL_VERSION,
@@ -77,20 +77,20 @@ def test_programs_updated_refreshes_cached_snapshot_programs():
         'programs': [{'program_id': 'old', 'beat': 1.0, 'duration': 2.0, 'error': None}],
     }
 
-    relay._apply_json_message({
+    server._apply_json_message({
         'type': 'event',
         'event': 'programs_updated',
         'programs': [{'program_id': 'new', 'beat': 0.5, 'duration': 4.0, 'error': None}],
     })
 
-    assert relay._snapshot['programs'] == [
+    assert server._snapshot['programs'] == [
         {'program_id': 'new', 'beat': 0.5, 'duration': 4.0, 'error': None},
     ]
 
 
 def test_device_status_event_updates_reported_and_session_role():
-    relay = WebRelay('/tmp/elemctl.sock', '127.0.0.1', 8080)
-    relay._snapshot = {
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080)
+    server._snapshot = {
         'type': 'event',
         'event': 'snapshot',
         'protocol_version': PROTOCOL_VERSION,
@@ -107,7 +107,7 @@ def test_device_status_event_updates_reported_and_session_role():
         'programs': [],
     }
 
-    relay._apply_json_message({
+    server._apply_json_message({
         'type': 'event',
         'event': 'device_status',
         'source': 'reported',
@@ -121,7 +121,7 @@ def test_device_status_event_updates_reported_and_session_role():
         'reported_at': 123.5,
     })
 
-    device = relay._snapshot['devices'][0]
+    device = server._snapshot['devices'][0]
     assert device['connected'] is False
     assert device['session_role'] == 'detached'
     assert device['reported'] == {
@@ -129,12 +129,12 @@ def test_device_status_event_updates_reported_and_session_role():
         'background_present': True,
     }
     assert device['reported_at'] == 123.5
-    assert relay._snapshot['online_count'] == 0
+    assert server._snapshot['online_count'] == 0
 
 
 def test_session_events_update_observer_suspended():
-    relay = WebRelay('/tmp/elemctl.sock', '127.0.0.1', 8080)
-    relay._apply_json_message({
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080)
+    server._apply_json_message({
         'type': 'event',
         'event': 'session_start',
         'session_id': 7,
@@ -145,39 +145,39 @@ def test_session_events_update_observer_suspended():
         'strips': [],
     })
 
-    assert relay._snapshot['session']['observer_suspended'] is True
+    assert server._snapshot['session']['observer_suspended'] is True
 
-    relay._apply_json_message({
+    server._apply_json_message({
         'type': 'event',
         'event': 'state',
         'session_id': 7,
         'state': 'playing',
         'observer_suspended': False,
     })
-    assert relay._snapshot['session']['observer_suspended'] is False
+    assert server._snapshot['session']['observer_suspended'] is False
 
-    relay._apply_json_message({
+    server._apply_json_message({
         'type': 'event',
         'event': 'loop',
         'session_id': 7,
         'epoch': 1,
         'observer_suspended': True,
     })
-    assert relay._snapshot['session']['observer_suspended'] is True
+    assert server._snapshot['session']['observer_suspended'] is True
 
 
-def test_web_relay_initial_snapshot_includes_layouts():
+def test_web_ui_server_initial_snapshot_includes_layouts():
     layouts = {'sim-1': {'rows': [[1, 2], [None, 3]]}}
-    relay = WebRelay('/tmp/elemctl.sock', '127.0.0.1', 8080, layouts)
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, layouts)
 
-    assert relay._snapshot['layouts'] == layouts
+    assert server._snapshot['layouts'] == layouts
 
 
 def test_snapshot_event_reapplies_layouts():
     layouts = {'sim-1': {'rows': [[1, None], [2, 3]]}}
-    relay = WebRelay('/tmp/elemctl.sock', '127.0.0.1', 8080, layouts, relay_version='v-test')
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, layouts, server_version='v-test')
 
-    relay._apply_json_message({
+    server._apply_json_message({
         'type': 'event',
         'event': 'snapshot',
         'protocol_version': PROTOCOL_VERSION,
@@ -188,8 +188,8 @@ def test_snapshot_event_reapplies_layouts():
         'programs': [],
     })
 
-    assert relay._snapshot['layouts'] == layouts
-    assert relay._snapshot['relay_version'] == 'v-test'
+    assert server._snapshot['layouts'] == layouts
+    assert server._snapshot['server_version'] == 'v-test'
 
 
 def test_make_disconnected_snapshot_preserves_layouts():
@@ -212,12 +212,12 @@ def test_make_disconnected_snapshot_preserves_layouts():
     assert out['devices'][0]['connected'] is False
 
 
-def test_make_disconnected_snapshot_preserves_relay_version():
+def test_make_disconnected_snapshot_preserves_server_version():
     snap = {
         'type': 'event',
         'event': 'snapshot',
         'protocol_version': PROTOCOL_VERSION,
-        'relay_version': 'v-test',
+        'server_version': 'v-test',
         'online_count': 1,
         'expected_count': 1,
         'session': {'session_id': 7},
@@ -227,11 +227,11 @@ def test_make_disconnected_snapshot_preserves_relay_version():
 
     out = _make_disconnected_snapshot(snap)
 
-    assert out['relay_version'] == 'v-test'
+    assert out['server_version'] == 'v-test'
 
 
 def test_resolve_asset_path_allows_nested_assets(tmp_path, monkeypatch):
-    static_dir = tmp_path / 'web_static'
+    static_dir = tmp_path / 'dist'
     asset_dir = static_dir / 'assets'
     asset_dir.mkdir(parents=True)
     asset_path = asset_dir / 'index-abc123.js'
@@ -244,7 +244,7 @@ def test_resolve_asset_path_allows_nested_assets(tmp_path, monkeypatch):
 
 
 def test_resolve_asset_path_rejects_traversal(tmp_path, monkeypatch):
-    static_dir = tmp_path / 'web_static'
+    static_dir = tmp_path / 'dist'
     static_dir.mkdir()
     (tmp_path / 'secret.txt').write_text('nope', encoding='utf-8')
 
@@ -256,7 +256,7 @@ def test_resolve_asset_path_rejects_traversal(tmp_path, monkeypatch):
 
 
 def test_static_cache_control_is_immutable_for_hashed_assets(tmp_path, monkeypatch):
-    static_dir = tmp_path / 'web_static'
+    static_dir = tmp_path / 'dist'
     asset_dir = static_dir / 'assets'
     asset_dir.mkdir(parents=True)
     asset_path = asset_dir / 'index-abc123.js'
@@ -269,7 +269,7 @@ def test_static_cache_control_is_immutable_for_hashed_assets(tmp_path, monkeypat
 
 
 def test_static_cache_control_keeps_html_uncached(tmp_path, monkeypatch):
-    static_dir = tmp_path / 'web_static'
+    static_dir = tmp_path / 'dist'
     static_dir.mkdir()
     index_path = static_dir / 'index.html'
     index_path.write_text('<!doctype html>', encoding='utf-8')
@@ -313,7 +313,7 @@ def test_tailscale_urls_returns_empty_when_binary_missing(monkeypatch):
 
 
 def test_get_layout_response_missing_known_sim_returns_404(tmp_path):
-    relay = WebRelay(
+    server = WebUiServer(
         '/tmp/elemctl.sock',
         '127.0.0.1',
         8080,
@@ -322,16 +322,16 @@ def test_get_layout_response_missing_known_sim_returns_404(tmp_path):
         str(tmp_path),
     )
 
-    status, payload = relay._get_layout_response('sim-1')
+    status, payload = server._get_layout_response('sim-1')
 
     assert status == 404
     assert payload == {'error': 'layout not found'}
 
 
 def test_get_layout_response_unknown_device_returns_400(tmp_path):
-    relay = WebRelay('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
 
-    status, payload = relay._get_layout_response('sim-1')
+    status, payload = server._get_layout_response('sim-1')
 
     assert status == 400
     assert payload == {'error': 'unknown sim device'}
@@ -339,7 +339,7 @@ def test_get_layout_response_unknown_device_returns_400(tmp_path):
 
 def test_get_layout_response_returns_rows_without_editor_when_sidecar_missing(tmp_path):
     (tmp_path / 'sim-1.csv').write_text("1,2\n3,4\n", encoding='utf-8')
-    relay = WebRelay(
+    server = WebUiServer(
         '/tmp/elemctl.sock',
         '127.0.0.1',
         8080,
@@ -348,7 +348,7 @@ def test_get_layout_response_returns_rows_without_editor_when_sidecar_missing(tm
         str(tmp_path),
     )
 
-    status, payload = relay._get_layout_response('sim-1')
+    status, payload = server._get_layout_response('sim-1')
 
     assert status == 200
     assert payload == {
@@ -361,7 +361,7 @@ def test_get_layout_response_returns_rows_without_editor_when_sidecar_missing(tm
 
 
 def test_save_layout_response_updates_layout_cache_and_snapshot(tmp_path):
-    relay = WebRelay(
+    server = WebUiServer(
         '/tmp/elemctl.sock',
         '127.0.0.1',
         8080,
@@ -370,7 +370,7 @@ def test_save_layout_response_updates_layout_cache_and_snapshot(tmp_path):
         str(tmp_path),
     )
 
-    status, payload = relay._save_layout_response(
+    status, payload = server._save_layout_response(
         'sim-1',
         {
             'rows': [[1, 2], [3, 4]],
@@ -393,12 +393,12 @@ def test_save_layout_response_updates_layout_cache_and_snapshot(tmp_path):
         [3, 4],
     ]
     assert payload['editor']['csv_hash']
-    assert relay._layouts == {'sim-1': {'rows': [[1, 2], [3, 4]]}}
-    assert relay._snapshot['layouts'] == relay._layouts
+    assert server._layouts == {'sim-1': {'rows': [[1, 2], [3, 4]]}}
+    assert server._snapshot['layouts'] == server._layouts
 
 
 def test_save_layout_response_rejects_invalid_payload(tmp_path):
-    relay = WebRelay(
+    server = WebUiServer(
         '/tmp/elemctl.sock',
         '127.0.0.1',
         8080,
@@ -407,7 +407,7 @@ def test_save_layout_response_rejects_invalid_payload(tmp_path):
         str(tmp_path),
     )
 
-    status, payload = relay._save_layout_response(
+    status, payload = server._save_layout_response(
         'sim-1',
         {
             'rows': [[1, 2]],
@@ -427,7 +427,7 @@ def test_save_layout_response_rejects_invalid_payload(tmp_path):
 
 
 def test_create_device_response_forwards_add_device(monkeypatch, tmp_path):
-    relay = WebRelay('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
     commands: list[dict] = []
 
     class FakeClient:
@@ -468,7 +468,7 @@ def test_create_device_response_forwards_add_device(monkeypatch, tmp_path):
 
     monkeypatch.setattr(web_mod, 'ControllerClient', FakeClient)
 
-    status, payload = relay._create_device_response({
+    status, payload = server._create_device_response({
         'device_type': 'sim',
         'device_uid': 'sim-1',
         'strip_id': 'main',
@@ -488,9 +488,9 @@ def test_create_device_response_forwards_add_device(monkeypatch, tmp_path):
 
 
 def test_create_device_response_rejects_invalid_payload(tmp_path):
-    relay = WebRelay('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
 
-    status, payload = relay._create_device_response({
+    status, payload = server._create_device_response({
         'device_type': 'sim',
         'device_uid': 'sim-1',
         'strip_id': '',
@@ -502,7 +502,7 @@ def test_create_device_response_rejects_invalid_payload(tmp_path):
 
 
 def test_create_device_response_returns_503_when_controller_unavailable(monkeypatch, tmp_path):
-    relay = WebRelay('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
 
     class FailingClient:
         def __init__(self, socket_path: str, timeout: float, role: str) -> None:
@@ -510,7 +510,7 @@ def test_create_device_response_returns_503_when_controller_unavailable(monkeypa
 
     monkeypatch.setattr(web_mod, 'ControllerClient', FailingClient)
 
-    status, payload = relay._create_device_response({
+    status, payload = server._create_device_response({
         'device_type': 'sim',
         'device_uid': 'sim-1',
         'strip_id': 'main',
@@ -522,7 +522,7 @@ def test_create_device_response_returns_503_when_controller_unavailable(monkeypa
 
 
 def test_create_device_response_returns_503_when_controller_reply_times_out(monkeypatch, tmp_path):
-    relay = WebRelay('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
 
     class FakeSock:
         def __init__(self) -> None:
@@ -555,7 +555,7 @@ def test_create_device_response_returns_503_when_controller_reply_times_out(monk
     monkeypatch.setattr(web_mod, 'ControllerClient', TimeoutClient)
     monkeypatch.setattr(web_mod, '_CONTROLLER_REPLY_TIMEOUT', 0.01)
 
-    status, payload = relay._create_device_response({
+    status, payload = server._create_device_response({
         'device_type': 'sim',
         'device_uid': 'sim-1',
         'strip_id': 'main',
@@ -567,7 +567,7 @@ def test_create_device_response_returns_503_when_controller_reply_times_out(monk
 
 
 def test_edit_device_response_forwards_edit_device(monkeypatch, tmp_path):
-    relay = WebRelay('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
     commands: list[dict] = []
 
     class FakeClient:
@@ -600,7 +600,7 @@ def test_edit_device_response_forwards_edit_device(monkeypatch, tmp_path):
 
     monkeypatch.setattr(web_mod, 'ControllerClient', FakeClient)
 
-    status, payload = relay._edit_device_response('old-uid', {
+    status, payload = server._edit_device_response('old-uid', {
         'device_uid': 'new-uid',
         'strip_id': 'main',
         'length': 90,
@@ -619,9 +619,9 @@ def test_edit_device_response_forwards_edit_device(monkeypatch, tmp_path):
 
 
 def test_edit_device_response_rejects_invalid_payload(tmp_path):
-    relay = WebRelay('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
 
-    status, payload = relay._edit_device_response('sim-1', {
+    status, payload = server._edit_device_response('sim-1', {
         'device_uid': 'sim-1',
         'strip_id': '',
         'length': 60,
@@ -632,7 +632,7 @@ def test_edit_device_response_rejects_invalid_payload(tmp_path):
 
 
 def test_edit_device_response_returns_503_when_controller_unavailable(monkeypatch, tmp_path):
-    relay = WebRelay('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
 
     class FailingClient:
         def __init__(self, socket_path: str, timeout: float, role: str) -> None:
@@ -640,7 +640,7 @@ def test_edit_device_response_returns_503_when_controller_unavailable(monkeypatc
 
     monkeypatch.setattr(web_mod, 'ControllerClient', FailingClient)
 
-    status, payload = relay._edit_device_response('sim-1', {
+    status, payload = server._edit_device_response('sim-1', {
         'device_uid': 'sim-1',
         'strip_id': 'main',
         'length': 60,
@@ -651,7 +651,7 @@ def test_edit_device_response_returns_503_when_controller_unavailable(monkeypatc
 
 
 def test_remove_device_response_forwards_remove_device(monkeypatch, tmp_path):
-    relay = WebRelay('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
     commands: list[dict] = []
 
     class FakeClient:
@@ -684,7 +684,7 @@ def test_remove_device_response_forwards_remove_device(monkeypatch, tmp_path):
 
     monkeypatch.setattr(web_mod, 'ControllerClient', FakeClient)
 
-    status, payload = relay._remove_device_response('sim-1')
+    status, payload = server._remove_device_response('sim-1')
 
     assert status == 200
     assert payload == {'ok': True, 'result': {'message': 'removed device sim-1'}}
@@ -696,16 +696,16 @@ def test_remove_device_response_forwards_remove_device(monkeypatch, tmp_path):
 
 
 def test_remove_device_response_rejects_invalid_uid(tmp_path):
-    relay = WebRelay('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
 
-    status, payload = relay._remove_device_response('')
+    status, payload = server._remove_device_response('')
 
     assert status == 400
     assert payload == {'error': 'device uid must be a non-empty string'}
 
 
 def test_remove_device_response_returns_503_when_controller_unavailable(monkeypatch, tmp_path):
-    relay = WebRelay('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
 
     class FailingClient:
         def __init__(self, socket_path: str, timeout: float, role: str) -> None:
@@ -713,19 +713,19 @@ def test_remove_device_response_returns_503_when_controller_unavailable(monkeypa
 
     monkeypatch.setattr(web_mod, 'ControllerClient', FailingClient)
 
-    status, payload = relay._remove_device_response('sim-1')
+    status, payload = server._remove_device_response('sim-1')
 
     assert status == 503
     assert payload == {'error': 'controller unavailable: hello failed'}
 
 
 def test_read_http_body_rejects_oversized_request(tmp_path):
-    relay = WebRelay('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
     
     async def run() -> None:
         reader = asyncio.StreamReader()
         reader.feed_eof()
-        await relay._read_http_body(reader, {'content-length': str((1 << 20) + 1)})
+        await server._read_http_body(reader, {'content-length': str((1 << 20) + 1)})
 
     with pytest.raises(web_mod._HttpError) as exc:
         asyncio.run(run())
@@ -735,7 +735,7 @@ def test_read_http_body_rejects_oversized_request(tmp_path):
 
 
 def test_close_all_ws_clients_aborts_stuck_writer(tmp_path, monkeypatch):
-    relay = WebRelay('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
 
     class Transport:
         def __init__(self) -> None:
@@ -756,18 +756,18 @@ def test_close_all_ws_clients_aborts_stuck_writer(tmp_path, monkeypatch):
             await asyncio.Event().wait()
 
     writer = Writer()
-    relay._ws_clients.add(web_mod._WsClient(writer=writer, peer='browser'))  # type: ignore[arg-type]
+    server._ws_clients.add(web_mod._WsClient(writer=writer, peer='browser'))  # type: ignore[arg-type]
     monkeypatch.setattr(web_mod, '_WS_CLOSE_TIMEOUT', 0.001)
 
-    asyncio.run(relay._close_all_ws_clients())
+    asyncio.run(server._close_all_ws_clients())
 
     assert writer.closed is True
     assert writer.transport.aborted is True
-    assert relay._ws_clients == set()
+    assert server._ws_clients == set()
 
 
 def test_write_http_response_ignores_connection_reset_on_close(tmp_path):
-    relay = WebRelay('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
 
     class Writer:
         def __init__(self) -> None:
@@ -788,19 +788,19 @@ def test_write_http_response_ignores_connection_reset_on_close(tmp_path):
 
     writer = Writer()
 
-    asyncio.run(relay._write_http_response(writer, 200, b'ok'))  # type: ignore[arg-type]
+    asyncio.run(server._write_http_response(writer, 200, b'ok'))  # type: ignore[arg-type]
 
     assert writer.closed is True
     assert bytes(writer.buffer).startswith(b'HTTP/1.1 200 OK\r\n')
 
 
 def test_handle_http_client_ignores_connection_reset_from_ws_handler(tmp_path):
-    relay = WebRelay('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
 
     async def fail_ws(reader, writer, headers) -> None:
         raise ConnectionResetError(104, 'Connection reset by peer')
 
-    relay._handle_ws = fail_ws  # type: ignore[method-assign]
+    server._handle_ws = fail_ws  # type: ignore[method-assign]
 
     async def run() -> None:
         reader = asyncio.StreamReader()
@@ -823,13 +823,13 @@ def test_handle_http_client_ignores_connection_reset_from_ws_handler(tmp_path):
             async def wait_closed(self) -> None:
                 return None
 
-        await relay._handle_http_client(reader, Writer())  # type: ignore[arg-type]
+        await server._handle_http_client(reader, Writer())  # type: ignore[arg-type]
 
     asyncio.run(run())
 
 
 def test_shutdown_cancels_ws_tasks_before_waiting_for_server_close(tmp_path):
-    relay = WebRelay('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
     events: list[str] = []
 
     class Loop:
@@ -865,22 +865,22 @@ def test_shutdown_cancels_ws_tasks_before_waiting_for_server_close(tmp_path):
             raise
 
     async def run() -> None:
-        relay._loop = Loop()  # type: ignore[assignment]
-        relay._controller_thread = Thread()  # type: ignore[assignment]
-        relay._close_all_ws_clients = fake_close_all_ws_clients  # type: ignore[method-assign]
+        server._loop = Loop()  # type: ignore[assignment]
+        server._controller_thread = Thread()  # type: ignore[assignment]
+        server._close_all_ws_clients = fake_close_all_ws_clients  # type: ignore[method-assign]
 
         ws_task = asyncio.create_task(ws_task_body())
         await asyncio.sleep(0)
-        relay._ws_tasks.add(ws_task)
+        server._ws_tasks.add(ws_task)
 
         broadcast_task = asyncio.create_task(broadcast_task_body())
         await asyncio.sleep(0)
 
-        await relay._shutdown(Server(), broadcast_task, [signal.SIGINT])
+        await server._shutdown(Server(), broadcast_task, [signal.SIGINT])
 
     asyncio.run(run())
 
-    assert relay._stop.is_set() is True
+    assert server._stop.is_set() is True
     assert events.index('server-close') < events.index('ws-task-cancelled')
     assert events.index('ws-task-cancelled') < events.index('server-wait-closed')
     assert events.index('broadcast-task-cancelled') < events.index('server-wait-closed')
@@ -888,7 +888,7 @@ def test_shutdown_cancels_ws_tasks_before_waiting_for_server_close(tmp_path):
 
 
 def test_controller_reader_loop_logs_controller_connect_and_disconnect(monkeypatch, tmp_path, caplog):
-    relay = WebRelay('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
 
     class FakeClient:
         def __init__(self) -> None:
@@ -912,14 +912,14 @@ def test_controller_reader_loop_logs_controller_connect_and_disconnect(monkeypat
         created['count'] += 1
         if created['count'] == 1:
             return FakeClient()
-        relay._stop.set()
+        server._stop.set()
         raise ConnectionError('controller unavailable')
 
     monkeypatch.setattr(web_mod, 'ControllerClient', fake_client)
     monkeypatch.setattr(web_mod.select, 'select', lambda *args, **kwargs: ([123], [], []))
 
     with caplog.at_level(logging.INFO, logger='elemctl.web'):
-        relay._controller_reader_loop()
+        server._controller_reader_loop()
 
     messages = [record.getMessage() for record in caplog.records]
     assert 'controller connected: /tmp/elemctl.sock' in messages

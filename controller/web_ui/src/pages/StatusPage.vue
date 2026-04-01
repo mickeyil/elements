@@ -4,7 +4,7 @@ import { RouterLink } from 'vue-router';
 
 import DeviceModal from '../components/DeviceModal.vue';
 import RemoveDeviceModal from '../components/RemoveDeviceModal.vue';
-import { useInjectedRelayState, type SnapshotDevice } from '../composables/useRelayState';
+import { useInjectedServerState, type SnapshotDevice } from '../composables/useServerState';
 
 type DeviceStatus = 'online' | 'dropped' | 'offline';
 
@@ -13,7 +13,7 @@ interface StatusCardDevice extends SnapshotDevice {
   hasLayout: boolean;
 }
 
-const { controllerConnected, snapshot } = useInjectedRelayState();
+const { controllerConnected, snapshot } = useInjectedServerState();
 const openMenuUid = ref<string | null>(null);
 const showNewDeviceModal = ref(false);
 const editingDevice = ref<StatusCardDevice | null>(null);

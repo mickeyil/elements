@@ -1,6 +1,6 @@
 # Protocol
 
-All communication between the controller and devices uses three transport channels. A separate unix socket channel connects the controller to local clients (TUI, web relay).
+All communication between the controller and devices uses three transport channels. A separate unix socket channel connects the controller to local clients (TUI, web app).
 
 ```
                         Controller
@@ -58,7 +58,7 @@ Reliable channel for commands and ACKs. Controller opens a persistent connection
 └──────────────┴──────────┴──────────┴─────────────────────┘
 ```
 
-Status: `0` = OK, `1` = error, `2` = wrong state (e.g. LOAD before CONFIGURE).
+Status: `0` = OK, `1` = error, `2` = wrong state (e.g. LOAD before SET_PROFILE).
 
 Devices ACK after SET_PROFILE, ATTACH, LOAD, STORE_BACKGROUND, CLEAR_BACKGROUND, QUERY_DEVICE_STATUS, and REBOOT. Other commands are fire-and-forget (TCP guarantees delivery).
 

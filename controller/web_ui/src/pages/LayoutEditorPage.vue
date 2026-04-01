@@ -21,7 +21,7 @@ import IconSave from '../components/icons/IconSave.vue';
 import IconSelect from '../components/icons/IconSelect.vue';
 import IconSingle from '../components/icons/IconSingle.vue';
 import IconUndo from '../components/icons/IconUndo.vue';
-import { useInjectedRelayState, type SnapshotDevice } from '../composables/useRelayState';
+import { useInjectedServerState, type SnapshotDevice } from '../composables/useServerState';
 import {
   type CirclePrimitive,
   circleRadiusFromPoints,
@@ -117,7 +117,7 @@ const PLACEMENT_BUBBLE_FADE_MS = 180;
 
 const route = useRoute();
 const router = useRouter();
-const { snapshot } = useInjectedRelayState();
+const { snapshot } = useInjectedServerState();
 
 const canvasRef = ref<HTMLCanvasElement | null>(null);
 const editorSurfaceRef = ref<HTMLDivElement | null>(null);

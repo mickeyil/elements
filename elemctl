@@ -27,7 +27,7 @@ commands:
   tui      interactive TUI shell
   sim      launch a configured network simulator
   server   start controller server
-  web      start observer web relay and viewer
+  web      start web UI server and realtime viewer
   setup    install/update dependencies"""
 
 _PUBLIC_SUBCOMMANDS = {'tui', 'sim', 'server', 'web', 'setup'}
