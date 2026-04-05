@@ -1,13 +1,14 @@
 #pragma once
 
-#include <WString.h>
-
+#include <cstddef>
 #include <cstdint>
 
 namespace firmware {
 
+static constexpr size_t kDeviceUidCapacity = 24;
+
 struct DeviceIdentity {
-    String uid;
+    char uid[kDeviceUidCapacity] = {};
     uint32_t boot_token = 0;
 };
 

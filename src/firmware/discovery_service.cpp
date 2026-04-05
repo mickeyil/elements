@@ -31,7 +31,7 @@ void DiscoveryService::start_if_needed()
     if (_identity != nullptr) {
         log_line(
             "[net] uid=%s ip=%s tcp=%u discovery=%u",
-            _identity->uid.c_str(),
+            _identity->uid,
             WiFi.localIP().toString().c_str(),
             kTcpPort,
             kDiscoveryPort
@@ -123,8 +123,8 @@ void DiscoveryService::maybe_send_hello_()
         return;
     }
 
-    const size_t uid_len = _identity->uid.length();
-    if (uid_len == 0 || uid_len > 255) {
+    const size_t uid_len = strlen(_identity->uid);
+    if (uid_len == 0) {
         return;
     }
 
@@ -132,7 +132,7 @@ void DiscoveryService::maybe_send_hello_()
     memcpy(pkt, &kDiscoveryMagic, 2);
     memcpy(pkt + 2, &kTcpPort, 2);
     pkt[4] = static_cast<uint8_t>(uid_len);
-    memcpy(pkt + 5, _identity->uid.c_str(), uid_len);
+    memcpy(pkt + 5, _identity->uid, uid_len);
 
     const IPAddress broadcast_ip(255, 255, 255, 255);
     if (_udp.beginPacket(broadcast_ip, kDiscoveryPort)) {
@@ -186,7 +186,7 @@ void DiscoveryService::handle_duplicate_reject_()
     }
 
     _hello_backoff_until_ms = millis() + kDuplicateHelloBackoffMs;
-    log_line("[discovery] duplicate uid backoff uid=%s", _identity->uid.c_str());
+    log_line("[discovery] duplicate uid backoff uid=%s", _identity->uid);
 }
 
 }  // namespace firmware

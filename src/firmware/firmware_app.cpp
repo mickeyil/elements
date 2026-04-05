@@ -28,7 +28,7 @@ void FirmwareApp::begin()
 
     log_line("[boot] elements esp32 runtime starting");
     log_line("[boot] build=%s %s", __DATE__, __TIME__);
-    log_line("[boot] uid=%s", _identity.uid.c_str());
+    log_line("[boot] uid=%s", _identity.uid);
     log_line("[boot] boot_token=%lu", static_cast<unsigned long>(_identity.boot_token));
     log_line("[mode] %s", mode_name_());
 

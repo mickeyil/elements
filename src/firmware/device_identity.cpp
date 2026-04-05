@@ -17,7 +17,7 @@ uint32_t make_boot_token_()
     return token;
 }
 
-String make_device_uid_()
+void make_device_uid_(char* out, size_t out_size)
 {
     const uint64_t chip_id = ESP.getEfuseMac();
     const uint8_t mac0 = static_cast<uint8_t>((chip_id >> 0) & 0xff);
@@ -26,10 +26,9 @@ String make_device_uid_()
     const uint8_t mac3 = static_cast<uint8_t>((chip_id >> 24) & 0xff);
     const uint8_t mac4 = static_cast<uint8_t>((chip_id >> 32) & 0xff);
     const uint8_t mac5 = static_cast<uint8_t>((chip_id >> 40) & 0xff);
-    char buf[32];
     snprintf(
-        buf,
-        sizeof(buf),
+        out,
+        out_size,
         "esp32-%02x%02x%02x%02x%02x%02x",
         mac0,
         mac1,
@@ -38,7 +37,6 @@ String make_device_uid_()
         mac4,
         mac5
     );
-    return String(buf);
 }
 
 }  // namespace
@@ -46,7 +44,7 @@ String make_device_uid_()
 DeviceIdentity read_device_identity()
 {
     DeviceIdentity identity;
-    identity.uid = make_device_uid_();
+    make_device_uid_(identity.uid, kDeviceUidCapacity);
     identity.boot_token = make_boot_token_();
     return identity;
 }
