@@ -83,6 +83,8 @@ Notes:
 
 - discovery defaults to UDP port `6040` when `controller.discovery_port` is omitted
 - set `"discovery_port": null` in the config to disable discovery explicitly
+- repo-local deployment config now lives in `instance/config.json`; it is auto-created on first run
+- simulator layouts are stored in `instance/layouts/`
 
 ## Project structure
 
@@ -94,4 +96,5 @@ compiler/         Python compiler (DSL → binary blob)
 controller/       Python controller service, TUI, web UI server
 controller/web_ui/ Vue 3 browser interface source + built assets
 docs/             Documentation
+instance/         Local deployment config and simulator layouts (gitignored)
 ```

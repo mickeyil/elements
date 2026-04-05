@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
 from pathlib import Path
 
 from .config import (
-    DEFAULT_DISCOVERY_PORT,
-    DEFAULT_FRAME_PORT,
     ConfigError,
     load_config_obj,
+    _write_json_file_atomic,
+    default_config_doc,
 )
 
 
@@ -23,19 +22,21 @@ def ensure_editor_shape(doc: dict) -> dict:
     if not isinstance(doc, dict):
         raise ConfigError("config must be a JSON object")
 
+    defaults = default_config_doc()
+
     ctrl = doc.get("controller")
     if ctrl is None:
         ctrl = {}
         doc["controller"] = ctrl
     if not isinstance(ctrl, dict):
         raise ConfigError("'controller' must be an object")
-    ctrl.setdefault("frame_port", DEFAULT_FRAME_PORT)
+    ctrl.setdefault("frame_port", defaults["controller"]["frame_port"])
     if "discovery_port" not in ctrl:
-        ctrl["discovery_port"] = DEFAULT_DISCOVERY_PORT
+        ctrl["discovery_port"] = defaults["controller"]["discovery_port"]
 
     devices = doc.get("devices")
     if devices is None:
-        devices = []
+        devices = list(defaults["devices"])
         doc["devices"] = devices
     if not isinstance(devices, list):
         raise ConfigError("'devices' must be a list")
@@ -127,23 +128,4 @@ def save_config_doc(path: str, doc: dict) -> None:
     load_config_obj(doc)
 
     resolved = Path(os.path.expanduser(path))
-    resolved.parent.mkdir(parents=True, exist_ok=True)
-
-    fd, tmp_path = tempfile.mkstemp(
-        prefix=f".{resolved.name}.tmp-",
-        suffix=".json",
-        dir=str(resolved.parent),
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(doc, f, indent=2)
-            f.write("\n")
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp_path, resolved)
-    except Exception:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
+    _write_json_file_atomic(resolved, doc)

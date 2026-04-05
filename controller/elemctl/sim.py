@@ -96,8 +96,9 @@ def main() -> None:
     )
     parser.add_argument('device_uid', help='configured sim device UID to launch')
     parser.add_argument(
-        '--config', default=DEFAULT_CONFIG_PATH,
-        help='config JSON path (default: %(default)s)',
+        '--config',
+        default=None,
+        help=f'config JSON path (default: {DEFAULT_CONFIG_PATH})',
     )
     parser.add_argument(
         '--discovery-host', default='127.0.0.1',

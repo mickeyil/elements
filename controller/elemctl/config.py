@@ -6,18 +6,24 @@ Reads a JSON config describing the controller and device topology.
 from __future__ import annotations
 
 import json
+import logging
 import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-DEFAULT_CONFIG_PATH = '~/.config/elemctl/config.json'
+log = logging.getLogger(__name__)
+
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+INSTANCE_DIR = REPO_ROOT / 'instance'
+DEFAULT_CONFIG_PATH = str(INSTANCE_DIR / 'config.json')
 DEFAULT_SOCKET_PATH = '/tmp/elemctl.sock'
 DEFAULT_FRAME_PORT = 9002
 DEFAULT_DISCOVERY_PORT = 6040
 # Must match kMaxStripPixels in src/hardware_profile.h
 MAX_DEVICE_PIXELS = 250
-DEFAULT_ANIMATIONS_PATH = str(Path(__file__).resolve().parent.parent.parent / 'animations')
-DEFAULT_LOGS_PATH = str(Path(__file__).resolve().parent.parent.parent / 'logs')
+DEFAULT_ANIMATIONS_PATH = str(REPO_ROOT / 'animations')
+DEFAULT_LOGS_PATH = str(REPO_ROOT / 'logs')
 
 _VALID_DEVICE_TYPES = {"sim", "esp32"}
 
@@ -31,15 +37,70 @@ class ConfigError(ValueError):
     """Raised for invalid or missing config."""
 
 
-def resolve_config_path(path: str) -> str:
-    """Expand ~ and verify the config file exists. Raises ConfigError if missing."""
-    resolved = os.path.expanduser(path)
-    if not os.path.isfile(resolved):
+def default_config_doc() -> dict:
+    """Return the default first-run config document."""
+    return {
+        "controller": {
+            "frame_port": DEFAULT_FRAME_PORT,
+            "discovery_port": DEFAULT_DISCOVERY_PORT,
+        },
+        "devices": [],
+    }
+
+
+def _write_json_file_atomic(path: Path, doc: dict) -> None:
+    """Write JSON atomically with a trailing newline."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    fd, tmp_path = tempfile.mkstemp(
+        prefix=f'.{path.name}.tmp-',
+        suffix='.json',
+        dir=str(path.parent),
+    )
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            json.dump(doc, f, indent=2)
+            f.write('\n')
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def create_default_config(path: str) -> str:
+    """Create a fresh default config file and return its resolved path."""
+    resolved_path = Path(os.path.expanduser(path)).resolve()
+    _write_json_file_atomic(resolved_path, default_config_doc())
+    log.warning('created default config at %s', resolved_path)
+    return str(resolved_path)
+
+
+def resolve_config_path(path: str | None = None) -> str:
+    """Resolve config path, auto-creating the default config when needed.
+
+    When path is None, the repo-local default config path is used and the file
+    is created on first run if it does not exist.
+
+    When path is explicit, the file must already exist.
+    """
+    if path is None:
+        resolved = Path(DEFAULT_CONFIG_PATH).resolve()
+        if not resolved.is_file():
+            return create_default_config(str(resolved))
+        return str(resolved)
+
+    resolved = Path(os.path.expanduser(path)).resolve()
+    if not resolved.is_file():
         raise ConfigError(
             f"config file not found: {resolved}\n"
-            f"create your config at {DEFAULT_CONFIG_PATH} or pass --config"
+            f"omit --config to create the default config at {DEFAULT_CONFIG_PATH}"
         )
-    return resolved
+    return str(resolved)
 
 
 @dataclass

@@ -40,7 +40,7 @@ The controller is a long-running Python service on the base station. It compiles
 
 ## Config
 
-Single JSON file, the source of truth for the physical setup:
+Repo-local JSON file at `instance/config.json`, the source of truth for the physical setup. On first run, `elemctl` creates it automatically with default controller ports and an empty `devices` list if it does not exist.
 
 ```json
 {
@@ -68,6 +68,7 @@ Single JSON file, the source of truth for the physical setup:
 - `strip_id` — logical name matching DSL `strip()` calls; multiple devices can share one `strip_id` (mirroring)
 - `length` — pixel count (1–250), validated against DSL at compile time
 - `discovery_port` — `null` disables discovery; defaults to 6040 if omitted
+- simulator layouts are stored separately under `instance/layouts/`
 
 ## DSL & Compiler
 
@@ -168,9 +169,9 @@ The compiler identifies time ranges where no event carries prior state, making e
 ## Entry Point
 
 ```bash
-./elemctl server --config config.json   # start controller service
+./elemctl server                        # start controller service using instance/config.json
 ./elemctl tui                           # connect TUI as writer
-./elemctl sim sim-1 --config config.json # launch a simulator
+./elemctl sim sim-1                     # launch a simulator using instance/config.json
 ./elemctl web                           # start web UI server (observer client)
 ./elemctl run program.py                # standalone: compile + play
 ```

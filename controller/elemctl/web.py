@@ -1037,8 +1037,9 @@ def _build_parser() -> argparse.ArgumentParser:
         help='controller unix socket path (default: %(default)s)',
     )
     parser.add_argument(
-        '--config', default=DEFAULT_CONFIG_PATH,
-        help='config JSON path (default: %(default)s)',
+        '--config',
+        default=None,
+        help=f'config JSON path (default: {DEFAULT_CONFIG_PATH})',
     )
     parser.add_argument(
         '--host', default='0.0.0.0',

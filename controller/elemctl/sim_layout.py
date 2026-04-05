@@ -10,9 +10,9 @@ import math
 import os
 from pathlib import Path
 
-from .config import DeviceConfig
+from .config import DeviceConfig, INSTANCE_DIR
 
-DEFAULT_LAYOUTS_PATH = '~/.config/elemctl/layouts'
+DEFAULT_LAYOUTS_PATH = str(INSTANCE_DIR / 'layouts')
 
 log = logging.getLogger(__name__)
 

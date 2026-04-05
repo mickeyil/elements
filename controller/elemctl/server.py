@@ -402,8 +402,9 @@ def main() -> None:
         description='Elements controller server',
     )
     parser.add_argument(
-        '--config', default=DEFAULT_CONFIG_PATH,
-        help='config JSON path (default: %(default)s)',
+        '--config',
+        default=None,
+        help=f'config JSON path (default: {DEFAULT_CONFIG_PATH})',
     )
     parser.add_argument(
         '--socket', default=DEFAULT_SOCKET_PATH,

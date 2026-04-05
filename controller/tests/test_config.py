@@ -5,9 +5,9 @@ import json
 import pytest
 
 from elemctl.config import (
-    Config, ConfigError, DEFAULT_CONFIG_PATH, DEFAULT_DISCOVERY_PORT,
+    ConfigError, DEFAULT_CONFIG_PATH, DEFAULT_DISCOVERY_PORT,
     MAX_DEVICE_PIXELS,
-    DEFAULT_LOGS_PATH, DeviceConfig, load_config, resolve_config_path,
+    DEFAULT_LOGS_PATH, default_config_doc, load_config, resolve_config_path,
     resolve_runtime_path,
 )
 
@@ -307,16 +307,26 @@ class TestLoadConfig:
 
 
 class TestResolveConfigPath:
+    def test_creates_default_config_when_path_omitted(self, tmp_path, monkeypatch):
+        cfg_path = tmp_path / "instance" / "config.json"
+        monkeypatch.setattr('elemctl.config.DEFAULT_CONFIG_PATH', str(cfg_path))
+
+        resolved = resolve_config_path(None)
+
+        assert resolved == str(cfg_path.resolve())
+        assert cfg_path.exists()
+        assert json.loads(cfg_path.read_text()) == default_config_doc()
+
     def test_returns_path_for_existing_file(self, tmp_path):
         p = tmp_path / "config.json"
         p.write_text("{}")
         assert resolve_config_path(str(p)) == str(p)
 
-    def test_raises_for_nonexistent_file(self):
+    def test_raises_for_nonexistent_explicit_file(self):
         with pytest.raises(ConfigError, match="config file not found"):
             resolve_config_path("/nonexistent/config.json")
 
-    def test_error_mentions_default_path(self):
+    def test_explicit_missing_error_mentions_default_path(self):
         with pytest.raises(ConfigError, match=DEFAULT_CONFIG_PATH):
             resolve_config_path("/nonexistent/config.json")
 
@@ -343,15 +353,14 @@ class TestResolveRuntimePath:
 class TestServerMainDefaults:
     """Smoke tests verifying server.main() exposes default args via argparse."""
 
-    def test_no_args_exits_with_config_error(self, monkeypatch):
-        """Zero-arg invocation fails with a clear config-not-found message."""
+    def test_explicit_missing_config_exits_with_error(self, monkeypatch):
+        """Explicit missing --config exits with a config error."""
         from elemctl.server import main as server_main
 
         monkeypatch.setattr(
             'sys.argv',
             ['elemctl.server', '--config', '/definitely/missing/config.json'],
         )
-        # Missing config path should exit(1) with config error
         with pytest.raises(SystemExit) as exc_info:
             server_main()
         assert exc_info.value.code == 1

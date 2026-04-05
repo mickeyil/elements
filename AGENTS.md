@@ -8,6 +8,7 @@ Repo-wide guidance for coding agents working in this repository.
 - When the user asks for a documentation update or a design discussion, do not make code changes unless they explicitly ask for implementation.
 - When asked to commit, make a single commit unless the user explicitly asks to split the work.
 - Commit messages should be a one-line summary only, with no body and no `Co-Authored-By`.
+- Repo-local deployment state lives under `instance/`. The default controller config is `instance/config.json`, and simulator layouts live in `instance/layouts/`.
 
 ## Build And Test
 
@@ -53,6 +54,7 @@ pytest compiler/tests/test_compiler.py -q
 
 - Prefer `./elemctl ...` as the repo entrypoint on a clean checkout.
 - `elemctl` creates and maintains the managed venv at `~/.elements/venv`.
+- `elemctl` auto-creates `instance/config.json` on first run when the default config path is used.
 - `pytest.ini` adds `controller/` and `compiler/` to `PYTHONPATH`, so run Python tests from the repo root unless you have a specific reason not to.
 - Tests marked `runtime_integration` expect an isolated local runtime: no other `./elemctl server`, `./elemctl sim`, or `network_sim` processes should be running unless you intentionally bypass the guard with `ELEMCTL_TEST_ALLOW_BUSY_RUNTIME=1`.
 
@@ -65,6 +67,7 @@ cd controller/web_ui && npm run build
 - Source lives in `controller/web_ui/src/`.
 - Built assets are written to `controller/web_ui/dist/`.
 - `controller/elemctl/web.py` serves `controller/web_ui/dist/` directly, so if you change shipped UI code, keep `dist/` in sync with the source.
+- Simulator layout files are stored under `instance/layouts/`.
 
 ### ESP32 Firmware (PlatformIO)
 ```bash
@@ -143,6 +146,7 @@ DSL (.py) -> Python compiler -> binary blob -> C++ decoder -> Program -> engine 
   - `test_dual_shift_right.bin`
 - If you change compiler output or fixture generation code, regenerate the fixtures before trusting C++ test results.
 - `controller/web_ui/dist/` is generated Vite output, not hand-authored source.
+- `instance/config.json` and `instance/layouts/` are local deployment state and should remain uncommitted.
 
 ## Local Smoke Test
 

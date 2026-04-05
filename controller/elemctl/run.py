@@ -161,8 +161,9 @@ def main() -> None:
         description="Elements LED controller",
     )
     parser.add_argument(
-        "--config", default=DEFAULT_CONFIG_PATH,
-        help="config JSON path (default: %(default)s)",
+        "--config",
+        default=None,
+        help=f"config JSON path (default: {DEFAULT_CONFIG_PATH})",
     )
     parser.add_argument("--beat", type=float, required=True, help="beat duration (seconds)")
     parser.add_argument("--duration", type=float, required=True, help="program duration (seconds)")
