@@ -176,4 +176,4 @@ The compiler identifies time ranges where no event carries prior state, making e
 ./elemctl run program.py                # standalone: compile + play
 ```
 
-`elemctl` is a self-bootstrapping script that creates/maintains a managed venv at `~/.elements/venv`.
+`elemctl` is a self-bootstrapping script that creates/maintains a managed venv at `local/venv`.

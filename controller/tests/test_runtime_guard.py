@@ -22,7 +22,7 @@ class TestRuntimeGuard:
         assert _runtime_conflict_label(['python3', '-m', 'elemctl', 'sim']) == 'elemctl sim'
         assert (
             _runtime_conflict_label(
-                ['/home/mickey/.elements/venv/bin/python', '/home/mickey/dev/elements/elemctl', 'sim']
+                ['/repo/local/venv/bin/python', '/repo/elements/elemctl', 'sim']
             )
             == 'elemctl sim'
         )
@@ -37,7 +37,7 @@ class TestRuntimeGuard:
         assert _runtime_conflict_label(['python3', '-m', 'elemctl', 'server']) == 'elemctl server'
         assert (
             _runtime_conflict_label(
-                ['/home/mickey/.elements/venv/bin/python', '/home/mickey/dev/elements/elemctl', 'server']
+                ['/repo/local/venv/bin/python', '/repo/elements/elemctl', 'server']
             )
             == 'elemctl server'
         )

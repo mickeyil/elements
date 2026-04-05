@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Self-bootstrapping launcher for elemctl.
 
-Creates/manages a venv at ~/.elements/venv with third-party deps.
+Creates/manages a repo-local venv at local/venv with third-party deps.
 Repo code (controller/, compiler/) is added to sys.path at runtime,
 so the current checkout always runs regardless of which clone invokes this.
 """
@@ -15,7 +15,7 @@ from pathlib import Path
 
 SCRIPT_PATH = str(Path(__file__).resolve())
 REPO_ROOT = Path(SCRIPT_PATH).parent
-VENV_DIR = Path.home() / '.elements' / 'venv'
+VENV_DIR = REPO_ROOT / 'local' / 'venv'
 VENV_PYTHON = VENV_DIR / 'bin' / 'python'
 REQUIREMENTS = REPO_ROOT / 'requirements.txt'
 STAMP_FILE = VENV_DIR / '.deps-stamp.json'

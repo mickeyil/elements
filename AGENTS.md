@@ -14,6 +14,9 @@ Repo-wide guidance for coding agents working in this repository.
 
 ### C++ Core (desktop CMake + Catch2)
 ```bash
+# Convenience wrapper
+make build
+
 # Configure and build
 cmake -B build
 cmake --build build
@@ -49,11 +52,11 @@ pytest controller/tests/test_service.py -q
 pytest compiler/tests/test_compiler.py -q
 
 # Run directly with the managed interpreter if needed
-/home/mickey/.elements/venv/bin/python -m pytest
+local/venv/bin/python -m pytest
 ```
 
 - Prefer `./elemctl ...` as the repo entrypoint on a clean checkout.
-- `elemctl` creates and maintains the managed venv at `~/.elements/venv`.
+- `elemctl` creates and maintains the managed venv at `local/venv`.
 - `elemctl` auto-creates `instance/config.json` on first run when the default config path is used.
 - `pytest.ini` adds `controller/` and `compiler/` to `PYTHONPATH`, so run Python tests from the repo root unless you have a specific reason not to.
 - Tests marked `runtime_integration` expect an isolated local runtime: no other `./elemctl server`, `./elemctl sim`, or `network_sim` processes should be running unless you intentionally bypass the guard with `ELEMCTL_TEST_ALLOW_BUSY_RUNTIME=1`.
@@ -71,11 +74,14 @@ cd controller/web_ui && npm run build
 
 ### ESP32 Firmware (PlatformIO)
 ```bash
+make firmware
+
 pio run
 pio run -t upload
 ```
 
 - Firmware builds are not part of the normal desktop development loop.
+- PlatformIO build output is written under `build/pio/`; repo-local PlatformIO workspace state lives under `local/pio/`.
 
 ## Project Map
 
@@ -146,6 +152,7 @@ DSL (.py) -> Python compiler -> binary blob -> C++ decoder -> Program -> engine 
   - `test_dual_shift_right.bin`
 - If you change compiler output or fixture generation code, regenerate the fixtures before trusting C++ test results.
 - `controller/web_ui/dist/` is generated Vite output, not hand-authored source.
+- `build/` is disposable build output; `local/` is repo-local cache and tool state.
 - `instance/config.json` and `instance/layouts/` are local deployment state and should remain uncommitted.
 
 ## Local Smoke Test

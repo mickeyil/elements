@@ -15,6 +15,7 @@ controller/web_ui/.vite/
 *.egg-info/
 __pycache__/
 build/
+local/
 test/build/
 test/fixtures/*.bin
 /logs/

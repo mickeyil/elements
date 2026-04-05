@@ -7,6 +7,12 @@ Beat-synced LED animation engine targeting ESP32. Work in progress.
 ## Build
 
 ```bash
+make build
+```
+
+Direct commands still work:
+
+```bash
 cmake -B build
 cmake --build build
 ```
@@ -14,6 +20,12 @@ cmake --build build
 Requires C++11 and Python 3 (for test fixture generation).
 
 ## Test
+
+```bash
+make test
+```
+
+Direct commands still work:
 
 ```bash
 cd build && ctest
@@ -83,6 +95,8 @@ Notes:
 
 - discovery defaults to UDP port `6040` when `controller.discovery_port` is omitted
 - set `"discovery_port": null` in the config to disable discovery explicitly
+- `elemctl` creates and maintains its managed environment at `local/venv`
+- `build/` is disposable build output; `local/` is repo-local cache and tool state
 - repo-local deployment config now lives in `instance/config.json`; it is auto-created on first run
 - simulator layouts are stored in `instance/layouts/`
 
@@ -96,5 +110,7 @@ compiler/         Python compiler (DSL → binary blob)
 controller/       Python controller service, TUI, web UI server
 controller/web_ui/ Vue 3 browser interface source + built assets
 docs/             Documentation
+build/            Disposable build output (cmake, PlatformIO)
+local/            Repo-local cache and tool state (venv, PlatformIO workspace)
 instance/         Local deployment config and simulator layouts (gitignored)
 ```
