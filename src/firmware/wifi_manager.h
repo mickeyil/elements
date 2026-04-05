@@ -7,6 +7,11 @@
 
 namespace firmware {
 
+struct DevWifiCredential {
+    const char* ssid;
+    const char* password;
+};
+
 enum class WifiTransition {
     none,
     connected,

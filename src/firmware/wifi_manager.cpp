@@ -8,7 +8,8 @@
 #if __has_include("secrets.h")
 #include "secrets.h"
 #else
-#error "Missing src/firmware/secrets.h. Copy src/firmware/secrets.example.h and fill in local Wi-Fi credentials."
+static constexpr const firmware::DevWifiCredential* DEV_WIFI_CREDENTIALS = nullptr;
+static constexpr size_t DEV_WIFI_CREDENTIAL_COUNT = 0;
 #endif
 
 namespace firmware {
