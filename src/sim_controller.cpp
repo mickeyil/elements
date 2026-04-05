@@ -22,8 +22,8 @@ SimController::SimController(std::vector<ControllerStrip> strips)
     for (size_t i = 0; i < _strips.size(); i++) {
         if (!_strips[i].device)
             throw std::invalid_argument("null device pointer for strip " + _strips[i].strip_id);
-        auto [_, inserted] = _strip_id_to_index.emplace(_strips[i].strip_id, i);
-        if (!inserted)
+        auto result = _strip_id_to_index.emplace(_strips[i].strip_id, i);
+        if (!result.second)
             throw std::invalid_argument("duplicate strip_id: " + _strips[i].strip_id);
     }
 }

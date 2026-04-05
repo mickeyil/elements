@@ -1,14 +1,21 @@
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+JOBS ?= $(shell sysctl -n hw.ncpu)
+else
+JOBS ?= $(shell nproc)
+endif
+
 .PHONY: build cmake network_sim firmware flash test clean cleanall
 
 build: cmake
 
 cmake:
 	cmake -B build
-	cmake --build build
+	cmake --build build --parallel $(JOBS)
 
 network_sim:
 	cmake -B build
-	cmake --build build --target network_sim
+	cmake --build build --target network_sim --parallel $(JOBS)
 
 firmware:
 	pio run
