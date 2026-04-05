@@ -9,8 +9,8 @@ from pathlib import Path
 from .config import (
     ConfigError,
     load_config_obj,
-    _write_json_file_atomic,
     default_config_doc,
+    write_json_file_atomic,
 )
 
 
@@ -128,4 +128,4 @@ def save_config_doc(path: str, doc: dict) -> None:
     load_config_obj(doc)
 
     resolved = Path(os.path.expanduser(path))
-    _write_json_file_atomic(resolved, doc)
+    write_json_file_atomic(resolved, doc)

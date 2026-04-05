@@ -48,7 +48,7 @@ def default_config_doc() -> dict:
     }
 
 
-def _write_json_file_atomic(path: Path, doc: dict) -> None:
+def write_json_file_atomic(path: Path, doc: dict) -> None:
     """Write JSON atomically with a trailing newline."""
     path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -75,7 +75,7 @@ def _write_json_file_atomic(path: Path, doc: dict) -> None:
 def create_default_config(path: str) -> str:
     """Create a fresh default config file and return its resolved path."""
     resolved_path = Path(os.path.expanduser(path)).resolve()
-    _write_json_file_atomic(resolved_path, default_config_doc())
+    write_json_file_atomic(resolved_path, default_config_doc())
     log.warning('created default config at %s', resolved_path)
     return str(resolved_path)
 
