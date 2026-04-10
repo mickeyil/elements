@@ -9,11 +9,12 @@
 
 #include "pixel_buffer_pool.h"
 #include "pixel_view.h"
+#include "runtime_constants.h"
 
 struct PixelViewSpec {
     // Which real PixelBufferPool buffer this view is built on top of.
     // This is decoder input metadata, not a runtime animation-facing field.
-    uint16_t buffer_idx = 0xFFFF;
+    uint16_t buffer_idx = PIXBUF_NONE;
 
     // Number of logical pixels exposed through the view.
     uint8_t size = 0;

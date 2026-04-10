@@ -17,6 +17,8 @@ This document is intentionally higher level than the code sketch. The concrete
 draft API lives in separate files under `drafts/`:
 
 - `colors.h`
+- `runtime_constants.h`
+- `hardware_profile.h`
 - `pixel_buffer_pool.h`
 - `pixel_buffer_pool.cpp`
 - `pixel_view.h`
@@ -24,6 +26,18 @@ draft API lives in separate files under `drafts/`:
 - `pixel_views.h`
 - `pixel_views.cpp`
 - `animation.h`
+- `layer.h`
+- `layer.cpp`
+- `strip.h`
+- `strip.cpp`
+- `compositor.h`
+- `compositor.cpp`
+- `engine.h`
+- `engine.cpp`
+- `synced_clock.h`
+- `synced_clock.cpp`
+- `playback.h`
+- `playback.cpp`
 - `program_structs.h`
 - `program_structs.cpp`
 
@@ -81,6 +95,27 @@ The current draft code keeps the `PixelBufferPool` API intentionally small:
 - release owned storage
 
 It does not currently expose extra clear/reset helpers beyond full teardown.
+
+### Strip-size limit and integer widths
+
+The draft direction assumes a maximum strip length of 250 LEDs.
+
+That means strip-sized and physical-pixel-indexed quantities can stay `uint8_t`,
+for example:
+
+- canonical layer buffer length
+- `physical_map` entries
+- `Strip` size and pixel indexing
+- per-buffer HSVA sizes in `PixelBufferPool`
+
+This does **not** mean every runtime table index becomes `uint8_t`.
+Counts such as:
+
+- total PixelViews
+- total pool buffers
+- total events
+
+may still exceed 255 and therefore remain wider where appropriate.
 
 ### `PixelView`
 
@@ -187,19 +222,89 @@ for the duration of each event.
 ## Layer Buffers And Compositor
 
 `PixelView` is for animation access. The compositor still composites canonical
-layer buffers onto the physical strip.
+layer buffers into a final RGB strip.
 
 That means:
 
 - animations write through `PixelView`s
 - those views land in real backing buffers from `PixelBufferPool`
-- each layer still has one canonical display buffer
+- each layer still has one canonical HSVA display buffer
 - each layer still has a physical LED mapping (`physical_map`)
 - the compositor still iterates the whole layer buffer and maps each slot to a
-  physical LED before blending
+  physical LED before blending into final RGB
 
 So `PixelView` does not replace the compositor's layer model. It replaces the
 animation-side routing model.
+
+### `Layer`
+
+`Layer` is the runtime canonical compositing layer.
+
+It owns:
+
+- the decoded event array
+- the physical LED map for the canonical layer buffer
+
+It borrows:
+
+- the canonical `hsva_t` buffer resolved from `PixelBufferPool`
+
+Important current direction:
+
+- runtime `Layer` does not retain a `buffer_idx`
+- decoder resolves the real pool buffer first and passes the resulting pointer
+  into `Layer::initialize()`
+- canonical layer length should come from that resolved pool buffer size, not
+  from a second independent source of truth
+
+This keeps runtime layer state free of decode-time buffer wiring metadata.
+
+## Engine / Compositor / Strip Boundary
+
+The current direction is:
+
+- `Engine` owns `Compositor` internally
+- callers render frames via `Engine::render_frame(t_rel, Strip&)`
+- callers do not need to know compositor details
+
+`Engine` owns per-layer playback progression only. The intended playback state
+per layer is:
+
+- `cursor`
+  - current event index
+- `initialized`
+  - whether `initialize()` has already run for the active event
+
+The old `instance == nullptr` activation signal disappears because animation
+objects are now decoder-constructed and stored directly on events.
+
+### `Strip`
+
+`Strip` is the canonical final RGB frame buffer.
+
+It is intended to be more than today's thin byte wrapper:
+
+- array-like RGB pixel access
+- size / clear helpers
+- raw byte access when needed
+- final `copy_to(..., ColorOrder)` helper for hardware-facing buffers
+
+The important semantic rule is:
+
+- rendering produces canonical linear RGB in `Strip`
+- simulator/tests/stdout may inspect that RGB directly
+- hardware-facing transforms happen afterward
+
+### Output transforms
+
+The agreed current direction is:
+
+- gamma correction is an external in-place transform:
+  - `apply_gamma(Strip&)`
+- channel reordering is a last-mile copy:
+  - `Strip::copy_to(dst, ColorOrder)`
+
+These transforms sit outside `Engine` and `Compositor`.
 
 ## Compiler / Decoder Responsibilities
 
@@ -227,7 +332,8 @@ The decoder owns:
 - allocating `PixelBufferPool`
 - building the runtime `PixelViews` table from the compiler's `PixelViewSpec`s
 - constructing concrete animation objects from decoded params
-- wiring layer buffers, views, and events together into `Program`
+- resolving canonical layer buffers from the pool
+- wiring layers, views, and events together into `Program`
 
 The decoder should not need animation-type-specific memory policy. It should
 mostly consume indices, sizes, and descriptors emitted by the compiler.
@@ -289,6 +395,8 @@ The engine is responsible for ensuring:
 - `initialize()` runs before the first `render()` of an activation
 - after reset / jump / restart, the event is treated as uninitialized again
 - buffers that must start cleared are cleared by engine/program reset
+- layer activity for compositing is derived directly from event timing in the
+  render loop, not from any old animation-instance pointer
 
 The current leaning is to keep this lifecycle state in the engine, not inside
 the animation base class.
@@ -334,6 +442,7 @@ These areas are intentionally not locked in yet:
 The main areas affected by this redesign are:
 
 - `drafts/colors.h`
+- `drafts/runtime_constants.h`
 - `drafts/pixel_buffer_pool.h`
 - `drafts/pixel_buffer_pool.cpp`
 - `drafts/pixel_view.h`
@@ -341,6 +450,18 @@ The main areas affected by this redesign are:
 - `drafts/pixel_views.h`
 - `drafts/pixel_views.cpp`
 - `drafts/animation.h`
+- `drafts/layer.h`
+- `drafts/layer.cpp`
+- `drafts/strip.h`
+- `drafts/strip.cpp`
+- `drafts/compositor.h`
+- `drafts/compositor.cpp`
+- `drafts/engine.h`
+- `drafts/engine.cpp`
+- `drafts/synced_clock.h`
+- `drafts/synced_clock.cpp`
+- `drafts/playback.h`
+- `drafts/playback.cpp`
 - `drafts/program_structs.h`
 - `drafts/program_structs.cpp`
 - `src/decoder.h` / `src/decoder.cpp`

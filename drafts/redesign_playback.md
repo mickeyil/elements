@@ -11,7 +11,7 @@ Replace `PlaybackDevice` with a concrete `Playback` class whose job is:
 - own the playback state machine
 - own the decoded program / engine / strip buffer
 - advance playback time
-- render into an RGB buffer
+- render into a canonical RGB `Strip`
 
 `Playback` should not:
 
@@ -24,7 +24,7 @@ Replace `PlaybackDevice` with a concrete `Playback` class whose job is:
 In short:
 
 `Playback` is a synchronous state machine that renders animation frames into a
-buffer. Everything else is the caller's job.
+canonical RGB `Strip`. Everything else is the caller's job.
 
 ## Current Facts In Code
 
@@ -46,7 +46,8 @@ already contains almost all playback behavior:
   - `_rgb_storage`
   - `_strip`
 - rendering orchestration:
-  - `_engine->tick(t_rel)`
+  - `_engine->tick(t_rel)` in the current source
+  - redesign below changes this to `Engine::render_frame(t_rel, Strip&)`
 
 Current subclasses mostly supply the destination for rendered output:
 
@@ -74,8 +75,8 @@ inheritance:
 ```cpp
 class Playback {
 public:
-    explicit Playback(SyncedClock& clock, bool gamma_enabled = true);
-    Playback(uint16_t strip_length, SyncedClock& clock, bool gamma_enabled = true);
+    explicit Playback(SyncedClock& clock);
+    Playback(uint8_t strip_length, SyncedClock& clock);
 
     bool has_hardware_profile() const;
     const HardwareProfile& hardware_profile() const;
@@ -95,9 +96,10 @@ public:
     DeviceState state() const;
     float duration() const;
     float current_t_rel() const;
-    const uint8_t* rgb_data() const;
-    uint16_t strip_length() const;
+    uint8_t strip_length() const;
     bool requires_sync() const;
+    Strip& strip();
+    const Strip& strip() const;
 
 private:
     int64_t now_us() const;
@@ -107,7 +109,7 @@ private:
     void clear_render_buffer_();
 
     SyncedClock& _clock;
-    std::array<uint8_t, kMaxStripPixels * 3> _rgb_storage{};
+    std::array<rgb_t, kMaxStripPixels> _rgb_storage{};
     Strip _strip;
     std::unique_ptr<Engine> _engine;
     HardwareProfile _profile{};
@@ -116,7 +118,6 @@ private:
     int64_t _t0_us = 0;
     float _paused_t_rel = 0.0f;
     bool _requires_sync = false;
-    bool _gamma_enabled = true;
 };
 ```
 
@@ -128,6 +129,30 @@ This class is concrete:
 - no `virtual playback_t0()`
 
 The owner reads the buffer and decides what to do with it.
+
+Important render-pipeline boundary:
+
+- `Engine` owns `Compositor` internally
+- `Engine::render_frame(t_rel, Strip&)` advances playback state and renders the
+  final RGB frame
+- `Playback` does not need compositor details
+- gamma correction and hardware channel order are outside the playback core
+
+### Strip-size limit and integer widths
+
+The draft direction keeps the maximum strip length at 250 LEDs.
+
+That lets strip-sized and physical-pixel-indexed quantities stay `uint8_t`
+throughout the render/output path, including:
+
+- `HardwareProfile::strip_length`
+- `Strip` size and indexing
+- canonical layer buffer lengths
+- hardware-facing physical pixel indices
+
+This does not force every runtime table count/index to `uint8_t`. Wider counts
+remain valid for things like total PixelViews, total pool buffers, and event
+arrays.
 
 ## Core Playback Rules
 
@@ -287,8 +312,12 @@ Example:
 void FirmwareApp::tick_playback_()
 {
     _playback.tick_once();
+    apply_gamma(_playback.strip());
+    _playback.strip().copy_to(
+        reinterpret_cast<uint8_t*>(g_leds),
+        _playback.hardware_profile().color_order
+    );
 
-    memcpy(g_leds, _playback.rgb_data(), _playback.strip_length() * 3);
     if (_playback.strip_length() < kMaxStripPixels) {
         memset(g_leds + _playback.strip_length(), 0,
                (kMaxStripPixels - _playback.strip_length()) * sizeof(CRGB));
@@ -369,7 +398,7 @@ Offline render becomes straightforward:
 
 ```cpp
 ManualClock clock;
-Playback playback(clock, /*gamma_enabled=*/false);
+Playback playback(clock);
 
 playback.apply_hardware_profile(HardwareProfile(strip_length));
 playback.handle_load(blob.data(), blob.size(), 1);
@@ -380,7 +409,7 @@ for (;;) {
     clock.set_us(next_time);
     if (!playback.tick_once())
         break;
-    fwrite(playback.rgb_data(), 1, playback.strip_length() * 3, stdout);
+    fwrite(playback.strip().bytes(), 1, playback.strip().byte_size(), stdout);
 }
 ```
 
@@ -404,6 +433,9 @@ If this direction is adopted, the following can leave the playback core:
   - `playback_t0()`
 - raw clock virtual:
   - `now_mono()`
+- render-output policy:
+  - gamma correction
+  - channel reordering
 
 Likely follow-on simplifications:
 
@@ -421,6 +453,8 @@ Still needed somewhere:
 
 - hardware profile management
 - LED output
+- gamma correction
+- channel reordering
 - state-change logging / telemetry
 - sim frame aggregation
 - background provisioning / offline playback policy

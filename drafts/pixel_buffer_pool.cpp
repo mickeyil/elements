@@ -8,7 +8,7 @@ PixelBufferPool::~PixelBufferPool()
     reset();
 }
 
-bool PixelBufferPool::initialize(const uint16_t* buffer_sizes, uint16_t buffer_count)
+bool PixelBufferPool::initialize(const uint8_t* buffer_sizes, uint16_t buffer_count)
 {
     reset();
 
@@ -20,7 +20,7 @@ bool PixelBufferPool::initialize(const uint16_t* buffer_sizes, uint16_t buffer_c
     }
 
     _buffers = new (std::nothrow) hsva_t*[buffer_count]();
-    _sizes = new (std::nothrow) uint16_t[buffer_count];
+    _sizes = new (std::nothrow) uint8_t[buffer_count];
     if (_buffers == nullptr || _sizes == nullptr) {
         reset();
         return false;
@@ -105,7 +105,7 @@ const hsva_t* PixelBufferPool::buffer_at(uint16_t buffer_idx) const
     return _buffers[buffer_idx];
 }
 
-uint16_t PixelBufferPool::buffer_size(uint16_t buffer_idx) const
+uint8_t PixelBufferPool::buffer_size(uint16_t buffer_idx) const
 {
     if (buffer_idx >= _buffer_count || _sizes == nullptr) {
         return 0;

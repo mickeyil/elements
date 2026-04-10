@@ -1,8 +1,8 @@
 #include "program_structs.h"
 
-bool initialize_program_views(
+bool initialize_program_runtime(
     Program& prog,
-    const uint16_t* buffer_sizes,
+    const uint8_t* buffer_sizes,
     uint16_t buffer_count,
     const PixelViewSpec* pixel_view_specs,
     uint16_t pixel_view_count
@@ -19,20 +19,16 @@ bool initialize_program_views(
         return false;
     }
 
-    for (uint8_t li = 0; li < prog.layer_count; li++) {
-        LayerDef& layer = prog.layers[li];
-        layer.buffer = prog.pixel_buffer_pool.buffer_at(layer.buffer_idx);
-
-        // TODO: final decoder should validate that:
-        // - layer.buffer_idx is valid
-        // - layer.buffer_length matches the intended canonical layer buffer size
-        // - physical_map length == buffer_length
-    }
-
     // TODO: final decoder should validate PixelView specs:
     // - spec.buffer_idx is valid
     // - spec.size <= pool.buffer_size(spec.buffer_idx) for identity views
     // - every spec.indices[j] is within pool.buffer_size(spec.buffer_idx)
+
+    // TODO: final decoder should resolve canonical layer buffers from the pool
+    // and validate that each Layer receives:
+    // - a valid resolved buffer pointer
+    // - a buffer_length derived from that resolved pool buffer size
+    // - a physical_map whose length matches the canonical layer length
 
     // TODO: final decoder should validate event view references:
     // - dst_pixv_idx != PIXV_NONE
@@ -50,18 +46,6 @@ void free_program_sketch(Program* prog)
     }
 
     if (prog->layers != nullptr) {
-        for (uint8_t li = 0; li < prog->layer_count; li++) {
-            LayerDef& layer = prog->layers[li];
-
-            if (layer.events != nullptr) {
-                for (uint16_t ei = 0; ei < layer.event_count; ei++) {
-                    delete layer.events[ei].animation;
-                }
-                delete[] layer.events;
-            }
-
-            delete[] layer.physical_map;
-        }
         delete[] prog->layers;
     }
 
