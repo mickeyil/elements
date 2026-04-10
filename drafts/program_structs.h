@@ -12,25 +12,10 @@
 #include "colors.h"
 #include "pixel_buffer_pool.h"
 #include "pixel_view.h"
+#include "pixel_views.h"
 
 static constexpr uint16_t PIXV_NONE = 0xFFFF;
 static constexpr uint16_t PIXBUF_NONE = 0xFFFF;
-
-struct PixelViewDef {
-    // Which real PixelBufferPool buffer this view is built on top of.
-    // This is blob/decode metadata. Animations never see raw buffer indices.
-    uint16_t buffer_idx = PIXBUF_NONE;
-
-    // Number of logical pixels exposed through the view.
-    uint8_t size = 0;
-
-    // True when the view maps directly onto backing buffer slots [0..size).
-    bool is_identity = true;
-
-    // Blob-decoded logical->buffer-slot mapping.
-    // Null when `is_identity == true`.
-    uint16_t* indices = nullptr;
-};
 
 struct AnimationEvent {
     // Decoder-constructed animation instance for this event.
@@ -91,28 +76,19 @@ struct Program {
     // Owns all real hsva_t backing buffers.
     PixelBufferPool pixel_buffer_pool;
 
-    // Number of resolved logical PixelViews.
-    uint16_t pixel_view_count = 0;
-
-    // Resolved logical PixelView table. Events reference indices into this
-    // table, and each view is already bound to a real pool buffer.
-    PixelView* pixel_views = nullptr;
-
-    // Blob-decoded PixelView descriptors retained for cleanup.
-    //
-    // In the current draft design, PixelView borrows def.indices directly, so
-    // these descriptors must remain alive for the lifetime of the Program
-    // unless the final decoder copies index arrays elsewhere.
-    PixelViewDef* pixel_view_defs = nullptr;
+    // Owns the runtime PixelView table.
+    PixelViews pixel_views;
 };
 
-// Build resolved Program state from blob-decoded buffer sizes and view defs.
+// Build resolved Program state from blob-decoded buffer sizes and PixelView specs.
 //
 // TODO: final decoder integration will likely fold this into decode_program().
 bool initialize_program_views(
     Program& prog,
     const uint16_t* buffer_sizes,
-    uint16_t buffer_count
+    uint16_t buffer_count,
+    const PixelViewSpec* pixel_view_specs,
+    uint16_t pixel_view_count
 );
 
 // Free all owned memory associated with Program.

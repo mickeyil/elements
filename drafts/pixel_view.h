@@ -2,8 +2,11 @@
 
 // Draft-only API.
 //
-// PixelView is a non-owning logical view over a real hsva_t backing buffer.
-// It may expose the buffer directly or through an index indirection table.
+// PixelView is a logical view over a real hsva_t backing buffer.
+//
+// Ownership model:
+// - backing hsva_t buffer: non-owning, provided by PixelBufferPool
+// - optional index indirection array: owned by PixelView
 
 #include <cstdint>
 
@@ -12,15 +15,21 @@
 class PixelView {
 public:
     PixelView() = default;
+    ~PixelView();
 
-    // Identity view: logical pixel i maps directly to backing_buffer[i].
-    PixelView(hsva_t* backing_buffer, uint8_t size);
+    PixelView(const PixelView&) = delete;
+    PixelView& operator=(const PixelView&) = delete;
+    PixelView(PixelView&&) = delete;
+    PixelView& operator=(PixelView&&) = delete;
 
-    // Indexed view: logical pixel i maps to backing_buffer[indices[i]].
-    PixelView(hsva_t* backing_buffer, const uint16_t* indices, uint8_t size);
+    // Initialize the view from a backing buffer and optional indirection list.
+    //
+    // If indices == nullptr, the view is identity-mapped and owns no index
+    // storage. Otherwise the view copies the incoming index list and owns it.
+    bool initialize(hsva_t* backing_buffer, uint8_t size, const uint16_t* indices = nullptr);
 
-    // Rebind this view to a new backing buffer and optional indirection array.
-    void bind(hsva_t* backing_buffer, const uint16_t* indices, uint8_t size);
+    // Release owned indirection state and clear the binding.
+    void reset();
 
     // Number of logical pixels exposed by the view.
     uint8_t size() const;
@@ -41,8 +50,9 @@ private:
     // Non-owning pointer to the real hsva_t buffer.
     hsva_t* _buffer = nullptr;
 
-    // Optional logical->physical slot mapping. nullptr means identity mapping.
-    const uint16_t* _indices = nullptr;
+    // Optional owned logical->physical slot mapping.
+    // nullptr means identity mapping.
+    uint16_t* _indices = nullptr;
 
     // Number of logical pixels exposed by this view.
     uint8_t _size = 0;

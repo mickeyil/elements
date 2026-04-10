@@ -11,6 +11,22 @@
 // - On non-ARDUINO builds, the intended implementation is one allocation per
 //   logical buffer so tools such as Valgrind remain effective at catching
 //   inter-buffer out-of-bounds writes.
+//
+// Desired tests for this class:
+// 1. Host unit tests for the non-ARDUINO separate-allocation path.
+//    - verify initialize/reset/buffer_at/buffer_size behavior
+//    - run under Valgrind
+// 2. Host unit tests for the ARDUINO pooled path.
+//    - compile the same class with ARDUINO defined on the test target
+//    - verify contiguous pooled layout and the same public behavior
+// 3. Behavioral equivalence tests across both implementations.
+//    - same logical buffer inputs
+//    - same externally visible results
+// 4. Pooled-layout invariant tests.
+//    - adjacency of pooled slices
+//    - correct size reporting
+//    - hsva_t-aligned resolved pointers
+//    - correct teardown/reset behavior
 
 #include <cstdint>
 

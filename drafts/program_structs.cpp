@@ -1,45 +1,22 @@
 #include "program_structs.h"
 
-#include <new>
-
 bool initialize_program_views(
     Program& prog,
     const uint16_t* buffer_sizes,
-    uint16_t buffer_count
+    uint16_t buffer_count,
+    const PixelViewSpec* pixel_view_specs,
+    uint16_t pixel_view_count
 )
 {
     if (!prog.pixel_buffer_pool.initialize(buffer_sizes, buffer_count)) {
         return false;
     }
 
-    if (prog.pixel_view_count == 0) {
-        return true;
-    }
-    if (prog.pixel_view_defs == nullptr) {
+    if (!prog.pixel_views.initialize(
+            prog.pixel_buffer_pool,
+            pixel_view_specs,
+            pixel_view_count)) {
         return false;
-    }
-
-    prog.pixel_views = new (std::nothrow) PixelView[prog.pixel_view_count];
-    if (prog.pixel_views == nullptr) {
-        return false;
-    }
-
-    for (uint16_t i = 0; i < prog.pixel_view_count; i++) {
-        const PixelViewDef& def = prog.pixel_view_defs[i];
-        hsva_t* backing = prog.pixel_buffer_pool.buffer_at(def.buffer_idx);
-        if (backing == nullptr) {
-            return false;
-        }
-
-        // TODO: final decoder should also validate:
-        // - def.buffer_idx is valid
-        // - def.size <= pool.buffer_size(def.buffer_idx) for identity views
-        // - every def.indices[j] is within pool.buffer_size(def.buffer_idx)
-        prog.pixel_views[i].bind(
-            backing,
-            def.is_identity ? nullptr : def.indices,
-            def.size
-        );
     }
 
     for (uint8_t li = 0; li < prog.layer_count; li++) {
@@ -52,11 +29,16 @@ bool initialize_program_views(
         // - physical_map length == buffer_length
     }
 
+    // TODO: final decoder should validate PixelView specs:
+    // - spec.buffer_idx is valid
+    // - spec.size <= pool.buffer_size(spec.buffer_idx) for identity views
+    // - every spec.indices[j] is within pool.buffer_size(spec.buffer_idx)
+
     // TODO: final decoder should validate event view references:
     // - dst_pixv_idx != PIXV_NONE
-    // - dst_pixv_idx < prog.pixel_view_count
-    // - src_pixv_idx is either PIXV_NONE or < prog.pixel_view_count
-    // - work_pixv_idx is either PIXV_NONE or < prog.pixel_view_count
+    // - dst_pixv_idx < prog.pixel_views.count()
+    // - src_pixv_idx is either PIXV_NONE or < prog.pixel_views.count()
+    // - work_pixv_idx is either PIXV_NONE or < prog.pixel_views.count()
 
     return true;
 }
@@ -82,18 +64,6 @@ void free_program_sketch(Program* prog)
         }
         delete[] prog->layers;
     }
-
-    if (prog->pixel_view_defs != nullptr) {
-        for (uint16_t i = 0; i < prog->pixel_view_count; i++) {
-            delete[] prog->pixel_view_defs[i].indices;
-        }
-        delete[] prog->pixel_view_defs;
-    }
-
-    delete[] prog->pixel_views;
-
-    // PixelBufferPool owns its storage and cleans it up itself.
-    prog->pixel_buffer_pool.reset();
 
     delete prog;
 }

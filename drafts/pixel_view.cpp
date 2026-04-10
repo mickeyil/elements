@@ -1,20 +1,42 @@
 #include "pixel_view.h"
 
-PixelView::PixelView(hsva_t* backing_buffer, uint8_t size)
+#include <new>
+
+PixelView::~PixelView()
 {
-    bind(backing_buffer, nullptr, size);
+    reset();
 }
 
-PixelView::PixelView(hsva_t* backing_buffer, const uint16_t* indices, uint8_t size)
+bool PixelView::initialize(hsva_t* backing_buffer, uint8_t size, const uint16_t* indices)
 {
-    bind(backing_buffer, indices, size);
-}
+    reset();
 
-void PixelView::bind(hsva_t* backing_buffer, const uint16_t* indices, uint8_t size)
-{
     _buffer = backing_buffer;
-    _indices = indices;
     _size = size;
+
+    if (indices == nullptr) {
+        return true;
+    }
+
+    _indices = new (std::nothrow) uint16_t[size];
+    if (_indices == nullptr) {
+        reset();
+        return false;
+    }
+
+    for (uint8_t i = 0; i < size; i++) {
+        _indices[i] = indices[i];
+    }
+
+    return true;
+}
+
+void PixelView::reset()
+{
+    delete[] _indices;
+    _indices = nullptr;
+    _buffer = nullptr;
+    _size = 0;
 }
 
 uint8_t PixelView::size() const

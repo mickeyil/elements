@@ -21,6 +21,8 @@ draft API lives in separate files under `drafts/`:
 - `pixel_buffer_pool.cpp`
 - `pixel_view.h`
 - `pixel_view.cpp`
+- `pixel_views.h`
+- `pixel_views.cpp`
 - `animation.h`
 - `program_structs.h`
 - `program_structs.cpp`
@@ -82,13 +84,13 @@ It does not currently expose extra clear/reset helpers beyond full teardown.
 
 ### `PixelView`
 
-`PixelView` is a small non-owning class that wraps logical pixel access into a
+`PixelView` is a small runtime class that wraps logical pixel access into a
 real backing buffer.
 
 It contains:
 
 - a pointer to the backing `hsva_t` buffer
-- an optional index indirection array
+- an optional owned index indirection array
 - a logical length
 
 Its main API is indexed access:
@@ -99,10 +101,30 @@ Its main API is indexed access:
 This keeps the animation-facing code simple. Animations see a logical pixel
 space; `PixelView` hides whether that space is direct or reindexed.
 
-In the current draft code, runtime `PixelView`s are built from decode-time
-`PixelViewDef` records. A `PixelViewDef` is not exposed to animations; it is
-only decoder metadata describing how to bind a runtime `PixelView` onto a real
-pool buffer.
+`PixelView` does **not** own its backing `hsva_t` buffer. That buffer still
+belongs to `PixelBufferPool`.
+
+It **does** own its optional indirection metadata. This keeps the runtime view
+object self-contained and avoids leaking decode-time descriptor lifetime into
+the runtime ownership model.
+
+### `PixelViews`
+
+`PixelViews` owns the runtime `PixelView[]` table.
+
+It is responsible for:
+
+- allocating the runtime `PixelView[]` array
+- initializing each runtime `PixelView` from decoder input metadata
+- disposing the runtime view array on teardown
+
+This keeps `Program` simpler:
+
+- `PixelBufferPool` owns real pixel buffers
+- `PixelViews` owns runtime logical views
+
+The current draft uses temporary decoder input metadata named `PixelViewSpec`.
+`PixelViewSpec` is construction input only; it is not retained in `Program`.
 
 ### Three-view event model
 
@@ -188,7 +210,7 @@ The compiler owns:
 - layer inference and layer ordering
 - allocation/reuse of real HSVA buffers
 - generation of the ordered real-buffer size list
-- generation of `PixelView` descriptors
+- generation of `PixelViewSpec` records
 - assigning `src_pixv_idx`, `dst_pixv_idx`, and `work_pixv_idx` per event
 - validating that work-storage reuse is safe
 
@@ -203,7 +225,7 @@ Important reuse rules:
 The decoder owns:
 
 - allocating `PixelBufferPool`
-- building the resolved `PixelView[]` table from the compiler's descriptors
+- building the runtime `PixelViews` table from the compiler's `PixelViewSpec`s
 - constructing concrete animation objects from decoded params
 - wiring layer buffers, views, and events together into `Program`
 
@@ -219,7 +241,8 @@ The intended direction is:
 - the compiler emits an ordered list of real buffer sizes
 - the decoder allocates the pool once
 - each pool buffer is resolved by index
-- `PixelView`s point into those resolved real buffers
+- runtime `PixelView`s are built from temporary `PixelViewSpec`s
+- each runtime `PixelView` points into one resolved real buffer
 
 This avoids scattering the main HSVA allocations across unrelated code paths.
 
@@ -289,7 +312,8 @@ These points should stay explicit in the design:
 
 - `dst` is mandatory; `src` and `work` are optional
 - `work` is persistent event-local pixel storage, not just a scratch pointer
-- `PixelView` is non-owning
+- `PixelView` is non-owning for backing pixel buffers but owning for optional
+  index metadata
 - the compiler owns buffer reuse correctness
 - the compositor still works from canonical layer buffers, not arbitrary views
 
@@ -314,6 +338,8 @@ The main areas affected by this redesign are:
 - `drafts/pixel_buffer_pool.cpp`
 - `drafts/pixel_view.h`
 - `drafts/pixel_view.cpp`
+- `drafts/pixel_views.h`
+- `drafts/pixel_views.cpp`
 - `drafts/animation.h`
 - `drafts/program_structs.h`
 - `drafts/program_structs.cpp`
@@ -325,5 +351,5 @@ The main areas affected by this redesign are:
 - `compiler/elements/compiler.py`
 - `compiler/elements/blob.py`
 
-The paired sketch files are meant to make those changes easier to refine
+The draft source files are meant to make those changes easier to refine
 without having to reconstruct the data model from discussion snippets.
