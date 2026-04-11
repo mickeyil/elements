@@ -5,7 +5,6 @@
 // Playback is the concrete state machine around Engine. It owns timing,
 // program lifecycle, and the canonical RGB Strip used for the latest frame.
 
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -20,7 +19,7 @@ enum class DeviceState : uint8_t { IDLE, LOADED, PLAYING, PAUSED, ENDED };
 class Playback {
 public:
     explicit Playback(SyncedClock& clock);
-    Playback(uint8_t strip_length, SyncedClock& clock);
+    Playback(uint16_t strip_length, SyncedClock& clock);
     ~Playback();
 
     bool has_hardware_profile() const;
@@ -43,7 +42,7 @@ public:
     DeviceState state() const;
     float duration() const;
     float current_t_rel() const;
-    uint8_t strip_length() const;
+    uint16_t strip_length() const;
     bool requires_sync() const;
 
     Strip& strip();
@@ -59,10 +58,7 @@ private:
     // Shared concrete clock abstraction.
     SyncedClock& _clock;
 
-    // Owned canonical RGB pixel storage for the latest rendered frame.
-    std::array<rgb_t, kMaxStripPixels> _rgb_storage{};
-
-    // Non-owning view over `_rgb_storage`.
+    // Owned canonical RGB frame buffer for the latest rendered frame.
     Strip _strip;
 
     // Owned render core for the currently loaded program.

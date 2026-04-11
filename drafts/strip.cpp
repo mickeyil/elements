@@ -1,6 +1,7 @@
 #include "strip.h"
 
 #include <cstring>
+#include <new>
 
 namespace {
 
@@ -19,23 +20,47 @@ static inline rgb_t reorder_rgb(const rgb_t& src, ColorOrder order)
 
 }  // namespace
 
-void Strip::rebind(rgb_t* pixels, uint8_t size)
+Strip::~Strip()
 {
-    _pixels = pixels;
+    reset();
+}
+
+bool Strip::resize(uint16_t size)
+{
+    reset();
+
+    if (size == 0) {
+        return true;
+    }
+
+    _pixels = new (std::nothrow) rgb_t[size]();
+    if (_pixels == nullptr) {
+        _size = 0;
+        return false;
+    }
+
     _size = size;
+    return true;
 }
 
-rgb_t& Strip::operator[](uint8_t idx)
+void Strip::reset()
+{
+    delete[] _pixels;
+    _pixels = nullptr;
+    _size = 0;
+}
+
+rgb_t& Strip::operator[](uint16_t idx)
 {
     return _pixels[idx];
 }
 
-const rgb_t& Strip::operator[](uint8_t idx) const
+const rgb_t& Strip::operator[](uint16_t idx) const
 {
     return _pixels[idx];
 }
 
-uint8_t Strip::size() const
+uint16_t Strip::size() const
 {
     return _size;
 }
@@ -84,7 +109,7 @@ void Strip::copy_to(uint8_t* dst, ColorOrder order) const
         return;
     }
 
-    for (uint8_t i = 0; i < _size; i++) {
+    for (uint16_t i = 0; i < _size; i++) {
         const rgb_t out = reorder_rgb(_pixels[i], order);
         dst[i * 3 + 0] = out.r;
         dst[i * 3 + 1] = out.g;
@@ -94,7 +119,7 @@ void Strip::copy_to(uint8_t* dst, ColorOrder order) const
 
 void apply_gamma(Strip& strip)
 {
-    for (uint8_t i = 0; i < strip.size(); i++) {
+    for (uint16_t i = 0; i < strip.size(); i++) {
         strip[i] = gamma_correct(strip[i]);
     }
 }

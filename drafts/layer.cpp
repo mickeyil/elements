@@ -7,8 +7,8 @@ Layer::~Layer()
 
 void Layer::initialize(
     hsva_t* buffer_,
-    uint8_t buffer_length_,
-    uint8_t* physical_map_,
+    uint16_t buffer_length_,
+    uint16_t* physical_map_,
     AnimationEvent* events_,
     uint16_t event_count_
 )

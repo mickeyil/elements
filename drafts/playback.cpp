@@ -3,11 +3,11 @@
 #include <cstring>
 
 Playback::Playback(SyncedClock& clock)
-    : _clock(clock), _strip(_rgb_storage.data(), 0)
+    : _clock(clock)
 {
 }
 
-Playback::Playback(uint8_t strip_length, SyncedClock& clock)
+Playback::Playback(uint16_t strip_length, SyncedClock& clock)
     : Playback(clock)
 {
     apply_hardware_profile(HardwareProfile(strip_length));
@@ -33,9 +33,12 @@ bool Playback::apply_hardware_profile(const HardwareProfile& profile)
 
     unload_program_();
     reset_program_state_();
-    clear_render_buffer_();
+    _profile = HardwareProfile();
+    if (!_strip.resize(profile.strip_length)) {
+        clear_render_buffer_();
+        return false;
+    }
     _profile = profile;
-    _strip.rebind(_rgb_storage.data(), _profile.strip_length);
     return true;
 }
 
@@ -224,7 +227,7 @@ float Playback::current_t_rel() const
     return 0.0f;
 }
 
-uint8_t Playback::strip_length() const
+uint16_t Playback::strip_length() const
 {
     return _strip.size();
 }

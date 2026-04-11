@@ -48,8 +48,8 @@ struct Layer {
     // source of truth.
     void initialize(
         hsva_t* buffer,
-        uint8_t buffer_length,
-        uint8_t* physical_map,
+        uint16_t buffer_length,
+        uint16_t* physical_map,
         AnimationEvent* events,
         uint16_t event_count
     );
@@ -61,10 +61,10 @@ struct Layer {
     hsva_t* buffer = nullptr;
 
     // Number of canonical compositing slots in `buffer`.
-    uint8_t buffer_length = 0;
+    uint16_t buffer_length = 0;
 
     // Owned map from canonical layer slot -> physical LED index.
-    uint8_t* physical_map = nullptr;
+    uint16_t* physical_map = nullptr;
 
     // Number of decoded events on this layer.
     uint16_t event_count = 0;

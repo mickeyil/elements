@@ -47,7 +47,7 @@ public:
     // The intended implementation is one contiguous hsva_t allocation plus an
     // array of resolved buffer pointers. Callers still address buffers by
     // index rather than by offset.
-    bool initialize(const uint8_t* buffer_sizes, uint16_t buffer_count);
+    bool initialize(const uint16_t* buffer_sizes, uint16_t buffer_count);
 
     // Release all owned storage.
     void reset();
@@ -60,7 +60,7 @@ public:
     const hsva_t* buffer_at(uint16_t buffer_idx) const;
 
     // Pixel length of logical buffer `buffer_idx`.
-    uint8_t buffer_size(uint16_t buffer_idx) const;
+    uint16_t buffer_size(uint16_t buffer_idx) const;
 
 private:
 #ifdef ARDUINO
@@ -78,5 +78,5 @@ private:
     hsva_t** _buffers = nullptr;
 
     // Pixel length of logical buffer i.
-    uint8_t* _sizes = nullptr;
+    uint16_t* _sizes = nullptr;
 };

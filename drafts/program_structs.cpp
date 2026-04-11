@@ -2,7 +2,7 @@
 
 bool initialize_program_runtime(
     Program& prog,
-    const uint8_t* buffer_sizes,
+    const uint16_t* buffer_sizes,
     uint16_t buffer_count,
     const PixelViewSpec* pixel_view_specs,
     uint16_t pixel_view_count

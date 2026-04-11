@@ -26,13 +26,13 @@ public:
     //
     // If indices == nullptr, the view is identity-mapped and owns no index
     // storage. Otherwise the view copies the incoming index list and owns it.
-    bool initialize(hsva_t* backing_buffer, uint8_t size, const uint16_t* indices = nullptr);
+    bool initialize(hsva_t* backing_buffer, uint16_t size, const uint16_t* indices = nullptr);
 
     // Release owned indirection state and clear the binding.
     void reset();
 
     // Number of logical pixels exposed by the view.
-    uint8_t size() const;
+    uint16_t size() const;
 
     // True when the view maps directly onto the first `size()` backing pixels.
     bool is_identity() const;
@@ -40,8 +40,8 @@ public:
     bool empty() const;
 
     // Logical pixel access.
-    hsva_t& operator[](uint8_t i);
-    const hsva_t& operator[](uint8_t i) const;
+    hsva_t& operator[](uint16_t i);
+    const hsva_t& operator[](uint16_t i) const;
 
     // Zero every logical pixel reachable through the view.
     void clear();
@@ -55,5 +55,5 @@ private:
     uint16_t* _indices = nullptr;
 
     // Number of logical pixels exposed by this view.
-    uint8_t _size = 0;
+    uint16_t _size = 0;
 };

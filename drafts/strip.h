@@ -20,15 +20,27 @@ static_assert(sizeof(rgb_t) == 3,
 
 class Strip {
 public:
-    Strip(rgb_t* pixels = nullptr, uint8_t size = 0)
-        : _pixels(pixels), _size(size) {}
+    Strip() = default;
+    ~Strip();
 
-    void rebind(rgb_t* pixels, uint8_t size);
+    Strip(const Strip&) = delete;
+    Strip& operator=(const Strip&) = delete;
+    Strip(Strip&&) = delete;
+    Strip& operator=(Strip&&) = delete;
 
-    rgb_t& operator[](uint8_t idx);
-    const rgb_t& operator[](uint8_t idx) const;
+    // Allocate exact RGB storage for this strip.
+    //
+    // This is called when the owner applies a HardwareProfile. It is not part
+    // of the per-frame render path.
+    bool resize(uint16_t size);
 
-    uint8_t size() const;
+    // Release owned RGB storage.
+    void reset();
+
+    rgb_t& operator[](uint16_t idx);
+    const rgb_t& operator[](uint16_t idx) const;
+
+    uint16_t size() const;
     bool empty() const;
     size_t byte_size() const;
 
@@ -45,11 +57,11 @@ public:
     void copy_to(uint8_t* dst, ColorOrder order) const;
 
 private:
-    // Non-owning canonical RGB pixel storage.
+    // Owned canonical RGB pixel storage.
     rgb_t* _pixels = nullptr;
 
     // Number of logical output pixels.
-    uint8_t _size = 0;
+    uint16_t _size = 0;
 };
 
 // Apply gamma correction in place to the current RGB frame.

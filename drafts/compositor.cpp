@@ -10,13 +10,13 @@ void Compositor::composite(Strip& out, Layer* layers, uint8_t count, uint32_t ac
         }
 
         Layer& layer = layers[li];
-        for (uint8_t i = 0; i < layer.buffer_length; i++) {
+        for (uint16_t i = 0; i < layer.buffer_length; i++) {
             const hsva_t& px = layer.buffer[i];
             if (px.a <= 0.0f) {
                 continue;
             }
 
-            const uint8_t phys = layer.physical_map[i];
+            const uint16_t phys = layer.physical_map[i];
             const rgb_t fg = hsv_to_rgb(px.h, px.s, px.v);
 
             if (px.a >= 1.0f) {

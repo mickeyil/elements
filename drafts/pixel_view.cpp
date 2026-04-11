@@ -7,7 +7,7 @@ PixelView::~PixelView()
     reset();
 }
 
-bool PixelView::initialize(hsva_t* backing_buffer, uint8_t size, const uint16_t* indices)
+bool PixelView::initialize(hsva_t* backing_buffer, uint16_t size, const uint16_t* indices)
 {
     reset();
 
@@ -24,7 +24,7 @@ bool PixelView::initialize(hsva_t* backing_buffer, uint8_t size, const uint16_t*
         return false;
     }
 
-    for (uint8_t i = 0; i < size; i++) {
+    for (uint16_t i = 0; i < size; i++) {
         _indices[i] = indices[i];
     }
 
@@ -39,7 +39,7 @@ void PixelView::reset()
     _size = 0;
 }
 
-uint8_t PixelView::size() const
+uint16_t PixelView::size() const
 {
     return _size;
 }
@@ -54,19 +54,19 @@ bool PixelView::empty() const
     return _size == 0;
 }
 
-hsva_t& PixelView::operator[](uint8_t i)
+hsva_t& PixelView::operator[](uint16_t i)
 {
     return _buffer[_indices ? _indices[i] : i];
 }
 
-const hsva_t& PixelView::operator[](uint8_t i) const
+const hsva_t& PixelView::operator[](uint16_t i) const
 {
     return _buffer[_indices ? _indices[i] : i];
 }
 
 void PixelView::clear()
 {
-    for (uint8_t i = 0; i < _size; i++) {
+    for (uint16_t i = 0; i < _size; i++) {
         (*this)[i] = hsva_t();
     }
 }

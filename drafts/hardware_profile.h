@@ -9,13 +9,9 @@
 #include <cstdint>
 
 // Draft note:
-// Strip-related sizing is intentionally capped at 250 LEDs, which allows
-// strip-length and physical-pixel indexing to stay uint8_t in the redesign.
-//
-// This does not imply every runtime table index can be uint8_t. Counts such as
-// total PixelViews, buffers, or events may still legitimately exceed 255 and
-// therefore remain wider where needed.
-static const uint8_t kMaxStripPixels = 250;
+// Strip-related sizing is intentionally capped at 1000 LEDs. Pixel positions,
+// strip lengths, and physical LED indices therefore use uint16_t.
+static const uint16_t kMaxStripPixels = 1000;
 
 enum class ColorOrder : uint8_t {
     RGB = 0,
@@ -30,11 +26,11 @@ struct HardwareProfile {
     HardwareProfile()
         : strip_length(0), color_order(ColorOrder::RGB) {}
 
-    explicit HardwareProfile(uint8_t length, ColorOrder order = ColorOrder::RGB)
+    explicit HardwareProfile(uint16_t length, ColorOrder order = ColorOrder::RGB)
         : strip_length(length), color_order(order) {}
 
     // Number of logical LEDs the playback output should cover.
-    uint8_t strip_length;
+    uint16_t strip_length;
 
     // Hardware-specific byte order expected by the final LED sink.
     //

@@ -98,24 +98,13 @@ It does not currently expose extra clear/reset helpers beyond full teardown.
 
 ### Strip-size limit and integer widths
 
-The draft direction assumes a maximum strip length of 250 LEDs.
+The draft direction assumes a maximum strip length of 1000 LEDs.
 
-That means strip-sized and physical-pixel-indexed quantities can stay `uint8_t`,
-for example:
+Pixel positions, strip lengths, physical LED indices, layer buffer lengths, and
+per-buffer HSVA sizes therefore use `uint16_t`.
 
-- canonical layer buffer length
-- `physical_map` entries
-- `Strip` size and pixel indexing
-- per-buffer HSVA sizes in `PixelBufferPool`
-
-This does **not** mean every runtime table index becomes `uint8_t`.
-Counts such as:
-
-- total PixelViews
-- total pool buffers
-- total events
-
-may still exceed 255 and therefore remain wider where appropriate.
+`ColorOrder`, `DeviceState`, and small bounded counts such as layer count can
+remain `uint8_t`.
 
 ### `PixelView`
 
@@ -284,6 +273,7 @@ objects are now decoder-constructed and stored directly on events.
 
 It is intended to be more than today's thin byte wrapper:
 
+- owned exact-sized RGB storage allocated from `HardwareProfile::strip_length`
 - array-like RGB pixel access
 - size / clear helpers
 - raw byte access when needed

@@ -17,7 +17,7 @@ struct PixelViewSpec {
     uint16_t buffer_idx = PIXBUF_NONE;
 
     // Number of logical pixels exposed through the view.
-    uint8_t size = 0;
+    uint16_t size = 0;
 
     // True when the view maps directly onto backing buffer slots [0..size).
     bool is_identity = true;

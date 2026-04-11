@@ -85,7 +85,7 @@ void Engine::reset()
     // already covers them. Avoid clearing them twice.
     for (uint16_t bi = 0; bi < _program->pixel_buffer_pool.buffer_count(); bi++) {
         hsva_t* buf = _program->pixel_buffer_pool.buffer_at(bi);
-        const uint8_t len = _program->pixel_buffer_pool.buffer_size(bi);
+        const uint16_t len = _program->pixel_buffer_pool.buffer_size(bi);
         if (buf != nullptr && len > 0) {
             std::memset(buf, 0, len * sizeof(hsva_t));
         }

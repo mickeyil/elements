@@ -76,7 +76,7 @@ inheritance:
 class Playback {
 public:
     explicit Playback(SyncedClock& clock);
-    Playback(uint8_t strip_length, SyncedClock& clock);
+    Playback(uint16_t strip_length, SyncedClock& clock);
 
     bool has_hardware_profile() const;
     const HardwareProfile& hardware_profile() const;
@@ -96,7 +96,7 @@ public:
     DeviceState state() const;
     float duration() const;
     float current_t_rel() const;
-    uint8_t strip_length() const;
+    uint16_t strip_length() const;
     bool requires_sync() const;
     Strip& strip();
     const Strip& strip() const;
@@ -109,7 +109,7 @@ private:
     void clear_render_buffer_();
 
     SyncedClock& _clock;
-    std::array<rgb_t, kMaxStripPixels> _rgb_storage{};
+    // Strip owns exact-sized RGB storage allocated from HardwareProfile.
     Strip _strip;
     std::unique_ptr<Engine> _engine;
     HardwareProfile _profile{};
@@ -140,19 +140,14 @@ Important render-pipeline boundary:
 
 ### Strip-size limit and integer widths
 
-The draft direction keeps the maximum strip length at 250 LEDs.
+The draft direction keeps the maximum strip length at 1000 LEDs.
 
-That lets strip-sized and physical-pixel-indexed quantities stay `uint8_t`
-throughout the render/output path, including:
+Pixel positions, strip lengths, physical LED indices, layer buffer lengths, and
+per-buffer HSVA sizes therefore use `uint16_t`.
 
-- `HardwareProfile::strip_length`
-- `Strip` size and indexing
-- canonical layer buffer lengths
-- hardware-facing physical pixel indices
-
-This does not force every runtime table count/index to `uint8_t`. Wider counts
-remain valid for things like total PixelViews, total pool buffers, and event
-arrays.
+`Strip` owns exact-sized RGB storage allocated from
+`HardwareProfile::strip_length`, so the 1000 LED ceiling does not force the
+common small-strip case to preallocate a 1000-pixel RGB frame.
 
 ## Core Playback Rules
 
