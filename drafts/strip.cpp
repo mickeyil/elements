@@ -3,23 +3,6 @@
 #include <cstring>
 #include <new>
 
-namespace {
-
-static inline rgb_t reorder_rgb(const rgb_t& src, ColorOrder order)
-{
-    switch (order) {
-        case ColorOrder::RGB: return rgb_t(src.r, src.g, src.b);
-        case ColorOrder::GRB: return rgb_t(src.g, src.r, src.b);
-        case ColorOrder::BGR: return rgb_t(src.b, src.g, src.r);
-        case ColorOrder::BRG: return rgb_t(src.b, src.r, src.g);
-        case ColorOrder::GBR: return rgb_t(src.g, src.b, src.r);
-        case ColorOrder::RBG: return rgb_t(src.r, src.b, src.g);
-    }
-    return src;
-}
-
-}  // namespace
-
 Strip::~Strip()
 {
     reset();
@@ -110,16 +93,23 @@ void Strip::copy_to(uint8_t* dst, ColorOrder order) const
     }
 
     for (uint16_t i = 0; i < _size; i++) {
-        const rgb_t out = reorder_rgb(_pixels[i], order);
-        dst[i * 3 + 0] = out.r;
-        dst[i * 3 + 1] = out.g;
-        dst[i * 3 + 2] = out.b;
+        const rgb_t& src = _pixels[i];
+
+        if (order == ColorOrder::BGR) {
+            dst[i * 3 + 0] = src.b;
+            dst[i * 3 + 1] = src.g;
+            dst[i * 3 + 2] = src.r;
+        } else {
+            dst[i * 3 + 0] = src.r;
+            dst[i * 3 + 1] = src.g;
+            dst[i * 3 + 2] = src.b;
+        }
     }
 }
 
-void apply_gamma(Strip& strip)
+void apply_gamma(Strip& strip, const GammaCorrection& gamma)
 {
     for (uint16_t i = 0; i < strip.size(); i++) {
-        strip[i] = gamma_correct(strip[i]);
+        strip[i] = gamma.correct(strip[i]);
     }
 }

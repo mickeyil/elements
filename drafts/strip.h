@@ -13,6 +13,7 @@
 #include <cstdint>
 
 #include "colors.h"
+#include "gamma.h"
 #include "hardware_profile.h"
 
 static_assert(sizeof(rgb_t) == 3,
@@ -68,4 +69,8 @@ private:
 //
 // After this call the strip still contains RGB pixels, but no longer linear
 // canonical RGB. It is intended as a last-mile output transform.
-void apply_gamma(Strip& strip);
+//
+// The same call is used for firmware, sim, tests, and debug output. A default
+// constructed GammaCorrection is an identity transform, so no separate
+// gamma-enabled flag is needed.
+void apply_gamma(Strip& strip, const GammaCorrection& gamma);

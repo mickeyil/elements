@@ -17,6 +17,8 @@ This document is intentionally higher level than the code sketch. The concrete
 draft API lives in separate files under `drafts/`:
 
 - `colors.h`
+- `gamma.h`
+- `gamma.cpp`
 - `runtime_constants.h`
 - `hardware_profile.h`
 - `pixel_buffer_pool.h`
@@ -289,12 +291,33 @@ The important semantic rule is:
 
 The agreed current direction is:
 
+- gamma correction is represented by a caller-owned `GammaCorrection`
+  lookup table
+- `GammaCorrection` defaults to identity gamma, so sim/tests/debug output can
+  use the same output path without a separate gamma-enabled flag
+- firmware/output owners call `set_gamma()` once from their selected hardware
+  profile or output policy
+- invalid gamma values leave the previous LUT unchanged
 - gamma correction is an external in-place transform:
-  - `apply_gamma(Strip&)`
+  - `apply_gamma(Strip&, const GammaCorrection&)`
 - channel reordering is a last-mile copy:
   - `Strip::copy_to(dst, ColorOrder)`
 
 These transforms sit outside `Engine` and `Compositor`.
+
+`ColorOrder` is intentionally limited to `RGB` and `BGR` in the current draft.
+Additional channel layouts should be added only when a real strip requires
+them.
+
+The current draft accepts:
+
+- `1.0`
+  - identity gamma
+- `> 1.0` and `<= kMaxSupportedGamma`
+  - generated LED correction LUT
+
+The default WS2812 dark-room starting point is `kWs2812DarkRoomGamma`, currently
+`2.8`. This matches the fixed gamma table in today's `src/colors.cpp`.
 
 ## Compiler / Decoder Responsibilities
 
@@ -432,6 +455,8 @@ These areas are intentionally not locked in yet:
 The main areas affected by this redesign are:
 
 - `drafts/colors.h`
+- `drafts/gamma.h`
+- `drafts/gamma.cpp`
 - `drafts/runtime_constants.h`
 - `drafts/pixel_buffer_pool.h`
 - `drafts/pixel_buffer_pool.cpp`
@@ -459,6 +484,8 @@ The main areas affected by this redesign are:
 - concrete animation headers, especially `anim_shift.h`
 - `src/engine.h` / `src/engine.cpp`
 - `src/compositor.h` / `src/compositor.cpp`
+- `src/colors.h` / `src/colors.cpp`
+- new `src/gamma.h` / `src/gamma.cpp`
 - `compiler/elements/compiler.py`
 - `compiler/elements/blob.py`
 

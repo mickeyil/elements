@@ -137,6 +137,7 @@ Important render-pipeline boundary:
   final RGB frame
 - `Playback` does not need compositor details
 - gamma correction and hardware channel order are outside the playback core
+- gamma correction is represented by a caller-owned `GammaCorrection` LUT
 
 ### Strip-size limit and integer widths
 
@@ -148,6 +149,14 @@ per-buffer HSVA sizes therefore use `uint16_t`.
 `Strip` owns exact-sized RGB storage allocated from
 `HardwareProfile::strip_length`, so the 1000 LED ceiling does not force the
 common small-strip case to preallocate a 1000-pixel RGB frame.
+
+`HardwareProfile` may also carry last-mile output facts such as channel order
+and desired gamma. `Playback` only needs the strip length for buffer allocation.
+The owner applies gamma/channel-order policy after rendering.
+
+The current output profile intentionally supports only `RGB` and `BGR` channel
+order. Other layouts can be added later as localized changes if hardware needs
+them.
 
 ## Core Playback Rules
 
@@ -307,7 +316,7 @@ Example:
 void FirmwareApp::tick_playback_()
 {
     _playback.tick_once();
-    apply_gamma(_playback.strip());
+    apply_gamma(_playback.strip(), _gamma);
     _playback.strip().copy_to(
         reinterpret_cast<uint8_t*>(g_leds),
         _playback.hardware_profile().color_order
@@ -320,6 +329,17 @@ void FirmwareApp::tick_playback_()
     FastLED.show();
 }
 ```
+
+The firmware owner initializes `_gamma` when applying its output profile:
+
+```cpp
+_gamma.set_gamma(profile.gamma);
+_playback.apply_hardware_profile(profile);
+```
+
+If `profile.gamma` is invalid, `GammaCorrection::set_gamma()` leaves the
+previous valid LUT unchanged. A default constructed `GammaCorrection` is already
+identity, which is the intended sim/raw-output behavior.
 
 This is intentionally simple. Presentation signaling can be optimized later if
 needed.
@@ -370,6 +390,7 @@ Firmware owns:
 
 - `SyncedClock`
 - `Playback`
+- `GammaCorrection`
 - output to LEDs
 - logging / telemetry
 - controller connection
