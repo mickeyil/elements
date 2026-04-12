@@ -25,5 +25,9 @@ public:
     virtual void initialize(const PixelView* src, PixelView* work) {}
 
     // Render the current frame into dst. dst is always present.
+    //
+    // Contract: every logical pixel in dst should be fully defined on every
+    // render call. The engine should not rely on stale dst contents for visual
+    // correctness.
     virtual void render(PixelView& dst, float t_rel) = 0;
 };

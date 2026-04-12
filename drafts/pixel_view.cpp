@@ -7,25 +7,53 @@ PixelView::~PixelView()
     reset();
 }
 
-bool PixelView::initialize(hsva_t* backing_buffer, uint16_t size, const uint16_t* indices)
+bool PixelView::initialize(
+    hsva_t* backing_buffer,
+    uint16_t size,
+    const uint16_t* storage_indices,
+    bool has_physical_mapping,
+    const uint16_t* physical_indices,
+    bool physical_identity
+)
 {
     reset();
 
-    _buffer = backing_buffer;
-    _size = size;
-
-    if (indices == nullptr) {
-        return true;
-    }
-
-    _indices = new (std::nothrow) uint16_t[size];
-    if (_indices == nullptr) {
-        reset();
+    if (backing_buffer == nullptr && size > 0) {
         return false;
     }
 
-    for (uint16_t i = 0; i < size; i++) {
-        _indices[i] = indices[i];
+    _buffer = backing_buffer;
+    _size = size;
+    _has_physical_mapping = has_physical_mapping;
+    _physical_identity = has_physical_mapping && physical_identity;
+
+    if (storage_indices != nullptr) {
+        _storage_indices = new (std::nothrow) uint16_t[size];
+        if (_storage_indices == nullptr) {
+            reset();
+            return false;
+        }
+
+        for (uint16_t i = 0; i < size; i++) {
+            _storage_indices[i] = storage_indices[i];
+        }
+    }
+
+    if (has_physical_mapping && !physical_identity) {
+        if (physical_indices == nullptr) {
+            reset();
+            return false;
+        }
+
+        _physical_indices = new (std::nothrow) uint16_t[size];
+        if (_physical_indices == nullptr) {
+            reset();
+            return false;
+        }
+
+        for (uint16_t i = 0; i < size; i++) {
+            _physical_indices[i] = physical_indices[i];
+        }
     }
 
     return true;
@@ -33,10 +61,15 @@ bool PixelView::initialize(hsva_t* backing_buffer, uint16_t size, const uint16_t
 
 void PixelView::reset()
 {
-    delete[] _indices;
-    _indices = nullptr;
+    delete[] _storage_indices;
+    delete[] _physical_indices;
+
+    _storage_indices = nullptr;
+    _physical_indices = nullptr;
     _buffer = nullptr;
     _size = 0;
+    _has_physical_mapping = false;
+    _physical_identity = false;
 }
 
 uint16_t PixelView::size() const
@@ -44,9 +77,19 @@ uint16_t PixelView::size() const
     return _size;
 }
 
-bool PixelView::is_identity() const
+bool PixelView::is_storage_identity() const
 {
-    return _indices == nullptr;
+    return _storage_indices == nullptr;
+}
+
+bool PixelView::has_physical_mapping() const
+{
+    return _has_physical_mapping;
+}
+
+bool PixelView::is_physical_identity() const
+{
+    return _has_physical_mapping && _physical_identity;
 }
 
 bool PixelView::empty() const
@@ -56,12 +99,20 @@ bool PixelView::empty() const
 
 hsva_t& PixelView::operator[](uint16_t i)
 {
-    return _buffer[_indices ? _indices[i] : i];
+    return _buffer[_storage_indices ? _storage_indices[i] : i];
 }
 
 const hsva_t& PixelView::operator[](uint16_t i) const
 {
-    return _buffer[_indices ? _indices[i] : i];
+    return _buffer[_storage_indices ? _storage_indices[i] : i];
+}
+
+uint16_t PixelView::physical_index(uint16_t i) const
+{
+    if (!_has_physical_mapping) {
+        return 0;
+    }
+    return _physical_identity ? i : _physical_indices[i];
 }
 
 void PixelView::clear()

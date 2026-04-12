@@ -143,7 +143,7 @@ Important render-pipeline boundary:
 
 The draft direction keeps the maximum strip length at 1000 LEDs.
 
-Pixel positions, strip lengths, physical LED indices, layer buffer lengths, and
+Pixel positions, strip lengths, physical LED indices, PixelView sizes, and
 per-buffer HSVA sizes therefore use `uint16_t`.
 
 `Strip` owns exact-sized RGB storage allocated from

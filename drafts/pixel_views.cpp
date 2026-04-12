@@ -31,11 +31,27 @@ bool PixelViews::initialize(PixelBufferPool& buffers, const PixelViewSpec* specs
             reset();
             return false;
         }
+        if (spec.storage_identity && spec.size > buffers.buffer_size(spec.buffer_idx)) {
+            reset();
+            return false;
+        }
+        if (!spec.storage_identity && spec.storage_indices == nullptr) {
+            reset();
+            return false;
+        }
+        if (spec.has_physical_mapping && !spec.physical_identity
+            && spec.physical_indices == nullptr) {
+            reset();
+            return false;
+        }
 
         if (!_views[i].initialize(
                 backing,
                 spec.size,
-                spec.is_identity ? nullptr : spec.indices)) {
+                spec.storage_identity ? nullptr : spec.storage_indices,
+                spec.has_physical_mapping,
+                spec.physical_identity ? nullptr : spec.physical_indices,
+                spec.physical_identity)) {
             reset();
             return false;
         }

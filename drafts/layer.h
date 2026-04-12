@@ -2,13 +2,15 @@
 
 // Draft-only API.
 //
-// Layer is the runtime canonical compositing layer. It owns its event list and
-// physical mapping, but borrows its HSVA backing buffer from PixelBufferPool.
+// Layer is a visual timeline only.
+//
+// It no longer owns or borrows a canonical compositing buffer. All HSVA storage
+// is owned by PixelBufferPool and reached through PixelViews referenced by
+// events. The compositor receives active dst PixelViews directly from Engine.
 
 #include <cstdint>
 
 #include "animation.h"
-#include "colors.h"
 #include "runtime_constants.h"
 
 struct AnimationEvent {
@@ -25,6 +27,9 @@ struct AnimationEvent {
     uint16_t src_pixv_idx = PIXV_NONE;
 
     // Required destination PixelView used during render().
+    //
+    // dst views must be compositable: PixelView::has_physical_mapping() should
+    // be true so the compositor can route rendered pixels to physical LEDs.
     uint16_t dst_pixv_idx = PIXV_NONE;
 
     // Optional persistent work PixelView for stateful animations.
@@ -40,31 +45,11 @@ struct Layer {
     Layer(Layer&&) = delete;
     Layer& operator=(Layer&&) = delete;
 
-    // Bind the runtime layer to its resolved canonical buffer and adopt the
-    // owned event/mapping arrays produced by the decoder.
-    //
-    // `buffer_length` is expected to come from the resolved PixelBufferPool
-    // size for the canonical layer buffer, not from a second blob-owned
-    // source of truth.
-    void initialize(
-        hsva_t* buffer,
-        uint16_t buffer_length,
-        uint16_t* physical_map,
-        AnimationEvent* events,
-        uint16_t event_count
-    );
+    // Adopt the owned event array produced by the decoder.
+    void initialize(AnimationEvent* events, uint16_t event_count);
 
-    // Release owned event/mapping state and clear the runtime binding.
+    // Release owned event state.
     void reset();
-
-    // Non-owning canonical layer buffer used by compositor.
-    hsva_t* buffer = nullptr;
-
-    // Number of canonical compositing slots in `buffer`.
-    uint16_t buffer_length = 0;
-
-    // Owned map from canonical layer slot -> physical LED index.
-    uint16_t* physical_map = nullptr;
 
     // Number of decoded events on this layer.
     uint16_t event_count = 0;

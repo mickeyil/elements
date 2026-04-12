@@ -58,7 +58,8 @@ bool Playback::handle_load(const uint8_t* blob, size_t blob_len, uint16_t gen)
     // TODO: decode the blob into Program, including:
     // - requires_sync from artifact metadata
     // - PixelBufferPool + PixelViews setup
-    // - Layer initialization with resolved canonical pool buffers
+    // - CopyOps setup for explicit source preservation
+    // - Layer initialization with decoded event timelines
     Program* program = nullptr;
     if (program == nullptr) {
         clear_render_buffer_();

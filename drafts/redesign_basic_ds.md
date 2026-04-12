@@ -21,6 +21,8 @@ draft API lives in separate files under `drafts/`:
 - `gamma.cpp`
 - `runtime_constants.h`
 - `hardware_profile.h`
+- `copy_ops.h`
+- `copy_ops.cpp`
 - `pixel_buffer_pool.h`
 - `pixel_buffer_pool.cpp`
 - `pixel_view.h`
@@ -102,7 +104,7 @@ It does not currently expose extra clear/reset helpers beyond full teardown.
 
 The draft direction assumes a maximum strip length of 1000 LEDs.
 
-Pixel positions, strip lengths, physical LED indices, layer buffer lengths, and
+Pixel positions, strip lengths, physical LED indices, PixelView sizes, and
 per-buffer HSVA sizes therefore use `uint16_t`.
 
 `ColorOrder`, `DeviceState`, and small bounded counts such as layer count can
@@ -111,28 +113,46 @@ remain `uint8_t`.
 ### `PixelView`
 
 `PixelView` is a small runtime class that wraps logical pixel access into a
-real backing buffer.
+real backing buffer and, for destination views, records where those pixels
+appear on the physical strip.
 
 It contains:
 
 - a pointer to the backing `hsva_t` buffer
-- an optional owned index indirection array
+- an optional owned storage index indirection array
+- an optional owned physical output index array
 - a logical length
 
-Its main API is indexed access:
+Its main APIs answer two different questions:
 
-- `view[i]` returns the correct pixel in the underlying buffer
-- identity views avoid extra metadata beyond the null index pointer
+- `view[i]`
+  - memory access for animations and copy ops
+  - uses the optional storage mapping
+- `view.physical_index(i)`
+  - output routing for the compositor
+  - uses the optional physical mapping
+
+Storage mapping and physical mapping are intentionally independent:
+
+- storage mapping describes where logical pixels live in HSVA memory
+- physical mapping describes where logical pixels appear on the LED strip
 
 This keeps the animation-facing code simple. Animations see a logical pixel
 space; `PixelView` hides whether that space is direct or reindexed.
 
+The dominant case is identity storage. Storage indirection remains available
+because it is the cleanest way to build source views over preserved buffers
+when a later consumer needs a subset or a different logical order.
+
+Physical mapping is required only for destination views that may be passed to
+the compositor. Source, work, and copy-internal views can be storage-only.
+
 `PixelView` does **not** own its backing `hsva_t` buffer. That buffer still
 belongs to `PixelBufferPool`.
 
-It **does** own its optional indirection metadata. This keeps the runtime view
-object self-contained and avoids leaking decode-time descriptor lifetime into
-the runtime ownership model.
+It **does** own its optional storage/physical index metadata. This keeps the
+runtime view object self-contained and avoids leaking decode-time descriptor
+lifetime into the runtime ownership model.
 
 ### `PixelViews`
 
@@ -162,6 +182,7 @@ Each event references up to three `PixelView`s:
 - `dst_pixv_idx`
   - required
   - render target for `render()`
+  - must have physical mapping because it may be composited
 - `work_pixv_idx`
   - optional
   - persistent mutable storage used by stateful animations
@@ -174,6 +195,50 @@ This is the key semantic split:
   active event
 
 That model keeps shift correct without reintroducing today's coordinate bridge.
+
+### `CopyOps`
+
+`CopyOps` is an internal source-preservation timeline.
+
+Each `CopyOp` has:
+
+- `at`
+  - program-relative time when the copy becomes due
+- `before_layer_idx`
+  - layer boundary where the copy runs
+  - `0` means before visual layer 0
+  - `N` means before visual layer N
+  - `layer_count` means after all visual layers
+- `src_pixv_idx`
+  - source logical view
+- `dst_pixv_idx`
+  - destination logical view
+
+Copy ops are not visual events and are not layers. The engine runs due copy ops
+at compiler-selected layer boundaries.
+
+The `before_layer_idx` field is the recommended solution for same-frame source
+dependencies. If layer 0 renders a source and layer 1 depends on it, the
+compiler can emit a copy op with `before_layer_idx = 1`; the engine renders
+layer 0, runs due copy ops for boundary 1, then initializes/renders layer 1.
+
+The intended use is explicit preservation:
+
+- an earlier visual event renders output into some buffer/view
+- a compiler-scheduled copy op copies the relevant logical source pixels into a
+  stable buffer/view
+- a later dependent animation initializes from that stable source view
+
+This keeps the runtime uniform: preservation is represented as data movement
+between PixelViews, not as hidden source-layer logic inside the engine.
+
+Important timing recommendation:
+
+- the compiler must schedule a copy op at a time and layer boundary where the
+  source view already contains the intended pixels
+- safe-interval analysis must include both visual events and copy ops
+- if exact end-state sampling ever matters, the compiler should model that
+  explicitly rather than relying on an implicit "event ended" side effect
 
 ## Animation Interface
 
@@ -210,45 +275,84 @@ Shift is the motivating example:
 stable snapshot. The compiler is responsible for assigning valid work storage
 for the duration of each event.
 
-## Layer Buffers And Compositor
+## Views, Layers, And Compositor
 
-`PixelView` is for animation access. The compositor still composites canonical
-layer buffers into a final RGB strip.
+The updated direction removes the canonical layer buffer concept.
 
-That means:
-
-- animations write through `PixelView`s
-- those views land in real backing buffers from `PixelBufferPool`
-- each layer still has one canonical HSVA display buffer
-- each layer still has a physical LED mapping (`physical_map`)
-- the compositor still iterates the whole layer buffer and maps each slot to a
-  physical LED before blending into final RGB
-
-So `PixelView` does not replace the compositor's layer model. It replaces the
-animation-side routing model.
+All HSVA storage is just pool storage. PixelViews describe how visual events,
+copy ops, source initialization, work storage, and compositor output access
+that storage.
 
 ### `Layer`
 
-`Layer` is the runtime canonical compositing layer.
+`Layer` is a timeline of visual events.
 
 It owns:
 
-- the decoded event array
-- the physical LED map for the canonical layer buffer
+- the decoded `AnimationEvent[]`
 
-It borrows:
+It does not own or borrow:
 
-- the canonical `hsva_t` buffer resolved from `PixelBufferPool`
+- HSVA buffers
+- physical maps
+- layer buffer lengths
+- buffer indices
 
-Important current direction:
+This is the main simplification from the latest discussion. A layer answers:
 
-- runtime `Layer` does not retain a `buffer_idx`
-- decoder resolves the real pool buffer first and passes the resulting pointer
-  into `Layer::initialize()`
-- canonical layer length should come from that resolved pool buffer size, not
-  from a second independent source of truth
+- which event is active at time `t`?
 
-This keeps runtime layer state free of decode-time buffer wiring metadata.
+It no longer answers:
+
+- where is this layer's compositing buffer?
+- how does this layer map buffer positions to physical LEDs?
+
+Those answers moved to `PixelView`.
+
+### `Compositor`
+
+The compositor receives active destination views in layer order:
+
+```cpp
+void composite(Strip& out, PixelView* const* active_dst_views, uint8_t count);
+```
+
+Each entry is:
+
+- `nullptr`
+  - layer has no active visual event for this frame
+- non-null `PixelView*`
+  - active destination view rendered by that layer for this frame
+
+The compositor never includes `layer.h`, never sees event cursors, and never
+knows about layer buffers. It only needs:
+
+- `view[i]`
+  - the HSVA pixel to blend
+- `view.physical_index(i)`
+  - the physical LED to write
+
+This keeps the hot path direct while removing the old two-level routing model.
+
+### Scratch, Stable, And Work Storage
+
+Scratch/stable/work buffers still exist, but they are just entries in
+`PixelBufferPool`.
+
+The compiler decides:
+
+- which real pool buffers exist
+- which PixelViews point at those buffers
+- which events can reuse the same backing storage
+- which outputs must be preserved in stable storage for later dependencies
+- when copy ops are required to move data into preserved/work views
+
+The runtime does not need buffer "types". It sees only:
+
+- pool buffer sizes
+- PixelView descriptors
+- visual event view indices
+- copy-op view indices
 
 ## Engine / Compositor / Strip Boundary
 
@@ -258,8 +362,8 @@ The current direction is:
 - callers render frames via `Engine::render_frame(t_rel, Strip&)`
 - callers do not need to know compositor details
 
-`Engine` owns per-layer playback progression only. The intended playback state
-per layer is:
+`Engine` owns visual layer progression and copy-op execution state. The
+intended playback state per layer is:
 
 - `cursor`
   - current event index
@@ -268,6 +372,37 @@ per layer is:
 
 The old `instance == nullptr` activation signal disappears because animation
 objects are now decoder-constructed and stored directly on events.
+
+Engine also owns:
+
+- copy-op execution state
+- a reused `active_dst_views[]` array, one entry per layer
+
+The high-level frame order is:
+
+1. clear `active_dst_views[]` to `nullptr`
+2. for each layer boundary, run due copy ops assigned to that boundary
+3. walk the next layer timeline and find its active visual event
+4. initialize newly active events with optional `src` / `work`
+5. render each active event into its `dst` PixelView
+6. store each active `dst` view in `active_dst_views[layer_index]`
+7. after the last layer, run due copy ops assigned to `layer_count`
+8. ask `Compositor` to blend active views into `Strip`
+
+This replaces the old `active_mask`. Layer activity is represented directly by
+whether the active-view pointer is null.
+
+The draft source currently uses per-copy execution flags and scans the copy-op
+table by stage. If copy-op counts become large, this can be optimized later by
+emitting per-stage copy-op ranges and using one cursor per stage. The external
+data model does not need to change for that optimization.
+
+Animation render contract:
+
+- `render(dst, t_rel)` must fully define every logical pixel in `dst` on every
+  frame
+- engine-side activation clear is allowed as defensive hygiene, but should not
+  be required for correctness
 
 ### `Strip`
 
@@ -330,13 +465,32 @@ The compiler owns:
 - generation of the ordered real-buffer size list
 - generation of `PixelViewSpec` records
 - assigning `src_pixv_idx`, `dst_pixv_idx`, and `work_pixv_idx` per event
+- generation of `CopyOp` records for explicit preservation copies
 - validating that work-storage reuse is safe
+- validating that source-preservation storage remains valid until all
+  dependent events have initialized
+- validating that physical mappings on dst views stay within strip length
 
 Important reuse rules:
 
 - same-layer event reuse remains valid because layer events do not overlap
 - work-buffer reuse is allowed when lifetimes do not overlap
+- copy-op destinations and preserved source buffers participate in the same
+  lifetime/safe-interval analysis
+- a copy-op destination must not alias an active dst view that will still be
+  composited in the same frame, unless the copy is intentionally part of that
+  visual output
+- copy-op layer boundaries must be chosen so same-frame source dependencies are
+  copied after the source layer renders and before the dependent layer
+  initializes
 - partial reuse is allowed only when overlapping regions are proven disjoint
+
+Recommendation:
+
+- keep the decoder/runtime dumb
+- let the compiler perform global lifetime analysis
+- represent preservation with explicit copy ops when that is easier to reason
+  about than complex compile-time source rewrites
 
 ### Decoder
 
@@ -344,12 +498,25 @@ The decoder owns:
 
 - allocating `PixelBufferPool`
 - building the runtime `PixelViews` table from the compiler's `PixelViewSpec`s
+- building the runtime `CopyOps` table
 - constructing concrete animation objects from decoded params
-- resolving canonical layer buffers from the pool
-- wiring layers, views, and events together into `Program`
+- wiring layers, views, copy ops, and events together into `Program`
 
 The decoder should not need animation-type-specific memory policy. It should
 mostly consume indices, sizes, and descriptors emitted by the compiler.
+
+Decoder validation should include:
+
+- PixelView buffer indices are valid
+- storage indices are within the referenced pool buffer
+- physical indices are within `HardwareProfile::strip_length`
+- event `dst_pixv_idx` is present and references a compositable PixelView
+- event `src_pixv_idx` and `work_pixv_idx` are absent or valid
+- copy ops are sorted by `(at, before_layer_idx)` if the implementation wants
+  cursor-based execution
+- copy-op `before_layer_idx <= layer_count`
+- copy-op source/destination view indices are valid
+- copy-op source and destination sizes match
 
 ## Memory Model
 
@@ -362,6 +529,8 @@ The intended direction is:
 - each pool buffer is resolved by index
 - runtime `PixelView`s are built from temporary `PixelViewSpec`s
 - each runtime `PixelView` points into one resolved real buffer
+- layer timelines reference PixelViews by index
+- copy ops reference PixelViews by index
 
 This avoids scattering the main HSVA allocations across unrelated code paths.
 
@@ -402,14 +571,17 @@ Per active layer/event, the engine must know at least:
 
 - current event cursor
 - whether the current event has already been initialized
+- copy-op execution state
 
 The engine is responsible for ensuring:
 
+- due copy ops run before dependent visual events initialize
 - `initialize()` runs before the first `render()` of an activation
 - after reset / jump / restart, the event is treated as uninitialized again
 - buffers that must start cleared are cleared by engine/program reset
 - layer activity for compositing is derived directly from event timing in the
   render loop, not from any old animation-instance pointer
+- active compositor input is the active dst view array, not an active bitmask
 
 The current leaning is to keep this lifecycle state in the engine, not inside
 the animation base class.
@@ -422,7 +594,9 @@ The intended simplifications are:
   `Animation` objects directly
 - engine-side `create_animation()` goes away
 - event-side `remap` / `remap_is_identity` / `remap_length` go away
+- layer-side `index_map` / `physical_map` compositing metadata goes away
 - `temp_buffer` goes away
+- `active_mask` goes away
 - the current shift coordinate bridge goes away
 - today's shift work-buffer pool becomes a more general `PixelBufferPool` +
   `work_pixv_idx` model
@@ -432,21 +606,29 @@ The intended simplifications are:
 These points should stay explicit in the design:
 
 - `dst` is mandatory; `src` and `work` are optional
+- `dst` views must have physical mapping; `src` and `work` views do not
 - `work` is persistent event-local pixel storage, not just a scratch pointer
 - `PixelView` is non-owning for backing pixel buffers but owning for optional
-  index metadata
+  storage/physical index metadata
+- storage mapping and physical mapping are separate concepts
+- `Layer` is a timeline, not a compositing surface
+- `CopyOp` is an internal preservation operation, not a visual event and not a
+  layer
 - the compiler owns buffer reuse correctness
-- the compositor still works from canonical layer buffers, not arbitrary views
+- the compositor works from active dst views in layer order
 
 ## Open Items
 
 These areas are intentionally not locked in yet:
 
 - exact blob layout for `PixelBufferPool` and `PixelView` descriptors
+- exact blob layout for `CopyOp` records
 - whether pool internals are represented as one contiguous block, a small set
   of chunks, or another pool implementation detail
-- whether `PixelView` should expose any helpers beyond `operator[]`, `size()`,
-  and `clear()`
+- whether `PixelView` should expose any helpers beyond `operator[]`,
+  `physical_index()`, `size()`, and `clear()`
+- exact compiler policy for when to preserve by stable dst buffer vs. by
+  explicit copy op
 - future animation types that may need additional runtime state beyond pixel
   storage
 
@@ -458,6 +640,8 @@ The main areas affected by this redesign are:
 - `drafts/gamma.h`
 - `drafts/gamma.cpp`
 - `drafts/runtime_constants.h`
+- `drafts/copy_ops.h`
+- `drafts/copy_ops.cpp`
 - `drafts/pixel_buffer_pool.h`
 - `drafts/pixel_buffer_pool.cpp`
 - `drafts/pixel_view.h`

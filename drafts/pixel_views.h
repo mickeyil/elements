@@ -19,12 +19,27 @@ struct PixelViewSpec {
     // Number of logical pixels exposed through the view.
     uint16_t size = 0;
 
-    // True when the view maps directly onto backing buffer slots [0..size).
-    bool is_identity = true;
+    // True when operator[] maps directly onto backing buffer slots [0..size).
+    bool storage_identity = true;
 
     // Decoder input logical->buffer-slot mapping.
-    // Null when `is_identity == true`.
-    const uint16_t* indices = nullptr;
+    // Null when `storage_identity == true`.
+    const uint16_t* storage_indices = nullptr;
+
+    // True when this view can be composited to the output strip.
+    //
+    // dst views must have physical mapping. src/work/copy-internal views do
+    // not need one.
+    bool has_physical_mapping = false;
+
+    // True when physical_index(i) == i.
+    //
+    // Only meaningful when has_physical_mapping == true.
+    bool physical_identity = false;
+
+    // Decoder input logical->physical-LED mapping.
+    // Null when `physical_identity == true` or when there is no physical map.
+    const uint16_t* physical_indices = nullptr;
 };
 
 class PixelViews {
@@ -40,7 +55,7 @@ public:
     // Build the runtime PixelView table from decoder input specs.
     //
     // PixelViews owns the resulting PixelView[] array. Each PixelView in turn
-    // owns its copied index list, if any.
+    // owns its copied storage/physical index lists, if any.
     bool initialize(PixelBufferPool& buffers, const PixelViewSpec* specs, uint16_t count);
 
     // Release every runtime PixelView and its owned metadata.
