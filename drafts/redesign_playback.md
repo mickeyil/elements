@@ -39,15 +39,15 @@ already contains almost all playback behavior:
   - engine ownership
   - strip binding
 - playback timing:
-  - `_t0`
+  - `_program_start_us`
   - `tick_once()`
-  - `current_t_rel()`
+  - `current_t_program()`
 - buffer ownership:
   - `_rgb_storage`
   - `_strip`
 - rendering orchestration:
-  - `_engine->tick(t_rel)` in the current source
-  - redesign below changes this to `Engine::render_frame(t_rel, Strip&)`
+  - legacy `_engine->tick(t_rel)` in the current source
+  - redesign below changes this to `Engine::render_frame(t_program, Strip&)`
 
 Current subclasses mostly supply the destination for rendered output:
 
@@ -75,18 +75,18 @@ inheritance:
 ```cpp
 class Playback {
 public:
-    explicit Playback(SyncedClock& clock);
-    Playback(uint16_t strip_length, SyncedClock& clock);
+    explicit Playback(DeviceClock& clock);
+    Playback(uint16_t strip_length, DeviceClock& clock);
 
     bool has_hardware_profile() const;
     const HardwareProfile& hardware_profile() const;
     bool apply_hardware_profile(const HardwareProfile& profile);
 
     bool handle_load(const uint8_t* blob, size_t blob_len, uint16_t gen);
-    void handle_start(int64_t t0_us);
-    void handle_jump(int64_t t0_us, float t_rel, uint16_t gen);
+    void handle_start(int64_t program_start_us);
+    void handle_jump(int64_t program_start_us, float t_program, uint16_t gen);
     void handle_pause();
-    void handle_resume(int64_t t0_us);
+    void handle_resume(int64_t program_start_us);
     void handle_stop();
     void reset_for_detach();
     void present_black_frame();
@@ -95,28 +95,28 @@ public:
 
     DeviceState state() const;
     float duration() const;
-    float current_t_rel() const;
+    float current_t_program() const;
     uint16_t strip_length() const;
     bool requires_sync() const;
     Strip& strip();
     const Strip& strip() const;
 
 private:
-    int64_t now_us() const;
+    int64_t program_clock_now_us() const;
     void unload_program_();
     void reset_program_state_();
     void reset_timing_state_();
     void clear_render_buffer_();
 
-    SyncedClock& _clock;
+    DeviceClock& _clock;
     // Strip owns exact-sized RGB storage allocated from HardwareProfile.
     Strip _strip;
     std::unique_ptr<Engine> _engine;
     HardwareProfile _profile{};
     DeviceState _state = DeviceState::IDLE;
     float _duration = 0.0f;
-    int64_t _t0_us = 0;
-    float _paused_t_rel = 0.0f;
+    int64_t _program_start_us = 0;
+    float _paused_t_program = 0.0f;
     bool _requires_sync = false;
 };
 ```
@@ -126,15 +126,15 @@ This class is concrete:
 - no `virtual output_frame()`
 - no `virtual send_telemetry()`
 - no `virtual now_mono()`
-- no `virtual playback_t0()`
+- no legacy `playback_t0()` virtual playback-start-anchor hook
 
 The owner reads the buffer and decides what to do with it.
 
 Important render-pipeline boundary:
 
 - `Engine` owns `Compositor` internally
-- `Engine::render_frame(t_rel, Strip&)` advances playback state and renders the
-  final RGB frame
+- `Engine::render_frame(t_program, Strip&)` advances playback state and
+  renders the final RGB frame
 - `Playback` does not need compositor details
 - gamma correction and hardware channel order are outside the playback core
 - gamma correction is represented by a caller-owned `GammaCorrection` LUT
@@ -157,6 +157,24 @@ The owner applies gamma/channel-order policy after rendering.
 The current output profile intentionally supports only `RGB` and `BGR` channel
 order. Other layouts can be added later as localized changes if hardware needs
 them.
+
+### Time naming policy
+
+The canonical timing vocabulary is defined once in
+`redesign_basic_ds.md#time-naming-policy`. Playback follows that policy:
+
+- loose program-relative seconds are `t_program`
+- animation-relative seconds are `t_animation`
+- absolute program start anchors are `program_start_us`
+- selected-clock absolute now is `program_clock_now_us()`
+- controller/local clock domains are exposed through `DeviceClock`
+- new implementation code should not introduce `t_rel`, `t0`,
+  `now_synced_us()`, or `now_unsynced_us()`
+
+Frame/reporting/protocol names such as `DeviceFrame::t_program` and
+start/jump/resume `program_start_us` are part of the intended follow-up
+implementation rename pass; the live source may still use legacy names until
+that pass lands.
 
 ## Core Playback Rules
 
@@ -182,17 +200,17 @@ Meaning:
 The central helper is:
 
 ```cpp
-int64_t Playback::now_us() const
+int64_t Playback::program_clock_now_us() const
 {
-    return _requires_sync ? _clock.now_synced_us()
-                          : _clock.now_unsynced_us();
+    return _requires_sync ? _clock.now_controller_us()
+                          : _clock.now_local_us();
 }
 ```
 
 That is the one intended branch.
 
-This is explicit enough to grep and reason about, while keeping
-`tick_once()` / `current_t_rel()` simple.
+This is explicit enough to grep and reason about, while keeping `tick_once()` /
+`current_t_program()` simple.
 
 There is no additional `_use_synced` latch in the current design direction.
 The intent is that `_requires_sync` is enough, with assertions/tests catching
@@ -221,50 +239,50 @@ sync is ready and later falls back / adapts awkwardly.
 
 The time domains must stay explicit:
 
-- `now_synced_us()`
+- `now_controller_us()`
   - disciplined monotonic time in the controller's time domain
-- `now_unsynced_us()`
+- `now_local_us()`
   - device-local monotonic time
 
 For synced playback:
 
 ```cpp
-float t_rel = float(_clock.now_synced_us() - _t0_us) / 1e6f;
+float t_program = float(_clock.now_controller_us() - _program_start_us) / 1e6f;
 ```
 
 For unsynced playback:
 
 ```cpp
-float t_rel = float(_clock.now_unsynced_us() - _t0_us) / 1e6f;
+float t_program = float(_clock.now_local_us() - _program_start_us) / 1e6f;
 ```
 
 So:
 
-- synced `_t0_us` is stored in controller time domain
-- unsynced `_t0_us` is anchored from local monotonic time
+- synced `_program_start_us` is stored in controller time domain
+- unsynced `_program_start_us` is anchored from local monotonic time
 
-## `SyncedClock`
+## `DeviceClock`
 
-`Playback` depends on one concrete `SyncedClock`.
+`Playback` depends on one concrete `DeviceClock`.
 
 Expected API:
 
 ```cpp
-class SyncedClock {
+class DeviceClock {
 public:
     bool is_synced() const;
-    int64_t now_synced_us() const;
-    int64_t now_unsynced_us() const;
+    int64_t now_controller_us() const;
+    int64_t now_local_us() const;
 
-    void apply_correction(int64_t offset_us);
+    void apply_sync_offset(int64_t local_minus_controller_us);
     void clear_sync();
 };
 ```
 
 Notes:
 
-- `SyncedClock` is one concrete class, not a class hierarchy.
-- simulation and firmware should share the same `SyncedClock` behavior.
+- `DeviceClock` is one concrete class, not a class hierarchy.
+- simulation and firmware should share the same `DeviceClock` behavior.
 - only the raw monotonic source underneath should differ:
   - firmware: `esp_timer_get_time()`
   - desktop sim: `steady_clock`
@@ -273,11 +291,11 @@ Notes:
 
 ### Intended behavior
 
-`SyncedClock` should:
+`DeviceClock` should:
 
 - expose `is_synced()`
-- publish disciplined monotonic synced time
-- publish raw unsynced monotonic time
+- publish disciplined monotonic controller-domain time
+- publish raw local monotonic time
 - absorb small corrections
 - never move backward while synced
 - transition to unsynced when correction/drift exceeds the allowed band
@@ -292,7 +310,7 @@ Today:
 Redesign direction:
 
 - `ControllerConnection` receives `CMD_SYNC_RESULT`
-- `ControllerConnection` feeds `SyncedClock` directly
+- `ControllerConnection` feeds `DeviceClock` directly
 - `Playback` no longer exposes `handle_sync_result()` / `clear_sync()`
 
 That is an explicit ownership change, not just an implementation detail.
@@ -358,10 +376,10 @@ Possible owner-side pattern:
 
 ```cpp
 DeviceState before = _playback.state();
-_playback.handle_start(t0);
+_playback.handle_start(program_start_us);
 DeviceState after = _playback.state();
 if (after != before) {
-    log_state_change(after, _playback.current_t_rel());
+    log_state_change(after, _playback.current_t_program());
 }
 ```
 
@@ -388,7 +406,7 @@ the first redesign pass.
 
 Firmware owns:
 
-- `SyncedClock`
+- `DeviceClock`
 - `Playback`
 - `GammaCorrection`
 - output to LEDs
@@ -400,7 +418,7 @@ Firmware owns:
 
 Simulation owns:
 
-- raw monotonic source for `SyncedClock`
+- raw monotonic source for `DeviceClock`
 - `Playback`
 - frame queueing / aggregation
 - any simulator-side observability
@@ -446,7 +464,7 @@ If this direction is adopted, the following can leave the playback core:
   - `handle_sync_result()`
   - `clear_sync()`
 - timing indirection:
-  - `playback_t0()`
+  - `playback_t0()` virtual playback-start-anchor
 - raw clock virtual:
   - `now_mono()`
 - render-output policy:
@@ -570,8 +588,8 @@ If the goal is to simplify aggressively while keeping the redesign grounded,
 the first pass should do this:
 
 1. Replace artifact timebase enum language with `requires_sync: bool`.
-2. Introduce concrete `SyncedClock`.
-3. Move sync correction ownership from `PlaybackDevice` to `SyncedClock`.
+2. Introduce concrete `DeviceClock`.
+3. Move sync correction ownership from `PlaybackDevice` to `DeviceClock`.
 4. Replace `PlaybackDevice` with concrete `Playback`.
 5. Move hardware output and telemetry to owners.
 6. Keep sim on the same playback rules as firmware.
@@ -584,7 +602,7 @@ Only a few decisions still look important at this level:
 
 ### 1. Sync threshold / hysteresis
 
-`SyncedClock::is_synced()` needs a configured notion of "good enough".
+`DeviceClock::is_synced()` needs a configured notion of "good enough".
 
 Example starting point:
 
@@ -609,7 +627,7 @@ Current lean:
 
 Current lean:
 
-- `SyncedClock` reports loss of sync
+- `DeviceClock` reports loss of sync
 - higher-level playback/firmware policy fades out to black
 - no silent fallback to unsynced playback for synced content
 
@@ -626,7 +644,7 @@ Current lean:
 The most up-to-date intended abstraction is:
 
 - `Playback` is a concrete playback-and-rendering core
-- `SyncedClock` is a concrete time source abstraction
+- `DeviceClock` is a concrete time source abstraction
 - owners handle output, transport, telemetry, and simulator tooling
 - simulation follows firmware semantics
 - simplification wins over preserving old wrapper hierarchies

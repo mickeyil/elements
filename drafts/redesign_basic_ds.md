@@ -38,8 +38,8 @@ draft API lives in separate files under `drafts/`:
 - `compositor.cpp`
 - `engine.h`
 - `engine.cpp`
-- `synced_clock.h`
-- `synced_clock.cpp`
+- `device_clock.h`
+- `device_clock.cpp`
 - `playback.h`
 - `playback.cpp`
 - `program_structs.h`
@@ -109,6 +109,66 @@ per-buffer HSVA sizes therefore use `uint16_t`.
 
 `ColorOrder`, `DeviceState`, and small bounded counts such as layer count can
 remain `uint8_t`.
+
+### Time Naming Policy
+
+The redesign should not introduce new `t_rel` or `t0` names.
+
+Use this naming rule:
+
+- loose values, parameters, locals, and return values use strict domain names
+- `t_<domain>` means float seconds relative to that domain
+- `<thing>_us` / `<thing>_ns` means an absolute timestamp or delta with explicit
+  units
+- delta names must encode direction/sign at public API boundaries, for example
+  `local_minus_controller_us` instead of `offset_us`
+- struct fields may use short contextual names only when the struct type pins
+  both meaning and units
+- compiler fields may keep `_sec` because compiler code also handles beat-space
+  values
+
+Final runtime vocabulary:
+
+| Name | Meaning |
+| --- | --- |
+| `t_program` | float seconds relative to program start |
+| `t_animation` | float seconds relative to animation/event start |
+| `program_start_us` | absolute program start timestamp in selected clock domain |
+| `program_clock_now_us()` | absolute now in the selected program clock domain |
+| `now_controller_us()` | absolute controller-domain timestamp |
+| `now_local_us()` | absolute device-local monotonic timestamp |
+| `DeviceClock` | device-side clock abstraction |
+| `is_synced()` | status predicate for controller-domain validity |
+| `apply_sync_offset(local_minus_controller_us)` | applies signed sync offset at the API boundary |
+| `current_t_program()` | current program-relative time |
+| `_paused_t_program` | stored program-relative time while paused |
+
+Contextual struct fields:
+
+| Field | Meaning |
+| --- | --- |
+| `AnimationEvent::start` | program-relative float seconds |
+| `AnimationEvent::duration` | float seconds |
+| `CopyOp::at` | program-relative float seconds |
+| `Program::duration` | float seconds |
+
+Frame/reporting/protocol names should also use the same vocabulary:
+
+- `DeviceFrame::t_program`
+- `ProgramFrame::t_program`
+- UDP frame header field `t_program`
+- start/jump/resume command field `program_start_us`
+- jump/debug-seek target field `t_program`
+
+These frame/reporting/protocol names are the intended contract for the follow-up
+implementation rename pass. The live tree may still contain legacy `t_rel` /
+`t0_us` names until that pass lands.
+
+Names to avoid in new runtime code:
+
+- `t_rel`
+- `t0`
+- `synced time` / `unsynced time` as clock-domain names
 
 ### `PixelView`
 
@@ -255,7 +315,7 @@ into a logical pixel view."
 The intended shape is:
 
 - `initialize(const PixelView* src, PixelView* work)`
-- `render(PixelView& dst, float t_rel)`
+- `render(PixelView& dst, float t_animation)`
 
 Notes:
 
@@ -366,7 +426,7 @@ The runtime does not need buffer "types". It sees only:
 The current direction is:
 
 - `Engine` owns `Compositor` internally
-- callers render frames via `Engine::render_frame(t_rel, Strip&)`
+- callers render frames via `Engine::render_frame(t_program, Strip&)`
 - callers do not need to know compositor details
 
 `Engine` owns visual layer progression and the copy-op cursor. The intended
@@ -387,7 +447,7 @@ Engine also owns:
 
 The high-level frame order is:
 
-1. run due copy ops with `op.at <= t_rel`
+1. run due copy ops with `op.at <= t_program`
 2. clear `active_dst_views[]` to `nullptr`
 3. walk layer timelines and find active visual events
 4. initialize newly active events with optional `src` / `work`
@@ -403,8 +463,8 @@ monotonic cursor.
 
 Animation render contract:
 
-- `render(dst, t_rel)` must fully define every logical pixel in `dst` on every
-  frame
+- `render(dst, t_animation)` must fully define every logical pixel in `dst` on
+  every frame
 - engine-side activation clear is allowed as defensive hygiene, but should not
   be required for correctness
 
@@ -658,8 +718,8 @@ The main areas affected by this redesign are:
 - `drafts/compositor.cpp`
 - `drafts/engine.h`
 - `drafts/engine.cpp`
-- `drafts/synced_clock.h`
-- `drafts/synced_clock.cpp`
+- `drafts/device_clock.h`
+- `drafts/device_clock.cpp`
 - `drafts/playback.h`
 - `drafts/playback.cpp`
 - `drafts/program_structs.h`

@@ -5,6 +5,13 @@
 > of PlaybackDevice and its derivatives. Read if you need context on the
 > playback subsystem redesign; skip if you're working on unrelated areas.
 
+> **Terminology note:** this file is historical context. The current intended
+> implementation vocabulary is defined in `redesign_basic_ds.md` and
+> `redesign_playback.md`: `DeviceClock`, `now_controller_us()`,
+> `now_local_us()`, `program_start_us`, `t_program`, and `t_animation`.
+> Older names below such as `SyncedClock`, `t_rel`, and `t0` should not guide
+> implementation.
+
 ## Summary
 
 PlaybackDevice is the base class for all LED animation playback. It bundles

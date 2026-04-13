@@ -17,10 +17,10 @@ public:
     explicit Engine(Program* program);
     ~Engine();
 
-    // Advance to t_rel and render the final RGB frame into `out`.
+    // Advance to t_program and render the final RGB frame into `out`.
     //
-    // Returns false when t_rel is outside the playable program range.
-    bool render_frame(float t_rel, Strip& out);
+    // Returns false when t_program is outside the playable program range.
+    bool render_frame(float t_program, Strip& out);
 
     // Reset per-layer progression and clear mutable program buffers.
     void reset();
@@ -35,8 +35,8 @@ private:
         bool initialized = false;
     };
 
-    // Run due internal copy operations before visual rendering for t_rel.
-    void run_copy_ops_until(float t_rel);
+    // Run due internal copy operations before visual rendering for t_program.
+    void run_copy_ops_until(float t_program);
 
     // Copy logical pixels from src to dst. Decoder validation should ensure
     // equal sizes; this helper still checks defensively in the draft.

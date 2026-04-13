@@ -18,16 +18,16 @@ Engine::~Engine()
     free_program_sketch(_program);
 }
 
-bool Engine::render_frame(float t_rel, Strip& out)
+bool Engine::render_frame(float t_program, Strip& out)
 {
     if (_program == nullptr) {
         return false;
     }
-    if (t_rel < 0.0f || t_rel >= _program->duration) {
+    if (t_program < 0.0f || t_program >= _program->duration) {
         return false;
     }
 
-    run_copy_ops_until(t_rel);
+    run_copy_ops_until(t_program);
 
     for (uint8_t li = 0; li < _program->layer_count; li++) {
         _active_dst_views[li] = nullptr;
@@ -39,13 +39,13 @@ bool Engine::render_frame(float t_rel, Strip& out)
 
         while (state.cursor < layer.event_count) {
             AnimationEvent& e = layer.events[state.cursor];
-            const float end = e.t_start + e.duration;
+            const float end = e.start + e.duration;
 
-            if (t_rel < e.t_start) {
+            if (t_program < e.start) {
                 break;
             }
 
-            if (t_rel < end) {
+            if (t_program < end) {
                 PixelView& dst = _program->pixel_views.at(e.dst_pixv_idx);
 
                 if (!state.initialized) {
@@ -60,7 +60,8 @@ bool Engine::render_frame(float t_rel, Strip& out)
                     state.initialized = true;
                 }
 
-                e.animation->render(dst, t_rel - e.t_start);
+                const float t_animation = t_program - e.start;
+                e.animation->render(dst, t_animation);
 
                 // nullptr means inactive. A non-null dst view means this layer
                 // contributes to bottom-to-top compositing for this frame.
@@ -100,11 +101,11 @@ void Engine::reset()
     }
 }
 
-void Engine::run_copy_ops_until(float t_rel)
+void Engine::run_copy_ops_until(float t_program)
 {
     while (_copy_cursor < _program->copy_ops.count()) {
         const CopyOp& op = _program->copy_ops.at(_copy_cursor);
-        if (op.at > t_rel) {
+        if (op.at > t_program) {
             break;
         }
 

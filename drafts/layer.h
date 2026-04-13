@@ -17,8 +17,8 @@ struct AnimationEvent {
     // Decoder-constructed animation instance for this event.
     Animation* animation = nullptr;
 
-    // Start time in seconds from program start.
-    float t_start = 0.0f;
+    // Program-relative start time in seconds.
+    float start = 0.0f;
 
     // Duration in seconds.
     float duration = 0.0f;
