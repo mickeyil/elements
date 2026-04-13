@@ -9,14 +9,10 @@ Engine::Engine(Program* program)
         _layer_states = new LayerPlaybackState[_program->layer_count]();
         _active_dst_views = new PixelView*[_program->layer_count]();
     }
-    if (_program != nullptr && _program->copy_ops.count() > 0) {
-        _copy_done = new bool[_program->copy_ops.count()]();
-    }
 }
 
 Engine::~Engine()
 {
-    delete[] _copy_done;
     delete[] _active_dst_views;
     delete[] _layer_states;
     free_program_sketch(_program);
@@ -31,13 +27,13 @@ bool Engine::render_frame(float t_rel, Strip& out)
         return false;
     }
 
+    run_copy_ops_until(t_rel);
+
     for (uint8_t li = 0; li < _program->layer_count; li++) {
         _active_dst_views[li] = nullptr;
     }
 
     for (uint8_t li = 0; li < _program->layer_count; li++) {
-        run_copy_ops_for_stage(t_rel, li);
-
         Layer& layer = _program->layers[li];
         LayerPlaybackState& state = _layer_states[li];
 
@@ -76,7 +72,6 @@ bool Engine::render_frame(float t_rel, Strip& out)
             state.initialized = false;
         }
     }
-    run_copy_ops_for_stage(t_rel, _program->layer_count);
 
     _compositor.composite(out, _active_dst_views, _program->layer_count);
     return true;
@@ -92,9 +87,7 @@ void Engine::reset()
         _layer_states[li].cursor = 0;
         _layer_states[li].initialized = false;
     }
-    for (uint16_t ci = 0; ci < _program->copy_ops.count(); ci++) {
-        _copy_done[ci] = false;
-    }
+    _copy_cursor = 0;
 
     // All HSVA storage is owned by PixelBufferPool. This clears scratch,
     // stable, source-preservation, and work buffers with one logical pass.
@@ -107,22 +100,18 @@ void Engine::reset()
     }
 }
 
-void Engine::run_copy_ops_for_stage(float t_rel, uint8_t before_layer_idx)
+void Engine::run_copy_ops_until(float t_rel)
 {
-    for (uint16_t ci = 0; ci < _program->copy_ops.count(); ci++) {
-        if (_copy_done[ci]) {
-            continue;
-        }
-
-        const CopyOp& op = _program->copy_ops.at(ci);
-        if (op.before_layer_idx != before_layer_idx || op.at > t_rel) {
-            continue;
+    while (_copy_cursor < _program->copy_ops.count()) {
+        const CopyOp& op = _program->copy_ops.at(_copy_cursor);
+        if (op.at > t_rel) {
+            break;
         }
 
         PixelView& src = _program->pixel_views.at(op.src_pixv_idx);
         PixelView& dst = _program->pixel_views.at(op.dst_pixv_idx);
         copy_view(src, dst);
-        _copy_done[ci] = true;
+        _copy_cursor++;
     }
 }
 

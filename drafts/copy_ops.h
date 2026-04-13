@@ -5,9 +5,9 @@
 // CopyOps is an internal preservation timeline emitted by the compiler.
 //
 // A copy op is not a visual layer and is never composited. It exists to make
-// source preservation explicit: at a scheduled time, copy the logical pixels
-// from one PixelView into another PixelView. The compiler is responsible for
-// scheduling copy ops before any dependent animation initializes.
+// source preservation explicit: at a scheduled time, copy already-rendered
+// logical pixels from one PixelView into another PixelView. It preserves
+// existing rendered state; it does not evaluate an animation.
 
 #include <cstdint>
 
@@ -16,16 +16,6 @@
 struct CopyOp {
     // Program-relative time in seconds when this copy becomes due.
     float at = 0.0f;
-
-    // Layer stage where the copy should run.
-    //
-    // 0 means before visual layer 0.
-    // N means before visual layer N.
-    // layer_count means after all visual layers.
-    //
-    // This lets the compiler preserve same-frame source output from a lower
-    // layer before a higher dependent layer initializes.
-    uint8_t before_layer_idx = 0;
 
     // Source view to copy from. This view may use storage indirection to read
     // a subset/reordered logical view over preserved storage.
@@ -49,9 +39,7 @@ public:
     // Copy the ordered decoder-provided copy-op table.
     //
     // The decoder/compiler should validate that ops reference valid PixelViews,
-    // have equal src/dst sizes, and use a valid before_layer_idx. Keeping the
-    // blob sorted by (at, before_layer_idx) is recommended for a later cursor
-    // optimization, but this draft runtime does not rely on it.
+    // have equal src/dst sizes, and are sorted by `at`.
     bool initialize(const CopyOp* ops, uint16_t count);
 
     void reset();

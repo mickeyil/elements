@@ -31,8 +31,8 @@ struct Program {
 
     // Owns ordered internal source-preservation copy operations.
     //
-    // Copy ops run at compiler-selected layer boundaries. They are not layers
-    // and are not passed to the compositor.
+    // Copy ops run before visual rendering once they become due. They are not
+    // layers and are not passed to the compositor.
     CopyOps copy_ops;
 };
 

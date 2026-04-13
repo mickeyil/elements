@@ -42,11 +42,9 @@ bool initialize_program_runtime(
     // TODO: final decoder should validate copy ops:
     // - src/dst view indices are valid and not PIXV_NONE
     // - src.size() == dst.size()
-    // - before_layer_idx <= prog.layer_count
+    // - ops are sorted by op.at
     // - dst is storage-only unless a real future use case needs compositable
     //   copy destinations
-    // - optional: ops sorted by (op.at, op.before_layer_idx) for future
-    //   cursor-based execution
 
     return true;
 }

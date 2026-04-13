@@ -204,23 +204,13 @@ Each `CopyOp` has:
 
 - `at`
   - program-relative time when the copy becomes due
-- `before_layer_idx`
-  - layer boundary where the copy runs
-  - `0` means before visual layer 0
-  - `N` means before visual layer N
-  - `layer_count` means after all visual layers
 - `src_pixv_idx`
   - source logical view
 - `dst_pixv_idx`
   - destination logical view
 
 Copy ops are not visual events and are not layers. The engine runs due copy ops
-at compiler-selected layer boundaries.
-
-The `before_layer_idx` field is the recommended solution for same-frame source
-dependencies. If layer 0 renders a source and layer 1 depends on it, the
-compiler can emit a copy op with `before_layer_idx = 1`; the engine renders
-layer 0, runs due copy ops for boundary 1, then initializes/renders layer 1.
+before visual rendering for the current frame.
 
 The intended use is explicit preservation:
 
@@ -232,13 +222,30 @@ The intended use is explicit preservation:
 This keeps the runtime uniform: preservation is represented as data movement
 between PixelViews, not as hidden source-layer logic inside the engine.
 
+Important semantic rule:
+
+- `source=` must resolve to a source event whose `source.end_sec <=
+  dependent.at_sec`
+- same-start or overlapping source/dependent pairs are compiler errors
+- copy ops preserve already-rendered PixelView contents; they do not evaluate
+  an animation mathematically
+
 Important timing recommendation:
 
-- the compiler must schedule a copy op at a time and layer boundary where the
-  source view already contains the intended pixels
+- the compiler must schedule a copy op at a time where the source view already
+  contains the intended rendered pixels
+- common preservation points are source end or immediately before scratch
+  storage reuse
 - safe-interval analysis must include both visual events and copy ops
-- if exact end-state sampling ever matters, the compiler should model that
-  explicitly rather than relying on an implicit "event ended" side effect
+
+Sampling caveat:
+
+- `source=` captures preserved rendered output, not mathematical animation
+  output
+- if playback never samples the source interval, there may be no rendered
+  output to preserve
+- this mainly affects very short events, runtime stalls, jumps, and coarse
+  offline render steps
 
 ## Animation Interface
 
@@ -362,8 +369,8 @@ The current direction is:
 - callers render frames via `Engine::render_frame(t_rel, Strip&)`
 - callers do not need to know compositor details
 
-`Engine` owns visual layer progression and copy-op execution state. The
-intended playback state per layer is:
+`Engine` owns visual layer progression and the copy-op cursor. The intended
+playback state per layer is:
 
 - `cursor`
   - current event index
@@ -375,27 +382,24 @@ objects are now decoder-constructed and stored directly on events.
 
 Engine also owns:
 
-- copy-op execution state
+- a monotonic copy-op cursor
 - a reused `active_dst_views[]` array, one entry per layer
 
 The high-level frame order is:
 
-1. clear `active_dst_views[]` to `nullptr`
-2. for each layer boundary, run due copy ops assigned to that boundary
-3. walk the next layer timeline and find its active visual event
+1. run due copy ops with `op.at <= t_rel`
+2. clear `active_dst_views[]` to `nullptr`
+3. walk layer timelines and find active visual events
 4. initialize newly active events with optional `src` / `work`
 5. render each active event into its `dst` PixelView
 6. store each active `dst` view in `active_dst_views[layer_index]`
-7. after the last layer, run due copy ops assigned to `layer_count`
-8. ask `Compositor` to blend active views into `Strip`
+7. ask `Compositor` to blend active views into `Strip`
 
 This replaces the old `active_mask`. Layer activity is represented directly by
 whether the active-view pointer is null.
 
-The draft source currently uses per-copy execution flags and scans the copy-op
-table by stage. If copy-op counts become large, this can be optimized later by
-emitting per-stage copy-op ranges and using one cursor per stage. The external
-data model does not need to change for that optimization.
+Copy ops are sorted by time, so the engine can process them with a simple
+monotonic cursor.
 
 Animation render contract:
 
@@ -477,12 +481,9 @@ Important reuse rules:
 - work-buffer reuse is allowed when lifetimes do not overlap
 - copy-op destinations and preserved source buffers participate in the same
   lifetime/safe-interval analysis
-- a copy-op destination must not alias an active dst view that will still be
-  composited in the same frame, unless the copy is intentionally part of that
-  visual output
-- copy-op layer boundaries must be chosen so same-frame source dependencies are
-  copied after the source layer renders and before the dependent layer
-  initializes
+- copy-op destinations must not alias storage that will be overwritten before
+  all dependents initialize
+- source dependencies must refer to already-ended source events
 - partial reuse is allowed only when overlapping regions are proven disjoint
 
 Recommendation:
@@ -512,9 +513,9 @@ Decoder validation should include:
 - physical indices are within `HardwareProfile::strip_length`
 - event `dst_pixv_idx` is present and references a compositable PixelView
 - event `src_pixv_idx` and `work_pixv_idx` are absent or valid
-- copy ops are sorted by `(at, before_layer_idx)` if the implementation wants
-  cursor-based execution
-- copy-op `before_layer_idx <= layer_count`
+- source dependencies resolve only to source events with `end_sec <=
+  dependent.at_sec`
+- copy ops are sorted by `at`
 - copy-op source/destination view indices are valid
 - copy-op source and destination sizes match
 
@@ -571,11 +572,11 @@ Per active layer/event, the engine must know at least:
 
 - current event cursor
 - whether the current event has already been initialized
-- copy-op execution state
+- copy-op cursor
 
 The engine is responsible for ensuring:
 
-- due copy ops run before dependent visual events initialize
+- due copy ops run before visual rendering for the frame
 - `initialize()` runs before the first `render()` of an activation
 - after reset / jump / restart, the event is treated as uninitialized again
 - buffers that must start cleared are cleared by engine/program reset

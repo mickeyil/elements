@@ -35,8 +35,8 @@ private:
         bool initialized = false;
     };
 
-    // Run due internal copy operations assigned to a layer boundary.
-    void run_copy_ops_for_stage(float t_rel, uint8_t before_layer_idx);
+    // Run due internal copy operations before visual rendering for t_rel.
+    void run_copy_ops_until(float t_rel);
 
     // Copy logical pixels from src to dst. Decoder validation should ensure
     // equal sizes; this helper still checks defensively in the draft.
@@ -54,8 +54,6 @@ private:
     // Reused per-frame compositor input. One entry per layer, in layer order.
     PixelView** _active_dst_views = nullptr;
 
-    // Per-copy execution flags. The simple draft implementation scans the
-    // copy-op table by stage; final code can replace this with per-stage
-    // cursors if copy-op count becomes meaningful.
-    bool* _copy_done = nullptr;
+    // Monotonic cursor into sorted Program::copy_ops.
+    uint16_t _copy_cursor = 0;
 };
