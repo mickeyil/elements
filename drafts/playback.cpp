@@ -55,20 +55,37 @@ bool Playback::handle_load(const uint8_t* blob, size_t blob_len, uint16_t gen)
     unload_program_();
     reset_program_state_();
 
-    // TODO: decode the blob into Program, including:
-    // - requires_sync from artifact metadata
-    // - PixelBufferPool + PixelViews setup
-    // - CopyOps setup for explicit source preservation
-    // - Layer initialization with decoded event timelines
+    // TODO: decode the blob and build the engine. See drafts/decoder.md
+    // "Integration with Playback" for the exact shape. The implementation
+    // sketch is:
+    //
+    //   DecodeError err = DecodeError::Ok;
+    //   Program* program = decode_program(blob, blob_len,
+    //                                     _profile.strip_length, &err);
+    //   if (program == nullptr) {
+    //       clear_render_buffer_();
+    //       // log decode_error_name(err)
+    //       return false;
+    //   }
+    //   const float duration_s = program->duration;
+    //   const bool  needs_sync = program->requires_sync;
+    //   Engine* engine = Engine::create(program);  // takes ownership
+    //   if (engine == nullptr) {
+    //       clear_render_buffer_();
+    //       // log "[load] engine alloc failed"
+    //       return false;
+    //   }
+    //   _duration      = duration_s;
+    //   _requires_sync = needs_sync;
+    //   _engine.reset(engine);
+    //   clear_render_buffer_();
+    //   _state = DeviceState::LOADED;
+    //   return true;
     Program* program = nullptr;
     if (program == nullptr) {
         clear_render_buffer_();
         return false;
     }
-
-    _duration = program->duration;
-    _engine.reset(new Engine(program));
-    clear_render_buffer_();
     _state = DeviceState::LOADED;
     return true;
 }

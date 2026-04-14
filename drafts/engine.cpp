@@ -1,21 +1,50 @@
 #include "engine.h"
 
 #include <cstring>
+#include <new>
+
+Engine* Engine::create(Program* program)
+{
+    Engine* e = new (std::nothrow) Engine(program);
+    if (e == nullptr) {
+        // Engine struct itself failed to allocate. We still own the Program
+        // (the constructor never ran), so free it directly.
+        free_program(program);
+        return nullptr;
+    }
+    if (!e->initialize_()) {
+        // Engine constructed but its internal allocations failed.
+        // ~Engine() will free the Program via free_program(_program).
+        delete e;
+        return nullptr;
+    }
+    return e;
+}
 
 Engine::Engine(Program* program)
     : _program(program)
 {
-    if (_program != nullptr && _program->layer_count > 0) {
-        _layer_states = new LayerPlaybackState[_program->layer_count]();
-        _active_dst_views = new PixelView*[_program->layer_count]();
+    // Trivial. All allocations live in initialize_() so failure paths are
+    // explicit and create() can clean up cleanly.
+}
+
+bool Engine::initialize_()
+{
+    if (_program == nullptr || _program->layer_count == 0) {
+        return true;
     }
+    _layer_states = new (std::nothrow) LayerPlaybackState[_program->layer_count]();
+    if (_layer_states == nullptr) return false;
+    _active_dst_views = new (std::nothrow) PixelView*[_program->layer_count]();
+    if (_active_dst_views == nullptr) return false;
+    return true;
 }
 
 Engine::~Engine()
 {
     delete[] _active_dst_views;
     delete[] _layer_states;
-    free_program_sketch(_program);
+    free_program(_program);
 }
 
 bool Engine::render_frame(float t_program, Strip& out)

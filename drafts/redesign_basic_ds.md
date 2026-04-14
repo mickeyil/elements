@@ -21,6 +21,10 @@ draft API lives in separate files under `drafts/`:
 - `gamma.cpp`
 - `runtime_constants.h`
 - `hardware_profile.h`
+- `animation_types.h`
+- `blob_limits.h`
+- `blob_reader.h`
+- `blob_reader.cpp`
 - `copy_ops.h`
 - `copy_ops.cpp`
 - `pixel_buffer_pool.h`
@@ -44,6 +48,14 @@ draft API lives in separate files under `drafts/`:
 - `playback.cpp`
 - `program_structs.h`
 - `program_structs.cpp`
+- `decoder.h`
+- `decoder.cpp`
+
+Two prose files complement the draft sources:
+
+- `blob_format.md` — exact byte contract for blob format v3
+- `decoder.md` — decoder background, integration notes, and per-animation
+  factory contract
 
 ## Current Problems
 
@@ -296,16 +308,132 @@ Important timing recommendation:
   contains the intended rendered pixels
 - common preservation points are source end or immediately before scratch
   storage reuse
-- safe-interval analysis must include both visual events and copy ops
+
+### Jump correctness via safe intervals
+
+Source preservation only works when the source events that feed a copy op
+have actually been rendered. A naive jump into the middle of a program
+would let the engine reset its buffers, advance the copy-op cursor past
+unfired source events, and then copy zeros into a downstream view — silent
+corruption at the next consumer.
+
+The redesign relies on the existing **safe-interval mechanism** to make
+this unreachable, not on any new runtime check:
+
+1. The compiler computes, for every event with a source dependency, a
+   `required_start_sec` that extends the event's unsafe span back through
+   the entire view-provenance chain to the originating source event(s).
+   For an event E that reads view B, where B was last written by event A
+   (directly, or via a copy op chain rooted at A), E's
+   `required_start_sec` is A's required start — which is `A.start` if A
+   has no source dependencies of its own, or the recursive minimum if A
+   itself reads a preserved view.
+2. The compiler emits `safe_intervals` as the complement of the union of
+   all unsafe spans.
+3. The controller refuses to send any command that **reconstructs engine
+   state at a nonzero `t_program`** (`JUMP`, debug seek, live rejoin /
+   re-LOAD at nonzero time, `START` at nonzero time) when the target time
+   is not inside a safe interval. `START` at `t_program == 0` is always
+   safe by construction.
+4. The runtime trusts the controller. `Engine::reset()` clears buffers and
+   `run_copy_ops_until()` advances the copy cursor monotonically — both
+   are correct *given* that the time target is in a safe interval, because
+   any garbage write a fired-but-source-unrendered copy op produces is
+   guaranteed to be either (a) overwritten by a later writer that *does*
+   have a rendered source, or (b) never read by any consumer (any consumer
+   that would read it has its own `required_start_sec` that excludes the
+   current target).
+
+**Ordinary `RESUME` from `PAUSE` is not gated by safe intervals.**
+`Playback::handle_resume` does not call `Engine::reset()`; the copy cursor,
+layer cursors, and HSVA buffers are intact, so resuming forward from the
+paused position is correct regardless of whether that position is inside a
+safe interval. The contract relies on the controller using `RESUME` only
+for resuming-where-paused; meaningful retiming goes through `JUMP`, which
+is gated.
+
+Implications:
+
+- Programs with elaborate source chains have shorter safe intervals. That
+  is the intended trade-off, not a bug.
+- The runtime needs no new state, no warmup pass, no keyframes, and no
+  defensive assertions on jump targets. The compiler proves safety; the
+  controller enforces it; the runtime executes.
+- Offline render walks frames sequentially from `0`, so safe intervals are
+  irrelevant to it.
+- This is the compiler-proves / controller-gates / runtime-trusts pipeline.
+  Adding a runtime safe-interval check would require shipping
+  `safe_intervals` in the blob (currently they live in `CompiledManifest`
+  on the controller side); not currently planned.
 
 Sampling caveat:
 
 - `source=` captures preserved rendered output, not mathematical animation
   output
-- if playback never samples the source interval, there may be no rendered
-  output to preserve
-- this mainly affects very short events, runtime stalls, jumps, and coarse
-  offline render steps
+- if playback never samples the source interval, there is no rendered
+  output to preserve — but the safe-interval analysis above prevents any
+  consumer from reaching such a state legitimately
+- this still matters for very short events at coarse offline render
+  steps, where a frame sample could fall outside a short event entirely
+
+### Compiler responsibilities for copy-op safety
+
+The compiler must:
+
+- emit copy ops as v3 blob records (see `blob_format.md`)
+- compute `required_start_sec` for every event with a source dependency
+  by walking a **view-provenance graph** (see below)
+- emit safe intervals computed from those extended unsafe spans
+- enforce the per-event sortedness and non-overlap rules within layers
+- enforce the copy-op sortedness rule
+- topologically order same-time copy ops by data dependency, and reject
+  cycles or two same-time copy ops that write to the same destination
+  view (see "equal `at` values" in `blob_format.md`'s copy-ops section)
+- validate the legacy v2 invariant that each source dependency resolves
+  only to a writer whose end is `≤` the dependent's start (the decoder
+  cannot see source-event identity in v3, so this check is compiler-only)
+
+#### View-provenance graph
+
+The redesign supports two preservation forms (see Open Items below):
+
+1. **Stable dst preservation.** Event A writes view V; nothing else writes
+   V before event B reads V. No copy op is involved — V is preserved
+   simply because the compiler picked a buffer assignment that keeps it
+   live.
+2. **Copy-op preservation.** Event A writes view V'; before V' is
+   overwritten, a copy op fires at time `t_c` copying V' into view V;
+   event B later reads V.
+
+The provenance walk handles both forms uniformly. The graph has two edge
+types:
+
+- **Event → view**: an `AnimationEvent` writes its `dst_pixv_idx` view
+  during `[event.start, event.start + event.duration)`. The "writer" of
+  that view at any time inside the event's interval (and forward until
+  the next writer) is that event.
+- **CopyOp → view**: a copy op writes its `dst_pixv_idx` view at time
+  `at`. The write transitively depends on the writer of the copy op's
+  `src_pixv_idx` at time `at`.
+
+Then `required_start_sec` for an event E with `src_pixv_idx = V` is
+computed by:
+
+1. Find the most recent writer to V at any time `≤ E.start`. The writer
+   may be an event's `dst_pixv_idx` or a copy op's `dst_pixv_idx`.
+2. If the writer is a copy op, recursively walk to the writer of the copy
+   op's `src_pixv_idx` (using the same rule).
+3. If the writer is an event A, the chain terminates at A. Take A's
+   `required_start_sec` (or `A.start` if A has no src dependencies).
+4. Set E's `required_start_sec` to the earliest start in the chain.
+
+The same walk applies to `work_pixv_idx` if the work view is initialized
+from preserved content (and not just used as scratch).
+
+Today's `_compute_required_starts` walks only the legacy `source_layer`
+field on each event. The v3 update replaces it with the generic
+view-provenance walk above, which subsumes both the legacy
+implicit-source-layer model and the new explicit copy-op model.
 
 ## Animation Interface
 
@@ -573,11 +701,15 @@ Decoder validation should include:
 - physical indices are within `HardwareProfile::strip_length`
 - event `dst_pixv_idx` is present and references a compositable PixelView
 - event `src_pixv_idx` and `work_pixv_idx` are absent or valid
-- source dependencies resolve only to source events with `end_sec <=
-  dependent.at_sec`
 - copy ops are sorted by `at`
 - copy-op source/destination view indices are valid
 - copy-op source and destination sizes match
+
+The decoder enforces only structural and runtime-visible constraints. v3
+events do not carry source-event identity (only view indices), so the
+decoder cannot verify "source dependencies resolve only to events whose
+end ≤ dependent.start". That semantic check is a compiler responsibility
+(see "Compiler responsibilities for copy-op safety" earlier in this doc).
 
 ## Memory Model
 
@@ -682,8 +814,6 @@ These points should stay explicit in the design:
 
 These areas are intentionally not locked in yet:
 
-- exact blob layout for `PixelBufferPool` and `PixelView` descriptors
-- exact blob layout for `CopyOp` records
 - whether pool internals are represented as one contiguous block, a small set
   of chunks, or another pool implementation detail
 - whether `PixelView` should expose any helpers beyond `operator[]`,
@@ -693,6 +823,10 @@ These areas are intentionally not locked in yet:
 - future animation types that may need additional runtime state beyond pixel
   storage
 
+The exact blob layout for `PixelBufferPool`, `PixelView` descriptors, and
+`CopyOp` records is now defined in `blob_format.md`; the parser shape lives
+in `decoder.h` / `decoder.cpp`; integration notes are in `decoder.md`.
+
 ## Affected Code
 
 The main areas affected by this redesign are:
@@ -701,6 +835,10 @@ The main areas affected by this redesign are:
 - `drafts/gamma.h`
 - `drafts/gamma.cpp`
 - `drafts/runtime_constants.h`
+- `drafts/animation_types.h`
+- `drafts/blob_limits.h`
+- `drafts/blob_reader.h`
+- `drafts/blob_reader.cpp`
 - `drafts/copy_ops.h`
 - `drafts/copy_ops.cpp`
 - `drafts/pixel_buffer_pool.h`
@@ -724,15 +862,19 @@ The main areas affected by this redesign are:
 - `drafts/playback.cpp`
 - `drafts/program_structs.h`
 - `drafts/program_structs.cpp`
-- `src/decoder.h` / `src/decoder.cpp`
+- `drafts/decoder.h`
+- `drafts/decoder.cpp`
+- `drafts/blob_format.md`
+- `drafts/decoder.md`
+- `src/decoder.h` / `src/decoder.cpp` (replaced by drafts/decoder.{h,cpp})
 - `src/animation.h`
 - concrete animation headers, especially `anim_shift.h`
 - `src/engine.h` / `src/engine.cpp`
 - `src/compositor.h` / `src/compositor.cpp`
 - `src/colors.h` / `src/colors.cpp`
 - new `src/gamma.h` / `src/gamma.cpp`
-- `compiler/elements/compiler.py`
-- `compiler/elements/blob.py`
+- `compiler/elements/compiler.py` (incl. update to `_compute_required_starts` to walk copy-op chains)
+- `compiler/elements/blob.py` (replaced by v3 emitter matching `blob_format.md`)
 
 The draft source files are meant to make those changes easier to refine
 without having to reconstruct the data model from discussion snippets.

@@ -14,13 +14,26 @@
 #include "pixel_views.h"
 
 struct Program {
-    // Total program duration in seconds.
+    Program() = default;
+    ~Program();
+
+    Program(const Program&) = delete;
+    Program& operator=(const Program&) = delete;
+    Program(Program&&) = delete;
+    Program& operator=(Program&&) = delete;
+
+    // Total program duration in seconds. Must be finite and > 0.
     float duration = 0.0f;
+
+    // True when the artifact must run against controller-synchronized time.
+    // Read once at handle_load() into Playback::_requires_sync.
+    bool requires_sync = false;
 
     // Number of visual layer timelines.
     uint8_t layer_count = 0;
 
-    // Bottom-to-top visual layer order.
+    // Bottom-to-top visual layer order. Owned; deleted by ~Program(). Each
+    // Layer's destructor releases its own events array and animations.
     Layer* layers = nullptr;
 
     // Owns all real hsva_t backing buffers.
@@ -36,25 +49,10 @@ struct Program {
     CopyOps copy_ops;
 };
 
-// Build the shared pixel runtime pieces of Program from decoder input.
+// Free a Program returned by decode_program(). Safe to call with nullptr.
 //
-// Final decoder flow is expected to:
-// - initialize PixelBufferPool
-// - initialize PixelViews
-// - initialize CopyOps
-// - initialize Layer event timelines
-//
-// Layer does not retain buffer indices or physical maps. Buffer/view routing is
-// represented by PixelViewSpec records and event/copy-op PixelView indices.
-bool initialize_program_runtime(
-    Program& prog,
-    const uint16_t* buffer_sizes,
-    uint16_t buffer_count,
-    const PixelViewSpec* pixel_view_specs,
-    uint16_t pixel_view_count,
-    const CopyOp* copy_ops,
-    uint16_t copy_op_count
-);
-
-// Free all owned memory associated with Program.
-void free_program_sketch(Program* prog);
+// Thin wrapper around `delete prog;` — Program::~Program() releases the
+// layers array, each Layer destructor releases its events and animations,
+// and the embedded containers (PixelBufferPool, PixelViews, CopyOps) tear
+// down via their own destructors.
+void free_program(Program* prog);

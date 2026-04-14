@@ -1,0 +1,240 @@
+# Decoder
+
+Background and integration notes for the v3 blob decoder. The byte contract
+is in `blob_format.md`. The parser API is in `decoder.h`.
+
+## Why it exists
+
+The legacy `src/decoder.h` / `src/decoder.cpp` mixes three roles: wire
+constants, decoded runtime structs, and the parser itself. The redesign
+splits those out.
+
+| File                          | Owns |
+| ----------------------------- | ---- |
+| `drafts/decoder.h`            | `decode_program()`, `kBlobVersion`, `kBlobMagic` |
+| `drafts/decoder.cpp`          | the decode logic |
+| `drafts/blob_reader.h`        | `BlobReader`, `DecodeError`, `decode_error_name()` (declarations) |
+| `drafts/blob_reader.cpp`      | `BlobReader` and `decode_error_name()` implementations |
+| `drafts/blob_limits.h`        | `kMax*` cap constants |
+| `drafts/animation_types.h`    | `AnimType` enum |
+| `drafts/program_structs.h`    | `Program` shape, `free_program()` |
+| `drafts/layer.h`              | `Layer`, `AnimationEvent` |
+| `drafts/pixel_views.h`        | `PixelViews`, `PixelViewSpec` |
+| `drafts/pixel_buffer_pool.h`  | `PixelBufferPool` |
+| `drafts/copy_ops.h`           | `CopyOps`, `CopyOp` |
+| `src/anim_wave.h` (etc.)      | per-animation params struct AND its `Animation` subclass |
+
+`drafts/blob_reader.h` exists separately from `decoder.h` so per-animation
+`anim_*.h` headers can include it (for `BlobReader` and `DecodeError`)
+without dragging in the full decoder entry point. The decoder includes both;
+animation headers include only `blob_reader.h`.
+
+The decoder is the only translation unit that includes every `anim_*.h`.
+Each animation header is otherwise self-contained.
+
+`drafts/blob_limits.h` and `drafts/animation_types.h` are tiny one-screen
+headers. `blob_limits.h` reuses `kMaxStripPixels` from
+`drafts/hardware_profile.h` and defines the rest of the caps from
+`blob_format.md`. `animation_types.h` is just the `AnimType` enum.
+
+## Decoder responsibilities
+
+- allocate `PixelBufferPool` from the buffer-size table
+- build `PixelViews` from `PixelViewSpec` records
+- build `CopyOps` from `CopyOp` records
+- construct concrete `Animation` instances directly into events
+- wire layers, events, views, and copy ops into a `Program`
+- populate `Program::requires_sync` from the header flag
+- enforce every validation rule in `blob_format.md`
+
+The decoder does **not** own:
+
+- HSVA memory layout policy (`PixelBufferPool` owns this)
+- runtime activation state (`Engine` owns this)
+- animation execution (each animation subclass owns this)
+- topological ordering of same-`at` copy ops by data dependency. The
+  decoder trusts the compiler-emitted blob order for same-`at` execution
+  and only rejects the cheapest-to-detect violation: two same-`at` copy
+  ops writing the same `dst_pixv_idx` (ambiguous aliasing). Cycle
+  detection and full topological validation are compiler-side.
+
+## Single-pass shape
+
+`decode_program` is one forward pass:
+
+1. Validate magic and version. **Reject before any allocation.**
+2. Parse the rest of the header into a stack-local struct.
+3. Validate header: reserved flag bits, count caps, `strip_length` non-zero
+   and within `kMaxStripPixels`, `duration` finite and > 0.
+4. Validate `strip_length` against the profile (`StripLengthMismatch`).
+5. Allocate `Program`. The struct is small; allocating it first means every
+   subsequent failure path uses one uniform cleanup (`free_program(prog)`).
+6. Read the buffer-size table into a temporary, validate per-buffer caps
+   and the global `kMaxPoolBytes`, then initialize `PixelBufferPool` from
+   the temporary.
+7. Read and initialize `PixelViews`.
+8. Read and initialize `CopyOps`.
+9. For each layer: read `event_count`, then for each event read fixed
+   fields, validate view indices and float ranges, read `params_size`
+   bytes, dispatch on `anim_type` to the per-animation factory.
+10. Require `reader.done()`. If bytes remain, return `TrailingBytes`.
+
+## Animation construction
+
+Each animation header exposes a static factory that owns its own param shape:
+
+```cpp
+class WaveAnimation : public Animation {
+public:
+    static Animation* from_blob(const uint8_t* params, size_t params_size,
+                                DecodeError* err_out);
+    // ...
+};
+```
+
+Contract:
+
+- returns a constructed subclass on success; `*err_out` is set to
+  `DecodeError::Ok`
+- returns `nullptr` on failure; `*err_out` is set to `InvalidField` for
+  malformed param bytes or `OutOfMemory` for allocation failure
+- `err_out` is never null when called by the decoder
+- the factory **must** reject NaN, ±Inf, and out-of-range values in its
+  own params (the spec's "all floats finite" rule binds factories too,
+  not just the decoder)
+- the factory **may** consume fewer than `params_size` bytes; trailing
+  bytes are reserved for forward-compatible param extensions. Format
+  changes that alter required semantics bump the blob version, not extend
+  params silently
+- the factory builds its own local `BlobReader` over the params slice;
+  it does not need to include `decoder.h`, only `blob_reader.h`
+
+The decoder dispatches:
+
+```cpp
+DecodeError perr = DecodeError::Ok;
+switch (static_cast<AnimType>(anim_type)) {
+    case AnimType::Wave:  event.animation = WaveAnimation::from_blob(p, n, &perr); break;
+    case AnimType::Shift: event.animation = ShiftAnimation::from_blob(p, n, &perr); break;
+    case AnimType::Spark: event.animation = SparkAnimation::from_blob(p, n, &perr); break;
+    case AnimType::Paint: event.animation = PaintAnimation::from_blob(p, n, &perr); break;
+    default:              return DecodeError::InvalidField;
+}
+if (event.animation == nullptr) return perr;
+```
+
+Each `from_blob` parses its own param bytes (using a local `BlobReader` over
+the params slice) and constructs the subclass. The decoder never sees an
+animation-specific param shape. The legacy `AnimParams` tagged union is
+deleted.
+
+## Failure mapping
+
+`decode_program` returns `nullptr` on any failure and writes the category
+into `*err_out`. The firmware caller (`ControllerConnection::handle_load_`)
+maps `DecodeError` to ACK codes:
+
+| `DecodeError`         | ACK                       |
+| --------------------- | ------------------------- |
+| `Ok`                  | `kAckOk`                  |
+| `StripLengthMismatch` | `kAckProfileMismatch`     |
+| anything else         | `kAckError`               |
+
+Every failed load logs `decode_error_name(err)` so serial logs identify the
+exact rejection reason without a debugger.
+
+## Integration with Playback
+
+`Playback::handle_load(blob, blob_len, gen)` is the only caller of
+`decode_program`:
+
+```cpp
+DecodeError err = DecodeError::Ok;
+Program* program = decode_program(blob, blob_len,
+                                  _profile.strip_length, &err);
+if (program == nullptr) {
+    clear_render_buffer_();
+    // owner logs decode_error_name(err)
+    return false;
+}
+
+// Snapshot Program-level fields before handing ownership to Engine. After
+// Engine::create() the Program pointer (whether the call succeeds or not)
+// belongs to Engine, never to Playback directly.
+const float duration_s = program->duration;
+const bool  needs_sync = program->requires_sync;
+
+Engine* engine = Engine::create(program);  // takes ownership of program
+if (engine == nullptr) {
+    clear_render_buffer_();
+    // owner logs "[load] engine alloc failed" — distinct from decode errors
+    return false;
+}
+
+_duration      = duration_s;
+_requires_sync = needs_sync;
+_engine.reset(engine);
+_state = DeviceState::LOADED;
+return true;
+```
+
+`requires_sync` is read once at load time and stored on `Playback`. It is
+not re-read during playback.
+
+`Engine::create()` is a fallible factory: it owns the `Program` on both
+success and failure (frees it via `free_program()` if Engine itself or
+its internal allocations cannot be made). Engine OOM is **not** a
+`DecodeError` — the blob decoded fine; the device just ran out of heap
+mid-load. The firmware caller should log it under a separate identifier
+and ACK the LOAD command with `kAckError` (the same generic bucket as
+non-`StripLengthMismatch` decode failures).
+
+## Compiler alignment
+
+The Python compiler must:
+
+1. **Hardcode the same cap values** as `blob_limits.h`, with a unit test that
+   parses the C header and asserts equality.
+2. **Fail the build** with a clear error when any cap is exceeded.
+   Compile-time failure is much easier to triage than firmware rejection.
+3. **Print an estimated firmware memory footprint** for every successful
+   compile, computed from the in-blob structures:
+
+   - HSVA pool bytes = sum of buffer sizes × 16
+   - PixelView metadata = `pixel_view_count` × per-view fixed overhead, plus
+     the storage_indices and physical_indices arrays for non-identity views
+   - CopyOp records = `copy_op_count` × `sizeof(CopyOp)`
+   - Layer events = sum over layers of `event_count` × `sizeof(AnimationEvent)`
+   - Animation instances = sum over events of the per-anim-type sizeof
+     estimate
+
+   Allocator overhead, internal heap fragmentation, and stack costs are
+   intentionally ignored. The estimate is for guiding optimization, not for
+   precise budgeting.
+
+## Required edits to existing drafts
+
+The new decoder depends on a few small additions elsewhere:
+
+- `src/firmware/wire_constants.h` — add `kAckProfileMismatch = 3`.
+- `drafts/playback.cpp::handle_load` — replace the placeholder body with
+  the integration sketch above.
+
+`drafts/program_structs.h/.cpp` already carry the supporting changes:
+`Program::requires_sync` is declared, `Program::~Program()` releases the
+layers array, and `free_program(Program*)` is declared there as a thin
+wrapper around `delete prog`. The decoder does not redeclare
+`free_program`; callers that need it include `program_structs.h`.
+
+## What this replaces
+
+- `src/decoder.h` and `src/decoder.cpp` — replaced wholesale.
+- `BLOB_VERSION = 2` — replaced by `kBlobVersion = 3`.
+- `AnimParams` tagged union and `WaveParams`/`ShiftParams`/`SparkParams`/
+  `PaintParams` in the legacy header — deleted; each animation owns its own
+  params shape next to its class definition.
+- `LayerDef`, `BufferPool`, the legacy `AnimationEvent`, the legacy
+  `Program` — deleted; their replacements live in `drafts/program_structs.*`,
+  `drafts/layer.*`, `drafts/pixel_*.*`, and `drafts/copy_ops.*`.
+- `max_remap_length` in the header and `temp_buffer` in `Program` — deleted
+  with the old scatter-copy path.
