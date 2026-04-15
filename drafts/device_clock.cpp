@@ -1,5 +1,11 @@
 #include "device_clock.h"
 
+#ifdef ARDUINO
+#include <esp_timer.h>
+#else
+#include <chrono>
+#endif
+
 bool DeviceClock::is_synced() const
 {
     return _is_synced;
@@ -7,16 +13,19 @@ bool DeviceClock::is_synced() const
 
 int64_t DeviceClock::now_controller_us() const
 {
-    // TODO: final implementation should return disciplined monotonic time
-    // derived from the shared raw source plus correction policy.
     return now_local_us() - _offset_us;
 }
 
 int64_t DeviceClock::now_local_us() const
 {
-    // TODO: final implementation should read the raw monotonic source shared
-    // by firmware/sim and return it here.
-    return 0;
+#ifdef ARDUINO
+    return esp_timer_get_time();
+#else
+    using namespace std::chrono;
+    return duration_cast<microseconds>(
+               steady_clock::now().time_since_epoch())
+        .count();
+#endif
 }
 
 void DeviceClock::apply_sync_offset(int64_t local_minus_controller_us)

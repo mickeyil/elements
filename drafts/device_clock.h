@@ -12,6 +12,17 @@
 //   time leads controller time
 //
 // The exact correction / hysteresis policy is intentionally still open.
+//
+// Raw monotonic source policy:
+// - `DeviceClock` is one concrete class.
+// - The raw monotonic source underneath is selected at compile time via
+//   `#ifdef ARDUINO`, consistent with the rest of the drafts (see
+//   `pixel_buffer_pool.{h,cpp}`):
+//   - ARDUINO build     -> `esp_timer_get_time()`
+//   - non-ARDUINO build -> `std::chrono::steady_clock`
+// - No callback injection, no virtual hook: firmware and sim share one
+//   implementation, the only difference is which syscall `now_local_us()`
+//   reads underneath.
 
 #include <cstdint>
 
@@ -19,7 +30,13 @@ class DeviceClock {
 public:
     bool is_synced() const;
 
+    // Controller-domain disciplined monotonic time.
+    // Derived from `now_local_us()` minus the current sync offset.
     int64_t now_controller_us() const;
+
+    // Local-domain raw monotonic time.
+    // Reads the platform monotonic source directly (see raw source policy
+    // above). This is the single point where the platform ifdef lives.
     int64_t now_local_us() const;
 
     // Apply a fresh sync offset.
@@ -33,9 +50,6 @@ public:
     void clear_sync();
 
 private:
-    // TODO: final design should likely separate raw monotonic source access
-    // from correction state more explicitly.
-
     // INVARIANT: _offset_us == local - controller.
     // Positive means local/device time leads controller time.
     int64_t _offset_us = 0;
