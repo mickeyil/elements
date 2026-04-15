@@ -73,6 +73,12 @@ The proposed replacement is a concrete `Playback` class with no output
 inheritance:
 
 ```cpp
+enum class RenderFrameResult : uint8_t {
+    Unchanged,
+    Rendered,
+    Ended,
+};
+
 class Playback {
 public:
     explicit Playback(DeviceClock& clock);
@@ -84,14 +90,18 @@ public:
 
     bool handle_load(const uint8_t* blob, size_t blob_len, uint16_t gen);
     void handle_start(int64_t program_start_us);
-    void handle_jump(int64_t program_start_us, float t_program, uint16_t gen);
+    RenderFrameResult handle_jump(
+        int64_t program_start_us,
+        float t_program,
+        uint16_t gen
+    );
     void handle_pause();
     void handle_resume(int64_t program_start_us);
-    void handle_stop();
+    RenderFrameResult handle_stop();
     void reset_for_detach();
-    void present_black_frame();
+    RenderFrameResult render_black_frame();
 
-    bool tick_once();
+    RenderFrameResult render_next_frame();
 
     DeviceState state() const;
     float duration() const;
@@ -116,7 +126,7 @@ private:
     DeviceState _state = DeviceState::IDLE;
     float _duration = 0.0f;
     int64_t _program_start_us = 0;
-    float _paused_t_program = 0.0f;
+    int64_t _last_t_program_us = 0;
     bool _requires_sync = false;
 };
 ```
@@ -209,8 +219,8 @@ int64_t Playback::program_clock_now_us() const
 
 That is the one intended branch.
 
-This is explicit enough to grep and reason about, while keeping `tick_once()` /
-`current_t_program()` simple.
+This is explicit enough to grep and reason about, while keeping
+`render_next_frame()` and `current_t_program()` simple.
 
 There is no additional `_use_synced` latch in the current design direction.
 The intent is that `_requires_sync` is enough, with assertions/tests catching
@@ -230,7 +240,7 @@ That same rule applies to:
 
 - `handle_start()`
 - `handle_resume()`
-- `handle_jump()` if the new segment is meant to run immediately
+- `handle_jump()` when the loaded program requires controller sync
 
 This removes the current undesired state where synced content starts before
 sync is ready and later falls back / adapts awkwardly.
@@ -240,7 +250,7 @@ sync is ready and later falls back / adapts awkwardly.
 The time domains must stay explicit:
 
 - `now_controller_us()`
-  - disciplined monotonic time in the controller's time domain
+  - controller-domain time estimate derived from the accepted sync offset
 - `now_local_us()`
   - device-local monotonic time
 
@@ -260,6 +270,58 @@ So:
 
 - synced `_program_start_us` is stored in controller time domain
 - unsynced `_program_start_us` is anchored from local monotonic time
+
+### 5. Accepted program-time monotonicity
+
+`DeviceClock` is not responsible for making controller time monotonic after
+every correction. The render invariant lives in `Playback`:
+
+- during one continuous playback segment, `Playback` must not feed a decreasing
+  `t_program` to `Engine::render_frame()`
+- `_program_start_us` stores the selected-clock anchor for the current segment
+- `_last_t_program_us` stores the last accepted program position in integer
+  microseconds
+- `current_t_program()` reports the accepted program position; it does not read
+  the clock or mutate playback state
+
+`render_next_frame()` is the clock-derived render path. It computes:
+
+```cpp
+int64_t t_program_us = program_clock_now_us() - _program_start_us;
+```
+
+Then it ignores negative values for delayed starts, clamps backward movement to
+`_last_t_program_us`, stores the accepted value, and renders using that accepted
+time.
+
+`handle_jump()` is the explicit exception because the caller supplies a
+program-time anchor. A jump is an intentional timeline discontinuity, so it sets
+`_last_t_program_us` to the target even for backward jumps. Non-playing jumps
+render immediately for feedback and return `RenderFrameResult::Rendered`;
+playing jumps retime immediately and let the next `render_next_frame()` produce
+the frame.
+
+Timing-state rules:
+
+- `handle_start(program_start_us)`
+  - sets `_program_start_us = program_start_us`
+  - seeds `_last_t_program_us = 0`
+- `handle_pause()`
+  - changes state only
+  - preserves `_last_t_program_us`
+- `handle_resume(program_start_us)`
+  - sets `_program_start_us = program_start_us`
+  - preserves `_last_t_program_us`
+- `handle_jump(program_start_us, t_program, gen)`
+  - resets the engine
+  - sets `_program_start_us = program_start_us`
+  - sets `_last_t_program_us` to the target, including backward jumps
+- `handle_stop()`, load/unload failure, and detach reset
+  - clear timing state
+- natural end-of-program
+  - clears `_strip` to black
+  - sets state to `ENDED`
+  - reports `current_t_program() == duration()`
 
 ## `DeviceClock`
 
@@ -294,11 +356,15 @@ Notes:
 `DeviceClock` should:
 
 - expose `is_synced()`
-- publish disciplined monotonic controller-domain time
+- publish a controller-domain time estimate
 - publish raw local monotonic time
-- absorb small corrections
-- never move backward while synced
-- transition to unsynced when correction/drift exceeds the allowed band
+- own accepted sync offset state
+- transition to unsynced when freshness, correction size, or error exceeds the
+  allowed band
+
+It should not enforce the rendered-animation monotonicity invariant. That
+belongs to `Playback`, because only `Playback` knows when a start, resume, jump,
+stop, or restart intentionally re-anchors the program timeline.
 
 ### Correction ownership
 
@@ -333,7 +399,11 @@ Example:
 ```cpp
 void FirmwareApp::tick_playback_()
 {
-    _playback.tick_once();
+    const RenderFrameResult result = _playback.render_next_frame();
+    if (result == RenderFrameResult::Unchanged) {
+        return;
+    }
+
     apply_gamma(_playback.strip(), _gamma);
     _playback.strip().copy_to(
         reinterpret_cast<uint8_t*>(g_leds),
@@ -345,6 +415,10 @@ void FirmwareApp::tick_playback_()
                (kMaxStripPixels - _playback.strip_length()) * sizeof(CRGB));
     }
     FastLED.show();
+
+    if (result == RenderFrameResult::Ended) {
+        handle_program_ended();
+    }
 }
 ```
 
@@ -359,8 +433,8 @@ If `profile.gamma` is invalid, `GammaCorrection::set_gamma()` leaves the
 previous valid LUT unchanged. A default constructed `GammaCorrection` is already
 identity, which is the intended sim/raw-output behavior.
 
-This is intentionally simple. Presentation signaling can be optimized later if
-needed.
+Presentation is driven by `RenderFrameResult`: owners present on `Rendered` and
+`Ended`, and do nothing for `Unchanged`.
 
 ### Telemetry / logging
 
@@ -441,13 +515,19 @@ playback.handle_start(0);
 
 for (;;) {
     clock.set_us(next_time);
-    if (!playback.tick_once())
+    const RenderFrameResult result = playback.render_next_frame();
+    if (result == RenderFrameResult::Rendered ||
+        result == RenderFrameResult::Ended) {
+        fwrite(playback.strip().bytes(), 1, playback.strip().byte_size(), stdout);
+    }
+    if (result == RenderFrameResult::Ended)
         break;
-    fwrite(playback.strip().bytes(), 1, playback.strip().byte_size(), stdout);
 }
 ```
 
-This is one of the clearest benefits of the redesign.
+This is one of the clearest benefits of the redesign. Explicit seeks also remain
+straightforward because `handle_jump()` returns a `RenderFrameResult`; a
+non-playing jump can immediately render the requested frame into `_strip`.
 
 ## What Disappears
 
@@ -500,28 +580,37 @@ needs from the system.
 
 ### 1. Presentation signaling
 
-With a concrete `Playback`, the simplest firmware loop is:
+`Playback` exposes frame-buffer side effects through `RenderFrameResult`:
 
 ```cpp
-_playback.tick_once();
-present_buffer();
+enum class RenderFrameResult : uint8_t {
+    Unchanged,
+    Rendered,
+    Ended,
+};
 ```
 
-Pros:
+Meaning:
 
-- trivial
-- no extra API design
-- aligned with "simplify first"
+- `Unchanged`
+  - `_strip` was not modified by this call
+  - returned for `IDLE`, `LOADED`, `PAUSED`, already `ENDED`, invalid/no-op
+    commands, and delayed start while `t_program < 0`
+- `Rendered`
+  - `_strip` contains a newly produced frame
+- `Ended`
+  - natural end-of-program transition
+  - `_strip` is cleared to black
+  - state changed `PLAYING -> ENDED`
+  - returned exactly once for that transition; later calls return `Unchanged`
 
-Cons:
+Owners present on `Rendered` and `Ended`. Lifecycle queries use `state()`; no
+parallel `is_active()` style accessor is planned.
 
-- may re-present identical pixels while paused/loaded
-
-Current recommendation:
-
-- start with unconditional presentation if needed for simplicity
-- only add explicit `frame_emitted` / `buffer_changed` signaling later if ESP
-  code actually feels the cost
+Public methods that can intentionally produce a presentation frame return
+`RenderFrameResult`. That includes `render_next_frame()`, non-playing
+`handle_jump()`, `handle_stop()`, and `render_black_frame()`. Lifecycle/reset
+methods may clear internal stale buffers without implying presentation.
 
 ### 2. State-change signaling
 
@@ -531,17 +620,16 @@ explicitly.
 That is slightly more work, but it also makes the playback core more honest:
 it owns state transitions, not output sinks.
 
-### 3. `tick_once()` contract
+### 3. `render_next_frame()` contract
 
-Current `PlaybackDevice::tick_once()` returns a bool whose meaning is tied to
-"keep ticking / not ended yet", not "new frame rendered". That contract is not
-ideal for a concrete `Playback`, but it does not block the redesign.
+`tick_once()` is legacy terminology from `PlaybackDevice`. The concrete
+`Playback` entry point is `render_next_frame()`.
 
-First-pass recommendation:
-
-- keep a simple bool contract if that reduces churn
-- do not overdesign a result object up front
-- revisit only if owner code becomes awkward
+"Next" means the next frame accepted by `Playback` for presentation from the
+current state and selected clock, not a fixed frame-index increment. This call
+is the only path that derives a new `t_program` from the clock and renders it.
+Command handlers may render caller-supplied anchors, such as non-playing
+`handle_jump()`, but they return `RenderFrameResult` when they do.
 
 ### 4. Direction C may become less urgent
 
@@ -594,7 +682,7 @@ the first pass should do this:
 5. Move hardware output and telemetry to owners.
 6. Keep sim on the same playback rules as firmware.
 7. Keep `debug_seek` out of scope.
-8. Prefer simple owner logic over overdesigned signaling APIs.
+8. Use `RenderFrameResult` for owner presentation decisions.
 
 ## Open Decisions
 
@@ -610,18 +698,17 @@ Example starting point:
 
 This is tuning, not architecture, but it should be explicit.
 
-### 2. Small-correction policy
+### 2. Large/stale correction policy
 
-When a synced correction would otherwise move time backward:
+`DeviceClock::apply_sync_offset()` still needs concrete acceptance rules:
 
-- hold flat briefly
-- jump forward only
-- maybe later slew
+- maximum correction/error band for staying synced
+- freshness timeout for the latest accepted correction
+- whether a rejected correction immediately calls `clear_sync()` or reports a
+  status for the owner to handle
 
-Current lean:
-
-- simple first
-- no backward motion
+Small accepted corrections may step the controller-time estimate. Rendered
+animation monotonicity is enforced by `Playback` through `_last_t_program_us`.
 
 ### 3. Loss-of-sync lifecycle policy
 
@@ -631,13 +718,17 @@ Current lean:
 - higher-level playback/firmware policy fades out to black
 - no silent fallback to unsynced playback for synced content
 
-### 4. Whether/when to add explicit presentation signaling
+### 4. Test clock seam
 
 Current lean:
 
-- do not block the redesign on this
-- start with simple owner logic
-- add signaling only if it is actually needed
+- keep production `DeviceClock` concrete
+- do not add virtual/callback clock hooks to the production API
+- let deterministic tests link a test-only `DeviceClock` raw-time implementation
+  selected by the build target
+
+That preserves the concrete production shape while still allowing monotonicity,
+freshness, and correction-policy tests to control time without sleeping.
 
 ## Bottom Line
 

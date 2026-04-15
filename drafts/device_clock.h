@@ -11,7 +11,10 @@
 // - _offset_us == now_local_us() - now_controller_us(); positive means local
 //   time leads controller time
 //
-// The exact correction / hysteresis policy is intentionally still open.
+// `now_controller_us()` is a controller-domain estimate. It may step when a
+// fresh sync correction is accepted; Playback owns the monotonic accepted
+// `t_program` invariant for rendered animation. The exact sync-health,
+// freshness, and large-correction policy is intentionally still open.
 //
 // Raw monotonic source policy:
 // - `DeviceClock` is one concrete class.
@@ -30,8 +33,9 @@ class DeviceClock {
 public:
     bool is_synced() const;
 
-    // Controller-domain disciplined monotonic time.
-    // Derived from `now_local_us()` minus the current sync offset.
+    // Controller-domain estimate derived from `now_local_us()` minus the
+    // current accepted sync offset. This clock is not responsible for clamping
+    // rendered program time.
     int64_t now_controller_us() const;
 
     // Local-domain raw monotonic time.

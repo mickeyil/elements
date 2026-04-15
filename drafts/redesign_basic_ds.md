@@ -152,8 +152,10 @@ Final runtime vocabulary:
 | `DeviceClock` | device-side clock abstraction |
 | `is_synced()` | status predicate for controller-domain validity |
 | `apply_sync_offset(local_minus_controller_us)` | applies signed sync offset at the API boundary |
-| `current_t_program()` | current program-relative time |
-| `_paused_t_program` | stored program-relative time while paused |
+| `render_next_frame()` | accepts the next renderable frame from the selected clock/state |
+| `RenderFrameResult` | presentation-side result from a playback call that may update `_strip` |
+| `current_t_program()` | last accepted program-relative position |
+| `_last_t_program_us` | last accepted program position in integer microseconds |
 
 Contextual struct fields:
 

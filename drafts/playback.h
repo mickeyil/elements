@@ -16,6 +16,19 @@
 
 enum class DeviceState : uint8_t { IDLE, LOADED, PLAYING, PAUSED, ENDED };
 
+enum class RenderFrameResult : uint8_t {
+    // `_strip` was not modified by this call.
+    Unchanged,
+
+    // `_strip` contains a newly produced frame.
+    Rendered,
+
+    // Natural end-of-program transition. `_strip` was cleared to black and the
+    // state changed PLAYING -> ENDED. Returned only for that transition; later
+    // calls return Unchanged.
+    Ended,
+};
+
 class Playback {
 public:
     explicit Playback(DeviceClock& clock);
@@ -28,16 +41,21 @@ public:
 
     bool handle_load(const uint8_t* blob, size_t blob_len, uint16_t gen);
     void handle_start(int64_t program_start_us);
-    void handle_jump(int64_t program_start_us, float t_program, uint16_t gen);
+    RenderFrameResult handle_jump(
+        int64_t program_start_us,
+        float t_program,
+        uint16_t gen
+    );
     void handle_pause();
     void handle_resume(int64_t program_start_us);
-    void handle_stop();
+    RenderFrameResult handle_stop();
     void reset_for_detach();
-    void present_black_frame();
+    RenderFrameResult render_black_frame();
 
-    // Advance according to the currently selected clock domain and render the
-    // latest frame into `_strip`.
-    bool tick_once();
+    // Render the next frame accepted by Playback for presentation from the
+    // current state and selected clock. "Next" is clock/state-derived, not a
+    // fixed frame-index increment.
+    RenderFrameResult render_next_frame();
 
     DeviceState state() const;
     float duration() const;
@@ -70,7 +88,7 @@ private:
     DeviceState _state = DeviceState::IDLE;
     float _duration = 0.0f;
     int64_t _program_start_us = 0;
-    float _paused_t_program = 0.0f;
+    int64_t _last_t_program_us = 0;
     bool _requires_sync = false;
 
     // TODO: decide whether generation/frame-index metadata belongs here or in
