@@ -345,11 +345,14 @@ Notes:
 
 - `DeviceClock` is one concrete class, not a class hierarchy.
 - simulation and firmware should share the same `DeviceClock` behavior.
-- only the raw monotonic source underneath should differ:
+- only the platform raw monotonic source underneath differs in this draft:
   - firmware: `esp_timer_get_time()`
   - desktop sim: `steady_clock`
-- `ManualClock` is separate test/tooling utility if needed; it is not a
-  production runtime abstraction that `Playback` must be built around.
+- deterministic `Playback` tests still need a manual raw-time seam, but that
+  seam is a test/tooling concern and is not implemented in this draft source
+  sketch.
+- manual time control is not a production runtime abstraction and is not passed
+  to `Playback`.
 
 ### Intended behavior
 
@@ -502,32 +505,59 @@ playback core to preserve extra simulator-only behavior.
 
 ### Offline render
 
-Offline render becomes straightforward:
+Offline render is a direct render-core caller. It does not need `Playback` or a
+clock because it already owns the frame schedule and can pass explicit
+program-relative times into `Engine`.
 
 ```cpp
-ManualClock clock;
-Playback playback(clock);
-
-playback.apply_hardware_profile(HardwareProfile(strip_length));
-playback.handle_load(blob.data(), blob.size(), 1);
-clock.set_us(0);
-playback.handle_start(0);
-
-for (;;) {
-    clock.set_us(next_time);
-    const RenderFrameResult result = playback.render_next_frame();
-    if (result == RenderFrameResult::Rendered ||
-        result == RenderFrameResult::Ended) {
-        fwrite(playback.strip().bytes(), 1, playback.strip().byte_size(), stdout);
-    }
-    if (result == RenderFrameResult::Ended)
-        break;
+DecodeError err = DecodeError::Ok;
+Program* program = decode_program(blob.data(), blob.size(), strip_length, &err);
+if (program == nullptr) {
+    return error(decode_error_name(err));
 }
+
+if (program->requires_sync) {
+    free_program(program);
+    return error("offline render requires an unsynced artifact");
+}
+
+const float duration = program->duration;
+Engine* engine = Engine::create(program);  // takes ownership of program
+if (engine == nullptr) {
+    return error("engine alloc failed");
+}
+
+Strip strip;
+if (!strip.resize(strip_length)) {
+    delete engine;
+    return error("strip alloc failed");
+}
+
+for (int64_t frame = 0;; frame++) {
+    const float t_program = float(frame) / float(fps);
+    if (t_program >= duration) {
+        break;
+    }
+    if (engine->render_frame(t_program, strip)) {
+        fwrite(strip.bytes(), 1, strip.byte_size(), stdout);
+    }
+}
+
+delete engine;
 ```
 
-This is one of the clearest benefits of the redesign. Explicit seeks also remain
-straightforward because `handle_jump()` returns a `RenderFrameResult`; a
-non-playing jump can immediately render the requested frame into `_strip`.
+This is one of the clearest benefits of separating the render core from the
+playback state machine. Offline render walks `t_program` sequentially from `0`,
+so it does not need a deterministic playback clock. It also rejects
+`requires_sync` artifacts because offline + synced is an invalid mode.
+
+`ManualClock` is therefore not a `Playback` constructor argument. Deterministic
+`Playback` tests should eventually use a manual raw-time seam behind concrete
+`DeviceClock`; offline render bypasses `Playback` and drives `Engine` directly.
+
+Explicit seeks through `Playback` remain straightforward because `handle_jump()`
+returns a `RenderFrameResult`; a non-playing jump can immediately render the
+requested frame into `_strip`.
 
 ## What Disappears
 
@@ -631,17 +661,20 @@ is the only path that derives a new `t_program` from the clock and renders it.
 Command handlers may render caller-supplied anchors, such as non-playing
 `handle_jump()`, but they return `RenderFrameResult` when they do.
 
-### 4. Direction C may become less urgent
+### 4. Direct render-core tooling
 
 A concrete `Playback` already captures much of what "separate rendering
-pipeline from playback state machine" was trying to achieve:
+pipeline from playback state machine" was trying to achieve for firmware,
+simulation, and state-machine tests:
 
-- no subclassing for RenderDevice
-- no subclassing for tests
+- no subclassing for playback tests
 - no output virtuals in the core
 
-That does not eliminate the value of a future standalone renderer API, but it
-does reduce the urgency.
+That does not make `strip_render` a `Playback` caller. The offline renderer is
+the concrete case where direct render-core access is the better fit:
+`decode_program -> Engine::create -> Engine::render_frame(t_program, strip)`.
+It exercises rendering without threading clock or lifecycle state through a tool
+that does not need those behaviors.
 
 ## Online / Offline Matrix
 
@@ -683,6 +716,7 @@ the first pass should do this:
 6. Keep sim on the same playback rules as firmware.
 7. Keep `debug_seek` out of scope.
 8. Use `RenderFrameResult` for owner presentation decisions.
+9. Make `strip_render` a direct render-core tool, not a `Playback` wrapper.
 
 ## Open Decisions
 
@@ -718,14 +752,16 @@ Current lean:
 - higher-level playback/firmware policy fades out to black
 - no silent fallback to unsynced playback for synced content
 
-### 4. Test clock seam
+## Settled Test/Tool Time Seam
 
-Current lean:
+Decision:
 
 - keep production `DeviceClock` concrete
 - do not add virtual/callback clock hooks to the production API
-- let deterministic tests link a test-only `DeviceClock` raw-time implementation
-  selected by the build target
+- deterministic `Playback` tests need a manual raw-time seam, but this draft
+  source does not implement it yet
+- do not use this test seam for `strip_render`; offline rendering should pass
+  explicit `t_program` values directly to `Engine`
 
 That preserves the concrete production shape while still allowing monotonicity,
 freshness, and correction-policy tests to control time without sleeping.
@@ -737,6 +773,7 @@ The most up-to-date intended abstraction is:
 - `Playback` is a concrete playback-and-rendering core
 - `DeviceClock` is a concrete time source abstraction
 - owners handle output, transport, telemetry, and simulator tooling
+- `strip_render` is a direct render-core tool
 - simulation follows firmware semantics
 - simplification wins over preserving old wrapper hierarchies
 

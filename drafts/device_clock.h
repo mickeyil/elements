@@ -19,13 +19,13 @@
 // Raw monotonic source policy:
 // - `DeviceClock` is one concrete class.
 // - The raw monotonic source underneath is selected at compile time via
-//   `#ifdef ARDUINO`, consistent with the rest of the drafts (see
-//   `pixel_buffer_pool.{h,cpp}`):
+//   `#ifdef ARDUINO`, consistent with the rest of the drafts:
 //   - ARDUINO build     -> `esp_timer_get_time()`
 //   - non-ARDUINO build -> `std::chrono::steady_clock`
 // - No callback injection, no virtual hook: firmware and sim share one
-//   implementation, the only difference is which syscall `now_local_us()`
-//   reads underneath.
+//   concrete `DeviceClock`; only the platform raw source differs.
+// - Deterministic Playback tests still need a manual raw-time seam, but that
+//   seam is not part of this draft source sketch yet.
 
 #include <cstdint>
 
@@ -39,8 +39,7 @@ public:
     int64_t now_controller_us() const;
 
     // Local-domain raw monotonic time.
-    // Reads the platform monotonic source directly (see raw source policy
-    // above). This is the single point where the platform ifdef lives.
+    // Reads the platform monotonic source directly.
     int64_t now_local_us() const;
 
     // Apply a fresh sync offset.

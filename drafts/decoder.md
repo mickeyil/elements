@@ -145,7 +145,7 @@ exact rejection reason without a debugger.
 
 ## Integration with Playback
 
-`Playback::handle_load(blob, blob_len, gen)` is the only caller of
+`Playback::handle_load(blob, blob_len, gen)` is the runtime caller of
 `decode_program`:
 
 ```cpp
@@ -188,6 +188,12 @@ its internal allocations cannot be made). Engine OOM is **not** a
 mid-load. The firmware caller should log it under a separate identifier
 and ACK the LOAD command with `kAckError` (the same generic bucket as
 non-`StripLengthMismatch` decode failures).
+
+Tooling that only needs the render core may also call `decode_program`
+directly. In particular, `strip_render` should decode the blob, reject
+`Program::requires_sync`, create `Engine`, and drive
+`Engine::render_frame(t_program, strip)` with explicit frame times instead of
+constructing `Playback`.
 
 ## Compiler alignment
 

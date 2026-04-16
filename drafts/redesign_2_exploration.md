@@ -205,6 +205,10 @@ This suggests PlaybackDevice bundles two separable concerns:
 If the rendering pipeline were directly accessible (via Engine/Program/Strip),
 RenderDevice wouldn't need to inherit from PlaybackDevice at all.
 
+Current decision: `strip_render` / RenderDevice should take that path. It is a
+direct render-core tool that decodes the blob, constructs `Engine`, and passes
+explicit `t_program` values to `Engine::render_frame()`.
+
 ### Finding 5: Clock access should be injected, not inherited
 
 `now_mono()` is a pure virtual on PlaybackDevice, forcing every subclass to
@@ -224,13 +228,13 @@ The intended runtime shape is simpler than a full clock taxonomy:
   smoothing/jitter rejection, a small-correction policy, and transition back
   to unsynced if the correction needed exceeds the allowed perceptual band.
   Importantly, it must never publish time that goes backward.
-- **ManualClock**: a separate testing/tooling utility for RenderDevice and
-  tests when time is externally driven via `set()`.
+- **Manual raw clock source**: a separate testing/tooling source for
+  deterministic `Playback` tests when time is externally driven via `set()`.
 
 `SyncedClock` is intended to be one concrete class, not the root of a class
-hierarchy. `ManualClock` is a separate tool/testing utility rather than
-another production runtime clock implementation behind a shared virtual
-interface.
+hierarchy. A future manual raw-time seam should not become another production
+runtime clock implementation behind a shared virtual interface, and it should
+not be passed to Playback. Playback still receives the concrete device clock.
 
 ESP and simulation should share the same `SyncedClock` behavior. The justified
 platform difference is only the raw monotonic source underneath it
@@ -288,9 +292,12 @@ The sync correction path should also move explicitly:
 That is why `handle_sync_result()` / `clear_sync()` are expected to leave
 PlaybackDevice's public API.
 
-If the rendering pipeline is separated from PlaybackDevice (Finding 4),
-RenderDevice and tests that only need rendering wouldn't need a clock at all
--- they'd pass `t_rel` directly to the Engine.
+With the rendering pipeline separated from PlaybackDevice (Finding 4),
+RenderDevice and render-core tests do not need a clock at all -- they pass
+`t_program` directly to the Engine. Playback tests still need deterministic
+time behind the concrete clock because they are testing clock-derived
+state-machine behavior, but the exact test seam is intentionally left out of
+this draft source sketch.
 
 **Important distinction:** this document no longer assumes a naive
 `now_synced_us = mono_now - latest_offset` clock. The useful abstraction is a
@@ -398,7 +405,8 @@ It also fixes the ownership boundary: sync corrections are fed from
 Make the decode-Engine-Strip-tick pipeline directly usable without
 PlaybackDevice. This could be as simple as making Engine construction from a
 blob easier (it currently requires a separate `decode_program` call and manual
-Strip setup). RenderDevice becomes a standalone tool that uses Engine directly.
+Strip setup). RenderDevice / `strip_render` becomes a standalone tool that uses
+Engine directly.
 
 ---
 
