@@ -90,11 +90,7 @@ public:
 
     bool handle_load(const uint8_t* blob, size_t blob_len, uint16_t gen);
     void handle_start(int64_t program_start_us);
-    RenderFrameResult handle_jump(
-        int64_t program_start_us,
-        float t_program,
-        uint16_t gen
-    );
+    RenderFrameResult handle_jump(float t_program, uint16_t gen);
     void handle_pause();
     void handle_resume(int64_t program_start_us);
     RenderFrameResult handle_stop();
@@ -105,6 +101,8 @@ public:
 
     DeviceState state() const;
     float duration() const;
+    // Returns 0 when no program is loaded.
+    uint8_t target_fps() const;
     float current_t_program() const;
     uint16_t strip_length() const;
     bool requires_sync() const;
@@ -125,8 +123,9 @@ private:
     HardwareProfile _profile{};
     DeviceState _state = DeviceState::IDLE;
     float _duration = 0.0f;
+    uint8_t _target_fps = 0;
     int64_t _program_start_us = 0;
-    int64_t _last_t_program_us = 0;
+    int64_t _t_program_cursor_us = 0;
     bool _requires_sync = false;
 };
 ```
@@ -182,7 +181,7 @@ The canonical timing vocabulary is defined once in
   `now_synced_us()`, or `now_unsynced_us()`
 
 Frame/reporting/protocol names such as `DeviceFrame::t_program` and
-start/jump/resume `program_start_us` are part of the intended follow-up
+start/resume `program_start_us` are part of the intended follow-up
 implementation rename pass; the live source may still use legacy names until
 that pass lands.
 
@@ -279,10 +278,11 @@ every correction. The render invariant lives in `Playback`:
 - during one continuous playback segment, `Playback` must not feed a decreasing
   `t_program` to `Engine::render_frame()`
 - `_program_start_us` stores the selected-clock anchor for the current segment
-- `_last_t_program_us` stores the last accepted program position in integer
+- `_t_program_cursor_us` stores the minimum accepted program position in integer
   microseconds
-- `current_t_program()` reports the accepted program position; it does not read
-  the clock or mutate playback state
+- `current_t_program()` reports the cursor; it does not read the clock or mutate
+  playback state. After a future JUMP, this may be ahead of the last presented
+  frame because the device is deliberately waiting for the clock to catch up.
 
 `render_next_frame()` is the clock-derived render path. It computes:
 
@@ -290,32 +290,36 @@ every correction. The render invariant lives in `Playback`:
 int64_t t_program_us = program_clock_now_us() - _program_start_us;
 ```
 
-Then it ignores negative values for delayed starts, clamps backward movement to
-`_last_t_program_us`, stores the accepted value, and renders using that accepted
-time.
+Then it ignores negative values for delayed starts. If the clock-derived value
+is below `_t_program_cursor_us`, it returns `RenderFrameResult::Unchanged`
+instead of clamping upward and rendering. This covers both small backward clock
+corrections during ordinary playback and deliberate future JUMP targets during
+live rejoin. Once the clock reaches or passes the cursor, `render_next_frame()`
+advances the cursor to the sampled clock value and renders.
 
-`handle_jump()` is the explicit exception because the caller supplies a
-program-time anchor. A jump is an intentional timeline discontinuity, so it sets
-`_last_t_program_us` to the target even for backward jumps. Non-playing jumps
-render immediately for feedback and return `RenderFrameResult::Rendered`;
-playing jumps retime immediately and let the next `render_next_frame()` produce
-the frame.
+`handle_jump()` is the explicit timeline discontinuity. It resets the engine
+and sets `_t_program_cursor_us` to the target, but it does not set
+`_program_start_us` and does not render a frame. JUMP is for rejoin/reconstruct
+work; playback resumes from a later `handle_resume(program_start_us)` or from
+an already-playing state when the clock reaches the cursor.
 
 Timing-state rules:
 
 - `handle_start(program_start_us)`
   - sets `_program_start_us = program_start_us`
-  - seeds `_last_t_program_us = 0`
+  - seeds `_t_program_cursor_us = 0`
 - `handle_pause()`
   - changes state only
-  - preserves `_last_t_program_us`
+  - preserves `_t_program_cursor_us`
 - `handle_resume(program_start_us)`
   - sets `_program_start_us = program_start_us`
-  - preserves `_last_t_program_us`
-- `handle_jump(program_start_us, t_program, gen)`
+  - preserves `_t_program_cursor_us`
+- `handle_jump(t_program, gen)`
   - resets the engine
-  - sets `_program_start_us = program_start_us`
-  - sets `_last_t_program_us` to the target, including backward jumps
+  - sets `_t_program_cursor_us` to the target, including backward jumps
+  - does not touch `_program_start_us`
+  - returns `Unchanged`
+  - leaves `PLAYING` as `PLAYING`; otherwise moves to `PAUSED`
 - `handle_stop()`, load/unload failure, and detach reset
   - clear timing state
 - natural end-of-program
@@ -439,6 +443,19 @@ identity, which is the intended sim/raw-output behavior.
 Presentation is driven by `RenderFrameResult`: owners present on `Rendered` and
 `Ended`, and do nothing for `Unchanged`.
 
+Owners also own frame pacing. After LOAD, `Playback::target_fps()` exposes the
+program's intended presentation cadence from the blob. Firmware should pace
+render/present cycles to that cadence and keep the last-mile LED update inside
+the same frame budget. The budget is not just engine math: gamma/channel
+conversion, copying into the FastLED buffer, and `FastLED.show()` time all
+count. The exact `FastLED.show()` estimate can be filled in during
+implementation, when the real output path is measured.
+
+The cadence is not a LOAD capability gate. Firmware should run the program,
+measure whether it is meeting the target, and report actual cadence/slack
+telemetry so the composer can reduce animation complexity or lower the declared
+fps when the budget is too tight.
+
 ### Telemetry / logging
 
 Today state transitions call `send_telemetry()` inside the playback core.
@@ -459,6 +476,18 @@ if (after != before) {
     log_state_change(after, _playback.current_t_program());
 }
 ```
+
+Cadence telemetry follows the same ownership rule. The firmware loop knows the
+frame deadline, when render math finished, and when `FastLED.show()` returned,
+so it reports actual fps and slack from the owner instead of pushing those
+hooks into `Playback`. A useful first definition is:
+
+```text
+slack_us = frame_deadline_us - fastled_show_return_us
+```
+
+Negative or near-zero slack is the composer-facing signal that the program is
+asking too much of the hardware at its declared `target_fps`.
 
 This is slightly more explicit, but simpler overall than virtual telemetry
 hooks in the playback core.
@@ -522,6 +551,7 @@ if (program->requires_sync) {
 }
 
 const float duration = program->duration;
+const uint8_t fps = program->target_fps;
 Engine* engine = Engine::create(program);  // takes ownership of program
 if (engine == nullptr) {
     return error("engine alloc failed");
@@ -548,16 +578,15 @@ delete engine;
 
 This is one of the clearest benefits of separating the render core from the
 playback state machine. Offline render walks `t_program` sequentially from `0`,
-so it does not need a deterministic playback clock. It also rejects
+using the blob's `target_fps` as its default frame step, so it does not need a
+deterministic playback clock. A tooling CLI may expose an explicit override,
+but the artifact's cadence is the default because it is the cadence the
+compiler used for safe-interval filtering. Offline render also rejects
 `requires_sync` artifacts because offline + synced is an invalid mode.
 
 `ManualClock` is therefore not a `Playback` constructor argument. Deterministic
 `Playback` tests should eventually use a manual raw-time seam behind concrete
 `DeviceClock`; offline render bypasses `Playback` and drives `Engine` directly.
-
-Explicit seeks through `Playback` remain straightforward because `handle_jump()`
-returns a `RenderFrameResult`; a non-playing jump can immediately render the
-requested frame into `_strip`.
 
 ## What Disappears
 
@@ -638,8 +667,9 @@ Owners present on `Rendered` and `Ended`. Lifecycle queries use `state()`; no
 parallel `is_active()` style accessor is planned.
 
 Public methods that can intentionally produce a presentation frame return
-`RenderFrameResult`. That includes `render_next_frame()`, non-playing
-`handle_jump()`, `handle_stop()`, and `render_black_frame()`. Lifecycle/reset
+`RenderFrameResult`. That includes `render_next_frame()`, `handle_stop()`, and
+`render_black_frame()`. `handle_jump()` returns `RenderFrameResult` for API
+uniformity, but it is retime-only and returns `Unchanged`. Lifecycle/reset
 methods may clear internal stale buffers without implying presentation.
 
 ### 2. State-change signaling
@@ -658,8 +688,8 @@ it owns state transitions, not output sinks.
 "Next" means the next frame accepted by `Playback` for presentation from the
 current state and selected clock, not a fixed frame-index increment. This call
 is the only path that derives a new `t_program` from the clock and renders it.
-Command handlers may render caller-supplied anchors, such as non-playing
-`handle_jump()`, but they return `RenderFrameResult` when they do.
+Command handlers do not render caller-supplied program-time anchors in the first
+pass; JUMP sets the cursor and waits for the clock-driven path.
 
 ### 4. Direct render-core tooling
 
@@ -742,7 +772,7 @@ This is tuning, not architecture, but it should be explicit.
   status for the owner to handle
 
 Small accepted corrections may step the controller-time estimate. Rendered
-animation monotonicity is enforced by `Playback` through `_last_t_program_us`.
+animation monotonicity is enforced by `Playback` through `_t_program_cursor_us`.
 
 ### 3. Loss-of-sync lifecycle policy
 

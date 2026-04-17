@@ -84,6 +84,7 @@ bool Playback::handle_load(const uint8_t* blob, size_t blob_len, uint16_t gen)
     //       return false;
     //   }
     //   const float duration_s = program->duration;
+    //   const uint8_t target_fps = program->target_fps;
     //   const bool  needs_sync = program->requires_sync;
     //   Engine* engine = Engine::create(program);  // takes ownership
     //   if (engine == nullptr) {
@@ -92,6 +93,7 @@ bool Playback::handle_load(const uint8_t* blob, size_t blob_len, uint16_t gen)
     //       return false;
     //   }
     //   _duration      = duration_s;
+    //   _target_fps    = target_fps;
     //   _requires_sync = needs_sync;
     //   _engine.reset(engine);
     //   clear_render_buffer_();
@@ -119,15 +121,11 @@ void Playback::handle_start(int64_t program_start_us)
     }
 
     _program_start_us = program_start_us;
-    _last_t_program_us = 0;
+    _t_program_cursor_us = 0;
     _state = DeviceState::PLAYING;
 }
 
-RenderFrameResult Playback::handle_jump(
-    int64_t program_start_us,
-    float t_program,
-    uint16_t gen
-)
+RenderFrameResult Playback::handle_jump(float t_program, uint16_t gen)
 {
     (void)gen;
 
@@ -143,20 +141,12 @@ RenderFrameResult Playback::handle_jump(
 
     DeviceState prev = _state;
     _engine->reset();
-    _program_start_us = program_start_us;
-    _last_t_program_us = t_program_to_us(t_program);
+    _t_program_cursor_us = t_program_to_us(t_program);
 
-    if (prev == DeviceState::PLAYING) {
-        // Mirror current runtime behavior: when jumping during active playback,
-        // retime immediately and let render_next_frame() render from the new
-        // position. Non-playing states render a frame right away because the
-        // owner expects a paused/loaded frame to be available immediately.
-        return RenderFrameResult::Unchanged;
+    if (prev != DeviceState::PLAYING) {
+        _state = DeviceState::PAUSED;
     }
-
-    _engine->render_frame(t_program, _strip);
-    _state = DeviceState::PAUSED;
-    return RenderFrameResult::Rendered;
+    return RenderFrameResult::Unchanged;
 }
 
 void Playback::handle_pause()
@@ -225,15 +215,14 @@ RenderFrameResult Playback::render_next_frame()
     if (t_program_us < 0) {
         return RenderFrameResult::Unchanged;
     }
-    if (t_program_us < _last_t_program_us) {
-        t_program_us = _last_t_program_us;
-    } else {
-        _last_t_program_us = t_program_us;
+    if (t_program_us < _t_program_cursor_us) {
+        return RenderFrameResult::Unchanged;
     }
+    _t_program_cursor_us = t_program_us;
 
     if (!_engine->render_frame(t_program_from_us(t_program_us), _strip)) {
         clear_render_buffer_();
-        _last_t_program_us = t_program_to_us(_duration);
+        _t_program_cursor_us = t_program_to_us(_duration);
         _state = DeviceState::ENDED;
         return RenderFrameResult::Ended;
     }
@@ -250,6 +239,11 @@ float Playback::duration() const
     return _duration;
 }
 
+uint8_t Playback::target_fps() const
+{
+    return _target_fps;
+}
+
 float Playback::current_t_program() const
 {
     switch (_state) {
@@ -258,7 +252,7 @@ float Playback::current_t_program() const
             return 0.0f;
         case DeviceState::PAUSED:
         case DeviceState::PLAYING: {
-            const float t_program = t_program_from_us(_last_t_program_us);
+            const float t_program = t_program_from_us(_t_program_cursor_us);
             if (t_program > _duration) {
                 return _duration;
             }
@@ -305,6 +299,7 @@ void Playback::reset_program_state_()
 {
     _state = DeviceState::IDLE;
     _duration = 0.0f;
+    _target_fps = 0;
     _requires_sync = false;
     reset_timing_state_();
 }
@@ -312,7 +307,7 @@ void Playback::reset_program_state_()
 void Playback::reset_timing_state_()
 {
     _program_start_us = 0;
-    _last_t_program_us = 0;
+    _t_program_cursor_us = 0;
 }
 
 void Playback::clear_render_buffer_()

@@ -14,24 +14,31 @@ Binary format for compiled animation programs. Emitted by the Python compiler
 - No alignment padding. Every field is byte-packed.
 - v3 is a clean break from v2. New decoders do not parse old blobs.
 
-## Header (19 bytes)
+## Header (20 bytes)
 
 | Offset | Size | Type    | Field            |
 | ------ | ---- | ------- | ---------------- |
 | 0      | 4    | char[4] | magic            |
 | 4      | 1    | u8      | version          |
 | 5      | 1    | u8      | flags            |
-| 6      | 1    | u8      | layer_count      |
-| 7      | 2    | u16     | strip_length     |
-| 9      | 2    | u16     | buffer_count     |
-| 11     | 2    | u16     | pixel_view_count |
-| 13     | 2    | u16     | copy_op_count    |
-| 15     | 4    | f32     | duration         |
+| 6      | 1    | u8      | target_fps       |
+| 7      | 1    | u8      | layer_count      |
+| 8      | 2    | u16     | strip_length     |
+| 10     | 2    | u16     | buffer_count     |
+| 12     | 2    | u16     | pixel_view_count |
+| 14     | 2    | u16     | copy_op_count    |
+| 16     | 4    | f32     | duration         |
 
 - `magic` — `"ELEM"` (`0x45 0x4C 0x45 0x4D`).
 - `version` — `3`.
 - `flags` — bit0 = `requires_sync`. All other bits are reserved and must be
   0. The decoder rejects any blob with unknown bits set (`InvalidField`).
+- `target_fps` — intended presentation cadence in Hz. Must be > 0.
+  The compiler default is 50 unless the program overrides it. The compiler
+  uses this value to discard nonzero safe intervals narrower than one target
+  frame period; firmware owners use it for pacing and telemetry. It is not a
+  device capability gate, and LOAD does not reject a blob because the device
+  may miss the target cadence.
 - `layer_count` — number of visual layers.
 - `strip_length` — physical LED count this blob targets. Must be in
   `[1, kMaxStripPixels]`. Must equal the active

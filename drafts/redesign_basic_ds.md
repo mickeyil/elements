@@ -154,8 +154,9 @@ Final runtime vocabulary:
 | `apply_sync_offset(local_minus_controller_us)` | applies signed sync offset at the API boundary |
 | `render_next_frame()` | accepts the next renderable frame from the selected clock/state |
 | `RenderFrameResult` | presentation-side result from a playback call that may update `_strip` |
-| `current_t_program()` | last accepted program-relative position |
-| `_last_t_program_us` | last accepted program position in integer microseconds |
+| `current_t_program()` | current program-time cursor |
+| `_t_program_cursor_us` | minimum accepted program position in integer microseconds |
+| `target_fps` | program-level intended presentation cadence in Hz |
 
 Contextual struct fields:
 
@@ -165,13 +166,14 @@ Contextual struct fields:
 | `AnimationEvent::duration` | float seconds |
 | `CopyOp::at` | program-relative float seconds |
 | `Program::duration` | float seconds |
+| `Program::target_fps` | intended presentation cadence in Hz |
 
 Frame/reporting/protocol names should also use the same vocabulary:
 
 - `DeviceFrame::t_program`
 - `ProgramFrame::t_program`
 - UDP frame header field `t_program`
-- start/jump/resume command field `program_start_us`
+- start/resume command field `program_start_us`
 - jump/debug-seek target field `t_program`
 
 These frame/reporting/protocol names are the intended contract for the follow-up
@@ -331,7 +333,10 @@ this unreachable, not on any new runtime check:
    has no source dependencies of its own, or the recursive minimum if A
    itself reads a preserved view.
 2. The compiler emits `safe_intervals` as the complement of the union of
-   all unsafe spans.
+   all unsafe spans. Before publishing those intervals, it drops
+   nonzero candidate safe intervals narrower than one target frame period
+   (`1 / Program::target_fps`). The `t_program == 0` start sentinel is
+   preserved even though it may be represented as a zero-width safe point.
 3. The controller refuses to send any command that **reconstructs engine
    state at a nonzero `t_program`** (`JUMP`, debug seek, live rejoin /
    re-LOAD at nonzero time, `START` at nonzero time) when the target time
@@ -358,6 +363,18 @@ Implications:
 
 - Programs with elaborate source chains have shorter safe intervals. That
   is the intended trade-off, not a bug.
+- The controller does not need its own safe-interval width check. The compiler
+  only publishes nonzero safe intervals wide enough for the program's declared
+  presentation cadence.
+- Live rejoin targets a future safe point. The controller sends `LOAD`, then
+  `JUMP(safe_point_t)`, then `RESUME(program_start_us)` if the session is
+  currently playing. The device remains dark until the clock reaches the
+  cursor, then renders in sync at the first eligible tick.
+- Paused rejoin uses the same safe-point rule but skips `RESUME` until the
+  session actually resumes. If the paused position is unsafe, the controller
+  may jump to a later safe point; the device waits there.
+- If there is no future safe interval in the current program segment, the
+  controller cannot safely rejoin that device into the segment.
 - The runtime needs no new state, no warmup pass, no keyframes, and no
   defensive assertions on jump targets. The compiler proves safety; the
   controller enforces it; the runtime executes.
@@ -377,15 +394,22 @@ Sampling caveat:
   consumer from reaching such a state legitimately
 - this still matters for very short events at coarse offline render
   steps, where a frame sample could fall outside a short event entirely
+- `target_fps` makes that sampling contract explicit at program scope. Authors
+  can override the default cadence when needed, but the compiler and offline
+  render use one cadence for the whole program, not per-animation rates.
 
 ### Compiler responsibilities for copy-op safety
 
 The compiler must:
 
 - emit copy ops as v3 blob records (see `blob_format.md`)
+- emit `Program::target_fps`, defaulting to 50 Hz unless the program overrides
+  it
 - compute `required_start_sec` for every event with a source dependency
   by walking a **view-provenance graph** (see below)
 - emit safe intervals computed from those extended unsafe spans
+- filter nonzero safe intervals narrower than one target frame period while
+  preserving the `t_program == 0` start sentinel
 - enforce the per-event sortedness and non-overlap rules within layers
 - enforce the copy-op sortedness rule
 - topologically order same-time copy ops by data dependency, and reject

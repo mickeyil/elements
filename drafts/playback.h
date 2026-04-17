@@ -41,11 +41,7 @@ public:
 
     bool handle_load(const uint8_t* blob, size_t blob_len, uint16_t gen);
     void handle_start(int64_t program_start_us);
-    RenderFrameResult handle_jump(
-        int64_t program_start_us,
-        float t_program,
-        uint16_t gen
-    );
+    RenderFrameResult handle_jump(float t_program, uint16_t gen);
     void handle_pause();
     void handle_resume(int64_t program_start_us);
     RenderFrameResult handle_stop();
@@ -59,6 +55,8 @@ public:
 
     DeviceState state() const;
     float duration() const;
+    // Returns 0 when no program is loaded.
+    uint8_t target_fps() const;
     float current_t_program() const;
     uint16_t strip_length() const;
     bool requires_sync() const;
@@ -87,8 +85,9 @@ private:
 
     DeviceState _state = DeviceState::IDLE;
     float _duration = 0.0f;
+    uint8_t _target_fps = 0;
     int64_t _program_start_us = 0;
-    int64_t _last_t_program_us = 0;
+    int64_t _t_program_cursor_us = 0;
     bool _requires_sync = false;
 
     // TODO: decide whether generation/frame-index metadata belongs here or in

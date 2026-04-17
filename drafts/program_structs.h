@@ -25,6 +25,11 @@ struct Program {
     // Total program duration in seconds. Must be finite and > 0.
     float duration = 0.0f;
 
+    // Intended presentation cadence for this program. The compiler uses this
+    // to filter nonzero safe intervals; owners use it for pacing/telemetry.
+    // Must be > 0 in decoded blobs.
+    uint8_t target_fps = 50;
+
     // True when the artifact must run against controller-synchronized time.
     // Read once at handle_load() into Playback::_requires_sync.
     bool requires_sync = false;

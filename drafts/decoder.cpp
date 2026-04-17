@@ -35,6 +35,7 @@ namespace {
 // Stack-local parsed header. Not a wire struct.
 struct ParsedHeader {
     uint8_t  flags;
+    uint8_t  target_fps;
     uint8_t  layer_count;
     uint16_t strip_length;
     uint16_t buffer_count;
@@ -59,6 +60,7 @@ DecodeError validate_prefix(BlobReader& r)
 DecodeError parse_header(BlobReader& r, ParsedHeader& hdr)
 {
     if (!r.read_u8(hdr.flags))                return DecodeError::Truncated;
+    if (!r.read_u8(hdr.target_fps))           return DecodeError::Truncated;
     if (!r.read_u8(hdr.layer_count))          return DecodeError::Truncated;
     if (!r.read_u16_le(hdr.strip_length))     return DecodeError::Truncated;
     if (!r.read_u16_le(hdr.buffer_count))     return DecodeError::Truncated;
@@ -79,6 +81,7 @@ DecodeError validate_header(const ParsedHeader& hdr)
     // detached caller could pass 0 and a 0-length blob would otherwise
     // pass the equality check below.
     if (hdr.strip_length == 0)                     return DecodeError::InvalidField;
+    if (hdr.target_fps == 0)                       return DecodeError::InvalidField;
 
     if (hdr.layer_count      > kMaxLayerCount)     return DecodeError::OverCap;
     if (hdr.strip_length     > kMaxStripPixels)    return DecodeError::OverCap;
@@ -285,6 +288,7 @@ Program* decode_program(
     if (prog == nullptr) return report(DecodeError::OutOfMemory);
 
     prog->duration      = hdr.duration;
+    prog->target_fps    = hdr.target_fps;
     prog->requires_sync = (hdr.flags & 0x01) != 0;
     prog->layer_count   = hdr.layer_count;
 

@@ -45,6 +45,7 @@ headers. `blob_limits.h` reuses `kMaxStripPixels` from
 - construct concrete `Animation` instances directly into events
 - wire layers, events, views, and copy ops into a `Program`
 - populate `Program::requires_sync` from the header flag
+- populate `Program::target_fps` from the header field
 - enforce every validation rule in `blob_format.md`
 
 The decoder does **not** own:
@@ -64,8 +65,9 @@ The decoder does **not** own:
 
 1. Validate magic and version. **Reject before any allocation.**
 2. Parse the rest of the header into a stack-local struct.
-3. Validate header: reserved flag bits, count caps, `strip_length` non-zero
-   and within `kMaxStripPixels`, `duration` finite and > 0.
+3. Validate header: reserved flag bits, `target_fps` non-zero, count caps,
+   `strip_length` non-zero and within `kMaxStripPixels`, `duration` finite
+   and > 0.
 4. Validate `strip_length` against the profile (`StripLengthMismatch`).
 5. Allocate `Program`. The struct is small; allocating it first means every
    subsequent failure path uses one uniform cleanup (`free_program(prog)`).
@@ -162,6 +164,7 @@ if (program == nullptr) {
 // Engine::create() the Program pointer (whether the call succeeds or not)
 // belongs to Engine, never to Playback directly.
 const float duration_s = program->duration;
+const uint8_t target_fps = program->target_fps;
 const bool  needs_sync = program->requires_sync;
 
 Engine* engine = Engine::create(program);  // takes ownership of program
@@ -172,14 +175,17 @@ if (engine == nullptr) {
 }
 
 _duration      = duration_s;
+_target_fps    = target_fps;
 _requires_sync = needs_sync;
 _engine.reset(engine);
 _state = DeviceState::LOADED;
 return true;
 ```
 
-`requires_sync` is read once at load time and stored on `Playback`. It is
-not re-read during playback.
+`requires_sync` and `target_fps` are read once at load time and stored on
+`Playback`. They are not re-read during playback. `target_fps` is exposed so
+the owner can pace presentation and report cadence/slack telemetry; the engine
+and playback core do not use it as a hot-path time step.
 
 `Engine::create()` is a fallible factory: it owns the `Program` on both
 success and failure (frees it via `free_program()` if Engine itself or
@@ -201,9 +207,14 @@ The Python compiler must:
 
 1. **Hardcode the same cap values** as `blob_limits.h`, with a unit test that
    parses the C header and asserts equality.
-2. **Fail the build** with a clear error when any cap is exceeded.
+2. **Emit `target_fps`** as a program-level cadence field. The default is
+   50 Hz unless the program overrides it. The compiler also uses this value
+   when computing safe intervals: any nonzero candidate safe interval narrower
+   than one target frame period is discarded/merged into the surrounding unsafe
+   span, while the `t_program == 0` start sentinel is preserved.
+3. **Fail the build** with a clear error when any cap is exceeded.
    Compile-time failure is much easier to triage than firmware rejection.
-3. **Print an estimated firmware memory footprint** for every successful
+4. **Print an estimated firmware memory footprint** for every successful
    compile, computed from the in-blob structures:
 
    - HSVA pool bytes = sum of buffer sizes × 16
