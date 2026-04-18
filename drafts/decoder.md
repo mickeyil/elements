@@ -210,8 +210,8 @@ The Python compiler must:
 2. **Emit `target_fps`** as a program-level cadence field. The default is
    50 Hz unless the program overrides it. The compiler also uses this value
    when computing safe intervals: any nonzero candidate safe interval narrower
-   than one target frame period is discarded/merged into the surrounding unsafe
-   span, while the `t_program == 0` start sentinel is preserved.
+   than one target frame period is dropped, while the `t_program == 0` start
+   sentinel is preserved separately from the nonzero interval list.
 3. **Fail the build** with a clear error when any cap is exceeded.
    Compile-time failure is much easier to triage than firmware rejection.
 4. **Print an estimated firmware memory footprint** for every successful

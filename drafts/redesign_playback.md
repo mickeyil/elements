@@ -300,8 +300,9 @@ advances the cursor to the sampled clock value and renders.
 `handle_jump()` is the explicit timeline discontinuity. It resets the engine
 and sets `_t_program_cursor_us` to the target, but it does not set
 `_program_start_us` and does not render a frame. JUMP is for rejoin/reconstruct
-work; playback resumes from a later `handle_resume(program_start_us)` or from
-an already-playing state when the clock reaches the cursor.
+work. It is admitted only from `LOADED` or `PAUSED`, and only when the target is
+strictly ahead of the current cursor. Playback resumes from a later
+`handle_resume(program_start_us)`.
 
 Timing-state rules:
 
@@ -315,11 +316,13 @@ Timing-state rules:
   - sets `_program_start_us = program_start_us`
   - preserves `_t_program_cursor_us`
 - `handle_jump(t_program, gen)`
+  - is valid only from `LOADED` or `PAUSED`
+  - rejects targets that are not strictly ahead of `_t_program_cursor_us`
   - resets the engine
-  - sets `_t_program_cursor_us` to the target, including backward jumps
+  - sets `_t_program_cursor_us` to the target
   - does not touch `_program_start_us`
   - returns `Unchanged`
-  - leaves `PLAYING` as `PLAYING`; otherwise moves to `PAUSED`
+  - moves to `PAUSED`
 - `handle_stop()`, load/unload failure, and detach reset
   - clear timing state
 - natural end-of-program
@@ -488,6 +491,11 @@ slack_us = frame_deadline_us - fastled_show_return_us
 
 Negative or near-zero slack is the composer-facing signal that the program is
 asking too much of the hardware at its declared `target_fps`.
+
+The exact "clean telemetry" gate is a tuning decision for controller/authoring
+tooling, not a LOAD admission rule. A later implementation should define the
+required slack margin and observation window before a program is considered
+production-ready.
 
 This is slightly more explicit, but simpler overall than virtual telemetry
 hooks in the playback core.

@@ -174,7 +174,7 @@ Frame/reporting/protocol names should also use the same vocabulary:
 - `ProgramFrame::t_program`
 - UDP frame header field `t_program`
 - start/resume command field `program_start_us`
-- jump/debug-seek target field `t_program`
+- jump target field `t_program`
 
 These frame/reporting/protocol names are the intended contract for the follow-up
 implementation rename pass. The live tree may still contain legacy `t_rel` /
@@ -336,12 +336,12 @@ this unreachable, not on any new runtime check:
    all unsafe spans. Before publishing those intervals, it drops
    nonzero candidate safe intervals narrower than one target frame period
    (`1 / Program::target_fps`). The `t_program == 0` start sentinel is
-   preserved even though it may be represented as a zero-width safe point.
+   preserved separately from the nonzero interval list, so startup safety does
+   not weaken the width/headroom rules for jump targets.
 3. The controller refuses to send any command that **reconstructs engine
-   state at a nonzero `t_program`** (`JUMP`, debug seek, live rejoin /
-   re-LOAD at nonzero time, `START` at nonzero time) when the target time
-   is not inside a safe interval. `START` at `t_program == 0` is always
-   safe by construction.
+   state at a nonzero `t_program`** (`JUMP`, live rejoin / re-LOAD at
+   nonzero time, `START` at nonzero time) when the target time is not inside
+   a safe interval. `START` at `t_program == 0` is always safe by construction.
 4. The runtime trusts the controller. `Engine::reset()` clears buffers and
    `run_copy_ops_until()` advances the copy cursor monotonically — both
    are correct *given* that the time target is in a safe interval, because
@@ -363,16 +363,22 @@ Implications:
 
 - Programs with elaborate source chains have shorter safe intervals. That
   is the intended trade-off, not a bug.
-- The controller does not need its own safe-interval width check. The compiler
-  only publishes nonzero safe intervals wide enough for the program's declared
-  presentation cadence.
-- Live rejoin targets a future safe point. The controller sends `LOAD`, then
-  `JUMP(safe_point_t)`, then `RESUME(program_start_us)` if the session is
-  currently playing. The device remains dark until the clock reaches the
-  cursor, then renders in sync at the first eligible tick.
+- The controller does not need to validate safe-interval widths itself. The
+  compiler only publishes nonzero safe intervals wide enough for the program's
+  declared presentation cadence. The controller still must choose a target with
+  one target-frame period of headroom when it joins into the middle of a safe
+  interval.
+- Live rejoin targets a safe reconstruction point: the current live time if it
+  is inside a safe interval with at least one target-frame period remaining,
+  otherwise the start of the next future safe interval. The controller sends
+  `LOAD`, then `JUMP(safe_point_t)`, then `RESUME(program_start_us)` if the
+  session is currently playing. The device waits until the clock reaches the
+  cursor before rendering; that wait is effectively zero when the target is the
+  current live time.
 - Paused rejoin uses the same safe-point rule but skips `RESUME` until the
-  session actually resumes. If the paused position is unsafe, the controller
-  may jump to a later safe point; the device waits there.
+  session actually resumes. If the paused position is unsafe or lacks
+  target-frame headroom, the controller may jump to a later safe point; the
+  device waits there.
 - If there is no future safe interval in the current program segment, the
   controller cannot safely rejoin that device into the segment.
 - The runtime needs no new state, no warmup pass, no keyframes, and no

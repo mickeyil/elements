@@ -139,13 +139,17 @@ RenderFrameResult Playback::handle_jump(float t_program, uint16_t gen)
         return RenderFrameResult::Unchanged;
     }
 
-    DeviceState prev = _state;
-    _engine->reset();
-    _t_program_cursor_us = t_program_to_us(t_program);
-
-    if (prev != DeviceState::PLAYING) {
-        _state = DeviceState::PAUSED;
+    const int64_t target_us = t_program_to_us(t_program);
+    if (_state != DeviceState::LOADED && _state != DeviceState::PAUSED) {
+        return RenderFrameResult::Unchanged;
     }
+    if (target_us <= _t_program_cursor_us) {
+        return RenderFrameResult::Unchanged;
+    }
+
+    _engine->reset();
+    _t_program_cursor_us = target_us;
+    _state = DeviceState::PAUSED;
     return RenderFrameResult::Unchanged;
 }
 
