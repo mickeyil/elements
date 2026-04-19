@@ -81,8 +81,8 @@ enum class RenderFrameResult : uint8_t {
 
 class Playback {
 public:
-    explicit Playback(DeviceClock& clock);
-    Playback(uint16_t strip_length, DeviceClock& clock);
+    explicit Playback(SyncedClock& clock);
+    Playback(uint16_t strip_length, SyncedClock& clock);
 
     bool has_hardware_profile() const;
     const HardwareProfile& hardware_profile() const;
@@ -116,7 +116,7 @@ private:
     void reset_timing_state_();
     void clear_render_buffer_();
 
-    DeviceClock& _clock;
+    SyncedClock& _clock;
     // Strip owns exact-sized RGB storage allocated from HardwareProfile.
     Strip _strip;
     std::unique_ptr<Engine> _engine;
@@ -176,9 +176,9 @@ The canonical timing vocabulary is defined once in
 - animation-relative seconds are `t_animation`
 - absolute program start anchors are `program_start_us`
 - selected-clock absolute now is `program_clock_now_us()`
-- controller/local clock domains are exposed through `DeviceClock`
+- remote/local clock domains are exposed through `SyncedClock`
 - new implementation code should not introduce `t_rel`, `t0`,
-  `now_synced_us()`, or `now_unsynced_us()`
+  `now_synced_us()`, `now_unsynced_us()`, or `now_controller_us()`
 
 Frame/reporting/protocol names such as `DeviceFrame::t_program` and
 start/resume `program_start_us` are part of the intended follow-up
@@ -200,7 +200,7 @@ This is a property of the animation/program, not of the play command.
 Meaning:
 
 - `requires_sync == true`
-  - animation must run against controller-synchronized time
+  - animation must run against remote-synchronized time
 - `requires_sync == false`
   - animation runs against local monotonic time
 
@@ -211,7 +211,7 @@ The central helper is:
 ```cpp
 int64_t Playback::program_clock_now_us() const
 {
-    return _requires_sync ? _clock.now_controller_us()
+    return _requires_sync ? _clock.now_remote_us()
                           : _clock.now_local_us();
 }
 ```
@@ -239,7 +239,7 @@ That same rule applies to:
 
 - `handle_start()`
 - `handle_resume()`
-- `handle_jump()` when the loaded program requires controller sync
+- `handle_jump()` when the loaded program requires remote sync
 
 This removes the current undesired state where synced content starts before
 sync is ready and later falls back / adapts awkwardly.
@@ -248,15 +248,15 @@ sync is ready and later falls back / adapts awkwardly.
 
 The time domains must stay explicit:
 
-- `now_controller_us()`
-  - controller-domain time estimate derived from the accepted sync offset
+- `now_remote_us()`
+  - remote-domain time estimate derived from the accepted sync offset
 - `now_local_us()`
   - device-local monotonic time
 
 For synced playback:
 
 ```cpp
-float t_program = float(_clock.now_controller_us() - _program_start_us) / 1e6f;
+float t_program = float(_clock.now_remote_us() - _program_start_us) / 1e6f;
 ```
 
 For unsynced playback:
@@ -267,12 +267,12 @@ float t_program = float(_clock.now_local_us() - _program_start_us) / 1e6f;
 
 So:
 
-- synced `_program_start_us` is stored in controller time domain
+- synced `_program_start_us` is stored in remote time domain
 - unsynced `_program_start_us` is anchored from local monotonic time
 
 ### 5. Accepted program-time monotonicity
 
-`DeviceClock` is not responsible for making controller time monotonic after
+`SyncedClock` is not responsible for making remote time monotonic after
 every correction. The render invariant lives in `Playback`:
 
 - during one continuous playback segment, `Playback` must not feed a decreasing
@@ -330,28 +330,28 @@ Timing-state rules:
   - sets state to `ENDED`
   - reports `current_t_program() == duration()`
 
-## `DeviceClock`
+## `SyncedClock`
 
-`Playback` depends on one concrete `DeviceClock`.
+`Playback` depends on one concrete `SyncedClock`.
 
 Expected API:
 
 ```cpp
-class DeviceClock {
+class SyncedClock {
 public:
     bool is_synced() const;
-    int64_t now_controller_us() const;
+    int64_t now_remote_us() const;
     int64_t now_local_us() const;
 
-    void apply_sync_offset(int64_t local_minus_controller_us);
+    void apply_sync_offset(int64_t local_minus_remote_us);
     void clear_sync();
 };
 ```
 
 Notes:
 
-- `DeviceClock` is one concrete class, not a class hierarchy.
-- simulation and firmware should share the same `DeviceClock` behavior.
+- `SyncedClock` is one concrete class, not a class hierarchy.
+- simulation and firmware should share the same `SyncedClock` behavior.
 - only the platform raw monotonic source underneath differs in this draft:
   - firmware: `esp_timer_get_time()`
   - desktop sim: `steady_clock`
@@ -363,10 +363,10 @@ Notes:
 
 ### Intended behavior
 
-`DeviceClock` should:
+`SyncedClock` should:
 
 - expose `is_synced()`
-- publish a controller-domain time estimate
+- publish a remote-domain time estimate
 - publish raw local monotonic time
 - own accepted sync offset state
 - transition to unsynced when freshness, correction size, or error exceeds the
@@ -386,7 +386,7 @@ Today:
 Redesign direction:
 
 - `ControllerConnection` receives `CMD_SYNC_RESULT`
-- `ControllerConnection` feeds `DeviceClock` directly
+- `ControllerConnection` feeds `SyncedClock` directly
 - `Playback` no longer exposes `handle_sync_result()` / `clear_sync()`
 
 That is an explicit ownership change, not just an implementation detail.
@@ -520,7 +520,7 @@ the first redesign pass.
 
 Firmware owns:
 
-- `DeviceClock`
+- `SyncedClock`
 - `Playback`
 - `GammaCorrection`
 - output to LEDs
@@ -532,7 +532,7 @@ Firmware owns:
 
 Simulation owns:
 
-- raw monotonic source for `DeviceClock`
+- raw monotonic source for `SyncedClock`
 - `Playback`
 - frame queueing / aggregation
 - any simulator-side observability
@@ -594,7 +594,7 @@ compiler used for safe-interval filtering. Offline render also rejects
 
 `ManualClock` is therefore not a `Playback` constructor argument. Deterministic
 `Playback` tests should eventually use a manual raw-time seam behind concrete
-`DeviceClock`; offline render bypasses `Playback` and drives `Engine` directly.
+`SyncedClock`; offline render bypasses `Playback` and drives `Engine` directly.
 
 ## What Disappears
 
@@ -747,8 +747,8 @@ If the goal is to simplify aggressively while keeping the redesign grounded,
 the first pass should do this:
 
 1. Replace artifact timebase enum language with `requires_sync: bool`.
-2. Introduce concrete `DeviceClock`.
-3. Move sync correction ownership from `PlaybackDevice` to `DeviceClock`.
+2. Introduce concrete `SyncedClock`.
+3. Move sync correction ownership from `PlaybackDevice` to `SyncedClock`.
 4. Replace `PlaybackDevice` with concrete `Playback`.
 5. Move hardware output and telemetry to owners.
 6. Keep sim on the same playback rules as firmware.
@@ -762,7 +762,7 @@ Only a few decisions still look important at this level:
 
 ### 1. Sync threshold / hysteresis
 
-`DeviceClock::is_synced()` needs a configured notion of "good enough".
+`SyncedClock::is_synced()` needs a configured notion of "good enough".
 
 Example starting point:
 
@@ -772,21 +772,21 @@ This is tuning, not architecture, but it should be explicit.
 
 ### 2. Large/stale correction policy
 
-`DeviceClock::apply_sync_offset()` still needs concrete acceptance rules:
+`SyncedClock::apply_sync_offset()` still needs concrete acceptance rules:
 
 - maximum correction/error band for staying synced
 - freshness timeout for the latest accepted correction
 - whether a rejected correction immediately calls `clear_sync()` or reports a
   status for the owner to handle
 
-Small accepted corrections may step the controller-time estimate. Rendered
+Small accepted corrections may step the remote-time estimate. Rendered
 animation monotonicity is enforced by `Playback` through `_t_program_cursor_us`.
 
 ### 3. Loss-of-sync lifecycle policy
 
 Current lean:
 
-- `DeviceClock` reports loss of sync
+- `SyncedClock` reports loss of sync
 - higher-level playback/firmware policy fades out to black
 - no silent fallback to unsynced playback for synced content
 
@@ -794,7 +794,7 @@ Current lean:
 
 Decision:
 
-- keep production `DeviceClock` concrete
+- keep production `SyncedClock` concrete
 - do not add virtual/callback clock hooks to the production API
 - deterministic `Playback` tests need a manual raw-time seam, but this draft
   source does not implement it yet
@@ -809,7 +809,7 @@ freshness, and correction-policy tests to control time without sleeping.
 The most up-to-date intended abstraction is:
 
 - `Playback` is a concrete playback-and-rendering core
-- `DeviceClock` is a concrete time source abstraction
+- `SyncedClock` is a concrete time source abstraction
 - owners handle output, transport, telemetry, and simulator tooling
 - `strip_render` is a direct render-core tool
 - simulation follows firmware semantics

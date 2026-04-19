@@ -12,7 +12,7 @@
 #include "engine.h"
 #include "hardware_profile.h"
 #include "strip.h"
-#include "device_clock.h"
+#include "synced_clock.h"
 
 enum class DeviceState : uint8_t { IDLE, LOADED, PLAYING, PAUSED, ENDED };
 
@@ -31,8 +31,8 @@ enum class RenderFrameResult : uint8_t {
 
 class Playback {
 public:
-    explicit Playback(DeviceClock& clock);
-    Playback(uint16_t strip_length, DeviceClock& clock);
+    explicit Playback(SyncedClock& clock);
+    Playback(uint16_t strip_length, SyncedClock& clock);
     ~Playback();
 
     bool has_hardware_profile() const;
@@ -72,7 +72,7 @@ private:
     void clear_render_buffer_();
 
     // Shared concrete clock abstraction.
-    DeviceClock& _clock;
+    SyncedClock& _clock;
 
     // Owned canonical RGB frame buffer for the latest rendered frame.
     Strip _strip;

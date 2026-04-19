@@ -1,4 +1,4 @@
-#include "device_clock.h"
+#include "synced_clock.h"
 
 #ifdef ARDUINO
 #include <esp_timer.h>
@@ -6,17 +6,17 @@
 #include <chrono>
 #endif
 
-bool DeviceClock::is_synced() const
+bool SyncedClock::is_synced() const
 {
     return _is_synced;
 }
 
-int64_t DeviceClock::now_controller_us() const
+int64_t SyncedClock::now_remote_us() const
 {
     return now_local_us() - _offset_us;
 }
 
-int64_t DeviceClock::now_local_us() const
+int64_t SyncedClock::now_local_us() const
 {
 #ifdef ARDUINO
     return esp_timer_get_time();
@@ -28,13 +28,13 @@ int64_t DeviceClock::now_local_us() const
 #endif
 }
 
-void DeviceClock::apply_sync_offset(int64_t local_minus_controller_us)
+void SyncedClock::apply_sync_offset(int64_t local_minus_remote_us)
 {
-    _offset_us = local_minus_controller_us;
+    _offset_us = local_minus_remote_us;
     _is_synced = true;
 }
 
-void DeviceClock::clear_sync()
+void SyncedClock::clear_sync()
 {
     _offset_us = 0;
     _is_synced = false;

@@ -30,7 +30,7 @@ struct Program {
     // Must be > 0 in decoded blobs.
     uint8_t target_fps = 50;
 
-    // True when the artifact must run against controller-synchronized time.
+    // True when the artifact must run against remote-synchronized time.
     // Read once at handle_load() into Playback::_requires_sync.
     bool requires_sync = false;
 

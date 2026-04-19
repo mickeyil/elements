@@ -18,12 +18,12 @@ float t_program_from_us(int64_t t_program_us)
 
 }  // namespace
 
-Playback::Playback(DeviceClock& clock)
+Playback::Playback(SyncedClock& clock)
     : _clock(clock)
 {
 }
 
-Playback::Playback(uint16_t strip_length, DeviceClock& clock)
+Playback::Playback(uint16_t strip_length, SyncedClock& clock)
     : Playback(clock)
 {
     apply_hardware_profile(HardwareProfile(strip_length));
@@ -290,7 +290,7 @@ const Strip& Playback::strip() const
 
 int64_t Playback::program_clock_now_us() const
 {
-    return _requires_sync ? _clock.now_controller_us()
+    return _requires_sync ? _clock.now_remote_us()
                           : _clock.now_local_us();
 }
 

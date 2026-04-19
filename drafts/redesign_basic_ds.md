@@ -42,8 +42,8 @@ draft API lives in separate files under `drafts/`:
 - `compositor.cpp`
 - `engine.h`
 - `engine.cpp`
-- `device_clock.h`
-- `device_clock.cpp`
+- `synced_clock.h`
+- `synced_clock.cpp`
 - `playback.h`
 - `playback.cpp`
 - `program_structs.h`
@@ -133,7 +133,7 @@ Use this naming rule:
 - `<thing>_us` / `<thing>_ns` means an absolute timestamp or delta with explicit
   units
 - delta names must encode direction/sign at public API boundaries, for example
-  `local_minus_controller_us` instead of `offset_us`
+  `local_minus_remote_us` instead of `offset_us`
 - struct fields may use short contextual names only when the struct type pins
   both meaning and units
 - compiler fields may keep `_sec` because compiler code also handles beat-space
@@ -147,11 +147,11 @@ Final runtime vocabulary:
 | `t_animation` | float seconds relative to animation/event start |
 | `program_start_us` | absolute program start timestamp in selected clock domain |
 | `program_clock_now_us()` | absolute now in the selected program clock domain |
-| `now_controller_us()` | absolute controller-domain timestamp |
+| `now_remote_us()` | absolute remote-domain timestamp |
 | `now_local_us()` | absolute device-local monotonic timestamp |
-| `DeviceClock` | device-side clock abstraction |
-| `is_synced()` | status predicate for controller-domain validity |
-| `apply_sync_offset(local_minus_controller_us)` | applies signed sync offset at the API boundary |
+| `SyncedClock` | synced clock abstraction exposing remote/local domains |
+| `is_synced()` | status predicate for remote-domain validity |
+| `apply_sync_offset(local_minus_remote_us)` | applies signed sync offset at the API boundary |
 | `render_next_frame()` | accepts the next renderable frame from the selected clock/state |
 | `RenderFrameResult` | presentation-side result from a playback call that may update `_strip` |
 | `current_t_program()` | current program-time cursor |
@@ -888,8 +888,8 @@ The main areas affected by this redesign are:
 - `drafts/compositor.cpp`
 - `drafts/engine.h`
 - `drafts/engine.cpp`
-- `drafts/device_clock.h`
-- `drafts/device_clock.cpp`
+- `drafts/synced_clock.h`
+- `drafts/synced_clock.cpp`
 - `drafts/playback.h`
 - `drafts/playback.cpp`
 - `drafts/program_structs.h`

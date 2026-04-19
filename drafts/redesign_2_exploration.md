@@ -7,12 +7,15 @@
 
 > **Terminology note:** this file is historical context. The current intended
 > implementation vocabulary is defined in `redesign_basic_ds.md` and
-> `redesign_playback.md`: `DeviceClock`, `now_controller_us()`,
+> `redesign_playback.md`: `SyncedClock`, `now_remote_us()`,
 > `now_local_us()`, `program_start_us`, `render_next_frame()`, `t_program`,
-> and `t_animation`. Older names below such as `SyncedClock`, `t_rel`, and
-> `t0` should not guide implementation. Older statements that the synced clock
-> itself must never move backward are superseded by the current rule:
-> `Playback` owns monotonic accepted `t_program` for rendering.
+> and `t_animation`. Older names still appearing below such as `t_rel`,
+> `_t0`, and `playback_t0()` should not guide implementation; earlier
+> proposals of `now_synced_us()` / `now_unsynced_us()` and
+> `now_controller_us()` are likewise superseded by `now_remote_us()` /
+> `now_local_us()`. Older statements that the synced clock itself must
+> never move backward are superseded by the current rule: `Playback` owns
+> monotonic accepted `t_program` for rendering.
 
 ## Summary
 
@@ -38,14 +41,14 @@ The main simplification directions are:
 
 1. **Encode timing requirements in the animation blob** -- a `requires_sync`
    flag set at compile time, so the system knows whether an animation needs
-   controller clock sync before it tries to play it.
+   remote clock sync before it tries to play it.
 
 2. **Inject clock access into PlaybackDevice and replace ad-hoc sync fields
    with a `SyncedClock` abstraction** -- PlaybackDevice should depend on
    explicit clock reads, not own raw sync flags and offset math. Synced
-   programs read disciplined time from `SyncedClock::now_synced_us()`;
+   programs read remote-domain time from `SyncedClock::now_remote_us()`;
    unsynced programs read local monotonic time from
-   `SyncedClock::now_unsynced_us()`. The selection is centralized in one
+   `SyncedClock::now_local_us()`. The selection is centralized in one
    helper, driven by the loaded program's `requires_sync` flag.
 
 3. **Separate the rendering pipeline from the playback state machine** --
@@ -137,7 +140,7 @@ knowable at animation creation time, it could be encoded in the blob as a
 simple `requires_sync` flag:
 
 ```cpp
-bool requires_sync;  // true = needs controller sync, false = runs on local clock
+bool requires_sync;  // true = needs remote sync, false = runs on local clock
 ```
 
 This enables a single clear rule: synced programs do not enter playback until
@@ -164,10 +167,12 @@ artifacts: it is not a special-case rule, it is the invalid cell in the
 matrix. This is now the intended conceptual model going forward.
 
 **Current design commitment for this exploration:** once admitted, a
-controller-synced program runs against a disciplined monotonic synced clock
-that may absorb small corrections during playback. This document is no longer
-exploring the earlier "translate t0 once, then ignore sync until the next
-segment boundary" direction.
+remote-synced program runs against a `SyncedClock` whose remote-domain
+estimate may change when corrections are accepted. Rendered-animation
+monotonicity is enforced by `Playback`, not by the clock (see
+`redesign_playback.md`). The correction acceptance policy is still open. This
+document is no longer exploring the earlier "translate t0 once, then ignore
+sync until the next segment boundary" direction.
 
 **Additional scope constraint for this redesign pass:** `debug_seek` is out of
 scope. It is a simulator-only feature that has not yet justified its added
@@ -223,11 +228,13 @@ A separate injected clock source would:
 
 The intended runtime shape is simpler than a full clock taxonomy:
 
-- **SyncedClock**: a disciplined monotonic clock that exposes
-  `is_synced()`, `now_synced_us()`, and `now_unsynced_us()`. It owns
-  smoothing/jitter rejection, a small-correction policy, and transition back
-  to unsynced if the correction needed exceeds the allowed perceptual band.
-  Importantly, it must never publish time that goes backward.
+- **SyncedClock**: exposes `is_synced()`, `now_remote_us()`, and
+  `now_local_us()`. Acceptance, smoothing, large-correction policy, and the
+  transition back to unsynced are still open (see `redesign_playback.md`).
+  Under the current boundary, `SyncedClock` itself is *not* required to
+  publish monotonic remote time -- small accepted corrections may step the
+  estimate. `Playback` owns the monotonic accepted `t_program` invariant for
+  rendering.
 - **Manual raw clock source**: a separate testing/tooling source for
   deterministic `Playback` tests when time is externally driven via `set()`.
 
@@ -245,8 +252,8 @@ Instead, it uses one private helper such as:
 
 ```cpp
 int64_t now_us() const {
-    return _requires_sync ? _clock.now_synced_us()
-                          : _clock.now_unsynced_us();
+    return _requires_sync ? _clock.now_remote_us()
+                          : _clock.now_local_us();
 }
 ```
 
@@ -261,7 +268,7 @@ The intended flow is:
 2. `handle_start()` / `handle_resume()` / `handle_jump()` check `is_synced()`
    if and only if `requires_sync == true`.
 3. During playback, one helper uses `_requires_sync` to select
-   `now_synced_us()` or `now_unsynced_us()`.
+   `now_remote_us()` or `now_local_us()`.
 
 No additional runtime latch such as `_use_synced` is part of the current
 direction. The loaded program's `requires_sync` flag is intended to be
@@ -270,19 +277,19 @@ incorrect transitions.
 
 The time domains should also be explicit:
 
-- `now_synced_us()` publishes disciplined monotonic time in the controller's
-  time domain
-- `now_unsynced_us()` publishes device-local monotonic time
+- `now_remote_us()` publishes a remote-domain time estimate (may step when
+  a correction is accepted; see `redesign_playback.md`)
+- `now_local_us()` publishes device-local monotonic time
 
-For synced playback, `_t0` is stored in the controller's time domain and
+For synced playback, `_t0` is stored in the remote's time domain and
 `t_rel` is computed as:
 
 ```cpp
-float t_rel = float(_clock.now_synced_us() - _t0_us) / 1e6f;
+float t_rel = float(_clock.now_remote_us() - _t0_us) / 1e6f;
 ```
 
 For unsynced playback, `_t0` is anchored from local monotonic time and `t_rel`
-is computed against `now_unsynced_us()`.
+is computed against `now_local_us()`.
 
 The sync correction path should also move explicitly:
 
@@ -300,9 +307,12 @@ state-machine behavior, but the exact test seam is intentionally left out of
 this draft source sketch.
 
 **Important distinction:** this document no longer assumes a naive
-`now_synced_us = mono_now - latest_offset` clock. The useful abstraction is a
-monotonic synced clock that may briefly hold or jump ahead for small
-corrections, but must not jump backward.
+`now_remote_us = mono_now - latest_offset` clock. The useful abstraction is
+a `SyncedClock` that exposes a remote-domain estimate; correction acceptance
+policy is still open (see `redesign_playback.md`). Earlier claims in this doc
+that the clock itself must never publish time that goes backward are
+superseded: the monotonic invariant lives on `Playback`'s accepted `t_program`,
+not on `SyncedClock`.
 
 ### Finding 6: ControllerDevice is a thin parallel hierarchy
 
@@ -389,12 +399,11 @@ and otherwise stays agnostic about sync math.
 
 For synced programs:
 - playback does not start until `is_synced()` is true
-- `SyncedClock` publishes monotonic time
-- small corrections are absorbed by clock policy
-- large corrections transition the clock back to unsynced
+- `SyncedClock` publishes a remote-domain estimate; acceptance, smoothing,
+  and large-correction policy are open (see `redesign_playback.md`)
 
 For unsynced programs:
-- `PlaybackDevice` reads `now_unsynced_us()` from the same clock abstraction
+- `PlaybackDevice` reads `now_local_us()` from the same clock abstraction
 
 This keeps the playback core small while still allowing sync policy to evolve.
 It also fixes the ownership boundary: sync corrections are fed from
@@ -422,9 +431,9 @@ Engine directly.
 
 3. What is the exact `SyncedClock` API? Current lean:
    - `is_synced()`
-   - `now_synced_us()`
-   - `now_unsynced_us()`
-   - if `now_synced_us()` is called while unsynced, returning `0` is an
+   - `now_remote_us()`
+   - `now_local_us()`
+   - if `now_remote_us()` is called while unsynced, returning `0` is an
      acceptable first pass as long as simulation/tests/assertions make misuse
      obvious
    PlaybackDevice itself should centralize the choice in one helper using
@@ -432,21 +441,21 @@ Engine directly.
 
 4. Where does the sync estimator live?
    - controller computes candidate corrections, firmware `SyncedClock`
-     disciplines and publishes monotonic time
+     accepts and publishes a remote-domain estimate
    - or firmware owns more of the smoothing/history logic directly
    Current code computes filtered offsets in controller `clock_sync.py`.
    Current lean: keep the heavier estimation/filtering work on the controller
-   and let firmware `SyncedClock` stay small: `is_synced()`, monotonic publishing,
-   small-correction absorption, and synced/unsynced transitions.
+   and let firmware `SyncedClock` stay small: `is_synced()`, remote-domain
+   publishing, correction acceptance, and synced/unsynced transitions.
 
 5. What is the small-correction policy inside `SyncedClock`?
-   Options include:
-   - hold time briefly when the corrected target would go backward
-   - jump ahead for forward corrections
-   - later, possibly slew instead of step
-   Constraint: never publish time that goes backward while synced.
+   Options under discussion have included holding, jumping ahead, or slewing;
+   the rendered-animation side of this is now covered by `Playback` owning
+   monotonic accepted `t_program`, so the clock-level policy is open (see
+   `redesign_playback.md`). Earlier bullets in this doc asserting that
+   `SyncedClock` must never publish time that goes backward are superseded.
 
-6. What should happen when a controller-synced show loses sync badly enough
+6. What should happen when a remote-synced show loses sync badly enough
    to leave the allowed band? This is a playback / firmware lifecycle policy,
    not just a clock-internal detail. Current desired direction: `SyncedClock`
    reports loss of sync; higher-level playback policy fades out to black and
