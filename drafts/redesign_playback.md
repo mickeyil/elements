@@ -332,64 +332,28 @@ Timing-state rules:
 
 ## `SyncedClock`
 
-`Playback` depends on one concrete `SyncedClock`.
+`Playback` depends on one concrete `SyncedClock`. The class is defined in
+`drafts/synced_clock.h`; sync policy, wire format, and controller-side
+integration are covered in `drafts/synced_clock.md`.
 
-Expected API:
+Contract relevant to `Playback`:
 
-```cpp
-class SyncedClock {
-public:
-    bool is_synced() const;
-    int64_t now_remote_us() const;
-    int64_t now_local_us() const;
+- `is_synced()` — true iff the current sync lease is valid.
+- `now_remote_us()` — remote-domain estimate in microseconds. Not guaranteed
+  monotonic across sync updates.
+- `now_local_us()` — local monotonic time in microseconds.
+- Sync corrections are delivered as leases (`offset_us`, `valid_for_us`);
+  `SyncedClock::is_synced()` flips to false automatically when the lease
+  expires.
 
-    void apply_sync_offset(int64_t local_minus_remote_us);
-    void clear_sync();
-};
-```
+Correction ownership moves off `Playback`: the firmware controller-connection
+layer feeds `SyncedClock` directly, and `Playback` no longer exposes
+`handle_sync_result()` / `clear_sync()`.
 
-Notes:
-
-- `SyncedClock` is one concrete class, not a class hierarchy.
-- simulation and firmware should share the same `SyncedClock` behavior.
-- only the platform raw monotonic source underneath differs in this draft:
-  - firmware: `esp_timer_get_time()`
-  - desktop sim: `steady_clock`
-- deterministic `Playback` tests still need a manual raw-time seam, but that
-  seam is a test/tooling concern and is not implemented in this draft source
-  sketch.
-- manual time control is not a production runtime abstraction and is not passed
-  to `Playback`.
-
-### Intended behavior
-
-`SyncedClock` should:
-
-- expose `is_synced()`
-- publish a remote-domain time estimate
-- publish raw local monotonic time
-- own accepted sync offset state
-- transition to unsynced when freshness, correction size, or error exceeds the
-  allowed band
-
-It should not enforce the rendered-animation monotonicity invariant. That
-belongs to `Playback`, because only `Playback` knows when a start, resume, jump,
-stop, or restart intentionally re-anchors the program timeline.
-
-### Correction ownership
-
-Today:
-
-- `ControllerConnection` receives `CMD_SYNC_RESULT`
-- `ControllerConnection` calls `PlaybackDevice::handle_sync_result()`
-
-Redesign direction:
-
-- `ControllerConnection` receives `CMD_SYNC_RESULT`
-- `ControllerConnection` feeds `SyncedClock` directly
-- `Playback` no longer exposes `handle_sync_result()` / `clear_sync()`
-
-That is an explicit ownership change, not just an implementation detail.
+`SyncedClock` does not enforce the rendered-animation monotonicity invariant.
+That belongs to `Playback`, because only `Playback` knows when a start,
+resume, jump, stop, or restart intentionally re-anchors the program timeline.
+It is enforced through `_t_program_cursor_us`.
 
 ## What Moves Out Of The Core
 
@@ -758,37 +722,19 @@ the first pass should do this:
 
 ## Open Decisions
 
-Only a few decisions still look important at this level:
-
-### 1. Sync threshold / hysteresis
-
-`SyncedClock::is_synced()` needs a configured notion of "good enough".
-
-Example starting point:
-
-- threshold around `50ms`
-
-This is tuning, not architecture, but it should be explicit.
-
-### 2. Large/stale correction policy
-
-`SyncedClock::apply_sync_offset()` still needs concrete acceptance rules:
-
-- maximum correction/error band for staying synced
-- freshness timeout for the latest accepted correction
-- whether a rejected correction immediately calls `clear_sync()` or reports a
-  status for the owner to handle
-
-Small accepted corrections may step the remote-time estimate. Rendered
-animation monotonicity is enforced by `Playback` through `_t_program_cursor_us`.
-
-### 3. Loss-of-sync lifecycle policy
+### 1. Loss-of-sync lifecycle policy
 
 Current lean:
 
-- `SyncedClock` reports loss of sync
-- higher-level playback/firmware policy fades out to black
-- no silent fallback to unsynced playback for synced content
+- `SyncedClock::is_synced()` flips false automatically when the lease expires.
+- higher-level playback/firmware policy fades out to black.
+- no silent fallback to unsynced playback for synced content.
+- recovery policy when the lease returns mid-playback (e.g. controller-issued
+  `JUMP` to the nearest safe interval) is not yet pinned down; it lives with
+  controller/firmware policy, not with `SyncedClock`.
+
+Sync lease acceptance, freshness, and large-correction policy are controller
+concerns. See `drafts/synced_clock.md`.
 
 ## Settled Test/Tool Time Seam
 

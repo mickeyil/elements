@@ -8,7 +8,7 @@
 
 bool SyncedClock::is_synced() const
 {
-    return _is_synced;
+    return _has_offset && now_local_us() < _valid_until_local_us;
 }
 
 int64_t SyncedClock::now_remote_us() const
@@ -28,14 +28,16 @@ int64_t SyncedClock::now_local_us() const
 #endif
 }
 
-void SyncedClock::apply_sync_offset(int64_t local_minus_remote_us)
+void SyncedClock::apply_sync_offset(int64_t offset_us, int64_t valid_for_us)
 {
-    _offset_us = local_minus_remote_us;
-    _is_synced = true;
+    _offset_us = offset_us;
+    _valid_until_local_us = now_local_us() + valid_for_us;
+    _has_offset = true;
 }
 
 void SyncedClock::clear_sync()
 {
     _offset_us = 0;
-    _is_synced = false;
+    _valid_until_local_us = 0;
+    _has_offset = false;
 }

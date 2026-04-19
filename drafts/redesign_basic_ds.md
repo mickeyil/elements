@@ -51,11 +51,13 @@ draft API lives in separate files under `drafts/`:
 - `decoder.h`
 - `decoder.cpp`
 
-Two prose files complement the draft sources:
+Three prose files complement the draft sources:
 
 - `blob_format.md` — exact byte contract for blob format v3
 - `decoder.md` — decoder background, integration notes, and per-animation
   factory contract
+- `synced_clock.md` — sync policy, wire format, and controller-side
+  integration for `SyncedClock`
 
 ## Current Problems
 
@@ -132,8 +134,9 @@ Use this naming rule:
 - `t_<domain>` means float seconds relative to that domain
 - `<thing>_us` / `<thing>_ns` means an absolute timestamp or delta with explicit
   units
-- delta names must encode direction/sign at public API boundaries, for example
-  `local_minus_remote_us` instead of `offset_us`
+- delta names must encode direction/sign at public API boundaries unless the
+  sign convention is pinned nearby (e.g. in the function's own doc comment or
+  by the enclosing type)
 - struct fields may use short contextual names only when the struct type pins
   both meaning and units
 - compiler fields may keep `_sec` because compiler code also handles beat-space
@@ -151,7 +154,7 @@ Final runtime vocabulary:
 | `now_local_us()` | absolute device-local monotonic timestamp |
 | `SyncedClock` | synced clock abstraction exposing remote/local domains |
 | `is_synced()` | status predicate for remote-domain validity |
-| `apply_sync_offset(local_minus_remote_us)` | applies signed sync offset at the API boundary |
+| `apply_sync_offset(offset_us, valid_for_us)` | applies a sync-offset lease; `offset_us` = local minus remote |
 | `render_next_frame()` | accepts the next renderable frame from the selected clock/state |
 | `RenderFrameResult` | presentation-side result from a playback call that may update `_strip` |
 | `current_t_program()` | current program-time cursor |
@@ -890,6 +893,7 @@ The main areas affected by this redesign are:
 - `drafts/engine.cpp`
 - `drafts/synced_clock.h`
 - `drafts/synced_clock.cpp`
+- `drafts/synced_clock.md`
 - `drafts/playback.h`
 - `drafts/playback.cpp`
 - `drafts/program_structs.h`
