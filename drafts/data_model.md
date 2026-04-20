@@ -232,7 +232,7 @@ handles beat-space values — see `compiler.md`.
 ## Open Items
 
 - compiler policy on preserving by stable dst buffer vs. explicit copy op —
-  see `compiler.md#preservation-policy`
+  see `compiler.md`
 - future animation types that may want runtime state beyond pixel storage
 
 Blob bytes, parser shape, and decoder integration live in `blob_format.md`,
