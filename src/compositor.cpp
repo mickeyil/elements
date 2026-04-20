@@ -25,7 +25,7 @@ void Compositor::composite(LayerDef* layers, uint8_t count, uint32_t active_mask
                 _strip.set_rgb(phys, fg);
             } else {
                 rgb_t bg = _strip.get_rgb(phys);
-                _strip.set_rgb(phys, rgb_lerp(bg, fg, a));
+                _strip.set_rgb(phys, rgb_alpha_blend(bg, fg, a));
             }
         }
     }

@@ -15,6 +15,7 @@ add_library(elements_core STATIC
     src/engine.cpp
     src/compositor.cpp
     src/colors.cpp
+    src/gamma.cpp
     src/playback_device.cpp
     src/esp_simulated.cpp
     src/sim_controller.cpp
@@ -68,8 +69,16 @@ if(BUILD_TESTS)
     add_executable(test_engine test/test_engine.cpp)
     target_link_libraries(test_engine elements_core Catch2::Catch2WithMain)
 
-    add_executable(test_colors test/test_colors.cpp)
-    target_link_libraries(test_colors elements_core Catch2::Catch2WithMain)
+    # test_colors and test_gamma are standalone during the v3 migration:
+    # elements_core compilation is broken until compositor is rewired in step
+    # 13, so these targets link only their own module sources.
+    add_executable(test_colors test/test_colors.cpp src/colors.cpp)
+    target_include_directories(test_colors PRIVATE src)
+    target_link_libraries(test_colors Catch2::Catch2WithMain)
+
+    add_executable(test_gamma test/test_gamma.cpp src/gamma.cpp)
+    target_include_directories(test_gamma PRIVATE src)
+    target_link_libraries(test_gamma Catch2::Catch2WithMain)
 
     add_executable(test_compositor test/test_compositor.cpp)
     target_link_libraries(test_compositor elements_core Catch2::Catch2WithMain)
@@ -136,6 +145,8 @@ if(BUILD_TESTS)
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_colors COMMAND test_colors
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    add_test(NAME test_gamma COMMAND test_gamma
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_compositor COMMAND test_compositor
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_animations COMMAND test_animations
@@ -177,6 +188,15 @@ if(BUILD_TESTS)
                     --error-exitcode=1 $<TARGET_FILE:test_colors>
         )
         set_tests_properties(test_colors_memcheck PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        )
+        add_test(
+            NAME test_gamma_memcheck
+            COMMAND ${VALGRIND} --leak-check=full
+                    --errors-for-leak-kinds=definite,indirect,possible
+                    --error-exitcode=1 $<TARGET_FILE:test_gamma>
+        )
+        set_tests_properties(test_gamma_memcheck PROPERTIES
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         )
         add_test(

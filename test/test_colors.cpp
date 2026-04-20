@@ -76,81 +76,49 @@ TEST_CASE("hsv_to_rgb: grayscale at various V", "[colors]") {
 }
 
 // ---------------------------------------------------------------------------
-// gamma_correct
+// rgb_alpha_blend
 // ---------------------------------------------------------------------------
 
-TEST_CASE("gamma_correct: 0 maps to 0", "[colors][gamma]") {
-    rgb_t c = gamma_correct(rgb_t(0, 0, 0));
-    CHECK(c.r == 0);
-    CHECK(c.g == 0);
-    CHECK(c.b == 0);
-}
-
-TEST_CASE("gamma_correct: 255 maps to 255", "[colors][gamma]") {
-    rgb_t c = gamma_correct(rgb_t(255, 255, 255));
-    CHECK(c.r == 255);
-    CHECK(c.g == 255);
-    CHECK(c.b == 255);
-}
-
-TEST_CASE("gamma_correct: midpoint is darker", "[colors][gamma]") {
-    rgb_t c = gamma_correct(rgb_t(128, 128, 128));
-    CHECK(c.r < 128);
-    CHECK(c.r > 0);
-}
-
-TEST_CASE("gamma_correct: monotonically increasing", "[colors][gamma]") {
-    for (int n = 1; n < 256; n++) {
-        rgb_t a = gamma_correct(rgb_t(n - 1, 0, 0));
-        rgb_t b = gamma_correct(rgb_t(n, 0, 0));
-        CHECK(b.r >= a.r);
-    }
-}
-
-// ---------------------------------------------------------------------------
-// rgb_lerp
-// ---------------------------------------------------------------------------
-
-TEST_CASE("rgb_lerp: t=0 returns a", "[colors][lerp]") {
+TEST_CASE("rgb_alpha_blend: t=0 returns a", "[colors][alpha_blend]") {
     rgb_t a(100, 150, 200);
     rgb_t b(200, 50, 10);
-    rgb_t c = rgb_lerp(a, b, 0.0f);
+    rgb_t c = rgb_alpha_blend(a, b, 0.0f);
     CHECK(c.r == a.r);
     CHECK(c.g == a.g);
     CHECK(c.b == a.b);
 }
 
-TEST_CASE("rgb_lerp: t=1 returns b", "[colors][lerp]") {
+TEST_CASE("rgb_alpha_blend: t=1 returns b", "[colors][alpha_blend]") {
     rgb_t a(100, 150, 200);
     rgb_t b(200, 50, 10);
-    rgb_t c = rgb_lerp(a, b, 1.0f);
+    rgb_t c = rgb_alpha_blend(a, b, 1.0f);
     CHECK(c.r == b.r);
     CHECK(c.g == b.g);
     CHECK(c.b == b.b);
 }
 
-TEST_CASE("rgb_lerp: t=0.5 midpoint", "[colors][lerp]") {
+TEST_CASE("rgb_alpha_blend: t=0.5 midpoint", "[colors][alpha_blend]") {
     rgb_t a(0, 0, 0);
     rgb_t b(200, 100, 50);
-    rgb_t c = rgb_lerp(a, b, 0.5f);
+    rgb_t c = rgb_alpha_blend(a, b, 0.5f);
     CHECK(c.r == 100);
     CHECK(c.g == 50);
     CHECK(c.b == 25);
 }
 
-TEST_CASE("rgb_lerp: t<0 clamps to a", "[colors][lerp]") {
+TEST_CASE("rgb_alpha_blend: t<0 clamps to a", "[colors][alpha_blend]") {
     rgb_t a(100, 150, 200);
     rgb_t b(200, 50, 10);
-    rgb_t c = rgb_lerp(a, b, -1.0f);
+    rgb_t c = rgb_alpha_blend(a, b, -1.0f);
     CHECK(c.r == a.r);
     CHECK(c.g == a.g);
     CHECK(c.b == a.b);
 }
 
-TEST_CASE("rgb_lerp: t>1 clamps to b", "[colors][lerp]") {
+TEST_CASE("rgb_alpha_blend: t>1 clamps to b", "[colors][alpha_blend]") {
     rgb_t a(100, 150, 200);
     rgb_t b(200, 50, 10);
-    rgb_t c = rgb_lerp(a, b, 2.0f);
+    rgb_t c = rgb_alpha_blend(a, b, 2.0f);
     CHECK(c.r == b.r);
     CHECK(c.g == b.g);
     CHECK(c.b == b.b);

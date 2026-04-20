@@ -84,7 +84,7 @@ TEST_CASE("Compositor: single layer A=0.5 blends with black", "[compositor]") {
     comp.composite(&layer.def, 1, 0x01);
 
     rgb_t red = hsv_to_rgb(0.0f, 1.0f, 1.0f);
-    rgb_t expected = rgb_lerp(rgb_t(0, 0, 0), red, 0.5f);
+    rgb_t expected = rgb_alpha_blend(rgb_t(0, 0, 0), red, 0.5f);
     for (uint8_t i = 0; i < STRIP_LEN; i++) {
         rgb_t c = ts.strip.get_rgb(i);
         CHECK(c.r == expected.r);
@@ -134,7 +134,7 @@ TEST_CASE("Compositor: bottom A=1.0, top A=0.5 blends", "[compositor]") {
 
     rgb_t red = hsv_to_rgb(0.0f, 1.0f, 1.0f);
     rgb_t blue = hsv_to_rgb(240.0f, 1.0f, 1.0f);
-    rgb_t expected = rgb_lerp(red, blue, 0.5f);
+    rgb_t expected = rgb_alpha_blend(red, blue, 0.5f);
     for (uint8_t i = 0; i < STRIP_LEN; i++) {
         rgb_t c = ts.strip.get_rgb(i);
         CHECK(c.r == expected.r);

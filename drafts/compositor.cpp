@@ -28,7 +28,7 @@ void Compositor::composite(Strip& out, PixelView* const* active_dst_views, uint8
             if (px.a >= 1.0f) {
                 out[phys] = fg;
             } else {
-                out[phys] = rgb_lerp(out[phys], fg, px.a);
+                out[phys] = rgb_alpha_blend(out[phys], fg, px.a);
             }
         }
     }

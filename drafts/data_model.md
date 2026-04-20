@@ -150,8 +150,8 @@ Gamma and channel order sit outside `Engine` and `Compositor`:
 `GammaCorrection` is a caller-owned LUT. Default-constructed is identity, so
 sim/tests/debug output share the render path without a separate flag.
 `set_gamma()` accepts `1.0` (identity) and `(1.0, kMaxSupportedGamma]`;
-invalid values leave the previous LUT in place. WS2812 dark-room starting
-point is `kWs2812DarkRoomGamma = 2.8`.
+invalid values leave the previous LUT in place. `kDefaultGamma = 2.8`
+is the recommended value for WS2812 LEDs in dark rooms.
 
 `ColorOrder` is limited to `RGB` and `BGR` until a real strip requires
 more.
@@ -173,8 +173,7 @@ Build-mode split inside `PixelBufferPool`:
 
 Public pool API is identical in both modes. Slices are taken only on
 `hsva_t` boundaries, so no extra alignment logic is needed; layout
-assumptions are asserted in `drafts/colors.h` and will land in
-`src/colors.h` with the rename pass.
+assumptions are asserted in `src/colors.h`.
 
 ## Time Naming Policy
 
