@@ -24,11 +24,11 @@ struct HardwareProfile {
     HardwareProfile()
         : strip_length(0),
           color_order(ColorOrder::RGB),
-          gamma(kIdentityGamma) {}
+          gamma(IDENTITY_GAMMA) {}
 
     explicit HardwareProfile(uint16_t length,
                              ColorOrder order = ColorOrder::RGB,
-                             float output_gamma = kIdentityGamma)
+                             float output_gamma = IDENTITY_GAMMA)
         : strip_length(length),
           color_order(order),
           gamma(output_gamma) {}

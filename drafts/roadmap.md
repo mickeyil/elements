@@ -8,10 +8,9 @@ the next step starts. Design contracts live in `data_model.md`,
 
 ## Settled Policies
 
-- **Colors cutover.** `hsv_to_rgb` and `rgb_alpha_blend` stay (still used by
-  the v3 compositor). `gamma_correct` is deleted in step 1; its callers
-  in old code break until step 13 rewires through the new gamma path.
-  No shim layer. No legacy compatibility window.
+- **Colors cutover.** `gamma_correct` is gone; old callers intentionally
+  break until step 13 rewires through the new gamma path. No shim layer.
+  No legacy compatibility window.
 - **SyncedClock test seam.** A small `platform_clock::now_us()` module
   selects `esp_timer_get_time()` on ARDUINO and `steady_clock` on host;
   tests link a controllable implementation. SyncedClock itself stays
@@ -37,19 +36,18 @@ Each step is: implement the module, write its unit tests, land it in
 `src/`. Tests run both on host and (where relevant) on the ARDUINO
 target.
 
-### 1. `colors.h` / `colors.cpp`
+### 1. `colors.h` / `colors.cpp` — DONE
 
-Keep `hsva_t`, `rgb_t`, `hsv_to_rgb`, `rgb_alpha_blend`. Delete
-`gamma_correct`. Add the layout static asserts from `drafts/colors.h`.
+Landed in `src/colors.{h,cpp}`. `hsva_t`, `rgb_t`, `hsv_to_rgb`, and
+`rgb_alpha_blend` stay; `gamma_correct` is deleted; `hsva_t` layout is
+asserted in `src/colors.h`.
 
-### 2. `gamma.{h,cpp}`
+### 2. `gamma.{h,cpp}` — DONE
 
-New module. Owns `GammaCorrection` (LUT) and
-`apply_gamma(Strip&, const GammaCorrection&)`. Identity default.
-Tests: identity passthrough, 2.8 darkens midpoint while preserving 0
-and 255, invalid gamma leaves the previous LUT in place,
-`gamma()` reports the last accepted value, range `(1.0,
-kMaxSupportedGamma]` plus identity 1.0.
+Landed in `src/gamma.{h,cpp}` as `GammaCorrection` with
+`IDENTITY_GAMMA`, `MAX_SUPPORTED_GAMMA`, and `DEFAULT_GAMMA`.
+`apply_gamma(Strip&, const GammaCorrection&)` is deferred to step 13
+with the v3 `Strip`.
 
 ### 3. `platform_clock.{h,cpp}` (new)
 
@@ -67,7 +65,7 @@ preserves the last mapping; `clear_sync()` drops sync.
 
 ### 5. `hardware_profile.h`
 
-Depends on `gamma.h` for `kIdentityGamma`. Tests: default-constructed
+Depends on `gamma.h` for `IDENTITY_GAMMA`. Tests: default-constructed
 is invalid (`strip_length == 0`); `[1, kMaxStripPixels]` valid;
 `kMaxStripPixels + 1` rejected; equality covers length + color order +
 gamma.
@@ -115,7 +113,7 @@ the blob as already sorted), and access by index.
 ### 13. `strip.{h,cpp}`
 
 Canonical linear-RGB buffer. Tests: construction at a given length,
-clear, `apply_gamma` via the step-2 module, `copy_to` with `RGB` and
+clear, `apply_gamma` with `GammaCorrection`, `copy_to` with `RGB` and
 `BGR` ordering, zero-pad semantics when destination is longer than
 strip. This is the step that removes the last `gamma_correct` caller.
 

@@ -149,8 +149,8 @@ Gamma and channel order sit outside `Engine` and `Compositor`:
 
 `GammaCorrection` is a caller-owned LUT. Default-constructed is identity, so
 sim/tests/debug output share the render path without a separate flag.
-`set_gamma()` accepts `1.0` (identity) and `(1.0, kMaxSupportedGamma]`;
-invalid values leave the previous LUT in place. `kDefaultGamma = 2.8`
+`set_gamma()` accepts `1.0` (identity) and `(1.0, MAX_SUPPORTED_GAMMA]`;
+invalid values leave the previous LUT in place. `DEFAULT_GAMMA = 2.8`
 is the recommended value for WS2812 LEDs in dark rooms.
 
 `ColorOrder` is limited to `RGB` and `BGR` until a real strip requires
@@ -244,8 +244,6 @@ Blob bytes, parser shape, and decoder integration live in `blob_format.md`,
   `anim_shift.h`
 - `src/engine.{h,cpp}`
 - `src/compositor.{h,cpp}`
-- `src/colors.{h,cpp}`
-- new `src/gamma.{h,cpp}`
 - `compiler/elements/compiler.py` — includes `_compute_required_starts`
   update to walk copy-op chains (see `compiler.md`)
 - `compiler/elements/blob.py` — replaced by the v3 emitter matching
