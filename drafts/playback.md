@@ -23,9 +23,9 @@ Key properties:
 - one concrete `SyncedClock&` injected at construction
 - `Engine` owns `Compositor` internally; `Playback` does not touch render
   internals
-- timing vocabulary: see `redesign_basic_ds.md#time-naming-policy`
+- timing vocabulary: see `data_model.md#time-naming-policy`
 - strip length and integer widths (1000-LED cap, `uint16_t`): see
-  `redesign_basic_ds.md` / `hardware_profile.h`
+  `hardware_profile.h`
 
 ## Core Rules
 

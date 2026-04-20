@@ -1,5 +1,16 @@
 # Redesign: Core Animation Data Structures
 
+> **Superseded.** This document has been split into smaller, tighter pieces.
+> Read those instead of this file:
+>
+> - `../data_model.md` — runtime data structures and time-naming vocabulary
+> - `../compiler.md` — compiler safety contract, view-provenance, preservation
+> - `../decoder.md` — decoder responsibilities and integration
+> - `../blob_format.md` — v3 byte contract
+>
+> This file lives under `deprecated/` and is kept only for diffability
+> against the new split.
+
 ## Goal
 
 Simplify the runtime's core data structures while preserving the current

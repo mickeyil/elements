@@ -58,6 +58,10 @@ The decoder does **not** own:
   and only rejects the cheapest-to-detect violation: two same-`at` copy
   ops writing the same `dst_pixv_idx` (ambiguous aliasing). Cycle
   detection and full topological validation are compiler-side.
+- source-dependency validation. v3 events carry view indices, not
+  source-event identity, so the decoder cannot verify that a source
+  dependency resolves only to a writer whose end is `<=` the dependent's
+  start. That semantic check is compiler-only; see `compiler.md`.
 
 ## Single-pass shape
 

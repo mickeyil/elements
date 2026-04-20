@@ -6,8 +6,8 @@
 > playback subsystem redesign; skip if you're working on unrelated areas.
 
 > **Terminology note:** this file is historical context. The current intended
-> implementation vocabulary is defined in `redesign_basic_ds.md` and
-> `redesign_playback.md`: `SyncedClock`, `now_remote_us()`,
+> implementation vocabulary is defined in `data_model.md` and
+> `playback.md`: `SyncedClock`, `now_remote_us()`,
 > `now_local_us()`, `program_start_us`, `render_next_frame()`, `t_program`,
 > and `t_animation`. Older names still appearing below such as `t_rel`,
 > `_t0`, and `playback_t0()` should not guide implementation; earlier
@@ -16,6 +16,9 @@
 > `now_local_us()`. Older statements that the synced clock itself must
 > never move backward are superseded by the current rule: `Playback` owns
 > monotonic accepted `t_program` for rendering.
+>
+> References below to `redesign_playback.md` are superseded by `playback.md`
+> and `synced_clock.md`; that file now lives under `deprecated/`.
 
 ## Summary
 
