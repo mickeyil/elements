@@ -17,7 +17,6 @@ add_library(elements_core STATIC
     src/colors.cpp
     src/gamma.cpp
     src/platform_clock_steady.cpp
-    src/synced_clock.cpp
     src/playback_device.cpp
     src/esp_simulated.cpp
     src/sim_controller.cpp
@@ -88,7 +87,6 @@ if(BUILD_TESTS)
     add_executable(test_synced_clock
         test/test_synced_clock.cpp
         test/platform_clock_test.cpp
-        src/synced_clock.cpp
     )
     target_include_directories(test_synced_clock PRIVATE src test)
     target_link_libraries(test_synced_clock Catch2::Catch2WithMain)

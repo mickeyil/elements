@@ -27,22 +27,31 @@
 // ESP timer, or the test fake. Deterministic tests substitute the platform
 // raw-time source, not SyncedClock itself.
 
+#include <cassert>
 #include <cstdint>
+
+#include "platform_clock.h"
 
 class SyncedClock {
 public:
     // True iff an offset has been applied and its lease has not yet expired.
-    bool is_synced() const;
+    bool is_synced() const {
+        return _has_offset && platform_clock::now_us() < _valid_until_local_us;
+    }
 
     // Current remote-clock estimate in microseconds, computed as
     // `now_local_us() - _offset_us`. Returns a value even after the lease
     // has expired; callers that require a fresh estimate gate on is_synced()
     // first. After clear_sync(), returns now_local_us() (the offset is
     // wiped).
-    int64_t now_remote_us() const;
+    int64_t now_remote_us() const {
+        return platform_clock::now_us() - _offset_us;
+    }
 
     // Current local monotonic clock in microseconds.
-    int64_t now_local_us() const;
+    int64_t now_local_us() const {
+        return platform_clock::now_us();
+    }
 
     // Apply a new sync offset with a validity window.
     //
@@ -53,10 +62,19 @@ public:
     //                a subsequent is_synced() returns false. Must be >= 0:
     //                negative values are not produced by the wire protocol
     //                (u32 ms) and are not part of the contract.
-    void apply_sync_offset(int64_t offset_us, int64_t valid_for_us);
+    void apply_sync_offset(int64_t offset_us, int64_t valid_for_us) {
+        assert(valid_for_us >= 0);
+        _offset_us = offset_us;
+        _valid_until_local_us = platform_clock::now_us() + valid_for_us;
+        _has_offset = true;
+    }
 
     // Drop the current offset and mark the clock unsynced.
-    void clear_sync();
+    void clear_sync() {
+        _offset_us = 0;
+        _valid_until_local_us = 0;
+        _has_offset = false;
+    }
 
 private:
     // Last applied offset. Held across lease expiry so now_remote_us()
