@@ -16,7 +16,7 @@ add_library(elements_core STATIC
     src/compositor.cpp
     src/colors.cpp
     src/gamma.cpp
-    src/platform_clock_steady.cpp
+    src/platform_clock_host.cpp
     src/playback_device.cpp
     src/esp_simulated.cpp
     src/sim_controller.cpp

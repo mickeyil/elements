@@ -51,7 +51,7 @@ with the v3 `Strip`.
 
 ### 3. `platform_clock.{h,cpp}` — DONE
 
-Landed as `src/platform_clock.h` + `src/platform_clock_steady.cpp`
+Landed as `src/platform_clock.h` + `src/platform_clock_host.cpp`
 (host) + `src/platform_clock_esp.cpp` (ARDUINO). Single-function seam:
 `int64_t platform_clock::now_us()`. The fake lives at
 `test/platform_clock_test.{h,cpp}` and exposes `set_test_now_us` /
