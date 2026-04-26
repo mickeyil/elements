@@ -146,7 +146,8 @@ storage for the lifetime of each event.
 Gamma and channel order sit outside `Engine` and `Compositor`:
 
 - `apply_gamma(Strip&, const GammaCorrection&)` — in-place on the Strip
-- `Strip::copy_to(dst, ColorOrder)` — last-mile copy for hardware sinks
+- `Strip::copy_to(dst, dst_pixels, ColorOrder)` — last-mile copy for hardware
+  sinks; zero-pads when `dst_pixels` exceeds `Strip::size()`
 
 `GammaCorrection` is a caller-owned LUT. Default-constructed is identity, so
 sim/tests/debug output share the render path without a separate flag.

@@ -170,12 +170,22 @@ and access, caller-frees-input semantics, input table order
 preserved, same-`at` ops keep their input order, reset returns to
 empty, re-initialize replaces. Passes under valgrind memcheck.
 
-### 12. `strip.{h,cpp}`
+### 12. `strip.{h,cpp}` — DONE
 
-Canonical linear-RGB buffer. Tests: construction at a given length,
-clear, `apply_gamma` with `GammaCorrection`, `copy_to` with `RGB` and
-`BGR` ordering, zero-pad semantics when destination is longer than
-strip. This is the step that removes the last `gamma_correct` caller.
+Landed in `src/strip.{h,cpp}` and added to `elements_core` for build
+coverage. Hot-path methods (`operator[]`, `size`, `empty`, `byte_size`,
+`pixels`, `bytes`) inline in the header; `resize`, `reset`, `clear`,
+`copy_to`, dtor, and free `apply_gamma` stay out of line. `copy_to` gained
+a `dst_pixels` argument so a max-sized hardware buffer ends up with a
+zeroed tail when the strip is shorter (the manual pattern in
+`src/firmware/esp_device.cpp`). Standalone test target `test_strip` links
+`src/strip.cpp` + `src/gamma.cpp`. Coverage: default-empty,
+`resize`/`reset`/re-resize zeroing, write-through via `operator[]`,
+`bytes` aliases `pixels`, `clear` (including empty no-op), `apply_gamma`
+identity vs `set_gamma(2.0f)` vs empty, `copy_to` RGB/BGR, truncation,
+zero-pad, empty-strip zero-fill, `dst_pixels==0` no-op, null `dst` no-op.
+`gamma_correct` is gone from new code; legacy `compositor.cpp` still
+references it but is not part of the new build path.
 
 ### 13. `animation.h` + `layer.{h,cpp}`
 

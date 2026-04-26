@@ -18,7 +18,6 @@ bool Strip::resize(uint16_t size)
 
     _pixels = new (std::nothrow) rgb_t[size]();
     if (_pixels == nullptr) {
-        _size = 0;
         return false;
     }
 
@@ -33,66 +32,23 @@ void Strip::reset()
     _size = 0;
 }
 
-rgb_t& Strip::operator[](uint16_t idx)
-{
-    return _pixels[idx];
-}
-
-const rgb_t& Strip::operator[](uint16_t idx) const
-{
-    return _pixels[idx];
-}
-
-uint16_t Strip::size() const
-{
-    return _size;
-}
-
-bool Strip::empty() const
-{
-    return _size == 0;
-}
-
-size_t Strip::byte_size() const
-{
-    return static_cast<size_t>(_size) * sizeof(rgb_t);
-}
-
 void Strip::clear()
 {
-    if (_pixels == nullptr || _size == 0) {
+    if (_pixels == nullptr) {
         return;
     }
     std::memset(_pixels, 0, byte_size());
 }
 
-rgb_t* Strip::pixels()
+void Strip::copy_to(uint8_t* dst, uint16_t dst_pixels, ColorOrder order) const
 {
-    return _pixels;
-}
-
-const rgb_t* Strip::pixels() const
-{
-    return _pixels;
-}
-
-uint8_t* Strip::bytes()
-{
-    return reinterpret_cast<uint8_t*>(_pixels);
-}
-
-const uint8_t* Strip::bytes() const
-{
-    return reinterpret_cast<const uint8_t*>(_pixels);
-}
-
-void Strip::copy_to(uint8_t* dst, ColorOrder order) const
-{
-    if (dst == nullptr || _pixels == nullptr) {
+    if (dst == nullptr) {
         return;
     }
 
-    for (uint16_t i = 0; i < _size; i++) {
+    const uint16_t copy_count = _size < dst_pixels ? _size : dst_pixels;
+
+    for (uint16_t i = 0; i < copy_count; i++) {
         const rgb_t& src = _pixels[i];
 
         if (order == ColorOrder::BGR) {
@@ -104,6 +60,10 @@ void Strip::copy_to(uint8_t* dst, ColorOrder order) const
             dst[i * 3 + 1] = src.g;
             dst[i * 3 + 2] = src.b;
         }
+    }
+
+    if (dst_pixels > copy_count) {
+        std::memset(dst + copy_count * 3, 0, (dst_pixels - copy_count) * 3);
     }
 }
 
