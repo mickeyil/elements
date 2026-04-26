@@ -4,10 +4,20 @@
 
 #include "gamma.h"
 
-// Shared playback/device profile facts. Keep this header neutral so both the
-// desktop/sim runtime and firmware runtime can depend on it.
+// Describes the physical LED strip a runtime is driving: how many pixels
+// it has, the channel order it uses, and the output gamma to apply before
+// emitting pixel values.
+//
+// Constructed once at startup (or on profile change) from device
+// configuration and passed to the renderer / output path. Default-
+// constructed instances are intentionally invalid (strip_length == 0);
+// is_valid() distinguishes "configured" from "uninitialized".
+
+// Upper bound on supported strip lengths. Profiles outside
+// [1, MAX_STRIP_PIXELS] fail is_valid().
 static constexpr uint16_t MAX_STRIP_PIXELS = 1000;
 
+// Order of color channels written to the output.
 enum class ColorOrder : uint8_t {
     RGB = 0,
     BGR = 1,
@@ -26,8 +36,13 @@ struct HardwareProfile {
           color_order(order),
           gamma(output_gamma) {}
 
+    // Number of pixels on the strip. Zero indicates an uninitialized profile.
     uint16_t strip_length;
+
     ColorOrder color_order;
+
+    // Gamma applied before output. IDENTITY_GAMMA (1.0) means no correction;
+    // see gamma.h for the supported range.
     float gamma;
 
     bool is_valid() const
