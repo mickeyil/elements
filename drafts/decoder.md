@@ -33,8 +33,8 @@ The decoder is the only translation unit that includes every `anim_*.h`.
 Each animation header is otherwise self-contained.
 
 `drafts/blob_limits.h` and `drafts/animation_types.h` are tiny one-screen
-headers. `blob_limits.h` reuses `kMaxStripPixels` from
-`drafts/hardware_profile.h` and defines the rest of the caps from
+headers. `blob_limits.h` reuses `MAX_STRIP_PIXELS` from
+`src/hardware_profile.h` and defines the rest of the caps from
 `blob_format.md`. `animation_types.h` is just the `AnimType` enum.
 
 ## Decoder responsibilities
@@ -70,7 +70,7 @@ The decoder does **not** own:
 1. Validate magic and version. **Reject before any allocation.**
 2. Parse the rest of the header into a stack-local struct.
 3. Validate header: reserved flag bits, `target_fps` non-zero, count caps,
-   `strip_length` non-zero and within `kMaxStripPixels`, `duration` finite
+   `strip_length` non-zero and within `MAX_STRIP_PIXELS`, `duration` finite
    and > 0.
 4. Validate `strip_length` against the profile (`StripLengthMismatch`).
 5. Allocate `Program`. The struct is small; allocating it first means every

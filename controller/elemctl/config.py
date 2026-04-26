@@ -20,8 +20,8 @@ DEFAULT_CONFIG_PATH = str(INSTANCE_DIR / 'config.json')
 DEFAULT_SOCKET_PATH = '/tmp/elemctl.sock'
 DEFAULT_FRAME_PORT = 9002
 DEFAULT_DISCOVERY_PORT = 6040
-# Must match kMaxStripPixels in src/hardware_profile.h
-MAX_DEVICE_PIXELS = 250
+# Must match MAX_STRIP_PIXELS in src/hardware_profile.h
+MAX_DEVICE_PIXELS = 1000
 DEFAULT_ANIMATIONS_PATH = str(REPO_ROOT / 'animations')
 DEFAULT_LOGS_PATH = str(REPO_ROOT / 'logs')
 

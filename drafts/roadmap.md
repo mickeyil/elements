@@ -34,6 +34,18 @@ the next step starts. Design contracts live in `data_model.md`,
   `TODO`; `playback.md` says "may move to the owner." Decide before
   step 21. Not a blocker for earlier steps.
 
+## Migration Process
+
+Each module step starts by promoting the draft source into `src/` with
+`git mv` where a draft file exists. Then fill in the implementation, add
+or update tests, and wire only the new component into the build. Do not
+update legacy/dead components just to keep them compiling unless the step
+explicitly depends on them.
+
+At the end of the step, update the relevant `drafts/*.md` docs and this
+roadmap to say the module is implemented. Promoted draft source files should
+not remain as duplicate source-of-truth files under `drafts/`.
+
 ## Order
 
 Each step is: implement the module, write its unit tests, land it in
@@ -77,16 +89,17 @@ mapping persists across lease expiry; `clear_sync` wipes the offset
 (post-clear `remote == local`); idempotent `clear_sync` after expiry;
 re-apply after clear restores sync; year-scale `int64` arithmetic.
 
-### 5. `hardware_profile.h`
+### 5. `hardware_profile.h` — DONE
 
-Depends on `gamma.h` for `IDENTITY_GAMMA`. Tests: default-constructed
-is invalid (`strip_length == 0`); `[1, kMaxStripPixels]` valid;
-`kMaxStripPixels + 1` rejected; equality covers length + color order +
-gamma.
+Landed in `src/hardware_profile.h` as a header-only profile with
+`MAX_STRIP_PIXELS`, `ColorOrder`, strip length, channel order, and output
+gamma. Tests cover: default-constructed is invalid (`strip_length == 0`);
+`[1, MAX_STRIP_PIXELS]` valid; `MAX_STRIP_PIXELS + 1` rejected; constructor
+stores length + color order + gamma; equality covers all three fields.
 
 ### 6. `blob_limits.h`
 
-Depends on `hardware_profile.h` for `kMaxStripPixels`. Header-only;
+Depends on `hardware_profile.h` for `MAX_STRIP_PIXELS`. Header-only;
 static checks only.
 
 ### 7. `blob_reader.{h,cpp}`

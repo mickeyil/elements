@@ -9,7 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "hardware_profile.h"  // kMaxStripPixels
+#include "hardware_profile.h"  // MAX_STRIP_PIXELS
 
 static constexpr uint8_t  kMaxLayerCount     = 32;
 static constexpr uint16_t kMaxBufferCount    = 256;

@@ -31,8 +31,9 @@ canonical home for the time-naming vocabulary.
 
 ## Components
 
-Concrete APIs live in `drafts/*.h`. What follows is the shape and the
-contract, not the signature list.
+Concrete APIs live in `src/` after their roadmap step is implemented; modules
+not yet promoted still have draft APIs in `drafts/*.h`. What follows is the
+shape and the contract, not the signature list.
 
 ### `PixelBufferPool` (`pixel_buffer_pool.h`)
 

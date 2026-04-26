@@ -81,6 +81,10 @@ if(BUILD_TESTS)
     target_include_directories(test_gamma PRIVATE src)
     target_link_libraries(test_gamma Catch2::Catch2WithMain)
 
+    add_executable(test_hardware_profile test/test_hardware_profile.cpp)
+    target_include_directories(test_hardware_profile PRIVATE src)
+    target_link_libraries(test_hardware_profile Catch2::Catch2WithMain)
+
     # test_synced_clock is also standalone during the v3 migration: it
     # links the test platform_clock fake (test/platform_clock_test.cpp)
     # instead of any production platform_clock impl.
@@ -158,6 +162,8 @@ if(BUILD_TESTS)
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_gamma COMMAND test_gamma
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    add_test(NAME test_hardware_profile COMMAND test_hardware_profile
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_synced_clock COMMAND test_synced_clock
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_compositor COMMAND test_compositor
@@ -210,6 +216,15 @@ if(BUILD_TESTS)
                     --error-exitcode=1 $<TARGET_FILE:test_gamma>
         )
         set_tests_properties(test_gamma_memcheck PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        )
+        add_test(
+            NAME test_hardware_profile_memcheck
+            COMMAND ${VALGRIND} --leak-check=full
+                    --errors-for-leak-kinds=definite,indirect,possible
+                    --error-exitcode=1 $<TARGET_FILE:test_hardware_profile>
+        )
+        set_tests_properties(test_hardware_profile_memcheck PROPERTIES
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         )
         add_test(

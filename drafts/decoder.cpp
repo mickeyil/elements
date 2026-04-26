@@ -84,7 +84,7 @@ DecodeError validate_header(const ParsedHeader& hdr)
     if (hdr.target_fps == 0)                       return DecodeError::InvalidField;
 
     if (hdr.layer_count      > kMaxLayerCount)     return DecodeError::OverCap;
-    if (hdr.strip_length     > kMaxStripPixels)    return DecodeError::OverCap;
+    if (hdr.strip_length     > MAX_STRIP_PIXELS)   return DecodeError::OverCap;
     if (hdr.buffer_count     > kMaxBufferCount)    return DecodeError::OverCap;
     if (hdr.pixel_view_count > kMaxPixelViewCount) return DecodeError::OverCap;
     if (hdr.copy_op_count    > kMaxCopyOpCount)    return DecodeError::OverCap;
@@ -112,7 +112,7 @@ DecodeError parse_buffer_sizes(BlobReader& r, const ParsedHeader& hdr,
 {
     // TODO:
     // - allocate a temporary uint16_t[hdr.buffer_count]
-    // - for each buffer i: read u16 size; reject OverCap if > kMaxStripPixels
+    // - for each buffer i: read u16 size; reject OverCap if > MAX_STRIP_PIXELS
     // - sum total_pixels; reject OverCap if total_pixels * sizeof(hsva_t)
     //   > kMaxPoolBytes
     // - prog.pixel_buffer_pool.initialize(sizes, hdr.buffer_count)

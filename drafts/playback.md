@@ -180,7 +180,7 @@ On `render_next_frame()` returning `Rendered` or `Ended`, the firmware owner:
 
 1. applies the current gamma LUT to the strip
 2. copies RGB into `g_leds` in the configured channel order
-3. zero-pads trailing pixels when the strip is shorter than `kMaxStripPixels`
+3. zero-pads trailing pixels when the strip is shorter than `MAX_STRIP_PIXELS`
 4. calls `FastLED.show()`
 5. on `Ended`, runs the end-of-program hook
 

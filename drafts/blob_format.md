@@ -41,7 +41,7 @@ Binary format for compiled animation programs. Emitted by the Python compiler
   may miss the target cadence.
 - `layer_count` — number of visual layers.
 - `strip_length` — physical LED count this blob targets. Must be in
-  `[1, kMaxStripPixels]`. Must equal the active
+  `[1, MAX_STRIP_PIXELS]`. Must equal the active
   `HardwareProfile::strip_length` exactly. The compiler bakes physical
   LED indices into PixelView descriptors, so a mismatch is rejected with
   `StripLengthMismatch`, not clamped. A header `strip_length` of 0 is
@@ -192,7 +192,7 @@ violation (see `decoder.md`).
 | Constant             | Value      | Bound                                    |
 | -------------------- | ---------- | ---------------------------------------- |
 | `kMaxLayerCount`     | 32         | header `layer_count`                     |
-| `kMaxStripPixels`    | 1000       | header `strip_length`, per-buffer `size` |
+| `MAX_STRIP_PIXELS`   | 1000       | header `strip_length`, per-buffer `size` |
 | `kMaxBufferCount`    | 256        | header `buffer_count`                    |
 | `kMaxPixelViewCount` | 512        | header `pixel_view_count`                |
 | `kMaxCopyOpCount`    | 512        | header `copy_op_count`                   |
@@ -200,14 +200,14 @@ violation (see `decoder.md`).
 | `kMaxParamsBytes`    | 4096       | per-event `params_size`                  |
 | `kMaxPoolBytes`      | 100 * 1024 | sum of `buffer_size * 16` over all pool buffers |
 
-`kMaxStripPixels` is an absolute upper bound. Real strips are typically
+`MAX_STRIP_PIXELS` is an absolute upper bound. Real strips are typically
 50–250 LEDs; firmware should size runtime structures from
 `HardwareProfile::strip_length`, not from this cap.
 
 `kMaxPoolBytes` is the global HSVA backing storage cap. It bounds worst-case
 heap consumption regardless of how the per-section caps combine.
 
-The per-buffer cap (`size <= kMaxStripPixels`) is a first-pass simplifying
+The per-buffer cap (`size <= MAX_STRIP_PIXELS`) is a first-pass simplifying
 policy, not a fundamental constraint. The hard memory limit is
 `kMaxPoolBytes`. The per-buffer cap can be raised later if a future compiler
 needs to pack multiple concurrently-live preserved regions into one larger

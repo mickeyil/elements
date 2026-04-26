@@ -118,7 +118,7 @@ Used by both firmware and simulator:
 | `anim_shift.h` | Shift animation (stateful) |
 | `colors.h/cpp` | `hsva_t`, `rgb_t`, conversion, gamma table |
 | `strip.h` | RGB buffer wrapper |
-| `hardware_profile.h` | Strip length constraint (max 250 pixels) |
+| `hardware_profile.h` | Strip/profile constraints, including `MAX_STRIP_PIXELS` |
 
 ## Desktop Simulator
 
