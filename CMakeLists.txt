@@ -17,6 +17,7 @@ add_library(elements_core STATIC
     src/colors.cpp
     src/gamma.cpp
     src/platform_clock_host.cpp
+    src/pixel_buffer_pool.cpp
     src/playback_device.cpp
     src/esp_simulated.cpp
     src/sim_controller.cpp
@@ -88,6 +89,25 @@ if(BUILD_TESTS)
     add_executable(test_blob_reader test/test_blob_reader.cpp src/blob_reader.cpp)
     target_include_directories(test_blob_reader PRIVATE src)
     target_link_libraries(test_blob_reader Catch2::Catch2WithMain)
+
+    # test_pixel_buffer_pool builds twice from the same test source: once
+    # with the host (per-buffer allocation) path, once with the pooled
+    # (-DARDUINO, contiguous) path. The pooled build also exercises the
+    # adjacency invariant inside an `#ifdef ARDUINO` block in the test.
+    add_executable(test_pixel_buffer_pool
+        test/test_pixel_buffer_pool.cpp
+        src/pixel_buffer_pool.cpp
+    )
+    target_include_directories(test_pixel_buffer_pool PRIVATE src)
+    target_link_libraries(test_pixel_buffer_pool Catch2::Catch2WithMain)
+
+    add_executable(test_pixel_buffer_pool_pooled
+        test/test_pixel_buffer_pool.cpp
+        src/pixel_buffer_pool.cpp
+    )
+    target_include_directories(test_pixel_buffer_pool_pooled PRIVATE src)
+    target_compile_definitions(test_pixel_buffer_pool_pooled PRIVATE ARDUINO=1)
+    target_link_libraries(test_pixel_buffer_pool_pooled Catch2::Catch2WithMain)
 
     # test_synced_clock is also standalone during the v3 migration: it
     # links the test platform_clock fake (test/platform_clock_test.cpp)
@@ -170,6 +190,10 @@ if(BUILD_TESTS)
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_blob_reader COMMAND test_blob_reader
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    add_test(NAME test_pixel_buffer_pool COMMAND test_pixel_buffer_pool
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    add_test(NAME test_pixel_buffer_pool_pooled COMMAND test_pixel_buffer_pool_pooled
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_synced_clock COMMAND test_synced_clock
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_compositor COMMAND test_compositor
@@ -240,6 +264,24 @@ if(BUILD_TESTS)
                     --error-exitcode=1 $<TARGET_FILE:test_blob_reader>
         )
         set_tests_properties(test_blob_reader_memcheck PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        )
+        add_test(
+            NAME test_pixel_buffer_pool_memcheck
+            COMMAND ${VALGRIND} --leak-check=full
+                    --errors-for-leak-kinds=definite,indirect,possible
+                    --error-exitcode=1 $<TARGET_FILE:test_pixel_buffer_pool>
+        )
+        set_tests_properties(test_pixel_buffer_pool_memcheck PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        )
+        add_test(
+            NAME test_pixel_buffer_pool_pooled_memcheck
+            COMMAND ${VALGRIND} --leak-check=full
+                    --errors-for-leak-kinds=definite,indirect,possible
+                    --error-exitcode=1 $<TARGET_FILE:test_pixel_buffer_pool_pooled>
+        )
+        set_tests_properties(test_pixel_buffer_pool_pooled_memcheck PROPERTIES
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         )
         add_test(

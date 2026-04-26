@@ -105,18 +105,25 @@ use `SCREAMING_SNAKE_CASE` and reuse `MAX_STRIP_PIXELS` from
 little-endian scalar reads, boundary failure without cursor movement,
 `read_bytes()`, `take()`, null buffers, `done()`, and `remaining()`.
 
-### 7. `runtime_constants.h`
+### 7. `runtime_constants.h` — DONE
 
-Header-only. Lands with its first consumer but sequenced here to
-enforce dep order.
+Landed in `src/runtime_constants.h`. Header-only with `PIXV_NONE` and
+`PIXBUF_NONE` (both `0xFFFF`). No tests — the header is two constants
+with self-evident values; a unit test would just restate them.
 
-### 8. `pixel_buffer_pool.{h,cpp}`
+### 8. `pixel_buffer_pool.{h,cpp}` — DONE
 
-Host separate-allocation path tested first. ARDUINO pooled-allocation
-path tested as a second compile target verifying the same public
-behavior plus pool-adjacency invariants. Allocation strategy is
-pinned in the draft header and `data_model.md §Memory Model`; no
-design decisions pending.
+Landed in `src/pixel_buffer_pool.{h,cpp}` and added to `elements_core`
+for build coverage. Two test targets share one source:
+`test_pixel_buffer_pool` exercises the host (per-buffer-allocation)
+path, and `test_pixel_buffer_pool_pooled` exercises the pooled
+(`-DARDUINO`, contiguous) path. The pooled target also runs an
+`#ifdef ARDUINO` adjacency block. Coverage: default-empty,
+zero-buffer init, null-with-non-zero-count fails, allocation with
+sizes preserved, zero-size entry allowed, out-of-range buffer_at /
+buffer_size, per-buffer write isolation, reset returns to empty,
+re-initialize replaces, pooled adjacency. Both targets pass under
+valgrind memcheck.
 
 ### 9. `pixel_view.{h,cpp}`
 
