@@ -172,14 +172,14 @@ TEST_CASE("SyncedClock: int64 arithmetic holds at year-scale magnitudes", "[sync
     // Local clock at ~30 years of microseconds, offset at ~10 years.
     // Both well inside int64 range; this test catches accidental int32
     // narrowing in the math path.
-    constexpr int64_t kLocal  = 1'000'000'000'000'000LL;  // ~31.7 years
-    constexpr int64_t kOffset =   100'000'000'000'000LL;  //  ~3.17 years
-    platform_clock::set_test_now_us(kLocal);
+    constexpr int64_t LOCAL_US  = 1'000'000'000'000'000LL;  // ~31.7 years
+    constexpr int64_t OFFSET_US =   100'000'000'000'000LL;  //  ~3.17 years
+    platform_clock::set_test_now_us(LOCAL_US);
 
     SyncedClock c;
-    c.apply_sync_offset(kOffset, /*valid_for*/ 1'000'000'000LL);
+    c.apply_sync_offset(OFFSET_US, /*valid_for*/ 1'000'000'000LL);
 
     REQUIRE(c.is_synced());
-    CHECK(c.now_local_us() == kLocal);
-    CHECK(c.now_remote_us() == kLocal - kOffset);
+    CHECK(c.now_local_us() == LOCAL_US);
+    CHECK(c.now_remote_us() == LOCAL_US - OFFSET_US);
 }

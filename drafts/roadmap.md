@@ -16,6 +16,10 @@ the next step starts. Design contracts live in `data_model.md`,
   tests link a controllable implementation. SyncedClock itself stays
   concrete — no virtuals, templates, or callbacks. Pinned by
   `synced_clock.h:29-30`.
+- **Constant naming cutover.** New or touched C++ constants use
+  `SCREAMING_SNAKE_CASE`, not `kCamelCase`. Because modules land
+  incrementally, update constants as their roadmap step is implemented
+  rather than sweeping future draft-only modules early.
 - **Engine tested with fakes first.** Concrete `anim_*.h` ports land
   after engine, not before. Engine tests use fake `Animation`
   subclasses to exercise event timing, copy-op ordering, layer
