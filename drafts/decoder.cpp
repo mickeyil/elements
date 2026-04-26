@@ -83,11 +83,11 @@ DecodeError validate_header(const ParsedHeader& hdr)
     if (hdr.strip_length == 0)                     return DecodeError::InvalidField;
     if (hdr.target_fps == 0)                       return DecodeError::InvalidField;
 
-    if (hdr.layer_count      > kMaxLayerCount)     return DecodeError::OverCap;
-    if (hdr.strip_length     > MAX_STRIP_PIXELS)   return DecodeError::OverCap;
-    if (hdr.buffer_count     > kMaxBufferCount)    return DecodeError::OverCap;
-    if (hdr.pixel_view_count > kMaxPixelViewCount) return DecodeError::OverCap;
-    if (hdr.copy_op_count    > kMaxCopyOpCount)    return DecodeError::OverCap;
+    if (hdr.layer_count      > MAX_LAYER_COUNT)       return DecodeError::OverCap;
+    if (hdr.strip_length     > MAX_STRIP_PIXELS)      return DecodeError::OverCap;
+    if (hdr.buffer_count     > MAX_BUFFER_COUNT)      return DecodeError::OverCap;
+    if (hdr.pixel_view_count > MAX_PIXEL_VIEW_COUNT)  return DecodeError::OverCap;
+    if (hdr.copy_op_count    > MAX_COPY_OP_COUNT)     return DecodeError::OverCap;
 
     // Program duration must be a finite positive number. NaN and ±Inf would
     // silently break time comparisons in Engine and event ordering checks
@@ -114,7 +114,7 @@ DecodeError parse_buffer_sizes(BlobReader& r, const ParsedHeader& hdr,
     // - allocate a temporary uint16_t[hdr.buffer_count]
     // - for each buffer i: read u16 size; reject OverCap if > MAX_STRIP_PIXELS
     // - sum total_pixels; reject OverCap if total_pixels * sizeof(hsva_t)
-    //   > kMaxPoolBytes
+    //   > MAX_POOL_BYTES
     // - prog.pixel_buffer_pool.initialize(sizes, hdr.buffer_count)
     //   → OutOfMemory if it returns false
     // - free the temporary
@@ -202,7 +202,7 @@ DecodeError parse_event(BlobReader& r, const ParsedHeader& hdr,
     // - reject InvalidField if !std::isfinite(start) || start < 0.0f
     // - reject InvalidField if !std::isfinite(duration) || duration <= 0.0f
     // - reject InvalidField if start + duration > hdr.duration
-    // - reject OverCap if params_size > kMaxParamsBytes
+    // - reject OverCap if params_size > MAX_PARAMS_BYTES
     // - reject InvalidField if dst_pixv_idx == PIXV_NONE or
     //   >= hdr.pixel_view_count
     // - reject InvalidField if !prog.pixel_views.at(dst).has_physical_mapping()
@@ -234,7 +234,7 @@ DecodeError parse_layers(BlobReader& r, const ParsedHeader& hdr,
     // - allocate prog.layers as Layer[hdr.layer_count]
     // - for each layer li:
     //   - read u16 event_count
-    //   - reject OverCap if event_count > kMaxEventsPerLayer
+    //   - reject OverCap if event_count > MAX_EVENTS_PER_LAYER
     //   - allocate AnimationEvent[event_count]
     //   - prev_end = 0
     //   - for each event ei:

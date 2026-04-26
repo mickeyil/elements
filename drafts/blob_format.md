@@ -62,7 +62,7 @@ buffer in pool index order.
 
 The backing storage cost of one buffer is `size * sizeof(hsva_t)` =
 `size * 16` bytes. The total across all buffers must not exceed
-`kMaxPoolBytes`.
+`MAX_POOL_BYTES`.
 
 ## PixelView descriptors section
 
@@ -191,29 +191,29 @@ violation (see `decoder.md`).
 
 | Constant             | Value      | Bound                                    |
 | -------------------- | ---------- | ---------------------------------------- |
-| `kMaxLayerCount`     | 32         | header `layer_count`                     |
+| `MAX_LAYER_COUNT`    | 32         | header `layer_count`                     |
 | `MAX_STRIP_PIXELS`   | 1000       | header `strip_length`, per-buffer `size` |
-| `kMaxBufferCount`    | 256        | header `buffer_count`                    |
-| `kMaxPixelViewCount` | 512        | header `pixel_view_count`                |
-| `kMaxCopyOpCount`    | 512        | header `copy_op_count`                   |
-| `kMaxEventsPerLayer` | 1024       | per-layer `event_count`                  |
-| `kMaxParamsBytes`    | 4096       | per-event `params_size`                  |
-| `kMaxPoolBytes`      | 100 * 1024 | sum of `buffer_size * 16` over all pool buffers |
+| `MAX_BUFFER_COUNT`   | 256        | header `buffer_count`                    |
+| `MAX_PIXEL_VIEW_COUNT` | 512      | header `pixel_view_count`                |
+| `MAX_COPY_OP_COUNT`  | 512        | header `copy_op_count`                   |
+| `MAX_EVENTS_PER_LAYER` | 1024     | per-layer `event_count`                  |
+| `MAX_PARAMS_BYTES`   | 4096       | per-event `params_size`                  |
+| `MAX_POOL_BYTES`     | 100 * 1024 | sum of `buffer_size * 16` over all pool buffers |
 
 `MAX_STRIP_PIXELS` is an absolute upper bound. Real strips are typically
 50–250 LEDs; firmware should size runtime structures from
 `HardwareProfile::strip_length`, not from this cap.
 
-`kMaxPoolBytes` is the global HSVA backing storage cap. It bounds worst-case
+`MAX_POOL_BYTES` is the global HSVA backing storage cap. It bounds worst-case
 heap consumption regardless of how the per-section caps combine.
 
 The per-buffer cap (`size <= MAX_STRIP_PIXELS`) is a first-pass simplifying
 policy, not a fundamental constraint. The hard memory limit is
-`kMaxPoolBytes`. The per-buffer cap can be raised later if a future compiler
+`MAX_POOL_BYTES`. The per-buffer cap can be raised later if a future compiler
 needs to pack multiple concurrently-live preserved regions into one larger
 backing buffer.
 
-These constants live in `drafts/blob_limits.h` and are mirrored by the Python
+These constants live in `src/blob_limits.h` and are mirrored by the Python
 compiler.
 
 ## Decoder rejection reasons
@@ -230,5 +230,5 @@ compiler.
 | `OutOfMemory`         | any allocation during decode failed                            |
 
 `BadMagic` and `BadVersion` are checked before any allocation. Header count
-caps are checked before allocating any section. `kMaxPoolBytes` is checked
+caps are checked before allocating any section. `MAX_POOL_BYTES` is checked
 after reading the buffer-sizes table, before pool allocation.

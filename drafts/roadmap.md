@@ -9,7 +9,7 @@ the next step starts. Design contracts live in `data_model.md`,
 ## Settled Policies
 
 - **Colors cutover.** `gamma_correct` is gone; old callers intentionally
-  break until step 13 rewires through the new gamma path. No shim layer.
+  break until step 12 rewires through the new gamma path. No shim layer.
   No legacy compatibility window.
 - **SyncedClock test seam.** A small `platform_clock::now_us()` module
   selects `esp_timer_get_time()` on ARDUINO and `steady_clock` on host;
@@ -62,7 +62,7 @@ asserted in `src/colors.h`.
 
 Landed in `src/gamma.{h,cpp}` as `GammaCorrection` with
 `IDENTITY_GAMMA`, `MAX_SUPPORTED_GAMMA`, and `DEFAULT_GAMMA`.
-`apply_gamma(Strip&, const GammaCorrection&)` is deferred to step 13
+`apply_gamma(Strip&, const GammaCorrection&)` is deferred to step 12
 with the v3 `Strip`.
 
 ### 3. `platform_clock.{h,cpp}` — DONE
@@ -97,23 +97,20 @@ gamma. Tests cover: default-constructed is invalid (`strip_length == 0`);
 `[1, MAX_STRIP_PIXELS]` valid; `MAX_STRIP_PIXELS + 1` rejected; constructor
 stores length + color order + gamma; equality covers all three fields.
 
-### 6. `blob_limits.h`
+### 6. `blob_limits.h` + `blob_reader.{h,cpp}` — DONE
 
-Depends on `hardware_profile.h` for `MAX_STRIP_PIXELS`. Header-only;
-static checks only.
+Landed in `src/blob_limits.h` and `src/blob_reader.{h,cpp}`. Cap constants
+use `SCREAMING_SNAKE_CASE` and reuse `MAX_STRIP_PIXELS` from
+`hardware_profile.h`. Tests cover cap values, `decode_error_name()`,
+little-endian scalar reads, boundary failure without cursor movement,
+`read_bytes()`, `take()`, null buffers, `done()`, and `remaining()`.
 
-### 7. `blob_reader.{h,cpp}`
-
-Bounded little-endian reader + `DecodeError` enum. Tests: each
-`read_*` at boundary and one past; truncation sets error; remaining
-bytes reported correctly.
-
-### 8. `runtime_constants.h`
+### 7. `runtime_constants.h`
 
 Header-only. Lands with its first consumer but sequenced here to
 enforce dep order.
 
-### 9. `pixel_buffer_pool.{h,cpp}`
+### 8. `pixel_buffer_pool.{h,cpp}`
 
 Host separate-allocation path tested first. ARDUINO pooled-allocation
 path tested as a second compile target verifying the same public
@@ -121,46 +118,46 @@ behavior plus pool-adjacency invariants. Allocation strategy is
 pinned in the draft header and `data_model.md §Memory Model`; no
 design decisions pending.
 
-### 10. `pixel_view.{h,cpp}`
+### 9. `pixel_view.{h,cpp}`
 
 Tests cover: identity storage, non-identity storage, identity
 physical, non-identity physical, all four combinations, and that
 `view[i]` and `view.physical_index(i)` are independent.
 
-### 11. `pixel_views.{h,cpp}`
+### 10. `pixel_views.{h,cpp}`
 
 Built once from `PixelViewSpec[]`. Test spec → view materialization
 and index bounds.
 
-### 12. `copy_ops.{h,cpp}`
+### 11. `copy_ops.{h,cpp}`
 
 Small. Test basic construction, sort-by-`at` invariant (consumed from
 the blob as already sorted), and access by index.
 
-### 13. `strip.{h,cpp}`
+### 12. `strip.{h,cpp}`
 
 Canonical linear-RGB buffer. Tests: construction at a given length,
 clear, `apply_gamma` with `GammaCorrection`, `copy_to` with `RGB` and
 `BGR` ordering, zero-pad semantics when destination is longer than
 strip. This is the step that removes the last `gamma_correct` caller.
 
-### 14. `animation.h` + `layer.{h,cpp}`
+### 13. `animation.h` + `layer.{h,cpp}`
 
 Structural. `Layer::initialize` + `Layer::active_at(t)` tests against
 a trivial event list (use a fake animation type).
 
-### 15. `compositor.{h,cpp}`
+### 14. `compositor.{h,cpp}`
 
 Depends on `PixelView` and `Strip`. Tests: single active layer,
 multiple layers bottom-to-top, inactive layers skipped, physical
 mapping applied per view.
 
-### 16. `program_structs.{h,cpp}`
+### 15. `program_structs.{h,cpp}`
 
 Program ownership + `free_program()`. Tests: destructor releases all
 owned tables; post-`free` state is safe to destroy again.
 
-### 17. `engine.{h,cpp}`
+### 16. `engine.{h,cpp}`
 
 Render order per `data_model.md §Engine`. Tests use **fake
 Animation** subclasses to exercise: event initialize on activation,
@@ -168,14 +165,14 @@ render each frame, copy-ops fired before rendering, `active_dst_views`
 tracking, `reset()` clears initialized flags, jump semantics via
 `run_copy_ops_until`.
 
-### 18. `anim_paint.{h,cpp}` + `anim_wave.{h,cpp}` + `anim_spark.{h,cpp}`
+### 17. `anim_paint.{h,cpp}` + `anim_wave.{h,cpp}` + `anim_spark.{h,cpp}`
 
 Mechanical v3 ports: `render(dst, t_animation)` only, no `src`, no
 `work`. Port the existing render math to the three-view interface;
 add each type's `from_blob()` factory per `decoder.md §Animation
 Construction`.
 
-### 19. `anim_shift.{h,cpp}`
+### 18. `anim_shift.{h,cpp}`
 
 Careful pass: `initialize(src, work)` snapshots source pixels into
 `work`; each `render(dst, t_animation)` reads `work` and writes `dst`
@@ -183,7 +180,7 @@ at the shifted offset. Tests must cover: fresh initialization snapshot
 integrity, work view not mutated by later sources, shift offset sign
 and wrap at `t_animation = 0` / mid / end.
 
-### 20. `decoder.{h,cpp}`
+### 19. `decoder.{h,cpp}`
 
 Single-pass decode, blob → `Program`. Pulls in every `anim_*.h`
 `from_blob()`. Tests: valid blob decodes; each per-section error path
@@ -191,7 +188,7 @@ surfaces the right `DecodeError`; over-cap / truncation cases; copy-op
 ordering accepted / rejected per `blob_format.md`; animation-type
 dispatch reaches the right factory.
 
-### 21. `playback.{h,cpp}`
+### 20. `playback.{h,cpp}`
 
 **First resolve `_gen` / `_frame_index` ownership.** Then implement the
 state machine per `playback.md §Command Lifecycle`. Tests: each
@@ -205,12 +202,12 @@ natural-end transitions `PLAYING → ENDED` exactly once.
 - **Old `src/` callers break during the migration.** Legacy
   `PlaybackDevice`, `ControllerDevice`, `SimDevice`, `ESPSimulated`,
   and their tests depend on v2 shapes. They get retired (or rewritten
-  as thin owners) after step 21, not kept alive on the side. Tests
+  as thin owners) after step 20, not kept alive on the side. Tests
   that block the build during the window are tolerated.
 - **Compiler-side work is parallelizable.** v3 compiler emits the new
   blob per `blob_format.md` regardless of runtime progress. Schedule
   compiler changes independently; do not gate runtime migration on
   them.
-- **Offline render and firmware owners** are rewired after step 21
+- **Offline render and firmware owners** are rewired after step 20
   onto the `Playback` / `SyncedClock` / `GammaCorrection` surface
   described in `playback.md §Firmware / Sim / Offline-render`.

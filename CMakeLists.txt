@@ -85,6 +85,10 @@ if(BUILD_TESTS)
     target_include_directories(test_hardware_profile PRIVATE src)
     target_link_libraries(test_hardware_profile Catch2::Catch2WithMain)
 
+    add_executable(test_blob_reader test/test_blob_reader.cpp src/blob_reader.cpp)
+    target_include_directories(test_blob_reader PRIVATE src)
+    target_link_libraries(test_blob_reader Catch2::Catch2WithMain)
+
     # test_synced_clock is also standalone during the v3 migration: it
     # links the test platform_clock fake (test/platform_clock_test.cpp)
     # instead of any production platform_clock impl.
@@ -164,6 +168,8 @@ if(BUILD_TESTS)
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_hardware_profile COMMAND test_hardware_profile
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    add_test(NAME test_blob_reader COMMAND test_blob_reader
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_synced_clock COMMAND test_synced_clock
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_compositor COMMAND test_compositor
@@ -225,6 +231,15 @@ if(BUILD_TESTS)
                     --error-exitcode=1 $<TARGET_FILE:test_hardware_profile>
         )
         set_tests_properties(test_hardware_profile_memcheck PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        )
+        add_test(
+            NAME test_blob_reader_memcheck
+            COMMAND ${VALGRIND} --leak-check=full
+                    --errors-for-leak-kinds=definite,indirect,possible
+                    --error-exitcode=1 $<TARGET_FILE:test_blob_reader>
+        )
+        set_tests_properties(test_blob_reader_memcheck PROPERTIES
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         )
         add_test(

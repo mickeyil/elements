@@ -13,9 +13,9 @@ splits those out.
 | ----------------------------- | ---- |
 | `drafts/decoder.h`            | `decode_program()`, `kBlobVersion`, `kBlobMagic` |
 | `drafts/decoder.cpp`          | the decode logic |
-| `drafts/blob_reader.h`        | `BlobReader`, `DecodeError`, `decode_error_name()` (declarations) |
-| `drafts/blob_reader.cpp`      | `BlobReader` and `decode_error_name()` implementations |
-| `drafts/blob_limits.h`        | `kMax*` cap constants |
+| `src/blob_reader.h`           | `BlobReader`, `DecodeError`, `decode_error_name()` (declarations) |
+| `src/blob_reader.cpp`         | `BlobReader` and `decode_error_name()` implementations |
+| `src/blob_limits.h`           | `MAX_*` cap constants |
 | `drafts/animation_types.h`    | `AnimType` enum |
 | `drafts/program_structs.h`    | `Program` shape, `free_program()` |
 | `drafts/layer.h`              | `Layer`, `AnimationEvent` |
@@ -24,7 +24,7 @@ splits those out.
 | `drafts/copy_ops.h`           | `CopyOps`, `CopyOp` |
 | `src/anim_wave.h` (etc.)      | per-animation params struct AND its `Animation` subclass |
 
-`drafts/blob_reader.h` exists separately from `decoder.h` so per-animation
+`src/blob_reader.h` exists separately from `decoder.h` so per-animation
 `anim_*.h` headers can include it (for `BlobReader` and `DecodeError`)
 without dragging in the full decoder entry point. The decoder includes both;
 animation headers include only `blob_reader.h`.
@@ -32,7 +32,7 @@ animation headers include only `blob_reader.h`.
 The decoder is the only translation unit that includes every `anim_*.h`.
 Each animation header is otherwise self-contained.
 
-`drafts/blob_limits.h` and `drafts/animation_types.h` are tiny one-screen
+`src/blob_limits.h` and `drafts/animation_types.h` are tiny one-screen
 headers. `blob_limits.h` reuses `MAX_STRIP_PIXELS` from
 `src/hardware_profile.h` and defines the rest of the caps from
 `blob_format.md`. `animation_types.h` is just the `AnimType` enum.
@@ -76,7 +76,7 @@ The decoder does **not** own:
 5. Allocate `Program`. The struct is small; allocating it first means every
    subsequent failure path uses one uniform cleanup (`free_program(prog)`).
 6. Read the buffer-size table into a temporary, validate per-buffer caps
-   and the global `kMaxPoolBytes`, then initialize `PixelBufferPool` from
+   and the global `MAX_POOL_BYTES`, then initialize `PixelBufferPool` from
    the temporary.
 7. Read and initialize `PixelViews`.
 8. Read and initialize `CopyOps`.
