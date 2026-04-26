@@ -26,8 +26,8 @@ bool PixelViews::initialize(PixelBufferPool& buffers, const PixelViewSpec* specs
 
     for (uint16_t i = 0; i < count; i++) {
         const PixelViewSpec& spec = specs[i];
-        hsva_t* backing = buffers.buffer_at(spec.buffer_idx);
-        if (backing == nullptr) {
+        hsva_t* buffer = buffers.buffer_at(spec.buffer_idx);
+        if (buffer == nullptr) {
             reset();
             return false;
         }
@@ -39,20 +39,17 @@ bool PixelViews::initialize(PixelBufferPool& buffers, const PixelViewSpec* specs
             reset();
             return false;
         }
-        // Canonicality: identity storage must not also carry an index array.
+        // Identity flags must not also carry an index array.
         if (spec.storage_identity && spec.storage_indices != nullptr) {
             reset();
             return false;
         }
-        // Canonicality: physical_identity is only meaningful when the view
-        // has physical mapping at all.
-        if (!spec.has_physical_mapping && spec.physical_identity) {
+        if (spec.physical_identity && spec.physical_indices != nullptr) {
             reset();
             return false;
         }
-        // Canonicality: identity physical mapping must not also carry an
-        // index array.
-        if (spec.physical_identity && spec.physical_indices != nullptr) {
+        // physical_identity only makes sense when has_physical_mapping is set.
+        if (!spec.has_physical_mapping && spec.physical_identity) {
             reset();
             return false;
         }
@@ -61,14 +58,9 @@ bool PixelViews::initialize(PixelBufferPool& buffers, const PixelViewSpec* specs
             reset();
             return false;
         }
-        // Bounds: identity physical map implies view[i] -> LED i, so size
-        // must fit within whatever the caller treats as the strip length.
-        // The decoder already enforces this against the active profile;
-        // PixelViews itself cannot see strip_length, so the check here is
-        // limited to the structural canonicality rules above.
 
         if (!_views[i].initialize(
-                backing,
+                buffer,
                 spec.size,
                 spec.storage_identity ? nullptr : spec.storage_indices,
                 spec.has_physical_mapping,
@@ -87,19 +79,4 @@ void PixelViews::reset()
     delete[] _views;
     _views = nullptr;
     _count = 0;
-}
-
-uint16_t PixelViews::count() const
-{
-    return _count;
-}
-
-PixelView& PixelViews::at(uint16_t idx)
-{
-    return _views[idx];
-}
-
-const PixelView& PixelViews::at(uint16_t idx) const
-{
-    return _views[idx];
 }

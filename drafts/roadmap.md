@@ -140,10 +140,22 @@ with non-identity mapping rejected, all four combinations of (storage
 pixels reachable via the view, `reset()` returns to empty,
 re-initialize replaces the binding. Passes under valgrind memcheck.
 
-### 10. `pixel_views.{h,cpp}`
+### 10. `pixel_views.{h,cpp}` — DONE
 
-Built once from `PixelViewSpec[]`. Test spec → view materialization
-and index bounds.
+Landed in `src/pixel_views.{h,cpp}` and added to `elements_core` for
+build coverage. Hot-path methods (`count`, `at`) inline in the header;
+`initialize`, `reset`, dtor stay out of line. `PixelViewSpec` is the
+public input record (each field maps 1:1 to a `PixelView::initialize`
+argument; per-field comments removed in favor of cross-reference to
+`pixel_view.h`). Coverage in `test_pixel_views`: default-empty,
+zero-count init, null-specs failure, identity-storage construction,
+write-through to the pool buffer, non-identity storage routing,
+identity vs non-identity physical wiring, every canonicality
+violation (storage_identity ↔ storage_indices, physical_identity ↔
+has_physical_mapping, physical_identity ↔ physical_indices),
+invalid `buffer_idx`, identity-storage size > buffer fails,
+mid-table failure cleans up earlier views, reset returns to empty,
+re-initialize replaces. Passes under valgrind memcheck.
 
 ### 11. `copy_ops.{h,cpp}`
 

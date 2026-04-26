@@ -19,6 +19,7 @@ add_library(elements_core STATIC
     src/platform_clock_host.cpp
     src/pixel_buffer_pool.cpp
     src/pixel_view.cpp
+    src/pixel_views.cpp
     src/playback_device.cpp
     src/esp_simulated.cpp
     src/sim_controller.cpp
@@ -117,6 +118,15 @@ if(BUILD_TESTS)
     target_include_directories(test_pixel_view PRIVATE src)
     target_link_libraries(test_pixel_view Catch2::Catch2WithMain)
 
+    add_executable(test_pixel_views
+        test/test_pixel_views.cpp
+        src/pixel_views.cpp
+        src/pixel_view.cpp
+        src/pixel_buffer_pool.cpp
+    )
+    target_include_directories(test_pixel_views PRIVATE src)
+    target_link_libraries(test_pixel_views Catch2::Catch2WithMain)
+
     # test_synced_clock is also standalone during the v3 migration: it
     # links the test platform_clock fake (test/platform_clock_test.cpp)
     # instead of any production platform_clock impl.
@@ -203,6 +213,8 @@ if(BUILD_TESTS)
     add_test(NAME test_pixel_buffer_pool_pooled COMMAND test_pixel_buffer_pool_pooled
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_pixel_view COMMAND test_pixel_view
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    add_test(NAME test_pixel_views COMMAND test_pixel_views
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_synced_clock COMMAND test_synced_clock
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
@@ -301,6 +313,15 @@ if(BUILD_TESTS)
                     --error-exitcode=1 $<TARGET_FILE:test_pixel_view>
         )
         set_tests_properties(test_pixel_view_memcheck PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        )
+        add_test(
+            NAME test_pixel_views_memcheck
+            COMMAND ${VALGRIND} --leak-check=full
+                    --errors-for-leak-kinds=definite,indirect,possible
+                    --error-exitcode=1 $<TARGET_FILE:test_pixel_views>
+        )
+        set_tests_properties(test_pixel_views_memcheck PROPERTIES
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         )
         add_test(
