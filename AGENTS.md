@@ -8,6 +8,7 @@ Repo-wide guidance for coding agents working in this repository.
 - When the user asks for a documentation update or a design discussion, do not make code changes unless they explicitly ask for implementation.
 - When asked to commit, make a single commit unless the user explicitly asks to split the work.
 - Commit messages should be a one-line summary only, with no body and no `Co-Authored-By`.
+- C++ source files must contain only ASCII characters.
 - Repo-local deployment state lives under `instance/`. The default controller config is `instance/config.json`, and simulator layouts live in `instance/layouts/`.
 
 ## Build And Test

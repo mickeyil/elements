@@ -37,18 +37,3 @@ void CopyOps::reset()
     _ops = nullptr;
     _count = 0;
 }
-
-uint16_t CopyOps::count() const
-{
-    return _count;
-}
-
-CopyOp& CopyOps::at(uint16_t idx)
-{
-    return _ops[idx];
-}
-
-const CopyOp& CopyOps::at(uint16_t idx) const
-{
-    return _ops[idx];
-}

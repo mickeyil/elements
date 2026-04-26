@@ -157,10 +157,18 @@ invalid `buffer_idx`, identity-storage size > buffer fails,
 mid-table failure cleans up earlier views, reset returns to empty,
 re-initialize replaces. Passes under valgrind memcheck.
 
-### 11. `copy_ops.{h,cpp}`
+### 11. `copy_ops.{h,cpp}` — DONE
 
-Small. Test basic construction, sort-by-`at` invariant (consumed from
-the blob as already sorted), and access by index.
+Landed in `src/copy_ops.{h,cpp}` and added to `elements_core` for
+build coverage. Hot-path methods (`count`, `at`) inline in the header;
+`initialize`, `reset`, dtor stay out of line. `CopyOp` is the public
+record (3 fields: `at`, `src_pixv_idx`, `dst_pixv_idx`); contents are
+trusted (the decoder validates view indices, equal src/dst sizes,
+sort order, and same-`at` uniqueness). Coverage in `test_copy_ops`:
+default-empty, zero-count init, null-ops failure, basic record copy
+and access, caller-frees-input semantics, input table order
+preserved, same-`at` ops keep their input order, reset returns to
+empty, re-initialize replaces. Passes under valgrind memcheck.
 
 ### 12. `strip.{h,cpp}`
 

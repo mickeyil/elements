@@ -7,8 +7,8 @@
 
 // Upper bounds on the structural counts and sizes accepted from a binary
 // program blob. A decoder consults these to reject blobs that exceed the
-// device's resource budget — too many layers, too many copy ops, oversized
-// parameter blocks — before any allocation work happens.
+// device's resource budget -- too many layers, too many copy ops, oversized
+// parameter blocks -- before any allocation work happens.
 static constexpr uint8_t  MAX_LAYER_COUNT      = 32;
 static constexpr uint16_t MAX_BUFFER_COUNT     = 256;
 static constexpr uint16_t MAX_PIXEL_VIEW_COUNT = 512;

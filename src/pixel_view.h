@@ -9,7 +9,7 @@
 // `storage_indices` remaps the buffer slot each view[i] uses (useful
 // for scattered access into the buffer). `physical_indices` gives the
 // strip LED that view[i] lights, and only matters for views the
-// compositor consumes — keeping it on the view leaves the compositor
+// compositor consumes -- keeping it on the view leaves the compositor
 // uniform. Either array may be omitted; the missing mapping defaults
 // to identity.
 //

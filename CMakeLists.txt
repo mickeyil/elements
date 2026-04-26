@@ -15,6 +15,7 @@ add_library(elements_core STATIC
     src/engine.cpp
     src/compositor.cpp
     src/colors.cpp
+    src/copy_ops.cpp
     src/gamma.cpp
     src/platform_clock_host.cpp
     src/pixel_buffer_pool.cpp
@@ -127,6 +128,10 @@ if(BUILD_TESTS)
     target_include_directories(test_pixel_views PRIVATE src)
     target_link_libraries(test_pixel_views Catch2::Catch2WithMain)
 
+    add_executable(test_copy_ops test/test_copy_ops.cpp src/copy_ops.cpp)
+    target_include_directories(test_copy_ops PRIVATE src)
+    target_link_libraries(test_copy_ops Catch2::Catch2WithMain)
+
     # test_synced_clock is also standalone during the v3 migration: it
     # links the test platform_clock fake (test/platform_clock_test.cpp)
     # instead of any production platform_clock impl.
@@ -215,6 +220,8 @@ if(BUILD_TESTS)
     add_test(NAME test_pixel_view COMMAND test_pixel_view
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_pixel_views COMMAND test_pixel_views
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    add_test(NAME test_copy_ops COMMAND test_copy_ops
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_synced_clock COMMAND test_synced_clock
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
@@ -322,6 +329,15 @@ if(BUILD_TESTS)
                     --error-exitcode=1 $<TARGET_FILE:test_pixel_views>
         )
         set_tests_properties(test_pixel_views_memcheck PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        )
+        add_test(
+            NAME test_copy_ops_memcheck
+            COMMAND ${VALGRIND} --leak-check=full
+                    --errors-for-leak-kinds=definite,indirect,possible
+                    --error-exitcode=1 $<TARGET_FILE:test_copy_ops>
+        )
+        set_tests_properties(test_copy_ops_memcheck PROPERTIES
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         )
         add_test(

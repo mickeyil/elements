@@ -7,7 +7,7 @@
 #include "runtime_constants.h"
 
 // PixelViews is a table of PixelView records, indexed by view index.
-// It is built once from a list of PixelViewSpec records — each spec
+// It is built once from a list of PixelViewSpec records -- each spec
 // says which pool buffer a view binds to and which storage and
 // physical mappings it uses.
 //
