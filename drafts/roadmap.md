@@ -125,11 +125,20 @@ buffer_size, per-buffer write isolation, reset returns to empty,
 re-initialize replaces, pooled adjacency. Both targets pass under
 valgrind memcheck.
 
-### 9. `pixel_view.{h,cpp}`
+### 9. `pixel_view.{h,cpp}` — DONE
 
-Tests cover: identity storage, non-identity storage, identity
-physical, non-identity physical, all four combinations, and that
-`view[i]` and `view.physical_index(i)` are independent.
+Landed in `src/pixel_view.{h,cpp}` and added to `elements_core` for
+build coverage. Hot-path methods (`operator[]`, `physical_index`,
+`size`, `empty`, `is_storage_identity`, `has_physical_mapping`,
+`is_physical_identity`) inline in the header; `initialize`, `reset`,
+`clear`, dtor stay out of line. Coverage in `test_pixel_view`:
+default-empty, null backing rejected, identity vs non-identity storage
+(including caller-frees-the-input-array), identity vs non-identity
+physical (including caller-frees-the-input-array), null physical array
+with non-identity mapping rejected, all four combinations of (storage
+× physical) including independence checks, `clear()` only zeroes
+pixels reachable via the view, `reset()` returns to empty,
+re-initialize replaces the binding. Passes under valgrind memcheck.
 
 ### 10. `pixel_views.{h,cpp}`
 

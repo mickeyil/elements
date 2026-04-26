@@ -72,49 +72,6 @@ void PixelView::reset()
     _physical_identity = false;
 }
 
-uint16_t PixelView::size() const
-{
-    return _size;
-}
-
-bool PixelView::is_storage_identity() const
-{
-    return _storage_indices == nullptr;
-}
-
-bool PixelView::has_physical_mapping() const
-{
-    return _has_physical_mapping;
-}
-
-bool PixelView::is_physical_identity() const
-{
-    return _has_physical_mapping && _physical_identity;
-}
-
-bool PixelView::empty() const
-{
-    return _size == 0;
-}
-
-hsva_t& PixelView::operator[](uint16_t i)
-{
-    return _buffer[_storage_indices ? _storage_indices[i] : i];
-}
-
-const hsva_t& PixelView::operator[](uint16_t i) const
-{
-    return _buffer[_storage_indices ? _storage_indices[i] : i];
-}
-
-uint16_t PixelView::physical_index(uint16_t i) const
-{
-    if (!_has_physical_mapping) {
-        return 0;
-    }
-    return _physical_identity ? i : _physical_indices[i];
-}
-
 void PixelView::clear()
 {
     for (uint16_t i = 0; i < _size; i++) {
