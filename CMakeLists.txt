@@ -16,6 +16,8 @@ add_library(elements_core STATIC
     src/compositor.cpp
     src/colors.cpp
     src/gamma.cpp
+    src/platform_clock_steady.cpp
+    src/synced_clock.cpp
     src/playback_device.cpp
     src/esp_simulated.cpp
     src/sim_controller.cpp
@@ -79,6 +81,17 @@ if(BUILD_TESTS)
     add_executable(test_gamma test/test_gamma.cpp src/gamma.cpp)
     target_include_directories(test_gamma PRIVATE src)
     target_link_libraries(test_gamma Catch2::Catch2WithMain)
+
+    # test_synced_clock is also standalone during the v3 migration: it
+    # links the test platform_clock fake (test/platform_clock_test.cpp)
+    # instead of any production platform_clock impl.
+    add_executable(test_synced_clock
+        test/test_synced_clock.cpp
+        test/platform_clock_test.cpp
+        src/synced_clock.cpp
+    )
+    target_include_directories(test_synced_clock PRIVATE src test)
+    target_link_libraries(test_synced_clock Catch2::Catch2WithMain)
 
     add_executable(test_compositor test/test_compositor.cpp)
     target_link_libraries(test_compositor elements_core Catch2::Catch2WithMain)
@@ -147,6 +160,8 @@ if(BUILD_TESTS)
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_gamma COMMAND test_gamma
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    add_test(NAME test_synced_clock COMMAND test_synced_clock
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_compositor COMMAND test_compositor
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_animations COMMAND test_animations
@@ -197,6 +212,15 @@ if(BUILD_TESTS)
                     --error-exitcode=1 $<TARGET_FILE:test_gamma>
         )
         set_tests_properties(test_gamma_memcheck PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        )
+        add_test(
+            NAME test_synced_clock_memcheck
+            COMMAND ${VALGRIND} --leak-check=full
+                    --errors-for-leak-kinds=definite,indirect,possible
+                    --error-exitcode=1 $<TARGET_FILE:test_synced_clock>
+        )
+        set_tests_properties(test_synced_clock_memcheck PROPERTIES
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         )
         add_test(

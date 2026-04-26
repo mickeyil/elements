@@ -49,19 +49,29 @@ Landed in `src/gamma.{h,cpp}` as `GammaCorrection` with
 `apply_gamma(Strip&, const GammaCorrection&)` is deferred to step 13
 with the v3 `Strip`.
 
-### 3. `platform_clock.{h,cpp}` (new)
+### 3. `platform_clock.{h,cpp}` — DONE
 
-Single-function seam: `int64_t platform_clock::now_us()`. One
-production TU per target (`_esp.cpp`, `_steady.cpp`). Test TU exposes
-`set_test_now_us(int64_t)`.
+Landed as `src/platform_clock.h` + `src/platform_clock_steady.cpp`
+(host) + `src/platform_clock_esp.cpp` (ARDUINO). Single-function seam:
+`int64_t platform_clock::now_us()`. The fake lives at
+`test/platform_clock_test.{h,cpp}` and exposes `set_test_now_us` /
+`advance_test_us`. Production impl is selected at link time. The host
+TU is now compiled by `elements_core`; the ESP TU is added to
+`platformio.ini`'s `build_src_filter` once firmware first consumes
+`SyncedClock`.
 
-### 4. `synced_clock.{h,cpp}`
+### 4. `synced_clock.{h,cpp}` — DONE
 
-Calls `platform_clock::now_us()`. Tests: initially unsynced; apply
-offset → synced and `now_remote_us() == now_local_us() - offset`;
-lease expires at the exact boundary; re-applying the same offset
-extends the lease; `valid_for_us == 0` expires immediately but
-preserves the last mapping; `clear_sync()` drops sync.
+Landed in `src/synced_clock.{h,cpp}`. Reads time through
+`platform_clock::now_us()`; no `#ifdef ARDUINO`. Test target
+`test_synced_clock` is standalone (mirrors `test_gamma`) and links the
+fake clock instead of any production impl. Coverage: initially
+unsynced; sign-convention round-trip (positive and negative offsets);
+strict-less-than lease boundary; `valid_for_us == 0` push-revoke;
+re-apply refreshes the lease relative to current now; last-known
+mapping persists across lease expiry; `clear_sync` wipes the offset
+(post-clear `remote == local`); idempotent `clear_sync` after expiry;
+re-apply after clear restores sync; year-scale `int64` arithmetic.
 
 ### 5. `hardware_profile.h`
 

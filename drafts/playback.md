@@ -107,8 +107,9 @@ clock-derived    ·····•·····•·····•·········T··�
 
 ## `SyncedClock` Integration
 
-`Playback` depends on a concrete `SyncedClock`. Contract and sync policy live
-in `drafts/synced_clock.h` and `drafts/synced_clock.md`.
+`Playback` depends on a concrete `SyncedClock`. The contract lives in
+`src/synced_clock.h`; the sync policy and wire format live in
+`drafts/synced_clock.md`.
 
 Playback-side boundary:
 

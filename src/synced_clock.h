@@ -21,13 +21,11 @@
 //   offset_us == now_local_us() - now_remote_us()
 // Positive means the local clock leads remote.
 //
-// Platform support. SyncedClock is a single concrete class. The raw
-// monotonic source is selected at compile time via `#ifdef ARDUINO`:
-// - ARDUINO (ESP32): esp_timer_get_time()
-// - non-ARDUINO (Linux on x86_64 or ARM — e.g. Intel NUC, Raspberry Pi,
-//   NVIDIA Jetson): std::chrono::steady_clock
-// No callback injection or virtual hooks. Deterministic tests substitute
-// the platform raw-time source, not SyncedClock itself.
+// Platform support. SyncedClock is a single concrete class with no virtuals,
+// templates, or callbacks. The raw monotonic source is reached through
+// platform_clock::now_us(); link-time selection picks the host clock, the
+// ESP timer, or the test fake. Deterministic tests substitute the platform
+// raw-time source, not SyncedClock itself.
 
 #include <cstdint>
 
@@ -39,11 +37,11 @@ public:
     // Current remote-clock estimate in microseconds, computed as
     // `now_local_us() - _offset_us`. Returns a value even after the lease
     // has expired; callers that require a fresh estimate gate on is_synced()
-    // first.
+    // first. After clear_sync(), returns now_local_us() (the offset is
+    // wiped).
     int64_t now_remote_us() const;
 
-    // Current local monotonic clock in microseconds. Reads the platform raw
-    // time source directly.
+    // Current local monotonic clock in microseconds.
     int64_t now_local_us() const;
 
     // Apply a new sync offset with a validity window.
@@ -52,9 +50,9 @@ public:
     //                (positive = local leads remote).
     // valid_for_us : lease duration measured from the current local time.
     //                Zero produces an immediately expired lease (push-revoke);
-    //                a subsequent is_synced() returns false. Negative values
-    //                are not produced by the wire protocol (u32 ms) and are
-    //                not part of the contract.
+    //                a subsequent is_synced() returns false. Must be >= 0:
+    //                negative values are not produced by the wire protocol
+    //                (u32 ms) and are not part of the contract.
     void apply_sync_offset(int64_t offset_us, int64_t valid_for_us);
 
     // Drop the current offset and mark the clock unsynced.

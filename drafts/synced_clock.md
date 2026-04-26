@@ -2,7 +2,7 @@
 
 Controller-side sync policy, wire format, and firmware integration for the
 `SyncedClock` abstraction. The firmware-side API lives in
-`drafts/synced_clock.h`.
+`src/synced_clock.h`.
 
 ## Model
 
