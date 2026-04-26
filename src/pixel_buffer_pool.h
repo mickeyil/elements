@@ -6,9 +6,9 @@
 
 // PixelBufferPool is a collection of hsva_t pixel buffers used by a
 // decoded program. Buffers are addressed by index. The pool owns the
-// backing memory: it is allocated on initialize() and released on
-// reset() or destruction. Callers borrow buffer pointers via
-// buffer_at() and must not free them.
+// memory: it is allocated on initialize() and released on reset() or
+// destruction. Callers borrow buffer pointers via buffer_at() and must
+// not free them.
 //
 //     PixelBufferPool pool;
 //     uint16_t sizes[] = {32, 64, 16};

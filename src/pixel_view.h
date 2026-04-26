@@ -4,21 +4,22 @@
 
 #include "colors.h"
 
-// PixelView is a logical view over an hsva_t backing buffer, exposing
-// `size` logical pixels through two independent mappings:
+// PixelView is a logical view over an hsva_t underlying buffer.
 //
-// - storage: where view[i] reads/writes in the buffer (identity by
-//   default; an optional indirection array can remap)
-// - physical: where view[i] appears on the strip (absent by default;
-//   set only on views the compositor consumes)
+// `storage_indices` remaps the buffer slot each view[i] uses (useful
+// for scattered access into the buffer). `physical_indices` gives the
+// strip LED that view[i] lights, and only matters for views the
+// compositor consumes — keeping it on the view leaves the compositor
+// uniform. Either array may be omitted; the missing mapping defaults
+// to identity.
 //
-// The view borrows its backing buffer (PixelBufferPool owns it) but
+// The view borrows the underlying buffer (PixelBufferPool owns it) but
 // owns its indirection arrays. Bind via initialize(); release via
 // reset() or destruction.
 //
-//     PixelView v;
-//     v.initialize(backing, /*size*/ 8);
-//     v[3] = hsva_t(120.0f, 1.0f, 0.5f);
+//     PixelView v;                     // not usable until initialize() is called
+//     v.initialize(buffer, 8);         // 8 pixels of buffer; identity storage
+//     v[3] = hsva_t(120.0, 1.0, 0.5);  // writes to buffer[3]
 
 class PixelView {
 public:
@@ -30,10 +31,10 @@ public:
     PixelView(PixelView&&) = delete;
     PixelView& operator=(PixelView&&) = delete;
 
-    // Bind the view to a backing buffer with optional indirection arrays.
+    // Bind the view to a buffer with optional indirection arrays.
     //
-    // storage_indices == nullptr: identity storage (view[i] -> backing[i]).
-    // Otherwise the array is copied and view[i] -> backing[storage_indices[i]].
+    // storage_indices == nullptr: identity storage (view[i] -> buffer[i]).
+    // Otherwise the array is copied and view[i] -> buffer[storage_indices[i]].
     //
     // has_physical_mapping == false: storage-only view; must not be passed
     // to the compositor. The physical_* arguments are ignored.
@@ -43,10 +44,10 @@ public:
     //     physical_indices must point to `size` entries (copied and owned).
     //
     // Returns false on allocation failure or invalid arguments (size > 0
-    // with backing_buffer == nullptr, or non-identity physical mapping
-    // with physical_indices == nullptr).
+    // with buffer == nullptr, or non-identity physical mapping with
+    // physical_indices == nullptr).
     bool initialize(
-        hsva_t* backing_buffer,
+        hsva_t* buffer,
         uint16_t size,
         const uint16_t* storage_indices = nullptr,
         bool has_physical_mapping = false,
@@ -64,7 +65,7 @@ public:
 
     bool empty() const { return _size == 0; }
 
-    // True when storage is identity (view[i] == backing[i]).
+    // True when storage is identity (view[i] == buffer[i]).
     bool is_storage_identity() const { return _storage_indices == nullptr; }
 
     // True when the view carries a physical-LED mapping.
@@ -91,7 +92,7 @@ public:
     }
 
 private:
-    // Non-owning pointer to the backing hsva_t buffer.
+    // Non-owning pointer to the underlying hsva_t buffer.
     hsva_t* _buffer = nullptr;
 
     // Owned logical -> storage-slot mapping. nullptr means identity.

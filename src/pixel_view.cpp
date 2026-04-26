@@ -8,7 +8,7 @@ PixelView::~PixelView()
 }
 
 bool PixelView::initialize(
-    hsva_t* backing_buffer,
+    hsva_t* buffer,
     uint16_t size,
     const uint16_t* storage_indices,
     bool has_physical_mapping,
@@ -18,11 +18,11 @@ bool PixelView::initialize(
 {
     reset();
 
-    if (backing_buffer == nullptr && size > 0) {
+    if (buffer == nullptr && size > 0) {
         return false;
     }
 
-    _buffer = backing_buffer;
+    _buffer = buffer;
     _size = size;
     _has_physical_mapping = has_physical_mapping;
     _physical_identity = has_physical_mapping && physical_identity;
