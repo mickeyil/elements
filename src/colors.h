@@ -16,9 +16,9 @@ struct hsva_t {
         : h(h), s(s), v(v), a(a) {}
 };
 
-// PixelBufferPool slices only on hsva_t boundaries and (in the ARDUINO
-// pooled path) memset-clears raw bytes, so the type must stay a flat
-// trivially-copyable value.
+// PixelBufferPool slices on hsva_t boundaries inside a contiguous array;
+// the type must stay a flat trivially-copyable value so size and alignment
+// stay predictable.
 static_assert(sizeof(hsva_t) == 4 * sizeof(float),
               "hsva_t must remain exactly 4 floats");
 static_assert(alignof(hsva_t) == alignof(float),

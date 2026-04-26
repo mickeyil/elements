@@ -1,6 +1,5 @@
 #include "pixel_buffer_pool.h"
 
-#include <cstring>
 #include <new>
 
 PixelBufferPool::~PixelBufferPool()
@@ -40,8 +39,6 @@ bool PixelBufferPool::initialize(const uint16_t* buffer_sizes, uint16_t buffer_c
         return false;
     }
 
-    _pool_size = total_pixels;
-
     uint32_t offset = 0;
     for (uint16_t i = 0; i < buffer_count; i++) {
         _buffers[i] = _pool + offset;
@@ -67,7 +64,6 @@ void PixelBufferPool::reset()
 #ifdef ARDUINO
     delete[] _pool;
     _pool = nullptr;
-    _pool_size = 0;
 #else
     if (_buffers != nullptr) {
         for (uint16_t i = 0; i < _buffer_count; i++) {
@@ -82,33 +78,4 @@ void PixelBufferPool::reset()
     _buffer_count = 0;
     _buffers = nullptr;
     _sizes = nullptr;
-}
-
-uint16_t PixelBufferPool::buffer_count() const
-{
-    return _buffer_count;
-}
-
-hsva_t* PixelBufferPool::buffer_at(uint16_t buffer_idx)
-{
-    if (buffer_idx >= _buffer_count || _buffers == nullptr) {
-        return nullptr;
-    }
-    return _buffers[buffer_idx];
-}
-
-const hsva_t* PixelBufferPool::buffer_at(uint16_t buffer_idx) const
-{
-    if (buffer_idx >= _buffer_count || _buffers == nullptr) {
-        return nullptr;
-    }
-    return _buffers[buffer_idx];
-}
-
-uint16_t PixelBufferPool::buffer_size(uint16_t buffer_idx) const
-{
-    if (buffer_idx >= _buffer_count || _sizes == nullptr) {
-        return 0;
-    }
-    return _sizes[buffer_idx];
 }
