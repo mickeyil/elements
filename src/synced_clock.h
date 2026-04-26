@@ -1,31 +1,20 @@
 #pragma once
 
-// Concrete synced-clock abstraction.
+
+// Tracks an estimate of a remote (shared) clock from the local monotonic
+// clock and a caller-supplied offset between them.
 //
-// SyncedClock publishes two time domains:
-// - local time: the device's own monotonic clock in microseconds.
-// - remote time: an estimate of the shared/authoritative clock in
-//   microseconds, derived from the local clock and the most recently
-//   applied sync offset.
+// Typical use: a sync routine measures the offset between the two clocks
+// somewhere outside this module, calls apply_sync_offset() with that
+// offset and a validity duration, and from then on now_remote_us()
+// returns the estimate. Once the validity window passes, is_synced()
+// returns false until a fresh offset is applied.
 //
-// Sync offsets are supplied with a lease duration (valid_for_us). is_synced()
-// reports whether the current lease is still valid. When the lease has
-// expired, or when no offset has been applied since construction or the last
-// clear_sync(), remote time is considered untrustworthy.
-//
-// Remote time is not guaranteed monotonic: when a new offset is applied, the
-// estimate can step forward or backward. Callers that require monotonic
-// remote time must enforce that invariant themselves.
-//
-// Sign convention for the offset:
-//   offset_us == now_local_us() - now_remote_us()
-// Positive means the local clock leads remote.
-//
-// Platform support. SyncedClock is a single concrete class with no virtuals,
-// templates, or callbacks. The raw monotonic source is reached through
-// platform_clock::now_us(); link-time selection picks the host clock, the
-// ESP timer, or the test fake. Deterministic tests substitute the platform
-// raw-time source, not SyncedClock itself.
+//     SyncedClock c;
+//     c.apply_sync_offset(offset_us, valid_for_us);
+//     if (c.is_synced()) {
+//         int64_t t = c.now_remote_us();
+//     }
 
 #include <cassert>
 #include <cstdint>
@@ -57,11 +46,9 @@ public:
     //
     // offset_us    : local clock minus remote clock, in microseconds
     //                (positive = local leads remote).
-    // valid_for_us : lease duration measured from the current local time.
-    //                Zero produces an immediately expired lease (push-revoke);
-    //                a subsequent is_synced() returns false. Must be >= 0:
-    //                negative values are not produced by the wire protocol
-    //                (u32 ms) and are not part of the contract.
+    // valid_for_us : how long this offset is considered valid, in microseconds.
+    //                When it elapses, is_synced() returns false. Passing 0
+    //                makes the instance immediately unsynced. Must be >= 0.
     void apply_sync_offset(int64_t offset_us, int64_t valid_for_us) {
         assert(valid_for_us >= 0);
         _offset_us = offset_us;
