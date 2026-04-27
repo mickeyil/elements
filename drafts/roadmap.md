@@ -187,10 +187,22 @@ zero-pad, empty-strip zero-fill, `dst_pixels==0` no-op, null `dst` no-op.
 `gamma_correct` is gone from new code; legacy `compositor.cpp` still
 references it but is not part of the new build path.
 
-### 13. `animation.h` + `layer.{h,cpp}`
+### 13. `animation.h` + `layer.{h,cpp}` — DONE
 
-Structural. `Layer::initialize` + `Layer::active_at(t)` tests against
-a trivial event list (use a fake animation type).
+Landed in `src/animation.h` and `src/layer.{h,cpp}` and added to
+`elements_core` for build coverage. `Animation` is the PixelView-based
+visual primitive (header-only, virtual `initialize`/`render`); the legacy
+HSVA-buffer interface is gone. `Layer` adopts a decoder-allocated event
+array, owns each event's `Animation*`, and exposes `count()`, `at(idx)`,
+and stateless `active_at(t)` (half-open `[start, start+duration)`,
+linear scan with sorted-order short-circuit). Standalone test target
+`test_layer` uses a `FakeAnim` that bumps a live-instance counter so
+ownership tests can prove every animation gets freed exactly once.
+Coverage in `test_layer`: default-empty, `active_at` on empty,
+`initialize` adopts (count + per-event field check), `reset` and dtor
+free both array and animations, re-`initialize` replaces (and frees the
+prior batch), `active_at` for before-first / on-start / mid-event /
+on-end (exclusive) / gap / past-last / back-to-back schedule.
 
 ### 14. `compositor.{h,cpp}`
 

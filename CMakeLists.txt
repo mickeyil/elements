@@ -22,6 +22,7 @@ add_library(elements_core STATIC
     src/pixel_view.cpp
     src/pixel_views.cpp
     src/strip.cpp
+    src/layer.cpp
     src/playback_device.cpp
     src/esp_simulated.cpp
     src/sim_controller.cpp
@@ -141,6 +142,10 @@ if(BUILD_TESTS)
     target_include_directories(test_strip PRIVATE src)
     target_link_libraries(test_strip Catch2::Catch2WithMain)
 
+    add_executable(test_layer test/test_layer.cpp src/layer.cpp)
+    target_include_directories(test_layer PRIVATE src)
+    target_link_libraries(test_layer Catch2::Catch2WithMain)
+
     # test_synced_clock is also standalone during the v3 migration: it
     # links the test platform_clock fake (test/platform_clock_test.cpp)
     # instead of any production platform_clock impl.
@@ -233,6 +238,8 @@ if(BUILD_TESTS)
     add_test(NAME test_copy_ops COMMAND test_copy_ops
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_strip COMMAND test_strip
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    add_test(NAME test_layer COMMAND test_layer
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_synced_clock COMMAND test_synced_clock
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
@@ -358,6 +365,15 @@ if(BUILD_TESTS)
                     --error-exitcode=1 $<TARGET_FILE:test_strip>
         )
         set_tests_properties(test_strip_memcheck PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        )
+        add_test(
+            NAME test_layer_memcheck
+            COMMAND ${VALGRIND} --leak-check=full
+                    --errors-for-leak-kinds=definite,indirect,possible
+                    --error-exitcode=1 $<TARGET_FILE:test_layer>
+        )
+        set_tests_properties(test_layer_memcheck PROPERTIES
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         )
         add_test(
