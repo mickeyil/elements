@@ -2,9 +2,9 @@
 
 Ordered plan for moving v3 draft modules into `src/` with tests. Each step
 lands a module (header + impl where applicable) and its unit tests before
-the next step starts. Design contracts live in `data_model.md`,
-`blob_format.md`, `playback.md`, `synced_clock.md`, `compiler.md`; this
-file is the migration sequence.
+the next step starts. Design contracts live in `blob_format.md`,
+`playback.md`, `synced_clock.md`, `compiler.md`; the time-naming
+vocabulary is in `data_model.md`. This file is the migration sequence.
 
 ## Settled Policies
 
