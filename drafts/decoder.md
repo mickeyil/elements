@@ -17,7 +17,7 @@ splits those out.
 | `src/blob_reader.cpp`         | `BlobReader` and `decode_error_name()` implementations |
 | `src/blob_limits.h`           | `MAX_*` cap constants |
 | `drafts/animation_types.h`    | `AnimType` enum |
-| `drafts/program_structs.h`    | `Program` shape, `free_program()` |
+| `src/program.h`               | `Program` shape, `free_program()` |
 | `drafts/layer.h`              | `Layer`, `AnimationEvent` |
 | `drafts/pixel_views.h`        | `PixelViews`, `PixelViewSpec` |
 | `drafts/pixel_buffer_pool.h`  | `PixelBufferPool` |
@@ -241,11 +241,11 @@ The new decoder depends on a few small additions elsewhere:
 - `drafts/playback.cpp::handle_load` — replace the placeholder body with
   the integration sketch above.
 
-`drafts/program_structs.h/.cpp` already carry the supporting changes:
+`src/program.{h,cpp}` already carry the supporting changes:
 `Program::requires_sync` is declared, `Program::~Program()` releases the
 layers array, and `free_program(Program*)` is declared there as a thin
 wrapper around `delete prog`. The decoder does not redeclare
-`free_program`; callers that need it include `program_structs.h`.
+`free_program`; callers that need it include `program.h`.
 
 ## What this replaces
 
@@ -255,7 +255,7 @@ wrapper around `delete prog`. The decoder does not redeclare
   `PaintParams` in the legacy header — deleted; each animation owns its own
   params shape next to its class definition.
 - `LayerDef`, `BufferPool`, the legacy `AnimationEvent`, the legacy
-  `Program` — deleted; their replacements live in `drafts/program_structs.*`,
-  `drafts/layer.*`, `drafts/pixel_*.*`, and `drafts/copy_ops.*`.
+  `Program` — deleted; their replacements live in `src/program.*`,
+  `src/layer.*`, `src/pixel_*.*`, and `src/copy_ops.*`.
 - `max_remap_length` in the header and `temp_buffer` in `Program` — deleted
   with the old scatter-copy path.

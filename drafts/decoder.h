@@ -30,7 +30,7 @@ static constexpr char    kBlobMagic[4] = { 'E', 'L', 'E', 'M' };
 //
 // The returned Program is heap-allocated and owns every nested allocation:
 // pool, views, copy ops, layers, events, and per-event Animation instances.
-// Free with free_program() declared in program_structs.h.
+// Free with free_program() declared in program.h.
 Program* decode_program(
     const uint8_t* blob,
     size_t blob_len,

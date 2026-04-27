@@ -224,10 +224,28 @@ active/inactive layers, non-identity physical mapping routes
 view[i]->strip[phys[i]], short view leaves uncovered pixels black,
 each composite re-clears.
 
-### 15. `program_structs.{h,cpp}`
+### 15. `program.{h,cpp}` — DONE
 
-Program ownership + `free_program()`. Tests: destructor releases all
-owned tables; post-`free` state is safe to destroy again.
+Renamed from `program_structs.{h,cpp}` -- the file holds one type
+(`Program`) plus `free_program()`, so the `_structs` suffix never fit.
+Landed in `src/program.{h,cpp}` and added to `elements_core` for build
+coverage. `Program` is a struct with deleted copy/move; `~Program()`
+runs `delete[] layers` (each Layer dtor releases its events and
+animations) and the embedded `PixelBufferPool` / `PixelViews` /
+`CopyOps` tear down via their own dtors. `free_program(prog)` is the
+thin `delete prog` wrapper; `nullptr` is safe. Standalone test
+target `test_program` links `program.cpp` + `layer.cpp` +
+`pixel_buffer_pool.cpp` + `pixel_view.cpp` + `pixel_views.cpp` +
+`copy_ops.cpp`. Coverage: default-empty field state, default-dtor
+no-op, populated-Program dtor frees layers/events/animations
+(verified via FakeAnim live counter), `free_program(populated)`
+matches `delete`, `free_program(nullptr)` no-op, embedded containers
+initialize-and-tear-down cleanly, full Program (layers + pool + views
++ copy_ops) destructs cleanly. Drafts swept for cross-references:
+`decoder.{h,cpp,md}` and `engine.h` now point at `program.h`. Engine
+skeleton (`drafts/engine.cpp:69-70`) updated to use `layer.count()` /
+`layer.at(...)` after step 13's encapsulation; the body otherwise
+remains the step-16 sketch.
 
 ### 16. `engine.{h,cpp}`
 

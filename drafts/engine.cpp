@@ -66,8 +66,8 @@ bool Engine::render_frame(float t_program, Strip& out)
         Layer& layer = _program->layers[li];
         LayerPlaybackState& state = _layer_states[li];
 
-        while (state.cursor < layer.event_count) {
-            AnimationEvent& e = layer.events[state.cursor];
+        while (state.cursor < layer.count()) {
+            AnimationEvent& e = layer.at(state.cursor);
             const float end = e.start + e.duration;
 
             if (t_program < e.start) {

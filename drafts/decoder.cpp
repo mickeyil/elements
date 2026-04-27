@@ -11,7 +11,7 @@
 #include "layer.h"
 #include "pixel_buffer_pool.h"
 #include "pixel_views.h"
-#include "program_structs.h"
+#include "program.h"
 #include "runtime_constants.h"
 
 // TODO: include each concrete animation header. The decoder is the only
@@ -313,7 +313,7 @@ Program* decode_program(
     return prog;
 }
 
-// free_program() lives in program_structs.cpp. The teardown chain:
+// free_program() lives in program.cpp. The teardown chain:
 //
 //   delete prog
 //     → Program::~Program() releases prog->layers

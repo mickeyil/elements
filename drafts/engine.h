@@ -8,7 +8,7 @@
 #include <cstdint>
 
 #include "compositor.h"
-#include "program_structs.h"
+#include "program.h"
 #include "strip.h"
 
 class Engine {
