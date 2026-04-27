@@ -216,12 +216,30 @@ DecodeError parse_event(BlobReader& r, const ParsedHeader& hdr,
     //    BlobReader handles a nullptr+0 input cleanly.)
     // - DecodeError perr = DecodeError::Ok;
     // - dispatch on AnimType (each from_blob writes perr on failure):
-    //     case AnimType::Wave:  event.animation = WaveAnimation::from_blob(p, params_size, &perr); break;
-    //     case AnimType::Shift: event.animation = ShiftAnimation::from_blob(p, params_size, &perr); break;
-    //     case AnimType::Spark: event.animation = SparkAnimation::from_blob(p, params_size, &perr); break;
-    //     case AnimType::Paint: event.animation = PaintAnimation::from_blob(p, params_size, &perr); break;
+    //     case AnimType::Wave:  event.animation = AnimWave::from_blob(p, params_size, &perr); break;
+    //     case AnimType::Shift: event.animation = AnimShift::from_blob(p, params_size, &perr); break;
+    //     case AnimType::Spark: event.animation = AnimSpark::from_blob(p, params_size, &perr); break;
+    //     case AnimType::Paint: event.animation = AnimPaint::from_blob(p, params_size, &perr); break;
     //     default: return DecodeError::InvalidField;
     // - if event.animation == nullptr return perr  // InvalidField or OutOfMemory
+    // - per-anim post-checks against the resolved event:
+    //     AnimType::Paint constant mode -- the constant array length must
+    //     match the dst view size. AnimPaint cannot self-validate (no view
+    //     access at construction):
+    //       AnimPaint* paint = static_cast<AnimPaint*>(event.animation);
+    //       const uint8_t k = paint->constant_array_size();
+    //       if (k != 0 && k != prog.pixel_views.at(dst_pixv_idx).size()) {
+    //           delete event.animation; event.animation = nullptr;
+    //           return DecodeError::InvalidField;
+    //       }
+    //     AnimType::Shift -- the event must carry src_pixv_idx != PIXV_NONE.
+    //     Shift snapshots from src in initialize(); without a source view it
+    //     would shift whatever happened to be in work (zeros after reset, or
+    //     stale data otherwise) -- not a meaningful render:
+    //       if (src_pixv_idx == PIXV_NONE) {
+    //           delete event.animation; event.animation = nullptr;
+    //           return DecodeError::InvalidField;
+    //       }
     // - assign event.start, event.duration, event.{src,dst,work}_pixv_idx
     (void)r; (void)hdr; (void)prog; (void)event;
     return DecodeError::Ok;

@@ -272,20 +272,37 @@ copy-op cursor advances only past due ops, `reset` re-arms initialize,
 buffers, chained same-`at` copy ops execute in table order, top layer
 wins on a shared physical LED (engine-to-compositor handoff).
 
-### 17. `anim_paint.{h,cpp}` + `anim_wave.{h,cpp}` + `anim_spark.{h,cpp}`
+### 17 + 18. `anim_paint.{h,cpp}` + `anim_wave.{h,cpp}` + `anim_spark.{h,cpp}` + `anim_shift.{h,cpp}` — DONE
 
-Mechanical v3 ports: `render(dst, t_animation)` only, no `src`, no
-`work`. Port the existing render math to the three-view interface;
-add each type's `from_blob()` factory per `decoder.md §Animation
-Construction`.
-
-### 18. `anim_shift.{h,cpp}`
-
-Careful pass: `initialize(src, work)` snapshots source pixels into
-`work`; each `render(dst, t_animation)` reads `work` and writes `dst`
-at the shifted offset. Tests must cover: fresh initialization snapshot
-integrity, work view not mutated by later sources, shift offset sign
-and wrap at `t_animation = 0` / mid / end.
+Bundled both steps into one landing. Each header defines its `*Params`
+struct and class, depends only on `animation.h` + `blob_reader.h` (and
+`colors.h` for paint, which exposes `hsva_t*` ownership). Each `.cpp`
+holds the render math and a `from_blob(params, params_size, err_out)`
+static factory: parse with a local `BlobReader`, validate per the
+decoder.md contract (every float finite, range checks, mode/channel
+bounds, period/fade > 0), allocate via `new (std::nothrow)`. Errors
+default to `InvalidField`; `OutOfMemory` is set explicitly on alloc
+failure. `AnimPaint` distinguishes solid (one color) from constant
+mode (a blob-baked hsva array replayed into dst); render() trusts
+`constant_count == dst.size()` per the contract. The decoder enforces
+that equality post-`from_blob` via `AnimPaint::constant_array_size()`
+(sketched in `drafts/decoder.{cpp,md}` for step 19). v3
+`ShiftParams` drops the legacy `buffer_id` -- the work view now comes
+from the event's `work_pixv_idx`. `AnimShift::initialize(src, work)`
+snapshots `src` into `work` and remembers `work` for `render`. Test
+target `test_animations` is now standalone (links the four anim
+sources + blob_reader + pixel_view + colors). Coverage in
+`test_animations` (30 cases, 144 assertions): wave channel selector,
+midpoint at t=0, pixel_step phase shift, from_blob round-trip and
+rejections (channel > 2, period <= 0, NaN, truncation); spark t=0
+full alpha, quadratic ease-out, post-fade clamp, from_blob round-trip
+and NaN/fade rejections; paint solid fill, per-pixel write, dst-size
+capping (shorter and longer than count, sentinel preserved), from_blob
+solid + per-pixel round-trips, mode/NaN rejections; shift initialize
+snapshot, t=0 produces work contents, direction left/right offset,
+circular wrap, non-circular fill, snapshot survives later src
+mutation, from_blob round-trip and rejections (direction > 1, circular
+> 1, NaN velocity).
 
 ### 19. `decoder.{h,cpp}`
 

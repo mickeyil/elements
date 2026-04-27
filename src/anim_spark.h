@@ -1,34 +1,27 @@
 #pragma once
 
 #include "animation.h"
-#include "decoder.h"
-#include <cmath>
+#include "blob_reader.h"
 
-// Single flash at t=0, fades alpha to 0 over _fade seconds.
-// No repeating — the DSL schedules multiple spark events for repetition.
+#include <cstddef>
+
+// Spark animation: a single flash with a quadratic alpha fade-out. At t=0
+// the color is full alpha; at t=fade alpha hits zero and stays there.
+
+struct SparkParams {
+    float color_h, color_s, color_v;
+    float fade;     // seconds; must be > 0
+};
 
 class AnimSpark : public Animation {
 public:
-    AnimSpark(const SparkParams& p)
-        : _color_h(p.color_h), _color_s(p.color_s), _color_v(p.color_v),
-          _fade(p.fade) {}
+    explicit AnimSpark(const SparkParams& p);
 
-    void render(hsva_t* buffer, uint8_t length, float t) override
-    {
-        float alpha;
-        if (t < _fade) {
-            alpha = 1.0f - (t / _fade);
-            alpha = alpha * alpha;  // quadratic ease-out
-        } else {
-            alpha = 0.0f;
-        }
+    static Animation* from_blob(const uint8_t* params, size_t params_size,
+                                DecodeError* err_out);
 
-        for (uint8_t i = 0; i < length; i++) {
-            buffer[i] = hsva_t(_color_h, _color_s, _color_v, alpha);
-        }
-    }
+    void render(PixelView& dst, float t_animation) override;
 
 private:
-    float _color_h, _color_s, _color_v;
-    float _fade;
+    SparkParams _p;
 };

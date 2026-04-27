@@ -90,7 +90,7 @@ The decoder does **not** own:
 Each animation header exposes a static factory that owns its own param shape:
 
 ```cpp
-class WaveAnimation : public Animation {
+class AnimWave : public Animation {
 public:
     static Animation* from_blob(const uint8_t* params, size_t params_size,
                                 DecodeError* err_out);
@@ -120,14 +120,32 @@ The decoder dispatches:
 ```cpp
 DecodeError perr = DecodeError::Ok;
 switch (static_cast<AnimType>(anim_type)) {
-    case AnimType::Wave:  event.animation = WaveAnimation::from_blob(p, n, &perr); break;
-    case AnimType::Shift: event.animation = ShiftAnimation::from_blob(p, n, &perr); break;
-    case AnimType::Spark: event.animation = SparkAnimation::from_blob(p, n, &perr); break;
-    case AnimType::Paint: event.animation = PaintAnimation::from_blob(p, n, &perr); break;
+    case AnimType::Wave:  event.animation = AnimWave::from_blob(p, n, &perr); break;
+    case AnimType::Shift: event.animation = AnimShift::from_blob(p, n, &perr); break;
+    case AnimType::Spark: event.animation = AnimSpark::from_blob(p, n, &perr); break;
+    case AnimType::Paint: event.animation = AnimPaint::from_blob(p, n, &perr); break;
     default:              return DecodeError::InvalidField;
 }
 if (event.animation == nullptr) return perr;
 ```
+
+### Per-anim post-checks against the resolved event
+
+A few animation types carry constraints that can only be checked once the
+event's view indices are resolved. The decoder runs these after `from_blob`
+returns:
+
+- **`AnimType::Paint` constant mode.** The constant array's length must
+  equal the dst view's size. `AnimPaint` cannot self-validate because
+  `from_blob` does not see the dst view; the decoder calls
+  `paint->constant_array_size()` and rejects `InvalidField` on mismatch.
+  Solid-mode paint reports `0` and trivially passes the check.
+
+- **`AnimType::Shift`.** The event must carry `src_pixv_idx != PIXV_NONE`.
+  Shift snapshots from src in `initialize()`; without a source view the
+  work buffer would be all zeros (after `Engine::reset()`) or stale
+  data (otherwise), and the rendered output would not be meaningful.
+  The decoder rejects `InvalidField` when the source index is missing.
 
 Each `from_blob` parses its own param bytes (using a local `BlobReader` over
 the params slice) and constructs the subclass. The decoder never sees an

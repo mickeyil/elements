@@ -24,6 +24,10 @@ add_library(elements_core STATIC
     src/strip.cpp
     src/layer.cpp
     src/program.cpp
+    src/anim_wave.cpp
+    src/anim_spark.cpp
+    src/anim_paint.cpp
+    src/anim_shift.cpp
     src/playback_device.cpp
     src/esp_simulated.cpp
     src/sim_controller.cpp
@@ -192,8 +196,18 @@ if(BUILD_TESTS)
     target_include_directories(test_compositor PRIVATE src)
     target_link_libraries(test_compositor Catch2::Catch2WithMain)
 
-    add_executable(test_animations test/test_animations.cpp)
-    target_link_libraries(test_animations elements_core Catch2::Catch2WithMain)
+    add_executable(test_animations
+        test/test_animations.cpp
+        src/anim_wave.cpp
+        src/anim_spark.cpp
+        src/anim_paint.cpp
+        src/anim_shift.cpp
+        src/blob_reader.cpp
+        src/pixel_view.cpp
+        src/colors.cpp
+    )
+    target_include_directories(test_animations PRIVATE src)
+    target_link_libraries(test_animations Catch2::Catch2WithMain)
 
     add_executable(test_playback_device test/test_playback_device.cpp)
     target_link_libraries(test_playback_device elements_core Catch2::Catch2WithMain)

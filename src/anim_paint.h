@@ -1,25 +1,48 @@
 #pragma once
 
 #include "animation.h"
-#include "decoder.h"
-#include <cstring>
+#include "blob_reader.h"
+#include "colors.h"
+
+#include <cstddef>
+#include <cstdint>
+
+// Paint animation: writes a fixed pattern to dst on every frame.
+//
+// Two shapes:
+//   - solid: every dst pixel takes the same color
+//   - constant: a constant hsva array is baked into the blob and replayed
+//     into dst as dst[i] = constant[i]. The constant length MUST equal
+//     dst.size(); the compiler enforces this and the decoder rejects any
+//     mismatch, so render() does not re-check.
 
 class AnimPaint : public Animation {
 public:
-    AnimPaint(const PaintParams& p) : _p(p) {}
+    // Solid color across every dst pixel.
+    AnimPaint(float h, float s, float v, float a);
 
-    void render(hsva_t* buffer, uint8_t length, float t) override
-    {
-        (void)t;
-        if (_p.mode == 0) {
-            for (uint8_t i = 0; i < length; i++)
-                buffer[i] = hsva_t(_p.color_h, _p.color_s, _p.color_v, _p.color_a);
-        } else {
-            uint8_t n = length < _p.pixel_count ? length : _p.pixel_count;
-            memcpy(buffer, _p.pixels, n * sizeof(hsva_t));
-        }
+    // Constant-array mode. Takes ownership of `constant`.
+    AnimPaint(hsva_t* constant, uint8_t count);
+
+    ~AnimPaint() override;
+
+    static Animation* from_blob(const uint8_t* params, size_t params_size,
+                                DecodeError* err_out);
+
+    void render(PixelView& dst, float t_animation) override;
+
+    // Length of the constant array, or 0 in solid mode. The decoder calls
+    // this to verify the array matches the dst view size before accepting
+    // the event.
+    uint8_t constant_array_size() const {
+        return _mode == Mode::Constant ? _constant_count : 0;
     }
 
 private:
-    PaintParams _p;
+    enum class Mode : uint8_t { Solid = 0, Constant = 1 };
+
+    Mode _mode;
+    hsva_t _solid;
+    hsva_t* _constant;
+    uint8_t _constant_count;
 };

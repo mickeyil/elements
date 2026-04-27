@@ -1,47 +1,38 @@
 #pragma once
 
 #include "animation.h"
-#include "decoder.h"
-#include <cmath>
-#include <cstring>
+#include "blob_reader.h"
 
-// Shift animation: slides a snapshot of pixels over time.
-// The work buffer is pre-filled by the engine with the correct source pixels.
+#include <cstddef>
+#include <cstdint>
+
+// Shift animation: initialize() snapshots the source view into the work
+// view; render() draws a shifted copy of that snapshot.
+//
+// `direction` picks left vs right; `velocity` is in pixels per second.
+// Circular wraps modulo work size; non-circular fills exposed pixels with
+// `fill`.
+
+struct ShiftParams {
+    uint8_t direction;       // 0=left, 1=right
+    float velocity;           // pixels per second
+    uint8_t circular;         // 0=non-circular, 1=circular
+    float fill_h, fill_s, fill_v, fill_a;
+};
 
 class AnimShift : public Animation {
 public:
-    AnimShift(const ShiftParams& p, hsva_t* work_buf, uint8_t work_len)
-        : _p(p), _work(work_buf), _work_len(work_len) {}
+    explicit AnimShift(const ShiftParams& p);
 
-    void render(hsva_t* buffer, uint8_t length, float t) override
-    {
-        float offset = _p.velocity * t;
-        // direction: 0=left, 1=right
-        if (_p.direction == 0)
-            offset = -offset;
+    static Animation* from_blob(const uint8_t* params, size_t params_size,
+                                DecodeError* err_out);
 
-        hsva_t fill(_p.fill_h, _p.fill_s, _p.fill_v, _p.fill_a);
+    // Snapshots `src` into `work`. `work` is also remembered for render().
+    void initialize(const PixelView* src, PixelView* work) override;
 
-        for (uint8_t i = 0; i < length; i++) {
-            float src_f = i - offset;
-            int src_i = (int)floorf(src_f);
-
-            if (_p.circular) {
-                // Wrap around
-                src_i = ((src_i % _work_len) + _work_len) % _work_len;
-                buffer[i] = _work[src_i];
-            } else {
-                if (src_i >= 0 && src_i < _work_len) {
-                    buffer[i] = _work[src_i];
-                } else {
-                    buffer[i] = fill;
-                }
-            }
-        }
-    }
+    void render(PixelView& dst, float t_animation) override;
 
 private:
     ShiftParams _p;
-    hsva_t* _work;
-    uint8_t _work_len;
+    PixelView* _work = nullptr;
 };
