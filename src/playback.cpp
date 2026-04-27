@@ -1,19 +1,19 @@
 #include "playback.h"
 
-#include <cstring>
+#include "decoder.h"
 
 namespace {
 
-constexpr float kUsPerSecond = 1000000.0f;
+constexpr float US_PER_SECOND = 1000000.0f;
 
 int64_t t_program_to_us(float t_program)
 {
-    return static_cast<int64_t>(t_program * kUsPerSecond);
+    return static_cast<int64_t>(t_program * US_PER_SECOND);
 }
 
 float t_program_from_us(int64_t t_program_us)
 {
-    return float(t_program_us) / kUsPerSecond;
+    return float(t_program_us) / US_PER_SECOND;
 }
 
 }  // namespace
@@ -51,59 +51,39 @@ bool Playback::apply_hardware_profile(const HardwareProfile& profile)
     reset_program_state_();
     _profile = HardwareProfile();
     if (!_strip.resize(profile.strip_length)) {
-        clear_render_buffer_();
         return false;
     }
     _profile = profile;
     return true;
 }
 
-bool Playback::handle_load(const uint8_t* blob, size_t blob_len, uint16_t gen)
+bool Playback::handle_load(const uint8_t* blob, size_t blob_len)
 {
-    (void)blob;
-    (void)blob_len;
-    (void)gen;
-
     if (!_profile.is_valid()) {
         return false;
     }
 
     unload_program_();
     reset_program_state_();
+    clear_render_buffer_();
 
-    // TODO: decode the blob and build the engine. See drafts/decoder.md
-    // "Integration with Playback" for the exact shape. The implementation
-    // sketch is:
-    //
-    //   DecodeError err = DecodeError::Ok;
-    //   Program* program = decode_program(blob, blob_len,
-    //                                     _profile.strip_length, &err);
-    //   if (program == nullptr) {
-    //       clear_render_buffer_();
-    //       // log decode_error_name(err)
-    //       return false;
-    //   }
-    //   const float duration_s = program->duration;
-    //   const uint8_t target_fps = program->target_fps;
-    //   const bool  needs_sync = program->requires_sync;
-    //   Engine* engine = Engine::create(program);  // takes ownership
-    //   if (engine == nullptr) {
-    //       clear_render_buffer_();
-    //       // log "[load] engine alloc failed"
-    //       return false;
-    //   }
-    //   _duration      = duration_s;
-    //   _target_fps    = target_fps;
-    //   _requires_sync = needs_sync;
-    //   _engine.reset(engine);
-    //   clear_render_buffer_();
-    //   _state = DeviceState::LOADED;
-    //   return true;
-    Program* program = nullptr;
+    Program* program = decode_program(blob, blob_len, _profile.strip_length);
     if (program == nullptr) {
-        clear_render_buffer_();
         return false;
     }
+    const float duration = program->duration;
+    const uint8_t target_fps = program->target_fps;
+    const bool requires_sync = program->requires_sync;
+
+    Engine* engine = Engine::create(program);
+    if (engine == nullptr) {
+        return false;
+    }
+
+    _duration = duration;
+    _target_fps = target_fps;
+    _requires_sync = requires_sync;
+    _engine.reset(engine);
     _state = DeviceState::LOADED;
     return true;
 }
@@ -125,11 +105,12 @@ void Playback::handle_start(int64_t program_start_us)
     _state = DeviceState::PLAYING;
 }
 
-RenderFrameResult Playback::handle_jump(float t_program, uint16_t gen)
+RenderFrameResult Playback::handle_jump(float t_program)
 {
-    (void)gen;
-
     if (_engine == nullptr) {
+        return RenderFrameResult::Unchanged;
+    }
+    if (_state != DeviceState::LOADED && _state != DeviceState::PAUSED) {
         return RenderFrameResult::Unchanged;
     }
     if (_requires_sync && !_clock.is_synced()) {
@@ -140,9 +121,6 @@ RenderFrameResult Playback::handle_jump(float t_program, uint16_t gen)
     }
 
     const int64_t target_us = t_program_to_us(t_program);
-    if (_state != DeviceState::LOADED && _state != DeviceState::PAUSED) {
-        return RenderFrameResult::Unchanged;
-    }
     if (target_us <= _t_program_cursor_us) {
         return RenderFrameResult::Unchanged;
     }
@@ -205,17 +183,14 @@ RenderFrameResult Playback::render_black_frame()
 
 RenderFrameResult Playback::render_next_frame()
 {
-    if (_state == DeviceState::IDLE || _state == DeviceState::ENDED) {
-        return RenderFrameResult::Unchanged;
-    }
-    if (_state == DeviceState::LOADED || _state == DeviceState::PAUSED) {
+    if (_state != DeviceState::PLAYING) {
         return RenderFrameResult::Unchanged;
     }
     if (_engine == nullptr) {
         return RenderFrameResult::Unchanged;
     }
 
-    int64_t t_program_us = program_clock_now_us() - _program_start_us;
+    const int64_t t_program_us = program_clock_now_us() - _program_start_us;
     if (t_program_us < 0) {
         return RenderFrameResult::Unchanged;
     }

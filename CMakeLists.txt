@@ -28,6 +28,7 @@ add_library(elements_core STATIC
     src/animations/spark.cpp
     src/animations/paint.cpp
     src/animations/shift.cpp
+    src/playback.cpp
     src/playback_device.cpp
     src/esp_simulated.cpp
     src/sim_controller.cpp
@@ -225,6 +226,34 @@ if(BUILD_TESTS)
     target_include_directories(test_animations PRIVATE src)
     target_link_libraries(test_animations Catch2::Catch2WithMain)
 
+    # test_playback is standalone: it links the test platform_clock fake
+    # (test/platform_clock_test.cpp) instead of the production impl, so
+    # SyncedClock advances under test control.
+    add_executable(test_playback
+        test/test_playback.cpp
+        test/platform_clock_test.cpp
+        src/playback.cpp
+        src/decoder.cpp
+        src/engine.cpp
+        src/compositor.cpp
+        src/strip.cpp
+        src/gamma.cpp
+        src/blob_reader.cpp
+        src/program.cpp
+        src/layer.cpp
+        src/pixel_buffer_pool.cpp
+        src/pixel_view.cpp
+        src/pixel_views.cpp
+        src/copy_ops.cpp
+        src/colors.cpp
+        src/animations/wave.cpp
+        src/animations/spark.cpp
+        src/animations/paint.cpp
+        src/animations/shift.cpp
+    )
+    target_include_directories(test_playback PRIVATE src test)
+    target_link_libraries(test_playback Catch2::Catch2WithMain)
+
     add_executable(test_playback_device test/test_playback_device.cpp)
     target_link_libraries(test_playback_device elements_core Catch2::Catch2WithMain)
 
@@ -309,6 +338,8 @@ if(BUILD_TESTS)
     add_test(NAME test_compositor COMMAND test_compositor
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_animations COMMAND test_animations
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    add_test(NAME test_playback COMMAND test_playback
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_playback_device COMMAND test_playback_device
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
@@ -473,6 +504,15 @@ if(BUILD_TESTS)
                     --error-exitcode=1 $<TARGET_FILE:test_animations>
         )
         set_tests_properties(test_animations_memcheck PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        )
+        add_test(
+            NAME test_playback_memcheck
+            COMMAND ${VALGRIND} --leak-check=full
+                    --errors-for-leak-kinds=definite,indirect,possible
+                    --error-exitcode=1 $<TARGET_FILE:test_playback>
+        )
+        set_tests_properties(test_playback_memcheck PROPERTIES
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         )
         add_test(

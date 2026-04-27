@@ -31,9 +31,7 @@ the next step starts. Design contracts live in `data_model.md`,
 
 ## Open Decisions (resolve before the blocked step)
 
-- **`Playback::_gen` / `_frame_index` ownership.** Header flags it as a
-  `TODO`; `playback.md` says "may move to the owner." Decide before
-  step 21. Not a blocker for earlier steps.
+(none open)
 
 ## Migration Process
 
@@ -340,14 +338,12 @@ factory-rejection propagation, layer events overlap, trailing bytes,
 plus minimal valid blob, requires_sync flag, full program with copy
 ops + spark event.
 
-### 20. `playback.{h,cpp}`
+### 20. `playback.{h,cpp}` — DONE
 
-**First resolve `_gen` / `_frame_index` ownership.** Then implement the
-state machine per `playback.md §Command Lifecycle`. Tests: each
-command from each admissible state; synced program rejection while
-`SyncedClock::is_synced() == false`; JUMP monotonicity via
-`_t_program_cursor_us`; RESUME not gated; `handle_stop` clears strip;
-natural-end transitions `PLAYING → ENDED` exactly once.
+`_gen` / `_frame_index` (and the `gen` parameter on `handle_load` /
+`handle_jump`) dropped from `Playback`; production firmware does not
+consume them and the host-side sim/network paths track per-call gen
+themselves. Resolves the only open decision blocking this step.
 
 ## Notes
 

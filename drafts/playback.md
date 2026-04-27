@@ -1,7 +1,7 @@
 # Playback
 
-Working draft for replacing `PlaybackDevice` with a concrete `Playback` class.
-See `src/playback_device.{h,cpp}` for current behavior.
+Design notes for the `Playback` render core. The implementation lives in
+`src/playback.{h,cpp}`; this file is the contract behind it.
 
 ## Goal
 
@@ -14,8 +14,7 @@ telemetry sinks, or raw sync offsets. Those are the caller's job.
 
 ## Design Direction
 
-The concrete API is in `drafts/playback.h`; the implementation sketch is in
-`drafts/playback.cpp`.
+Concrete API: `src/playback.h`. Implementation: `src/playback.cpp`.
 
 Key properties:
 
@@ -69,7 +68,7 @@ decreasing `t_program` to `Engine::render_frame()`. It enforces this with
 | `handle_start(start_us)`                 | `LOADED`, `ENDED` | sets `_program_start_us`; cursor := 0; engine reset if `ENDED`                               | `PLAYING` | —               |
 | `handle_pause()`                         | `PLAYING`         | preserves cursor                                                                             | `PAUSED`  | —               |
 | `handle_resume(start_us)`                | `PAUSED`          | sets `_program_start_us`; preserves cursor                                                   | `PLAYING` | —               |
-| `handle_jump(t, gen)`                    | `LOADED`, `PAUSED`| target strictly ahead of cursor; engine reset; cursor := target; `_program_start_us` untouched | `PAUSED`  | `Unchanged` (§6)|
+| `handle_jump(t)`                         | `LOADED`, `PAUSED`| target strictly ahead of cursor; engine reset; cursor := target; `_program_start_us` untouched | `PAUSED`  | `Unchanged` (§6)|
 | `handle_stop()`                          | any non-`IDLE`    | engine reset; strip cleared; timing cleared                                                  | `LOADED`  | `Rendered`      |
 | `reset_for_detach()` / load failure / `apply_hardware_profile()` | any               | unload program; clear timing; clear buffer                                                   | `IDLE`    | —               |
 | Natural end (inside `render_next_frame()`) | `PLAYING`       | strip cleared; cursor := duration                                                            | `ENDED`   | `Ended`         |
@@ -163,8 +162,12 @@ the cursor and waits for the clock-driven path.
 | Start-anchor indirection    | `virtual playback_t0()`            | concrete `_program_start_us`               |
 
 Likely follow-on: `ESPDevice` and `ESPSimulated` shrink to thin owner wrappers
-or disappear; `ControllerDevice` / `SimDevice` become hard to justify;
-`_gen` / `_frame_index` metadata may move to the owner.
+or disappear; `ControllerDevice` / `SimDevice` become hard to justify.
+
+`_gen` / `_frame_index` are owner-side. `Playback` does not track them, and
+`handle_load` / `handle_jump` no longer take a `gen` parameter. Owners that
+need to tag frames with a generation count keep that bookkeeping themselves
+alongside the transport state.
 
 ## Firmware / Sim / Offline-render
 
