@@ -3,10 +3,10 @@
 Runtime-facing redesign of the data structures that connect the compiler, the
 decoder, and the engine.
 
-The compiler-side safety contract lives in `compiler.md`. The decoder's
-per-program factory responsibilities live in `decoder.md`. The playback state
-machine lives in `playback.md`. This file is the runtime data story and the
-canonical home for the time-naming vocabulary.
+The compiler-side safety contract lives in `compiler.md`. The decoder
+lives in `src/decoder.{h,cpp}` (byte contract in `blob_format.md`). The
+playback state machine lives in `playback.md`. This file is the runtime
+data story and the canonical home for the time-naming vocabulary.
 
 ## Goal
 
@@ -236,8 +236,8 @@ handles beat-space values — see `compiler.md`.
   see `compiler.md`
 - future animation types that may want runtime state beyond pixel storage
 
-Blob bytes, parser shape, and decoder integration live in `blob_format.md`,
-`decoder.h` / `decoder.cpp`, and `decoder.md` respectively.
+Blob bytes and decoder implementation live in `blob_format.md` and
+`src/decoder.{h,cpp}` respectively.
 
 ## Affected Code
 

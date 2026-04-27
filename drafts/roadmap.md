@@ -3,8 +3,8 @@
 Ordered plan for moving v3 draft modules into `src/` with tests. Each step
 lands a module (header + impl where applicable) and its unit tests before
 the next step starts. Design contracts live in `data_model.md`,
-`blob_format.md`, `decoder.md`, `playback.md`, `synced_clock.md`,
-`compiler.md`; this file is the migration sequence.
+`blob_format.md`, `playback.md`, `synced_clock.md`, `compiler.md`; this
+file is the migration sequence.
 
 ## Settled Policies
 
@@ -278,8 +278,8 @@ struct and class, depends only on `animation.h` + `blob_reader.h` (and
 `colors.h` for paint, which exposes `hsva_t*` ownership). Each `.cpp`
 holds the render math and a `from_blob(params, params_size, err_out)`
 static factory: parse with a local `BlobReader`, validate per the
-decoder.md contract (every float finite, range checks, mode/channel
-bounds, period/fade > 0), allocate via `new (std::nothrow)`. Errors
+`blob_format.md` contract (every float finite, range checks,
+mode/channel bounds, period/fade > 0), allocate via `new (std::nothrow)`. Errors
 default to `InvalidField`; `OutOfMemory` is set explicitly on alloc
 failure. `Paint` distinguishes solid (one color) from constant
 mode (a blob-baked hsva array replayed into dst); render() trusts

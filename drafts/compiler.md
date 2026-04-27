@@ -3,8 +3,9 @@
 Reviewer-facing walkthrough of the compiler side of the v3 redesign. Each
 section follows the same arc: what the compiler does today, where that
 falls short, and what v3 changes. Runtime data structures and the
-time-naming vocabulary live in `data_model.md`; the byte contract lives in
-`blob_format.md`; decoder-side responsibilities live in `decoder.md`.
+time-naming vocabulary live in `data_model.md`; the byte contract lives
+in `blob_format.md`; the decoder implementation lives in
+`src/decoder.{h,cpp}`.
 
 ## 1. Overview
 
@@ -355,7 +356,40 @@ Wire-contract diff. Byte layout lives in `blob_format.md`.
 | `AnimParams` tagged union                            | Deleted — each animation owns its param shape                   |
 | `CompiledManifest.safe_intervals`                    | Unchanged (still controller-side; now filtered by width)        |
 
-## 9. Naming Exception
+## 9. Caps and Memory Footprint
+
+**Background.** Cap values (`MAX_LAYER_COUNT`, `MAX_STRIP_PIXELS`,
+`MAX_BUFFER_COUNT`, `MAX_PIXEL_VIEW_COUNT`, `MAX_COPY_OP_COUNT`,
+`MAX_EVENTS_PER_LAYER`, `MAX_PARAMS_BYTES`, `MAX_POOL_BYTES`) live in
+`src/blob_limits.h`. The decoder rejects on overflow. The compiler
+should reject earlier — compile-time failure is much easier to triage
+than firmware rejection.
+
+**Today.** No mirroring, no footprint output.
+
+**Proposal.**
+
+1. **Mirror cap values** in the compiler with a unit test that parses
+   `src/blob_limits.h` and asserts equality. Fail the build with a
+   clear error when any cap is exceeded.
+2. **Print a firmware memory-footprint estimate** for every successful
+   compile, computed from the in-blob structures:
+
+   - HSVA pool bytes = sum of buffer sizes × 16
+   - PixelView metadata = `pixel_view_count` × per-view fixed
+     overhead, plus `storage_indices` and `physical_indices` arrays
+     for non-identity views
+   - CopyOp records = `copy_op_count` × `sizeof(CopyOp)`
+   - Layer events = sum over layers of `event_count` ×
+     `sizeof(AnimationEvent)`
+   - Animation instances = sum over events of the per-anim-type
+     sizeof estimate
+
+   Allocator overhead, internal heap fragmentation, and stack costs
+   are intentionally ignored — the estimate guides optimization, not
+   precise budgeting.
+
+## 10. Naming Exception
 
 Compiler-side Python may keep `_sec` suffixes on program-relative times
 (`start_sec`, `required_start_sec`, `end_sec`). The compiler also
@@ -364,7 +398,7 @@ The runtime vocabulary in `data_model.md#time-naming-policy` still
 applies to everything the compiler emits into the blob or the wire
 format.
 
-## 10. Open Items
+## 11. Open Items
 
 - **Preservation policy.** Choosing between stable-dst preservation and
   an explicit copy op is the compiler's call. First-pass default:
