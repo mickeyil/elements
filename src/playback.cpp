@@ -107,7 +107,8 @@ void Playback::handle_start(int64_t program_start_us)
         _engine->reset();
     }
 
-    _program_start_us = program_start_us;
+    _program_start_us = _requires_sync ? program_start_us
+                                       : _clock.now_local_us();
     _t_program_cursor_us = 0;
     _state = DeviceState::PLAYING;
 }
@@ -160,7 +161,9 @@ void Playback::handle_resume(int64_t program_start_us)
         return;
     }
 
-    _program_start_us = program_start_us;
+    _program_start_us = _requires_sync
+        ? program_start_us
+        : _clock.now_local_us() - _t_program_cursor_us;
     _state = DeviceState::PLAYING;
 }
 

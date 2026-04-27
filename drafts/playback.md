@@ -56,10 +56,16 @@ Invariant: during one continuous playback segment, `Playback` never feeds a
 decreasing `t_program` to `Engine::render_frame()`. It enforces this with
 `_t_program_cursor_us` — the minimum accepted program position.
 
-- synced segment: `_program_start_us` is anchored in remote time
-- unsynced segment: anchored in local monotonic time
-- `current_t_program()` reports the cursor; it does not read the clock
-- `render_next_frame()` is the only path that samples the clock
+- synced segment: `_program_start_us` is the caller-supplied
+  remote-clock timestamp (the controller picks a future remote-clock
+  anchor so multiple devices line up).
+- unsynced segment: `_program_start_us` is set internally from the local
+  clock — `now_local_us()` on Start (cursor = 0), `now_local_us() -
+  cursor` on Resume. The caller-supplied value is ignored. "Play now" /
+  "resume now from cursor" is the only meaningful semantic for unsynced,
+  since there's no shared time domain to schedule against.
+- `current_t_program()` reports the cursor; it does not read the clock.
+- `render_next_frame()` is the only path that samples the clock.
 
 ### 5. Command lifecycle
 

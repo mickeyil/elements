@@ -62,7 +62,10 @@ public:
                      DecodeError* err_out = nullptr);
 
     // Start the program. Valid from LOADED or ENDED. For synced programs,
-    // rejected unless SyncedClock::is_synced() is true.
+    // rejected unless SyncedClock::is_synced() is true; the caller's
+    // program_start_us is taken as the remote-clock anchor. For unsynced
+    // programs, program_start_us is ignored and playback starts immediately
+    // (anchor = now_local_us(), cursor = 0).
     void handle_start(int64_t program_start_us);
 
     // Re-anchor the program-time cursor to t_program. Valid from LOADED or
@@ -74,7 +77,10 @@ public:
     void handle_pause();
 
     // Resume from PAUSED. For synced programs, rejected unless
-    // SyncedClock::is_synced() is true.
+    // SyncedClock::is_synced() is true; the caller's program_start_us is
+    // taken as the remote-clock anchor. For unsynced programs,
+    // program_start_us is ignored and playback resumes immediately from the
+    // preserved cursor (anchor = now_local_us() - cursor).
     void handle_resume(int64_t program_start_us);
 
     // Stop and return to LOADED. Engine reset, strip cleared.

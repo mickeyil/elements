@@ -40,10 +40,10 @@ parser rejects malformed payloads with `BadPayload`.
 | 0x01   | `Attach`            | `u16 device_id, u16 frame_port`                                        |
 | 0x02   | `SyncLease`         | `u16 seq, u32 boot_token, i64 offset_us, u32 valid_for_ms`             |
 | 0x10   | `Load`              | `u8[] blob`                                                            |
-| 0x11   | `Start`             | `i64 program_start_us`                                                 |
+| 0x11   | `Start`             | `i64 program_start_us` (synced: remote-clock anchor; unsynced: ignored, anchor = `now_local_us`) |
 | 0x12   | `Jump`              | `f32 t_program`                                                        |
 | 0x13   | `Pause`             | (empty)                                                                |
-| 0x14   | `Resume`            | `i64 program_start_us`                                                 |
+| 0x14   | `Resume`            | `i64 program_start_us` (synced: remote-clock anchor; unsynced: ignored, anchor preserves cursor) |
 | 0x15   | `Stop`              | (empty)                                                                |
 | 0x20   | `StoreBackground`   | `u16 strip_length, u32 expected_crc32, u8[] blob`                      |
 | 0x21   | `ClearBackground`   | (empty)                                                                |

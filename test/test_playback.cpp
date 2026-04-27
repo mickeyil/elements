@@ -535,22 +535,25 @@ TEST_CASE("Playback: render_next_frame returns Unchanged outside PLAYING",
 }
 
 TEST_CASE("Playback: render_next_frame waits for clock to reach program_start_us",
-          "[playback]") {
+          "[playback][sync]") {
     set_clock_us(0);
     SyncedClock clock;
+    clock.apply_sync_offset(0, 60'000'000);   // synced, local == remote
+    REQUIRE(clock.is_synced());
+
     Playback pb(1, clock);
-    auto blob = build_paint_blob(1.0f, false);
+    auto blob = build_paint_blob(1.0f, /*requires_sync=*/true);
     REQUIRE(pb.handle_load(blob.data(), blob.size()));
 
-    // Schedule start in the future.
+    // Schedule start at remote=1s.
     pb.handle_start(int64_t(1.0 * 1e6));
     CHECK(pb.state() == DeviceState::PLAYING);
 
-    set_clock_us(int64_t(0.5 * 1e6));   // clock < start
+    set_clock_us(int64_t(0.5 * 1e6));   // remote=0.5s -> wait
     CHECK(pb.render_next_frame() == RenderFrameResult::Unchanged);
     CHECK(strip_is_black(pb));
 
-    set_clock_us(int64_t(1.0 * 1e6));   // clock == start
+    set_clock_us(int64_t(1.0 * 1e6));   // remote=1.0s -> render
     CHECK(pb.render_next_frame() == RenderFrameResult::Rendered);
     CHECK(strip_is_red(pb));
 }
@@ -588,26 +591,29 @@ TEST_CASE("Playback: render_next_frame returns Ended exactly once", "[playback]"
 }
 
 TEST_CASE("Playback: render_next_frame waits while cursor leads clock (post-JUMP)",
-          "[playback]") {
+          "[playback][sync]") {
     set_clock_us(0);
     SyncedClock clock;
+    clock.apply_sync_offset(0, 60'000'000);
+    REQUIRE(clock.is_synced());
+
     Playback pb(1, clock);
-    auto blob = build_paint_blob(2.0f, false);
+    auto blob = build_paint_blob(2.0f, /*requires_sync=*/true);
     REQUIRE(pb.handle_load(blob.data(), blob.size()));
 
     REQUIRE(pb.handle_jump(0.5f) == RenderFrameResult::Unchanged);
     REQUIRE(pb.state() == DeviceState::PAUSED);
     REQUIRE(pb.current_t_program() == 0.5f);
 
-    pb.handle_resume(0);
+    pb.handle_resume(0);   // synced: remote-clock anchor
     REQUIRE(pb.state() == DeviceState::PLAYING);
 
-    // Clock at 0.25s, cursor at 0.5s -> wait.
+    // remote=0.25s, cursor at 0.5s -> wait.
     set_clock_us(int64_t(0.25 * 1e6));
     CHECK(pb.render_next_frame() == RenderFrameResult::Unchanged);
     CHECK(strip_is_black(pb));
 
-    // Clock catches up.
+    // remote=0.6s -> cursor catches up.
     set_clock_us(int64_t(0.6 * 1e6));
     CHECK(pb.render_next_frame() == RenderFrameResult::Rendered);
     CHECK(strip_is_red(pb));
@@ -651,6 +657,44 @@ TEST_CASE("Playback: unsynced program reads local clock domain", "[playback]") {
     set_clock_us(int64_t(0.5 * 1e6));
     CHECK(pb.render_next_frame() == RenderFrameResult::Rendered);
     CHECK(strip_is_red(pb));
+}
+
+TEST_CASE("Playback: unsynced handle_start ignores caller anchor, starts now",
+          "[playback]") {
+    set_clock_us(int64_t(7.0 * 1e6));    // device local clock at 7s
+    SyncedClock clock;                   // unsynced
+    Playback pb(1, clock);
+    auto blob = build_paint_blob(2.0f, /*requires_sync=*/false);
+    REQUIRE(pb.handle_load(blob.data(), blob.size()));
+
+    pb.handle_start(/*bogus*/ int64_t(99.0 * 1e6));
+    REQUIRE(pb.state() == DeviceState::PLAYING);
+
+    // 0.5s of wall time later, t_program should be 0.5s.
+    set_clock_us(int64_t(7.5 * 1e6));
+    CHECK(pb.render_next_frame() == RenderFrameResult::Rendered);
+    CHECK(pb.current_t_program() == 0.5f);
+}
+
+TEST_CASE("Playback: unsynced handle_resume ignores anchor, resumes from cursor immediately",
+          "[playback]") {
+    set_clock_us(int64_t(3.0 * 1e6));
+    SyncedClock clock;                   // unsynced
+    Playback pb(1, clock);
+    auto blob = build_paint_blob(2.0f, /*requires_sync=*/false);
+    REQUIRE(pb.handle_load(blob.data(), blob.size()));
+
+    REQUIRE(pb.handle_jump(0.5f) == RenderFrameResult::Unchanged);
+    REQUIRE(pb.current_t_program() == 0.5f);
+
+    // Resume with bogus anchor. Unsynced should resume immediately from 0.5s.
+    set_clock_us(int64_t(3.2 * 1e6));    // 0.2s of wall time has passed
+    pb.handle_resume(/*bogus*/ int64_t(99.0 * 1e6));
+    REQUIRE(pb.state() == DeviceState::PLAYING);
+
+    // No wall-time wait: render right now should produce a frame at 0.5s.
+    CHECK(pb.render_next_frame() == RenderFrameResult::Rendered);
+    CHECK(pb.current_t_program() == 0.5f);
 }
 
 // ---------------------------------------------------------------------------
