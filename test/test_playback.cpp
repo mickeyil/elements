@@ -1,7 +1,9 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <vector>
 
 #include "../src/animation_types.h"
@@ -410,6 +412,24 @@ TEST_CASE("Playback: handle_jump rejects out-of-range target", "[playback]") {
     CHECK(pb.handle_jump(-0.1f) == RenderFrameResult::Unchanged);
     CHECK(pb.handle_jump(1.0f) == RenderFrameResult::Unchanged);   // exclusive upper
     CHECK(pb.handle_jump(2.0f) == RenderFrameResult::Unchanged);
+    CHECK(pb.state() == DeviceState::LOADED);
+    CHECK(pb.current_t_program() == 0.0f);
+}
+
+TEST_CASE("Playback: handle_jump rejects non-finite target", "[playback]") {
+    set_clock_us(0);
+    SyncedClock clock;
+    Playback pb(1, clock);
+    auto blob = build_paint_blob(1.0f, false);
+    REQUIRE(pb.handle_load(blob.data(), blob.size()));
+
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const float pos_inf = std::numeric_limits<float>::infinity();
+    const float neg_inf = -std::numeric_limits<float>::infinity();
+
+    CHECK(pb.handle_jump(nan) == RenderFrameResult::Unchanged);
+    CHECK(pb.handle_jump(pos_inf) == RenderFrameResult::Unchanged);
+    CHECK(pb.handle_jump(neg_inf) == RenderFrameResult::Unchanged);
     CHECK(pb.state() == DeviceState::LOADED);
     CHECK(pb.current_t_program() == 0.0f);
 }

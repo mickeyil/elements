@@ -1,5 +1,7 @@
 #include "playback.h"
 
+#include <cmath>
+
 #include "decoder.h"
 
 namespace {
@@ -119,6 +121,10 @@ RenderFrameResult Playback::handle_jump(float t_program)
         return RenderFrameResult::Unchanged;
     }
     if (_requires_sync && !_clock.is_synced()) {
+        return RenderFrameResult::Unchanged;
+    }
+    // Reject non-finite before the float->int cast below (UB on NaN/Inf).
+    if (!std::isfinite(t_program)) {
         return RenderFrameResult::Unchanged;
     }
     if (t_program < 0.0f || t_program >= _duration) {
