@@ -17,10 +17,10 @@
 // TODO: include each concrete animation header. The decoder is the only
 // translation unit that pulls in all of them.
 //
-// #include "anim_wave.h"
-// #include "anim_shift.h"
-// #include "anim_spark.h"
-// #include "anim_paint.h"
+// #include "animations/wave.h"
+// #include "animations/shift.h"
+// #include "animations/spark.h"
+// #include "animations/paint.h"
 
 // BlobReader and decode_error_name() are implemented in blob_reader.cpp so
 // per-animation factories can link against them without depending on this
@@ -216,26 +216,26 @@ DecodeError parse_event(BlobReader& r, const ParsedHeader& hdr,
     //    BlobReader handles a nullptr+0 input cleanly.)
     // - DecodeError perr = DecodeError::Ok;
     // - dispatch on AnimType (each from_blob writes perr on failure):
-    //     case AnimType::Wave:  event.animation = AnimWave::from_blob(p, params_size, &perr); break;
-    //     case AnimType::Shift: event.animation = AnimShift::from_blob(p, params_size, &perr); break;
-    //     case AnimType::Spark: event.animation = AnimSpark::from_blob(p, params_size, &perr); break;
-    //     case AnimType::Paint: event.animation = AnimPaint::from_blob(p, params_size, &perr); break;
+    //     case AnimType::Wave:  event.animation = Wave::from_blob(p, params_size, &perr); break;
+    //     case AnimType::Shift: event.animation = Shift::from_blob(p, params_size, &perr); break;
+    //     case AnimType::Spark: event.animation = Spark::from_blob(p, params_size, &perr); break;
+    //     case AnimType::Paint: event.animation = Paint::from_blob(p, params_size, &perr); break;
     //     default: return DecodeError::InvalidField;
     // - if event.animation == nullptr return perr  // InvalidField or OutOfMemory
     // - per-anim post-checks against the resolved event:
     //     AnimType::Paint constant mode -- the constant array length must
-    //     match the dst view size. AnimPaint cannot self-validate (no view
+    //     match the dst view size. Paint cannot self-validate (no view
     //     access at construction):
-    //       AnimPaint* paint = static_cast<AnimPaint*>(event.animation);
+    //       Paint* paint = static_cast<Paint*>(event.animation);
     //       const uint8_t k = paint->constant_array_size();
     //       if (k != 0 && k != prog.pixel_views.at(dst_pixv_idx).size()) {
     //           delete event.animation; event.animation = nullptr;
     //           return DecodeError::InvalidField;
     //       }
     //     AnimType::Shift -- the event must carry src_pixv_idx != PIXV_NONE.
-    //     Shift snapshots from src in initialize(); without a source view it
-    //     would shift whatever happened to be in work (zeros after reset, or
-    //     stale data otherwise) -- not a meaningful render:
+    //     Shift snapshots from src in initialize(); without a source view
+    //     it would shift whatever happened to be in work (zeros after reset,
+    //     or stale data otherwise) -- not a meaningful render:
     //       if (src_pixv_idx == PIXV_NONE) {
     //           delete event.animation; event.animation = nullptr;
     //           return DecodeError::InvalidField;

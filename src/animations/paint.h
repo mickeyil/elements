@@ -16,15 +16,15 @@
 //     dst.size(); the compiler enforces this and the decoder rejects any
 //     mismatch, so render() does not re-check.
 
-class AnimPaint : public Animation {
+class Paint : public Animation {
 public:
     // Solid color across every dst pixel.
-    AnimPaint(float h, float s, float v, float a);
+    Paint(float h, float s, float v, float a);
 
     // Constant-array mode. Takes ownership of `constant`.
-    AnimPaint(hsva_t* constant, uint8_t count);
+    Paint(hsva_t* constant, uint8_t count);
 
-    ~AnimPaint() override;
+    ~Paint() override;
 
     static Animation* from_blob(const uint8_t* params, size_t params_size,
                                 DecodeError* err_out);

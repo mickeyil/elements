@@ -98,7 +98,7 @@ DSL (.py) -> Python compiler -> binary blob -> C++ decoder -> Program -> engine 
 - `engine.h/cpp` advances each layer with a single monotonic cursor and instantiates animations on demand.
 - `compositor.h/cpp` blends active layers bottom-up into the strip output with per-pixel alpha.
 - `playback_device.h/cpp` owns the runtime state machine and playback lifecycle. `reset_for_detach()` invalidates runtime state without presenting; `present_black_frame()` emits one black frame.
-- `animation.h` defines the animation interface; `anim_wave.h`, `anim_spark.h`, `anim_shift.h`, and `anim_paint.h` provide the concrete animation implementations.
+- `animation.h` defines the animation interface; `animations/wave.h`, `animations/spark.h`, `animations/shift.h`, and `animations/paint.h` provide the concrete animation implementations.
 - `colors.h/cpp` holds HSVA/RGB types, HSV-to-RGB conversion, and gamma correction.
 - `strip.h` is the thin wrapper over the raw RGB byte buffer.
 - `background_crc.h/cpp` implements CRC32 for background blob validation.

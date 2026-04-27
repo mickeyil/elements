@@ -22,7 +22,7 @@ splits those out.
 | `drafts/pixel_views.h`        | `PixelViews`, `PixelViewSpec` |
 | `drafts/pixel_buffer_pool.h`  | `PixelBufferPool` |
 | `drafts/copy_ops.h`           | `CopyOps`, `CopyOp` |
-| `src/anim_wave.h` (etc.)      | per-animation params struct AND its `Animation` subclass |
+| `src/animations/wave.h` (etc.) | per-animation params struct AND its `Animation` subclass |
 
 `src/blob_reader.h` exists separately from `decoder.h` so per-animation
 `anim_*.h` headers can include it (for `BlobReader` and `DecodeError`)
@@ -90,7 +90,7 @@ The decoder does **not** own:
 Each animation header exposes a static factory that owns its own param shape:
 
 ```cpp
-class AnimWave : public Animation {
+class Wave : public Animation {
 public:
     static Animation* from_blob(const uint8_t* params, size_t params_size,
                                 DecodeError* err_out);
@@ -120,10 +120,10 @@ The decoder dispatches:
 ```cpp
 DecodeError perr = DecodeError::Ok;
 switch (static_cast<AnimType>(anim_type)) {
-    case AnimType::Wave:  event.animation = AnimWave::from_blob(p, n, &perr); break;
-    case AnimType::Shift: event.animation = AnimShift::from_blob(p, n, &perr); break;
-    case AnimType::Spark: event.animation = AnimSpark::from_blob(p, n, &perr); break;
-    case AnimType::Paint: event.animation = AnimPaint::from_blob(p, n, &perr); break;
+    case AnimType::Wave:  event.animation = Wave::from_blob(p, n, &perr); break;
+    case AnimType::Shift: event.animation = Shift::from_blob(p, n, &perr); break;
+    case AnimType::Spark: event.animation = Spark::from_blob(p, n, &perr); break;
+    case AnimType::Paint: event.animation = Paint::from_blob(p, n, &perr); break;
     default:              return DecodeError::InvalidField;
 }
 if (event.animation == nullptr) return perr;
@@ -136,7 +136,7 @@ event's view indices are resolved. The decoder runs these after `from_blob`
 returns:
 
 - **`AnimType::Paint` constant mode.** The constant array's length must
-  equal the dst view's size. `AnimPaint` cannot self-validate because
+  equal the dst view's size. `Paint` cannot self-validate because
   `from_blob` does not see the dst view; the decoder calls
   `paint->constant_array_size()` and rejects `InvalidField` on mismatch.
   Solid-mode paint reports `0` and trivially passes the check.

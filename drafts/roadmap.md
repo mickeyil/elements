@@ -24,9 +24,10 @@ the next step starts. Design contracts live in `data_model.md`,
   after engine, not before. Engine tests use fake `Animation`
   subclasses to exercise event timing, copy-op ordering, layer
   activity, and reset/jump.
-- **Animation port split.** `anim_paint` / `anim_wave` / `anim_spark`
-  are mechanical three-view ports (no `src`, no `work`). `anim_shift`
-  gets its own pass because `src` + `work` preservation is load-bearing.
+- **Animation port split.** `animations/paint` / `animations/wave` /
+  `animations/spark` are mechanical three-view ports (no `src`, no
+  `work`). `animations/shift` gets its own pass because `src` + `work`
+  preservation is load-bearing.
 
 ## Open Decisions (resolve before the blocked step)
 
@@ -272,7 +273,7 @@ copy-op cursor advances only past due ops, `reset` re-arms initialize,
 buffers, chained same-`at` copy ops execute in table order, top layer
 wins on a shared physical LED (engine-to-compositor handoff).
 
-### 17 + 18. `anim_paint.{h,cpp}` + `anim_wave.{h,cpp}` + `anim_spark.{h,cpp}` + `anim_shift.{h,cpp}` — DONE
+### 17 + 18. `animations/{paint,wave,spark,shift}.{h,cpp}` — DONE
 
 Bundled both steps into one landing. Each header defines its `*Params`
 struct and class, depends only on `animation.h` + `blob_reader.h` (and
@@ -282,14 +283,17 @@ static factory: parse with a local `BlobReader`, validate per the
 decoder.md contract (every float finite, range checks, mode/channel
 bounds, period/fade > 0), allocate via `new (std::nothrow)`. Errors
 default to `InvalidField`; `OutOfMemory` is set explicitly on alloc
-failure. `AnimPaint` distinguishes solid (one color) from constant
+failure. `Paint` distinguishes solid (one color) from constant
 mode (a blob-baked hsva array replayed into dst); render() trusts
 `constant_count == dst.size()` per the contract. The decoder enforces
-that equality post-`from_blob` via `AnimPaint::constant_array_size()`
+that equality post-`from_blob` via `Paint::constant_array_size()`
 (sketched in `drafts/decoder.{cpp,md}` for step 19). v3
 `ShiftParams` drops the legacy `buffer_id` -- the work view now comes
-from the event's `work_pixv_idx`. `AnimShift::initialize(src, work)`
-snapshots `src` into `work` and remembers `work` for `render`. Test
+from the event's `work_pixv_idx`. `Shift::initialize(src, work)`
+snapshots `src` into `work` and remembers `work` for `render`. After
+the bundle landed the four animation files were moved into
+`src/animations/` and renamed `Wave` / `Spark` / `Shift` / `Paint` so
+the directory is the namespace and the C++ name doesn't repeat it. Test
 target `test_animations` is now standalone (links the four anim
 sources + blob_reader + pixel_view + colors). Coverage in
 `test_animations` (30 cases, 144 assertions): wave channel selector,

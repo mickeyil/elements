@@ -6,10 +6,10 @@
 #include <cstring>
 #include <vector>
 
-#include "../src/anim_paint.h"
-#include "../src/anim_shift.h"
-#include "../src/anim_spark.h"
-#include "../src/anim_wave.h"
+#include "../src/animations/paint.h"
+#include "../src/animations/shift.h"
+#include "../src/animations/spark.h"
+#include "../src/animations/wave.h"
 #include "../src/animation.h"
 #include "../src/blob_reader.h"
 #include "../src/colors.h"
@@ -97,17 +97,17 @@ std::vector<uint8_t> pack_shift(uint8_t direction, float velocity,
 }  // namespace
 
 // ===========================================================================
-// AnimWave
+// Wave
 // ===========================================================================
 
-TEST_CASE("AnimWave: t=0 phase0=0 channel=V gives midpoint", "[anim][wave]") {
+TEST_CASE("Wave: t=0 phase0=0 channel=V gives midpoint", "[anim][wave]") {
     WaveParams p = {};
     p.channel = 2;  // V
     p.h = 0; p.s = 0; p.v = 0;
     p.min_val = 0.0f; p.max_val = 1.0f;
     p.period = 1.0f; p.phase0 = 0.0f; p.pixel_step = 0.0f;
 
-    AnimWave wave(p);
+    Wave wave(p);
     hsva_t buf[4];
     PixelView dst; init_view(dst, buf, 4);
     wave.render(dst, 0.0f);
@@ -119,7 +119,7 @@ TEST_CASE("AnimWave: t=0 phase0=0 channel=V gives midpoint", "[anim][wave]") {
     }
 }
 
-TEST_CASE("AnimWave: channel selector picks the modulated component", "[anim][wave]") {
+TEST_CASE("Wave: channel selector picks the modulated component", "[anim][wave]") {
     WaveParams p = {};
     p.h = 200.0f; p.s = 0.5f; p.v = 0.5f;
     p.min_val = 0.0f; p.max_val = 1.0f;
@@ -127,7 +127,7 @@ TEST_CASE("AnimWave: channel selector picks the modulated component", "[anim][wa
 
     SECTION("channel=H") {
         p.channel = 0; p.min_val = 0.0f; p.max_val = 360.0f;
-        AnimWave wave(p);
+        Wave wave(p);
         hsva_t buf[1]; PixelView dst; init_view(dst, buf, 1);
         wave.render(dst, 1.0f);  // sin(pi/2)=1 -> val=360
         CHECK(buf[0].h == Approx(360.0f).epsilon(1e-4));
@@ -136,7 +136,7 @@ TEST_CASE("AnimWave: channel selector picks the modulated component", "[anim][wa
     }
     SECTION("channel=S") {
         p.channel = 1; p.min_val = 0.0f; p.max_val = 1.0f;
-        AnimWave wave(p);
+        Wave wave(p);
         hsva_t buf[1]; PixelView dst; init_view(dst, buf, 1);
         wave.render(dst, 1.0f);  // sin(pi/2)=1 -> val=1
         CHECK(buf[0].h == Approx(200.0f).epsilon(1e-4));
@@ -145,7 +145,7 @@ TEST_CASE("AnimWave: channel selector picks the modulated component", "[anim][wa
     }
     SECTION("channel=V") {
         p.channel = 2; p.min_val = 0.0f; p.max_val = 1.0f;
-        AnimWave wave(p);
+        Wave wave(p);
         hsva_t buf[1]; PixelView dst; init_view(dst, buf, 1);
         wave.render(dst, 1.0f);
         CHECK(buf[0].h == Approx(200.0f).epsilon(1e-4));
@@ -154,7 +154,7 @@ TEST_CASE("AnimWave: channel selector picks the modulated component", "[anim][wa
     }
 }
 
-TEST_CASE("AnimWave: pixel_step shifts phase across pixels", "[anim][wave]") {
+TEST_CASE("Wave: pixel_step shifts phase across pixels", "[anim][wave]") {
     WaveParams p = {};
     p.channel = 2;
     p.h = 0; p.s = 0; p.v = 0;
@@ -162,7 +162,7 @@ TEST_CASE("AnimWave: pixel_step shifts phase across pixels", "[anim][wave]") {
     p.period = 4.0f; p.phase0 = 0.0f;
     p.pixel_step = static_cast<float>(M_PI) / 2.0f;  // 90deg per pixel
 
-    AnimWave wave(p);
+    Wave wave(p);
     hsva_t buf[4]; PixelView dst; init_view(dst, buf, 4);
     wave.render(dst, 0.0f);  // base_phase = 0
 
@@ -173,10 +173,10 @@ TEST_CASE("AnimWave: pixel_step shifts phase across pixels", "[anim][wave]") {
     CHECK(buf[3].v == Approx(0.0f).margin(1e-4));
 }
 
-TEST_CASE("AnimWave: from_blob round-trip produces equivalent render", "[anim][wave][from_blob]") {
+TEST_CASE("Wave: from_blob round-trip produces equivalent render", "[anim][wave][from_blob]") {
     auto bytes = pack_wave(2, 0, 0, 0, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f);
     DecodeError err = DecodeError::OutOfMemory;
-    Animation* anim = AnimWave::from_blob(bytes.data(), bytes.size(), &err);
+    Animation* anim = Wave::from_blob(bytes.data(), bytes.size(), &err);
     REQUIRE(anim != nullptr);
     REQUIRE(err == DecodeError::Ok);
 
@@ -187,45 +187,45 @@ TEST_CASE("AnimWave: from_blob round-trip produces equivalent render", "[anim][w
     delete anim;
 }
 
-TEST_CASE("AnimWave: from_blob rejects channel > 2", "[anim][wave][from_blob]") {
+TEST_CASE("Wave: from_blob rejects channel > 2", "[anim][wave][from_blob]") {
     auto bytes = pack_wave(3, 0, 0, 0, 0, 1, 1, 0, 0);
     DecodeError err = DecodeError::Ok;
-    CHECK(AnimWave::from_blob(bytes.data(), bytes.size(), &err) == nullptr);
+    CHECK(Wave::from_blob(bytes.data(), bytes.size(), &err) == nullptr);
     CHECK(err == DecodeError::InvalidField);
 }
 
-TEST_CASE("AnimWave: from_blob rejects period <= 0", "[anim][wave][from_blob]") {
+TEST_CASE("Wave: from_blob rejects period <= 0", "[anim][wave][from_blob]") {
     auto bytes = pack_wave(2, 0, 0, 0, 0, 1, 0.0f, 0, 0);
     DecodeError err = DecodeError::Ok;
-    CHECK(AnimWave::from_blob(bytes.data(), bytes.size(), &err) == nullptr);
+    CHECK(Wave::from_blob(bytes.data(), bytes.size(), &err) == nullptr);
     CHECK(err == DecodeError::InvalidField);
 }
 
-TEST_CASE("AnimWave: from_blob rejects NaN", "[anim][wave][from_blob]") {
+TEST_CASE("Wave: from_blob rejects NaN", "[anim][wave][from_blob]") {
     auto bytes = pack_wave(2, std::nanf(""), 0, 0, 0, 1, 1, 0, 0);
     DecodeError err = DecodeError::Ok;
-    CHECK(AnimWave::from_blob(bytes.data(), bytes.size(), &err) == nullptr);
+    CHECK(Wave::from_blob(bytes.data(), bytes.size(), &err) == nullptr);
     CHECK(err == DecodeError::InvalidField);
 }
 
-TEST_CASE("AnimWave: from_blob rejects truncated bytes", "[anim][wave][from_blob]") {
+TEST_CASE("Wave: from_blob rejects truncated bytes", "[anim][wave][from_blob]") {
     auto bytes = pack_wave(2, 0, 0, 0, 0, 1, 1, 0, 0);
     bytes.pop_back();
     DecodeError err = DecodeError::Ok;
-    CHECK(AnimWave::from_blob(bytes.data(), bytes.size(), &err) == nullptr);
+    CHECK(Wave::from_blob(bytes.data(), bytes.size(), &err) == nullptr);
     CHECK(err == DecodeError::InvalidField);
 }
 
 // ===========================================================================
-// AnimSpark
+// Spark
 // ===========================================================================
 
-TEST_CASE("AnimSpark: t=0 gives full alpha", "[anim][spark]") {
+TEST_CASE("Spark: t=0 gives full alpha", "[anim][spark]") {
     SparkParams p = {};
     p.color_h = 60.0f; p.color_s = 1.0f; p.color_v = 1.0f;
     p.fade = 1.0f;
 
-    AnimSpark spark(p);
+    Spark spark(p);
     hsva_t buf[2]; PixelView dst; init_view(dst, buf, 2);
     spark.render(dst, 0.0f);
 
@@ -237,10 +237,10 @@ TEST_CASE("AnimSpark: t=0 gives full alpha", "[anim][spark]") {
     }
 }
 
-TEST_CASE("AnimSpark: alpha follows quadratic ease-out", "[anim][spark]") {
+TEST_CASE("Spark: alpha follows quadratic ease-out", "[anim][spark]") {
     SparkParams p = {};
     p.fade = 1.0f;
-    AnimSpark spark(p);
+    Spark spark(p);
     hsva_t buf[1]; PixelView dst; init_view(dst, buf, 1);
 
     spark.render(dst, 0.5f);  // (1 - 0.5)^2 = 0.25
@@ -253,10 +253,10 @@ TEST_CASE("AnimSpark: alpha follows quadratic ease-out", "[anim][spark]") {
     CHECK(buf[0].a == Approx(0.0f).margin(1e-4));
 }
 
-TEST_CASE("AnimSpark: from_blob round-trip", "[anim][spark][from_blob]") {
+TEST_CASE("Spark: from_blob round-trip", "[anim][spark][from_blob]") {
     auto bytes = pack_spark(120.0f, 0.5f, 1.0f, 2.0f);
     DecodeError err = DecodeError::Ok;
-    Animation* anim = AnimSpark::from_blob(bytes.data(), bytes.size(), &err);
+    Animation* anim = Spark::from_blob(bytes.data(), bytes.size(), &err);
     REQUIRE(anim != nullptr);
     REQUIRE(err == DecodeError::Ok);
 
@@ -267,26 +267,26 @@ TEST_CASE("AnimSpark: from_blob round-trip", "[anim][spark][from_blob]") {
     delete anim;
 }
 
-TEST_CASE("AnimSpark: from_blob rejects fade <= 0", "[anim][spark][from_blob]") {
+TEST_CASE("Spark: from_blob rejects fade <= 0", "[anim][spark][from_blob]") {
     auto bytes = pack_spark(0, 0, 0, 0.0f);
     DecodeError err = DecodeError::Ok;
-    CHECK(AnimSpark::from_blob(bytes.data(), bytes.size(), &err) == nullptr);
+    CHECK(Spark::from_blob(bytes.data(), bytes.size(), &err) == nullptr);
     CHECK(err == DecodeError::InvalidField);
 }
 
-TEST_CASE("AnimSpark: from_blob rejects NaN", "[anim][spark][from_blob]") {
+TEST_CASE("Spark: from_blob rejects NaN", "[anim][spark][from_blob]") {
     auto bytes = pack_spark(0, 0, 0, std::nanf(""));
     DecodeError err = DecodeError::Ok;
-    CHECK(AnimSpark::from_blob(bytes.data(), bytes.size(), &err) == nullptr);
+    CHECK(Spark::from_blob(bytes.data(), bytes.size(), &err) == nullptr);
     CHECK(err == DecodeError::InvalidField);
 }
 
 // ===========================================================================
-// AnimPaint
+// Paint
 // ===========================================================================
 
-TEST_CASE("AnimPaint: solid mode fills every pixel", "[anim][paint]") {
-    AnimPaint paint(60.0f, 0.5f, 1.0f, 0.75f);
+TEST_CASE("Paint: solid mode fills every pixel", "[anim][paint]") {
+    Paint paint(60.0f, 0.5f, 1.0f, 0.75f);
     hsva_t buf[3]; PixelView dst; init_view(dst, buf, 3);
     paint.render(dst, 0.0f);
     for (uint16_t i = 0; i < 3; i++) {
@@ -297,14 +297,14 @@ TEST_CASE("AnimPaint: solid mode fills every pixel", "[anim][paint]") {
     }
 }
 
-TEST_CASE("AnimPaint: constant mode replays the array into dst", "[anim][paint]") {
+TEST_CASE("Paint: constant mode replays the array into dst", "[anim][paint]") {
     // Contract: count == dst.size() (compiler enforces, decoder asserts).
     hsva_t* constant = new hsva_t[3];
     constant[0] = hsva_t(0,   1, 1, 1);
     constant[1] = hsva_t(120, 1, 1, 1);
     constant[2] = hsva_t(240, 1, 1, 1);
 
-    AnimPaint paint(constant, 3);
+    Paint paint(constant, 3);
     hsva_t buf[3]; PixelView dst; init_view(dst, buf, 3);
     paint.render(dst, 0.0f);
 
@@ -313,22 +313,22 @@ TEST_CASE("AnimPaint: constant mode replays the array into dst", "[anim][paint]"
     CHECK(buf[2].h == Approx(240.0f));
 }
 
-TEST_CASE("AnimPaint: constant_array_size reports count in constant mode, 0 in solid",
+TEST_CASE("Paint: constant_array_size reports count in constant mode, 0 in solid",
           "[anim][paint]") {
-    AnimPaint solid(60.0f, 1.0f, 1.0f, 1.0f);
+    Paint solid(60.0f, 1.0f, 1.0f, 1.0f);
     CHECK(solid.constant_array_size() == 0);
 
     hsva_t* constant = new hsva_t[2];
     constant[0] = hsva_t(0, 1, 1, 1);
     constant[1] = hsva_t(120, 1, 1, 1);
-    AnimPaint constant_paint(constant, 2);
+    Paint constant_paint(constant, 2);
     CHECK(constant_paint.constant_array_size() == 2);
 }
 
-TEST_CASE("AnimPaint: from_blob solid round-trip", "[anim][paint][from_blob]") {
+TEST_CASE("Paint: from_blob solid round-trip", "[anim][paint][from_blob]") {
     auto bytes = pack_paint_solid(60.0f, 0.25f, 0.5f, 0.75f);
     DecodeError err = DecodeError::Ok;
-    Animation* anim = AnimPaint::from_blob(bytes.data(), bytes.size(), &err);
+    Animation* anim = Paint::from_blob(bytes.data(), bytes.size(), &err);
     REQUIRE(anim != nullptr);
     REQUIRE(err == DecodeError::Ok);
 
@@ -341,14 +341,14 @@ TEST_CASE("AnimPaint: from_blob solid round-trip", "[anim][paint][from_blob]") {
     delete anim;
 }
 
-TEST_CASE("AnimPaint: from_blob constant round-trip", "[anim][paint][from_blob]") {
+TEST_CASE("Paint: from_blob constant round-trip", "[anim][paint][from_blob]") {
     std::vector<hsva_t> constant = {
         hsva_t(0,   1, 1, 1),
         hsva_t(120, 1, 1, 1),
     };
     auto bytes = pack_paint_per_pixel(constant);
     DecodeError err = DecodeError::Ok;
-    Animation* anim = AnimPaint::from_blob(bytes.data(), bytes.size(), &err);
+    Animation* anim = Paint::from_blob(bytes.data(), bytes.size(), &err);
     REQUIRE(anim != nullptr);
     REQUIRE(err == DecodeError::Ok);
 
@@ -359,27 +359,27 @@ TEST_CASE("AnimPaint: from_blob constant round-trip", "[anim][paint][from_blob]"
     delete anim;
 }
 
-TEST_CASE("AnimPaint: from_blob rejects unknown mode", "[anim][paint][from_blob]") {
+TEST_CASE("Paint: from_blob rejects unknown mode", "[anim][paint][from_blob]") {
     std::vector<uint8_t> bytes = { 2 };  // mode 2 is not defined
     DecodeError err = DecodeError::Ok;
-    CHECK(AnimPaint::from_blob(bytes.data(), bytes.size(), &err) == nullptr);
+    CHECK(Paint::from_blob(bytes.data(), bytes.size(), &err) == nullptr);
     CHECK(err == DecodeError::InvalidField);
 }
 
-TEST_CASE("AnimPaint: from_blob rejects NaN", "[anim][paint][from_blob]") {
+TEST_CASE("Paint: from_blob rejects NaN", "[anim][paint][from_blob]") {
     auto bytes = pack_paint_solid(std::nanf(""), 0, 0, 1);
     DecodeError err = DecodeError::Ok;
-    CHECK(AnimPaint::from_blob(bytes.data(), bytes.size(), &err) == nullptr);
+    CHECK(Paint::from_blob(bytes.data(), bytes.size(), &err) == nullptr);
     CHECK(err == DecodeError::InvalidField);
 }
 
 // ===========================================================================
-// AnimShift
+// Shift
 // ===========================================================================
 
-TEST_CASE("AnimShift: initialize copies src into work", "[anim][shift]") {
+TEST_CASE("Shift: initialize copies src into work", "[anim][shift]") {
     ShiftParams p = {};
-    AnimShift shift(p);
+    Shift shift(p);
 
     hsva_t src_buf[4] = {
         hsva_t(10, 1, 1, 1),
@@ -398,13 +398,13 @@ TEST_CASE("AnimShift: initialize copies src into work", "[anim][shift]") {
     }
 }
 
-TEST_CASE("AnimShift: render at t=0 produces work contents (no offset)",
+TEST_CASE("Shift: render at t=0 produces work contents (no offset)",
           "[anim][shift]") {
     ShiftParams p = {};
     p.direction = 1;       // right (sign doesn't matter at t=0)
     p.velocity = 1.0f;
     p.circular = 1;
-    AnimShift shift(p);
+    Shift shift(p);
 
     hsva_t src_buf[3] = { hsva_t(10,1,1,1), hsva_t(20,1,1,1), hsva_t(30,1,1,1) };
     hsva_t work_buf[3] = {};
@@ -421,13 +421,13 @@ TEST_CASE("AnimShift: render at t=0 produces work contents (no offset)",
     }
 }
 
-TEST_CASE("AnimShift: positive velocity, direction=right shifts right",
+TEST_CASE("Shift: positive velocity, direction=right shifts right",
           "[anim][shift]") {
     ShiftParams p = {};
     p.direction = 1;       // right (offset positive)
     p.velocity = 1.0f;     // 1 pixel/sec
     p.circular = 1;        // wrap so we don't hit fill
-    AnimShift shift(p);
+    Shift shift(p);
 
     hsva_t src_buf[3] = { hsva_t(10,1,1,1), hsva_t(20,1,1,1), hsva_t(30,1,1,1) };
     hsva_t work_buf[3] = {};
@@ -444,13 +444,13 @@ TEST_CASE("AnimShift: positive velocity, direction=right shifts right",
     CHECK(dst_buf[2].h == work_buf[1].h);
 }
 
-TEST_CASE("AnimShift: positive velocity, direction=left shifts left",
+TEST_CASE("Shift: positive velocity, direction=left shifts left",
           "[anim][shift]") {
     ShiftParams p = {};
     p.direction = 0;       // left (offset negated to negative)
     p.velocity = 1.0f;
     p.circular = 1;
-    AnimShift shift(p);
+    Shift shift(p);
 
     hsva_t src_buf[3] = { hsva_t(10,1,1,1), hsva_t(20,1,1,1), hsva_t(30,1,1,1) };
     hsva_t work_buf[3] = {};
@@ -467,13 +467,13 @@ TEST_CASE("AnimShift: positive velocity, direction=left shifts left",
     CHECK(dst_buf[2].h == work_buf[0].h);
 }
 
-TEST_CASE("AnimShift: non-circular fills exposed pixels", "[anim][shift]") {
+TEST_CASE("Shift: non-circular fills exposed pixels", "[anim][shift]") {
     ShiftParams p = {};
     p.direction = 1;
     p.velocity = 1.0f;
     p.circular = 0;
     p.fill_h = 99.0f; p.fill_s = 0.5f; p.fill_v = 0.5f; p.fill_a = 0.5f;
-    AnimShift shift(p);
+    Shift shift(p);
 
     hsva_t src_buf[3] = { hsva_t(10,1,1,1), hsva_t(20,1,1,1), hsva_t(30,1,1,1) };
     hsva_t work_buf[3] = {};
@@ -490,10 +490,10 @@ TEST_CASE("AnimShift: non-circular fills exposed pixels", "[anim][shift]") {
     CHECK(dst_buf[2].h == work_buf[1].h);
 }
 
-TEST_CASE("AnimShift: snapshot survives later src mutation", "[anim][shift]") {
+TEST_CASE("Shift: snapshot survives later src mutation", "[anim][shift]") {
     ShiftParams p = {};
     p.circular = 1;
-    AnimShift shift(p);
+    Shift shift(p);
 
     hsva_t src_buf[2] = { hsva_t(11,1,1,1), hsva_t(22,1,1,1) };
     hsva_t work_buf[2] = {};
@@ -513,32 +513,32 @@ TEST_CASE("AnimShift: snapshot survives later src mutation", "[anim][shift]") {
     CHECK(dst_buf[1].h == 22.0f);
 }
 
-TEST_CASE("AnimShift: from_blob round-trip", "[anim][shift][from_blob]") {
+TEST_CASE("Shift: from_blob round-trip", "[anim][shift][from_blob]") {
     auto bytes = pack_shift(1, 2.0f, 1, 0.0f, 0.0f, 0.0f, 0.0f);
     DecodeError err = DecodeError::Ok;
-    Animation* anim = AnimShift::from_blob(bytes.data(), bytes.size(), &err);
+    Animation* anim = Shift::from_blob(bytes.data(), bytes.size(), &err);
     REQUIRE(anim != nullptr);
     REQUIRE(err == DecodeError::Ok);
     delete anim;
 }
 
-TEST_CASE("AnimShift: from_blob rejects direction > 1", "[anim][shift][from_blob]") {
+TEST_CASE("Shift: from_blob rejects direction > 1", "[anim][shift][from_blob]") {
     auto bytes = pack_shift(2, 1.0f, 1, 0, 0, 0, 0);
     DecodeError err = DecodeError::Ok;
-    CHECK(AnimShift::from_blob(bytes.data(), bytes.size(), &err) == nullptr);
+    CHECK(Shift::from_blob(bytes.data(), bytes.size(), &err) == nullptr);
     CHECK(err == DecodeError::InvalidField);
 }
 
-TEST_CASE("AnimShift: from_blob rejects circular > 1", "[anim][shift][from_blob]") {
+TEST_CASE("Shift: from_blob rejects circular > 1", "[anim][shift][from_blob]") {
     auto bytes = pack_shift(1, 1.0f, 2, 0, 0, 0, 0);
     DecodeError err = DecodeError::Ok;
-    CHECK(AnimShift::from_blob(bytes.data(), bytes.size(), &err) == nullptr);
+    CHECK(Shift::from_blob(bytes.data(), bytes.size(), &err) == nullptr);
     CHECK(err == DecodeError::InvalidField);
 }
 
-TEST_CASE("AnimShift: from_blob rejects NaN velocity", "[anim][shift][from_blob]") {
+TEST_CASE("Shift: from_blob rejects NaN velocity", "[anim][shift][from_blob]") {
     auto bytes = pack_shift(1, std::nanf(""), 1, 0, 0, 0, 0);
     DecodeError err = DecodeError::Ok;
-    CHECK(AnimShift::from_blob(bytes.data(), bytes.size(), &err) == nullptr);
+    CHECK(Shift::from_blob(bytes.data(), bytes.size(), &err) == nullptr);
     CHECK(err == DecodeError::InvalidField);
 }

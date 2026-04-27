@@ -13,9 +13,9 @@ struct SparkParams {
     float fade;     // seconds; must be > 0
 };
 
-class AnimSpark : public Animation {
+class Spark : public Animation {
 public:
-    explicit AnimSpark(const SparkParams& p);
+    explicit Spark(const SparkParams& p);
 
     static Animation* from_blob(const uint8_t* params, size_t params_size,
                                 DecodeError* err_out);

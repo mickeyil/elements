@@ -1,4 +1,4 @@
-#include "anim_paint.h"
+#include "animations/paint.h"
 
 #include "pixel_view.h"
 
@@ -11,15 +11,15 @@ bool read_finite_f32(BlobReader& r, float& out) {
 }
 }  // namespace
 
-AnimPaint::AnimPaint(float h, float s, float v, float a)
+Paint::Paint(float h, float s, float v, float a)
     : _mode(Mode::Solid), _solid(h, s, v, a), _constant(nullptr), _constant_count(0) {}
 
-AnimPaint::AnimPaint(hsva_t* constant, uint8_t count)
+Paint::Paint(hsva_t* constant, uint8_t count)
     : _mode(Mode::Constant), _solid(), _constant(constant), _constant_count(count) {}
 
-AnimPaint::~AnimPaint() { delete[] _constant; }
+Paint::~Paint() { delete[] _constant; }
 
-void AnimPaint::render(PixelView& dst, float)
+void Paint::render(PixelView& dst, float)
 {
     if (_mode == Mode::Solid) {
         for (uint16_t i = 0; i < dst.size(); i++) {
@@ -34,7 +34,7 @@ void AnimPaint::render(PixelView& dst, float)
     }
 }
 
-Animation* AnimPaint::from_blob(const uint8_t* params, size_t params_size,
+Animation* Paint::from_blob(const uint8_t* params, size_t params_size,
                                  DecodeError* err_out)
 {
     *err_out = DecodeError::InvalidField;
@@ -50,7 +50,7 @@ Animation* AnimPaint::from_blob(const uint8_t* params, size_t params_size,
         if (!read_finite_f32(r, v)) return nullptr;
         if (!read_finite_f32(r, a)) return nullptr;
 
-        AnimPaint* anim = new (std::nothrow) AnimPaint(h, s, v, a);
+        Paint* anim = new (std::nothrow) Paint(h, s, v, a);
         if (anim == nullptr) {
             *err_out = DecodeError::OutOfMemory;
             return nullptr;
@@ -81,7 +81,7 @@ Animation* AnimPaint::from_blob(const uint8_t* params, size_t params_size,
             }
         }
 
-        AnimPaint* anim = new (std::nothrow) AnimPaint(constant, count);
+        Paint* anim = new (std::nothrow) Paint(constant, count);
         if (anim == nullptr) {
             delete[] constant;
             *err_out = DecodeError::OutOfMemory;

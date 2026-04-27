@@ -1,4 +1,4 @@
-#include "anim_wave.h"
+#include "animations/wave.h"
 
 #include "colors.h"
 #include "pixel_view.h"
@@ -12,9 +12,9 @@ bool read_finite_f32(BlobReader& r, float& out) {
 }
 }  // namespace
 
-AnimWave::AnimWave(const WaveParams& p) : _p(p) {}
+Wave::Wave(const WaveParams& p) : _p(p) {}
 
-void AnimWave::render(PixelView& dst, float t_animation)
+void Wave::render(PixelView& dst, float t_animation)
 {
     const float base_phase =
         (2.0f * static_cast<float>(M_PI) * t_animation / _p.period) + _p.phase0;
@@ -34,7 +34,7 @@ void AnimWave::render(PixelView& dst, float t_animation)
     }
 }
 
-Animation* AnimWave::from_blob(const uint8_t* params, size_t params_size,
+Animation* Wave::from_blob(const uint8_t* params, size_t params_size,
                                 DecodeError* err_out)
 {
     *err_out = DecodeError::InvalidField;
@@ -53,7 +53,7 @@ Animation* AnimWave::from_blob(const uint8_t* params, size_t params_size,
     if (!read_finite_f32(r, p.phase0))    return nullptr;
     if (!read_finite_f32(r, p.pixel_step)) return nullptr;
 
-    AnimWave* anim = new (std::nothrow) AnimWave(p);
+    Wave* anim = new (std::nothrow) Wave(p);
     if (anim == nullptr) {
         *err_out = DecodeError::OutOfMemory;
         return nullptr;

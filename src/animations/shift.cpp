@@ -1,4 +1,4 @@
-#include "anim_shift.h"
+#include "animations/shift.h"
 
 #include "colors.h"
 #include "pixel_view.h"
@@ -12,9 +12,9 @@ bool read_finite_f32(BlobReader& r, float& out) {
 }
 }  // namespace
 
-AnimShift::AnimShift(const ShiftParams& p) : _p(p) {}
+Shift::Shift(const ShiftParams& p) : _p(p) {}
 
-void AnimShift::initialize(const PixelView* src, PixelView* work)
+void Shift::initialize(const PixelView* src, PixelView* work)
 {
     _work = work;
     if (work == nullptr || src == nullptr) {
@@ -26,7 +26,7 @@ void AnimShift::initialize(const PixelView* src, PixelView* work)
     }
 }
 
-void AnimShift::render(PixelView& dst, float t_animation)
+void Shift::render(PixelView& dst, float t_animation)
 {
     if (_work == nullptr) {
         return;
@@ -55,7 +55,7 @@ void AnimShift::render(PixelView& dst, float t_animation)
     }
 }
 
-Animation* AnimShift::from_blob(const uint8_t* params, size_t params_size,
+Animation* Shift::from_blob(const uint8_t* params, size_t params_size,
                                  DecodeError* err_out)
 {
     *err_out = DecodeError::InvalidField;
@@ -72,7 +72,7 @@ Animation* AnimShift::from_blob(const uint8_t* params, size_t params_size,
     if (!read_finite_f32(r, p.fill_v)) return nullptr;
     if (!read_finite_f32(r, p.fill_a)) return nullptr;
 
-    AnimShift* anim = new (std::nothrow) AnimShift(p);
+    Shift* anim = new (std::nothrow) Shift(p);
     if (anim == nullptr) {
         *err_out = DecodeError::OutOfMemory;
         return nullptr;

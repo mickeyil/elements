@@ -19,9 +19,9 @@ struct WaveParams {
     float pixel_step;          // phase added per pixel
 };
 
-class AnimWave : public Animation {
+class Wave : public Animation {
 public:
-    explicit AnimWave(const WaveParams& p);
+    explicit Wave(const WaveParams& p);
 
     // Parse blob params. Returns nullptr and sets *err_out on failure.
     static Animation* from_blob(const uint8_t* params, size_t params_size,

@@ -1,4 +1,4 @@
-#include "anim_spark.h"
+#include "animations/spark.h"
 
 #include "colors.h"
 #include "pixel_view.h"
@@ -12,9 +12,9 @@ bool read_finite_f32(BlobReader& r, float& out) {
 }
 }  // namespace
 
-AnimSpark::AnimSpark(const SparkParams& p) : _p(p) {}
+Spark::Spark(const SparkParams& p) : _p(p) {}
 
-void AnimSpark::render(PixelView& dst, float t_animation)
+void Spark::render(PixelView& dst, float t_animation)
 {
     float alpha;
     if (t_animation < _p.fade) {
@@ -29,7 +29,7 @@ void AnimSpark::render(PixelView& dst, float t_animation)
     }
 }
 
-Animation* AnimSpark::from_blob(const uint8_t* params, size_t params_size,
+Animation* Spark::from_blob(const uint8_t* params, size_t params_size,
                                  DecodeError* err_out)
 {
     *err_out = DecodeError::InvalidField;
@@ -42,7 +42,7 @@ Animation* AnimSpark::from_blob(const uint8_t* params, size_t params_size,
     if (!read_finite_f32(r, p.fade))    return nullptr;
     if (p.fade <= 0.0f)                  return nullptr;
 
-    AnimSpark* anim = new (std::nothrow) AnimSpark(p);
+    Spark* anim = new (std::nothrow) Spark(p);
     if (anim == nullptr) {
         *err_out = DecodeError::OutOfMemory;
         return nullptr;

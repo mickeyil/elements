@@ -24,10 +24,10 @@ add_library(elements_core STATIC
     src/strip.cpp
     src/layer.cpp
     src/program.cpp
-    src/anim_wave.cpp
-    src/anim_spark.cpp
-    src/anim_paint.cpp
-    src/anim_shift.cpp
+    src/animations/wave.cpp
+    src/animations/spark.cpp
+    src/animations/paint.cpp
+    src/animations/shift.cpp
     src/playback_device.cpp
     src/esp_simulated.cpp
     src/sim_controller.cpp
@@ -198,10 +198,10 @@ if(BUILD_TESTS)
 
     add_executable(test_animations
         test/test_animations.cpp
-        src/anim_wave.cpp
-        src/anim_spark.cpp
-        src/anim_paint.cpp
-        src/anim_shift.cpp
+        src/animations/wave.cpp
+        src/animations/spark.cpp
+        src/animations/paint.cpp
+        src/animations/shift.cpp
         src/blob_reader.cpp
         src/pixel_view.cpp
         src/colors.cpp

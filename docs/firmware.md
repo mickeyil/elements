@@ -112,10 +112,10 @@ Used by both firmware and simulator:
 | `engine.h/cpp` | Timeline cursor, animation lifecycle, remap scatter-copy |
 | `compositor.h/cpp` | Layer blending, HSV→RGB, gamma LUT |
 | `animation.h` | Abstract base class |
-| `anim_wave.h` | Wave animation |
-| `anim_spark.h` | Spark animation |
-| `anim_paint.h` | Paint animation |
-| `anim_shift.h` | Shift animation (stateful) |
+| `animations/wave.h` | Wave animation |
+| `animations/spark.h` | Spark animation |
+| `animations/paint.h` | Paint animation |
+| `animations/shift.h` | Shift animation (stateful) |
 | `colors.h/cpp` | `hsva_t`, `rgb_t`, conversion, gamma table |
 | `strip.h` | RGB buffer wrapper |
 | `hardware_profile.h` | Strip/profile constraints, including `MAX_STRIP_PIXELS` |

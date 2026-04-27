@@ -243,7 +243,7 @@ Blob bytes, parser shape, and decoder integration live in `blob_format.md`,
 
 - `src/decoder.{h,cpp}` — replaced by `drafts/decoder.{h,cpp}`
 - `src/animation.h` and concrete animation headers, especially
-  `anim_shift.h`
+  `animations/shift.h`
 - `src/engine.{h,cpp}`
 - `src/compositor.{h,cpp}`
 - `compiler/elements/compiler.py` — includes `_compute_required_starts`

@@ -20,9 +20,9 @@ struct ShiftParams {
     float fill_h, fill_s, fill_v, fill_a;
 };
 
-class AnimShift : public Animation {
+class Shift : public Animation {
 public:
-    explicit AnimShift(const ShiftParams& p);
+    explicit Shift(const ShiftParams& p);
 
     static Animation* from_blob(const uint8_t* params, size_t params_size,
                                 DecodeError* err_out);
