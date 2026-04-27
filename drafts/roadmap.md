@@ -308,13 +308,37 @@ circular wrap, non-circular fill, snapshot survives later src
 mutation, from_blob round-trip and rejections (direction > 1, circular
 > 1, NaN velocity).
 
-### 19. `decoder.{h,cpp}`
+### 19. `decoder.{h,cpp}` — DONE
 
-Single-pass decode, blob → `Program`. Pulls in every `anim_*.h`
-`from_blob()`. Tests: valid blob decodes; each per-section error path
-surfaces the right `DecodeError`; over-cap / truncation cases; copy-op
-ordering accepted / rejected per `blob_format.md`; animation-type
-dispatch reaches the right factory.
+Landed in `src/decoder.{h,cpp}`. `BLOB_VERSION` and `BLOB_MAGIC`
+replace the draft `kBlobVersion` / `kBlobMagic` per the
+SCREAMING_SNAKE policy. `animation_types.h` promoted alongside.
+Single-pass `decode_program(blob, blob_len, profile_strip_length,
+err_out)`: validates magic + version, parses + validates the header,
+then the buffer-size table, pixel views (including index-array
+bounds), copy ops (sorted-`at`, src/dst sizes match, same-`at`
+duplicate-dst rejected), then layers and events. Per-event,
+dispatches on `AnimType` to the right `Anim::from_blob()`, then runs
+the post-checks for paint (constant size matches dst view) and shift
+(src view required). Trailing bytes rejected. On any failure the
+already-allocated `Program` is freed via `free_program()`. Standalone
+`test_decoder` target replaces the legacy fixture-driven test; the
+test/fixtures dependency is dropped (other legacy targets still
+declare it). Coverage in `test_decoder` (37 cases, 49 assertions):
+bad magic, bad version, truncated prefix, profile_strip_length == 0
+(caller bug), reserved flag bits, target_fps == 0, strip_length 0 /
+over-cap / mismatch, duration NaN / <= 0, layer_count over-cap,
+buffer size over-cap, total pool bytes over MAX_POOL_BYTES, truncated
+buffer-size table, pixel-view buffer_idx out of range, unknown flag
+bits, storage-identity oversized, physical_identity without
+has_physical, storage/physical indices out of range, copy-op
+NaN-`at`, out-of-order `at`, src/dst size mismatch, src ==
+PIXV_NONE, same-`at` duplicate dst, event start+duration over
+program duration, dst view without physical mapping, unknown
+anim_type, paint constant size mismatch, shift without src,
+factory-rejection propagation, layer events overlap, trailing bytes,
+plus minimal valid blob, requires_sync flag, full program with copy
+ops + spark event.
 
 ### 20. `playback.{h,cpp}`
 

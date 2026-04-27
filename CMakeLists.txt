@@ -75,8 +75,24 @@ if(BUILD_TESTS)
 
     enable_testing()
 
-    add_executable(test_decoder test/test_decoder.cpp)
-    target_link_libraries(test_decoder elements_core Catch2::Catch2WithMain)
+    add_executable(test_decoder
+        test/test_decoder.cpp
+        src/decoder.cpp
+        src/blob_reader.cpp
+        src/program.cpp
+        src/layer.cpp
+        src/pixel_buffer_pool.cpp
+        src/pixel_view.cpp
+        src/pixel_views.cpp
+        src/copy_ops.cpp
+        src/colors.cpp
+        src/animations/wave.cpp
+        src/animations/spark.cpp
+        src/animations/paint.cpp
+        src/animations/shift.cpp
+    )
+    target_include_directories(test_decoder PRIVATE src)
+    target_link_libraries(test_decoder Catch2::Catch2WithMain)
 
     add_executable(test_engine
         test/test_engine.cpp
@@ -255,7 +271,6 @@ if(BUILD_TESTS)
                     ${CMAKE_SOURCE_DIR}/test/fixtures/test_dual_shift_left.bin
                     ${CMAKE_SOURCE_DIR}/test/fixtures/test_dual_shift_right.bin
         )
-        add_dependencies(test_decoder test_fixtures)
         add_dependencies(test_playback_device test_fixtures)
         add_dependencies(test_esp_simulated test_fixtures)
         add_dependencies(test_sim_controller test_fixtures)

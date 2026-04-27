@@ -11,12 +11,12 @@ splits those out.
 
 | File                          | Owns |
 | ----------------------------- | ---- |
-| `drafts/decoder.h`            | `decode_program()`, `kBlobVersion`, `kBlobMagic` |
-| `drafts/decoder.cpp`          | the decode logic |
+| `src/decoder.h`               | `decode_program()`, `BLOB_VERSION`, `BLOB_MAGIC` |
+| `src/decoder.cpp`             | the decode logic |
 | `src/blob_reader.h`           | `BlobReader`, `DecodeError`, `decode_error_name()` (declarations) |
 | `src/blob_reader.cpp`         | `BlobReader` and `decode_error_name()` implementations |
 | `src/blob_limits.h`           | `MAX_*` cap constants |
-| `drafts/animation_types.h`    | `AnimType` enum |
+| `src/animation_types.h`       | `AnimType` enum |
 | `src/program.h`               | `Program` shape, `free_program()` |
 | `drafts/layer.h`              | `Layer`, `AnimationEvent` |
 | `drafts/pixel_views.h`        | `PixelViews`, `PixelViewSpec` |
@@ -32,7 +32,7 @@ animation headers include only `blob_reader.h`.
 The decoder is the only translation unit that includes every `anim_*.h`.
 Each animation header is otherwise self-contained.
 
-`src/blob_limits.h` and `drafts/animation_types.h` are tiny one-screen
+`src/blob_limits.h` and `src/animation_types.h` are tiny one-screen
 headers. `blob_limits.h` reuses `MAX_STRIP_PIXELS` from
 `src/hardware_profile.h` and defines the rest of the caps from
 `blob_format.md`. `animation_types.h` is just the `AnimType` enum.
@@ -268,7 +268,7 @@ wrapper around `delete prog`. The decoder does not redeclare
 ## What this replaces
 
 - `src/decoder.h` and `src/decoder.cpp` — replaced wholesale.
-- `BLOB_VERSION = 2` — replaced by `kBlobVersion = 3`.
+- `BLOB_VERSION = 2` — replaced by `BLOB_VERSION = 3`.
 - `AnimParams` tagged union and `WaveParams`/`ShiftParams`/`SparkParams`/
   `PaintParams` in the legacy header — deleted; each animation owns its own
   params shape next to its class definition.
@@ -277,3 +277,100 @@ wrapper around `delete prog`. The decoder does not redeclare
   `src/layer.*`, `src/pixel_*.*`, and `src/copy_ops.*`.
 - `max_remap_length` in the header and `temp_buffer` in `Program` — deleted
   with the old scatter-copy path.
+
+## Known gaps (deferred)
+
+Both items below are real correctness gaps in the post-step-19 decoder. They
+sit on the validation boundary -- the right place to fix is the decoder, not
+the runtime. Tackle as a separate task; tests should be added alongside the
+fixes in `test/test_decoder.cpp`.
+
+### 1. Paint constant-mode `count == 0` accepted, then `render()` dereferences nullptr
+
+`AnimPaint::from_blob` accepts a `mode == 1, count == 0` event. It allocates
+no constant array (`_constant = nullptr`) but still sets `_mode = Constant`.
+The decoder's per-anim post-check is:
+
+```cpp
+const uint8_t k = paint->constant_array_size();
+if (k != 0 && k != prog.pixel_views.at(dst_pixv_idx).size()) {
+    /* reject */
+}
+```
+
+`constant_array_size()` returns `_mode == Constant ? _constant_count : 0`,
+so a `count == 0` constant-mode paint and a solid-mode paint are
+indistinguishable from outside. The `k != 0` guard then skips the check.
+Engine activates the event, and `Paint::render()` enters the constant-mode
+loop and dereferences `_constant[i]` from `nullptr` for every dst pixel
+(when `dst.size() > 0`). Crash.
+
+**Fix sketch.** Split the accessor so the decoder can ask the two questions
+independently:
+
+```cpp
+// src/animations/paint.h
+bool is_constant_mode() const { return _mode == Mode::Constant; }
+uint8_t constant_array_size() const { return _constant_count; }
+```
+
+Decoder check becomes:
+
+```cpp
+if (paint->is_constant_mode()
+    && paint->constant_array_size() != prog.pixel_views.at(dst_pixv_idx).size()) {
+    delete anim;
+    return DecodeError::InvalidField;
+}
+```
+
+This catches all four cases:
+
+| `count` | `dst.size()` | result                                    |
+|---------|--------------|-------------------------------------------|
+| 0       | 0            | accepted (both empty; render no-op)       |
+| 0       | > 0          | rejected (`InvalidField`)                 |
+| N       | N            | accepted                                  |
+| N       | != N         | rejected                                  |
+
+**Test additions:** decoder rejects `mode=1, count=0` against a non-empty
+dst view; decoder accepts `mode=1, count=0` against a zero-size dst view
+(if the empty-view shape is otherwise legal).
+
+### 2. Shift requires src, but not work
+
+The decoder rejects shift events with `src_pixv_idx == PIXV_NONE`, but does
+not require `work_pixv_idx`. With `work_pixv_idx == PIXV_NONE`, Engine
+passes `nullptr` to `Shift::initialize`, `_work` stays null, and
+`Shift::render()` returns early without writing dst. This violates the
+Animation contract that every dst pixel be defined per frame, and on a
+fresh activation `dst` ends up showing whatever was there last.
+
+Two related compiler-emit invariants the decoder also doesn't enforce:
+
+- `work.size() == 0` would trip `((src_i % work_len) + work_len) % work_len`
+  in the circular branch with `work_len == 0` -- division by zero.
+- `src.size() != work.size()` produces a partial snapshot:
+  `Shift::initialize` copies `min(src.size(), work.size())` pixels, leaving
+  the tail of `work` at whatever it was (zero post-`Engine::reset()`,
+  stale otherwise). Render then reads that tail when shifting.
+
+**Fix sketch.** Replace the current shift post-check with:
+
+```cpp
+if (type == AnimType::Shift) {
+    if (src_pixv_idx == PIXV_NONE || work_pixv_idx == PIXV_NONE) {
+        delete anim;
+        return DecodeError::InvalidField;
+    }
+    const uint16_t src_size  = prog.pixel_views.at(src_pixv_idx).size();
+    const uint16_t work_size = prog.pixel_views.at(work_pixv_idx).size();
+    if (src_size == 0 || work_size == 0 || src_size != work_size) {
+        delete anim;
+        return DecodeError::InvalidField;
+    }
+}
+```
+
+**Test additions:** decoder rejects shift with no work view; with
+`work.size() == 0`; with `src.size() != work.size()`.
