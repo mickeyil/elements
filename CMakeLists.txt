@@ -156,8 +156,15 @@ if(BUILD_TESTS)
     target_include_directories(test_synced_clock PRIVATE src test)
     target_link_libraries(test_synced_clock Catch2::Catch2WithMain)
 
-    add_executable(test_compositor test/test_compositor.cpp)
-    target_link_libraries(test_compositor elements_core Catch2::Catch2WithMain)
+    add_executable(test_compositor
+        test/test_compositor.cpp
+        src/compositor.cpp
+        src/strip.cpp
+        src/pixel_view.cpp
+        src/colors.cpp
+    )
+    target_include_directories(test_compositor PRIVATE src)
+    target_link_libraries(test_compositor Catch2::Catch2WithMain)
 
     add_executable(test_animations test/test_animations.cpp)
     target_link_libraries(test_animations elements_core Catch2::Catch2WithMain)

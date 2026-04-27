@@ -204,11 +204,25 @@ free both array and animations, re-`initialize` replaces (and frees the
 prior batch), `active_at` for before-first / on-start / mid-event /
 on-end (exclusive) / gap / past-last / back-to-back schedule.
 
-### 14. `compositor.{h,cpp}`
+### 14. `compositor.{h,cpp}` — DONE
 
-Depends on `PixelView` and `Strip`. Tests: single active layer,
-multiple layers bottom-to-top, inactive layers skipped, physical
-mapping applied per view.
+Landed in `src/compositor.{h,cpp}` and stays in `elements_core`.
+`Compositor::composite(Strip&, PixelView* const* active_dst_views, count)`
+clears the strip, then walks each non-null view in array order:
+transparent pixels (`a <= 0`) skip, opaque (`a >= 1`) overwrite,
+partial-alpha calls `rgb_alpha_blend(out[phys], fg, a)`. Physical
+routing is `view->physical_index(i)`. The defensive
+`has_physical_mapping()` guard from the draft was dropped (decoder
+validates dst views; trust input matches CopyOps). Standalone
+`test_compositor` target replaces the legacy v2 wiring; it links
+`compositor.cpp` + `strip.cpp` + `pixel_view.cpp` + `colors.cpp`.
+Coverage: zero-count clears the strip, nullptr-entry skipped, opaque
+view writes `hsv_to_rgb` per pixel, transparent pixel leaves output
+untouched, partial alpha blends with cleared base, opaque-top overwrites
+bottom, semi-transparent top blends with bottom, mixed
+active/inactive layers, non-identity physical mapping routes
+view[i]->strip[phys[i]], short view leaves uncovered pixels black,
+each composite re-clears.
 
 ### 15. `program_structs.{h,cpp}`
 
