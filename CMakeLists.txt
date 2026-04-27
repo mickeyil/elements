@@ -74,8 +74,21 @@ if(BUILD_TESTS)
     add_executable(test_decoder test/test_decoder.cpp)
     target_link_libraries(test_decoder elements_core Catch2::Catch2WithMain)
 
-    add_executable(test_engine test/test_engine.cpp)
-    target_link_libraries(test_engine elements_core Catch2::Catch2WithMain)
+    add_executable(test_engine
+        test/test_engine.cpp
+        src/engine.cpp
+        src/compositor.cpp
+        src/strip.cpp
+        src/program.cpp
+        src/layer.cpp
+        src/pixel_buffer_pool.cpp
+        src/pixel_view.cpp
+        src/pixel_views.cpp
+        src/copy_ops.cpp
+        src/colors.cpp
+    )
+    target_include_directories(test_engine PRIVATE src)
+    target_link_libraries(test_engine Catch2::Catch2WithMain)
 
     # test_colors and test_gamma are standalone during the v3 migration:
     # elements_core compilation is broken until compositor is rewired in step
@@ -229,7 +242,6 @@ if(BUILD_TESTS)
                     ${CMAKE_SOURCE_DIR}/test/fixtures/test_dual_shift_right.bin
         )
         add_dependencies(test_decoder test_fixtures)
-        add_dependencies(test_engine test_fixtures)
         add_dependencies(test_playback_device test_fixtures)
         add_dependencies(test_esp_simulated test_fixtures)
         add_dependencies(test_sim_controller test_fixtures)

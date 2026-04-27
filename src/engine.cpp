@@ -1,164 +1,145 @@
 #include "engine.h"
-#include "anim_wave.h"
-#include "anim_spark.h"
-#include "anim_shift.h"
-#include "anim_paint.h"
 
 #include <cstring>
+#include <new>
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-static inline void scatter_copy(const hsva_t* src, hsva_t* dst,
-                                const uint8_t* remap, uint8_t len)
+Engine* Engine::create(Program* program)
 {
-    for (uint8_t i = 0; i < len; i++)
-        dst[remap[i]] = src[i];
+    Engine* e = new (std::nothrow) Engine(program);
+    if (e == nullptr) {
+        // The constructor never ran, so the Program is still ours to free.
+        free_program(program);
+        return nullptr;
+    }
+    if (!e->initialize_()) {
+        // ~Engine() frees the Program via free_program(_program).
+        delete e;
+        return nullptr;
+    }
+    return e;
 }
 
-static Animation* create_animation(const AnimationEvent& e, Program* prog,
-                                   const LayerDef& dep_layer)
+Engine::Engine(Program* program)
+    : _program(program)
+{}
+
+bool Engine::initialize_()
 {
-    switch (e.params.type) {
-        case ANIM_WAVE:
-            return new AnimWave(e.params.wave);
-
-        case ANIM_SPARK:
-            return new AnimSpark(e.params.spark);
-
-        case ANIM_PAINT:
-            return new AnimPaint(e.params.paint);
-
-        case ANIM_SHIFT: {
-            hsva_t* work = prog->pool.buffers[e.params.shift.buffer_id];
-            uint8_t shift_len = e.remap_is_identity
-                ? dep_layer.index_map_length : e.remap_length;
-
-            if (e.source_layer != SOURCE_NONE) {
-                const LayerDef& src_layer = prog->layers[e.source_layer];
-
-                // Build physical→source_logical lookup (256 bytes on stack)
-                uint8_t src_pos[256];
-                memset(src_pos, 0xFF, 256);
-                for (uint8_t j = 0; j < src_layer.index_map_length; j++)
-                    src_pos[src_layer.index_map[j]] = j;
-
-                // Copy source pixels in dependent's pixel order
-                for (uint8_t i = 0; i < shift_len; i++) {
-                    uint8_t dep_logical = e.remap_is_identity ? i : e.remap[i];
-                    uint8_t physical = dep_layer.index_map[dep_logical];
-                    uint8_t si = src_pos[physical];
-                    // Compiler guarantees pixel subset — si should never be 0xFF
-                    work[i] = (si != 0xFF) ? src_layer.buffer[si] : hsva_t();
-                }
-            } else {
-                memset(work, 0, shift_len * sizeof(hsva_t));
-            }
-
-            return new AnimShift(e.params.shift, work, shift_len);
-        }
-
-        default:
-            return nullptr;
+    if (_program == nullptr || _program->layer_count == 0) {
+        return true;
     }
-}
-
-// ---------------------------------------------------------------------------
-// Engine
-// ---------------------------------------------------------------------------
-
-Engine::Engine(Program* prog, Strip& strip, bool gamma_enabled)
-    : _prog(prog), _compositor(strip, gamma_enabled), _states(nullptr)
-{
-    // Allocate layer buffers
-    for (uint8_t i = 0; i < prog->layer_count; i++) {
-        LayerDef& layer = prog->layers[i];
-        layer.buffer = new hsva_t[layer.index_map_length]();
-    }
-
-    // Allocate per-layer state
-    _states = new LayerState[prog->layer_count];
-    for (uint8_t i = 0; i < prog->layer_count; i++) {
-        _states[i].cursor = 0;
-        _states[i].instance = nullptr;
-    }
+    _layer_states = new (std::nothrow) LayerPlaybackState[_program->layer_count]();
+    if (_layer_states == nullptr) return false;
+    _active_dst_views = new (std::nothrow) PixelView*[_program->layer_count]();
+    if (_active_dst_views == nullptr) return false;
+    return true;
 }
 
 Engine::~Engine()
 {
-    if (_states) {
-        for (uint8_t i = 0; i < _prog->layer_count; i++) {
-            delete _states[i].instance;
-        }
-        delete[] _states;
-    }
-    free_program(_prog);
+    delete[] _active_dst_views;
+    delete[] _layer_states;
+    free_program(_program);
 }
 
-bool Engine::tick(float t)
+bool Engine::render_frame(float t_program, Strip& out)
 {
-    if (t >= _prog->duration)
+    if (_program == nullptr) {
         return false;
+    }
+    if (t_program < 0.0f || t_program >= _program->duration) {
+        return false;
+    }
 
-    uint32_t active_mask = 0;
+    run_copy_ops_until(t_program);
 
-    for (uint8_t li = 0; li < _prog->layer_count; li++) {
-        LayerDef& layer = _prog->layers[li];
-        LayerState& state = _states[li];
+    for (uint8_t li = 0; li < _program->layer_count; li++) {
+        _active_dst_views[li] = nullptr;
+    }
 
-        while (state.cursor < layer.event_count) {
-            AnimationEvent& e = layer.events[state.cursor];
-            float end = e.t_start + e.duration;
+    for (uint8_t li = 0; li < _program->layer_count; li++) {
+        Layer& layer = _program->layers[li];
+        LayerPlaybackState& state = _layer_states[li];
 
-            if (t < e.t_start)
-                break;  // future event
+        while (state.cursor < layer.count()) {
+            AnimationEvent& e = layer.at(state.cursor);
+            const float end = e.start + e.duration;
 
-            if (t < end) {
-                // Active — create instance on first frame
-                if (!state.instance)
-                    state.instance = create_animation(e, _prog, layer);
-
-                float t_rel = t - e.t_start;
-                uint8_t len = e.remap_is_identity
-                    ? layer.index_map_length : e.remap_length;
-                hsva_t* buf = e.remap_is_identity
-                    ? layer.buffer : _prog->temp_buffer;
-
-                state.instance->render(buf, len, t_rel);
-
-                if (!e.remap_is_identity)
-                    scatter_copy(_prog->temp_buffer, layer.buffer,
-                                 e.remap, e.remap_length);
+            if (t_program < e.start) {
+                // Sorted: nothing later on this layer can start sooner.
                 break;
             }
 
-            // Event finished
-            delete state.instance;
-            state.instance = nullptr;
-            state.cursor++;
-        }
+            if (t_program < end) {
+                PixelView& dst = _program->pixel_views.at(e.dst_pixv_idx);
 
-        if (state.instance)
-            active_mask |= (1u << li);
+                if (!state.initialized) {
+                    PixelView* src = (e.src_pixv_idx != PIXV_NONE)
+                        ? &_program->pixel_views.at(e.src_pixv_idx)
+                        : nullptr;
+                    PixelView* work = (e.work_pixv_idx != PIXV_NONE)
+                        ? &_program->pixel_views.at(e.work_pixv_idx)
+                        : nullptr;
+
+                    e.animation->initialize(src, work);
+                    state.initialized = true;
+                }
+
+                const float t_animation = t_program - e.start;
+                e.animation->render(dst, t_animation);
+
+                _active_dst_views[li] = &dst;
+                break;
+            }
+
+            state.cursor++;
+            state.initialized = false;
+        }
     }
 
-    _compositor.composite(_prog->layers, _prog->layer_count, active_mask);
+    _compositor.composite(out, _active_dst_views, _program->layer_count);
     return true;
 }
 
 void Engine::reset()
 {
-    for (uint8_t i = 0; i < _prog->layer_count; i++) {
-        delete _states[i].instance;
-        _states[i].instance = nullptr;
-        _states[i].cursor = 0;
-        memset(_prog->layers[i].buffer, 0,
-               _prog->layers[i].index_map_length * sizeof(hsva_t));
+    if (_program == nullptr) {
+        return;
     }
-    // Zero buffer pool (shift work buffers)
-    for (uint8_t i = 0; i < _prog->pool.count; i++) {
-        memset(_prog->pool.buffers[i], 0,
-               _prog->pool.sizes[i] * sizeof(hsva_t));
+
+    for (uint8_t li = 0; li < _program->layer_count; li++) {
+        _layer_states[li].cursor = 0;
+        _layer_states[li].initialized = false;
+    }
+    _copy_cursor = 0;
+
+    for (uint16_t bi = 0; bi < _program->pixel_buffer_pool.buffer_count(); bi++) {
+        hsva_t* buf = _program->pixel_buffer_pool.buffer_at(bi);
+        const uint16_t len = _program->pixel_buffer_pool.buffer_size(bi);
+        if (buf != nullptr && len > 0) {
+            std::memset(buf, 0, len * sizeof(hsva_t));
+        }
+    }
+}
+
+void Engine::run_copy_ops_until(float t_program)
+{
+    while (_copy_cursor < _program->copy_ops.count()) {
+        const CopyOp& op = _program->copy_ops.at(_copy_cursor);
+        if (op.at > t_program) {
+            break;
+        }
+
+        PixelView& src = _program->pixel_views.at(op.src_pixv_idx);
+        PixelView& dst = _program->pixel_views.at(op.dst_pixv_idx);
+        copy_view(src, dst);
+        _copy_cursor++;
+    }
+}
+
+void Engine::copy_view(const PixelView& src, PixelView& dst)
+{
+    for (uint16_t i = 0; i < src.size(); i++) {
+        dst[i] = src[i];
     }
 }

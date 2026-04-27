@@ -247,13 +247,30 @@ skeleton (`drafts/engine.cpp:69-70`) updated to use `layer.count()` /
 `layer.at(...)` after step 13's encapsulation; the body otherwise
 remains the step-16 sketch.
 
-### 16. `engine.{h,cpp}`
+### 16. `engine.{h,cpp}` — DONE
 
-Render order per `data_model.md §Engine`. Tests use **fake
-Animation** subclasses to exercise: event initialize on activation,
-render each frame, copy-ops fired before rendering, `active_dst_views`
-tracking, `reset()` clears initialized flags, jump semantics via
-`run_copy_ops_until`.
+Landed in `src/engine.{h,cpp}` and stays in `elements_core`. `Engine`
+is the rendering driver: `create(Program*)` is the fallible factory
+(takes Program ownership on success and on failure), `render_frame`
+runs due copy ops, walks each layer to find the active event,
+initializes newly-active events with `src`/`work`, renders into `dst`,
+then composites into the Strip. `reset()` rewinds layer cursors,
+re-arms initialize flags, rewinds the copy-op cursor, and zeroes every
+pool buffer. Defensive `copy_view` size check dropped (decoder
+validates equal sizes per CopyOps trust convention). Standalone
+`test_engine` target replaces the legacy v2 fixture-driven test; links
+the engine + compositor + strip + program + container sources, no
+fixture dependency. `FakeAnim` records initialize/render call counts
+plus last-call args; `SrcReadAnim` makes copy-op-before-render order
+observable through the strip. Coverage: `create(nullptr)` benign,
+empty Program clears strip, `render_frame` boundaries (`[0, duration)`
+half-open), single-event activation lifecycle (initialize once, render
+per frame), cursor advance to next event, src/work view passing,
+multi-layer independent tracking, copy-op runs before render,
+copy-op cursor advances only past due ops, `reset` re-arms initialize,
+`reset` rewinds copy cursor (replay verified), `reset` zeroes pool
+buffers, chained same-`at` copy ops execute in table order, top layer
+wins on a shared physical LED (engine-to-compositor handoff).
 
 ### 17. `anim_paint.{h,cpp}` + `anim_wave.{h,cpp}` + `anim_spark.{h,cpp}`
 
