@@ -330,9 +330,17 @@ DecodeError parse_event(BlobReader& r, const ParsedHeader& hdr,
             return DecodeError::InvalidField;
         }
     }
-    if (type == AnimType::Shift && src_pixv_idx == PIXV_NONE) {
-        delete anim;
-        return DecodeError::InvalidField;
+    if (type == AnimType::Shift) {
+        if (src_pixv_idx == PIXV_NONE || work_pixv_idx == PIXV_NONE) {
+            delete anim;
+            return DecodeError::InvalidField;
+        }
+        const uint16_t src_size  = prog.pixel_views.at(src_pixv_idx).size();
+        const uint16_t work_size = prog.pixel_views.at(work_pixv_idx).size();
+        if (src_size == 0 || work_size == 0 || src_size != work_size) {
+            delete anim;
+            return DecodeError::InvalidField;
+        }
     }
 
     event.animation     = anim;

@@ -373,6 +373,15 @@ TEST_CASE("Paint: from_blob rejects NaN", "[anim][paint][from_blob]") {
     CHECK(err == DecodeError::InvalidField);
 }
 
+TEST_CASE("Paint: from_blob rejects constant mode with count 0", "[anim][paint][from_blob]") {
+    // Mode 1 (constant) with count 0 would produce a Paint that holds nullptr
+    // and dereferences it on render. The factory must reject upfront.
+    std::vector<uint8_t> bytes = { 1, 0 };
+    DecodeError err = DecodeError::Ok;
+    CHECK(Paint::from_blob(bytes.data(), bytes.size(), &err) == nullptr);
+    CHECK(err == DecodeError::InvalidField);
+}
+
 // ===========================================================================
 // Shift
 // ===========================================================================

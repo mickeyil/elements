@@ -567,6 +567,97 @@ TEST_CASE("decode_program: shift event without source rejected", "[decoder]") {
     CHECK(run(b) == DecodeError::InvalidField);
 }
 
+TEST_CASE("decode_program: shift event without work view rejected", "[decoder]") {
+    std::vector<uint8_t> b;
+    HeaderBytes h; h.buffer_count = 1; h.pixel_view_count = 2; h.layer_count = 1;
+    append_prefix_and_header(b, h);
+    append_buffer_sizes(b, { 4 });
+    ViewBytes v0; v0.buffer_idx = 0; v0.size = 4;
+    v0.storage_identity = true;
+    v0.has_physical = true; v0.physical_identity = true;
+    append_pixel_view(b, v0);
+    ViewBytes v1; v1.buffer_idx = 0; v1.size = 4;
+    v1.storage_identity = true;
+    v1.has_physical = false;
+    append_pixel_view(b, v1);
+    put_u16(b, 1);
+    EventBytes e; e.anim_type = static_cast<uint8_t>(AnimType::Shift);
+    e.start = 0.0f; e.duration = 1.0f;
+    e.dst = 0; e.src = 1; e.work = PIXV_NONE;
+    e.params = shift_params(1, 1.0f, 1, 0, 0, 0, 0);
+    append_event(b, e);
+    CHECK(run(b) == DecodeError::InvalidField);
+}
+
+TEST_CASE("decode_program: shift event with zero-size work view rejected", "[decoder]") {
+    std::vector<uint8_t> b;
+    HeaderBytes h; h.buffer_count = 3; h.pixel_view_count = 3; h.layer_count = 1;
+    append_prefix_and_header(b, h);
+    append_buffer_sizes(b, { 4, 0, 0 });
+    ViewBytes v0; v0.buffer_idx = 0; v0.size = 4;
+    v0.storage_identity = true;
+    v0.has_physical = true; v0.physical_identity = true;
+    append_pixel_view(b, v0);
+    ViewBytes v1; v1.buffer_idx = 1; v1.size = 0;
+    v1.storage_identity = true;
+    v1.has_physical = false;
+    append_pixel_view(b, v1);
+    ViewBytes v2; v2.buffer_idx = 2; v2.size = 0;
+    v2.storage_identity = true;
+    v2.has_physical = false;
+    append_pixel_view(b, v2);
+    put_u16(b, 1);
+    EventBytes e; e.anim_type = static_cast<uint8_t>(AnimType::Shift);
+    e.start = 0.0f; e.duration = 1.0f;
+    e.dst = 0; e.src = 1; e.work = 2;
+    e.params = shift_params(1, 1.0f, 1, 0, 0, 0, 0);
+    append_event(b, e);
+    CHECK(run(b) == DecodeError::InvalidField);
+}
+
+TEST_CASE("decode_program: shift event with mismatched src/work sizes rejected", "[decoder]") {
+    std::vector<uint8_t> b;
+    HeaderBytes h; h.buffer_count = 3; h.pixel_view_count = 3; h.layer_count = 1;
+    append_prefix_and_header(b, h);
+    append_buffer_sizes(b, { 4, 4, 8 });
+    ViewBytes v0; v0.buffer_idx = 0; v0.size = 4;
+    v0.storage_identity = true;
+    v0.has_physical = true; v0.physical_identity = true;
+    append_pixel_view(b, v0);
+    ViewBytes v1; v1.buffer_idx = 1; v1.size = 4;
+    v1.storage_identity = true;
+    v1.has_physical = false;
+    append_pixel_view(b, v1);
+    ViewBytes v2; v2.buffer_idx = 2; v2.size = 8;
+    v2.storage_identity = true;
+    v2.has_physical = false;
+    append_pixel_view(b, v2);
+    put_u16(b, 1);
+    EventBytes e; e.anim_type = static_cast<uint8_t>(AnimType::Shift);
+    e.start = 0.0f; e.duration = 1.0f;
+    e.dst = 0; e.src = 1; e.work = 2;
+    e.params = shift_params(1, 1.0f, 1, 0, 0, 0, 0);
+    append_event(b, e);
+    CHECK(run(b) == DecodeError::InvalidField);
+}
+
+TEST_CASE("decode_program: paint constant mode with count 0 rejected", "[decoder]") {
+    std::vector<uint8_t> b;
+    HeaderBytes h; h.buffer_count = 1; h.pixel_view_count = 1; h.layer_count = 1;
+    append_prefix_and_header(b, h);
+    append_buffer_sizes(b, { 4 });
+    ViewBytes v; v.buffer_idx = 0; v.size = 4;
+    v.storage_identity = true;
+    v.has_physical = true; v.physical_identity = true;
+    append_pixel_view(b, v);
+    put_u16(b, 1);
+    EventBytes e; e.anim_type = static_cast<uint8_t>(AnimType::Paint);
+    e.start = 0.0f; e.duration = 1.0f; e.dst = 0;
+    e.params = paint_constant_params({});   // mode 1, count 0
+    append_event(b, e);
+    CHECK(run(b) == DecodeError::InvalidField);
+}
+
 TEST_CASE("decode_program: animation factory rejection propagates", "[decoder]") {
     std::vector<uint8_t> b;
     HeaderBytes h; h.buffer_count = 1; h.pixel_view_count = 1; h.layer_count = 1;

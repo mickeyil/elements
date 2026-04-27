@@ -62,22 +62,20 @@ Animation* Paint::from_blob(const uint8_t* params, size_t params_size,
     if (mode == 1) {
         uint8_t count = 0;
         if (!r.read_u8(count)) return nullptr;
+        if (count == 0) return nullptr;   // constant mode without a constant is malformed
 
-        hsva_t* constant = nullptr;
-        if (count > 0) {
-            constant = new (std::nothrow) hsva_t[count];
-            if (constant == nullptr) {
-                *err_out = DecodeError::OutOfMemory;
+        hsva_t* constant = new (std::nothrow) hsva_t[count];
+        if (constant == nullptr) {
+            *err_out = DecodeError::OutOfMemory;
+            return nullptr;
+        }
+        for (uint8_t i = 0; i < count; i++) {
+            if (!read_finite_f32(r, constant[i].h) ||
+                !read_finite_f32(r, constant[i].s) ||
+                !read_finite_f32(r, constant[i].v) ||
+                !read_finite_f32(r, constant[i].a)) {
+                delete[] constant;
                 return nullptr;
-            }
-            for (uint8_t i = 0; i < count; i++) {
-                if (!read_finite_f32(r, constant[i].h) ||
-                    !read_finite_f32(r, constant[i].s) ||
-                    !read_finite_f32(r, constant[i].v) ||
-                    !read_finite_f32(r, constant[i].a)) {
-                    delete[] constant;
-                    return nullptr;
-                }
             }
         }
 
