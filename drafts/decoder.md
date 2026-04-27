@@ -169,40 +169,10 @@ exact rejection reason without a debugger.
 
 ## Integration with Playback
 
-`Playback::handle_load(blob, blob_len, gen)` is the runtime caller of
-`decode_program`:
-
-```cpp
-DecodeError err = DecodeError::Ok;
-Program* program = decode_program(blob, blob_len,
-                                  _profile.strip_length, &err);
-if (program == nullptr) {
-    clear_render_buffer_();
-    // owner logs decode_error_name(err)
-    return false;
-}
-
-// Snapshot Program-level fields before handing ownership to Engine. After
-// Engine::create() the Program pointer (whether the call succeeds or not)
-// belongs to Engine, never to Playback directly.
-const float duration_s = program->duration;
-const uint8_t target_fps = program->target_fps;
-const bool  needs_sync = program->requires_sync;
-
-Engine* engine = Engine::create(program);  // takes ownership of program
-if (engine == nullptr) {
-    clear_render_buffer_();
-    // owner logs "[load] engine alloc failed" — distinct from decode errors
-    return false;
-}
-
-_duration      = duration_s;
-_target_fps    = target_fps;
-_requires_sync = needs_sync;
-_engine.reset(engine);
-_state = DeviceState::LOADED;
-return true;
-```
+`Playback::handle_load(blob, blob_len, err_out)` is the runtime caller of
+`decode_program`. It forwards `err_out` so the owner can map decode failures
+to ACK codes and log `decode_error_name(err)`. See `src/playback.cpp` for
+the implementation.
 
 `requires_sync` and `target_fps` are read once at load time and stored on
 `Playback`. They are not re-read during playback. `target_fps` is exposed so
@@ -211,11 +181,12 @@ and playback core do not use it as a hot-path time step.
 
 `Engine::create()` is a fallible factory: it owns the `Program` on both
 success and failure (frees it via `free_program()` if Engine itself or
-its internal allocations cannot be made). Engine OOM is **not** a
-`DecodeError` — the blob decoded fine; the device just ran out of heap
-mid-load. The firmware caller should log it under a separate identifier
-and ACK the LOAD command with `kAckError` (the same generic bucket as
-non-`StripLengthMismatch` decode failures).
+its internal allocations cannot be made). Conceptually engine alloc failure
+is not a decode failure, but `Playback::handle_load` reports it as
+`DecodeError::OutOfMemory` to keep the API surface to a single error
+channel. Both OOM stages end up in the same `kAckError` bucket; firmware
+that wants to distinguish them in logs needs a memory profile, not an API
+distinction.
 
 Tooling that only needs the render core may also call `decode_program`
 directly. In particular, `strip_render` should decode the blob, reject
@@ -256,8 +227,6 @@ The Python compiler must:
 The new decoder depends on a few small additions elsewhere:
 
 - `src/firmware/wire_constants.h` — add `kAckProfileMismatch = 3`.
-- `drafts/playback.cpp::handle_load` — replace the placeholder body with
-  the integration sketch above.
 
 `src/program.{h,cpp}` already carry the supporting changes:
 `Program::requires_sync` is declared, `Program::~Program()` releases the

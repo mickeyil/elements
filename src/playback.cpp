@@ -57,7 +57,8 @@ bool Playback::apply_hardware_profile(const HardwareProfile& profile)
     return true;
 }
 
-bool Playback::handle_load(const uint8_t* blob, size_t blob_len)
+bool Playback::handle_load(const uint8_t* blob, size_t blob_len,
+                           DecodeError* err_out)
 {
     if (!_profile.is_valid()) {
         return false;
@@ -67,7 +68,8 @@ bool Playback::handle_load(const uint8_t* blob, size_t blob_len)
     reset_program_state_();
     clear_render_buffer_();
 
-    Program* program = decode_program(blob, blob_len, _profile.strip_length);
+    Program* program = decode_program(blob, blob_len, _profile.strip_length,
+                                      err_out);
     if (program == nullptr) {
         return false;
     }
@@ -77,6 +79,9 @@ bool Playback::handle_load(const uint8_t* blob, size_t blob_len)
 
     Engine* engine = Engine::create(program);
     if (engine == nullptr) {
+        if (err_out != nullptr) {
+            *err_out = DecodeError::OutOfMemory;
+        }
         return false;
     }
 

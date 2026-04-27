@@ -168,10 +168,32 @@ TEST_CASE("Playback: handle_load on a malformed blob keeps state IDLE", "[playba
     SyncedClock clock;
     Playback pb(1, clock);
     const uint8_t bad[] = { 'B', 'A', 'D', '!', 3 };
-    CHECK_FALSE(pb.handle_load(bad, sizeof(bad)));
+    DecodeError err = DecodeError::Ok;
+    CHECK_FALSE(pb.handle_load(bad, sizeof(bad), &err));
+    CHECK(err == DecodeError::BadMagic);
     CHECK(pb.state() == DeviceState::IDLE);
     CHECK(pb.duration() == 0.0f);
     CHECK(pb.target_fps() == 0);
+}
+
+TEST_CASE("Playback: handle_load forwards StripLengthMismatch", "[playback]") {
+    set_clock_us(0);
+    SyncedClock clock;
+    Playback pb(8, clock);  // profile = 8, blob = 1
+    auto blob = build_paint_blob(1.0f, false);
+    DecodeError err = DecodeError::Ok;
+    CHECK_FALSE(pb.handle_load(blob.data(), blob.size(), &err));
+    CHECK(err == DecodeError::StripLengthMismatch);
+    CHECK(pb.state() == DeviceState::IDLE);
+}
+
+TEST_CASE("Playback: handle_load without err_out does not crash", "[playback]") {
+    set_clock_us(0);
+    SyncedClock clock;
+    Playback pb(1, clock);
+    const uint8_t bad[] = { 'B', 'A', 'D', '!', 3 };
+    CHECK_FALSE(pb.handle_load(bad, sizeof(bad)));
+    CHECK(pb.state() == DeviceState::IDLE);
 }
 
 TEST_CASE("Playback: handle_load reports requires_sync from the blob", "[playback]") {

@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <memory>
 
+#include "blob_reader.h"
 #include "engine.h"
 #include "hardware_profile.h"
 #include "strip.h"
@@ -52,7 +53,13 @@ public:
 
     // Decode `blob` and build the engine. Requires a valid hardware profile.
     // Returns false on decode or alloc failure (state stays IDLE).
-    bool handle_load(const uint8_t* blob, size_t blob_len);
+    //
+    // On failure, writes the category to `*err_out` (if non-null):
+    //   - decode failures forward `decode_program`'s DecodeError
+    //   - engine alloc failure reports `OutOfMemory`
+    //   - missing hardware profile leaves `*err_out` untouched (caller bug)
+    bool handle_load(const uint8_t* blob, size_t blob_len,
+                     DecodeError* err_out = nullptr);
 
     // Start the program. Valid from LOADED or ENDED. For synced programs,
     // rejected unless SyncedClock::is_synced() is true.
