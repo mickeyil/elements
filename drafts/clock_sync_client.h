@@ -29,17 +29,21 @@ class ControllerLink;
 // Polling contract (see drafts/controller_link.md): the App calls
 // poll() unconditionally each tick. The client self-gates internally:
 //   - When link.is_ready() goes from true to false in a single tick,
-//     poll() resets the filter window (so a stale pre-disconnect offset
-//     doesn't blend with a fresh post-reconnect measurement) and calls
-//     SyncedClock::clear_sync() so consumers see the unsynced flip
-//     immediately rather than waiting for the lease to age out.
+//     poll() resets the filter window, drops any outstanding round,
+//     and closes the UDP socket so a fresh post-reconnect measurement
+//     starts from clean state. SyncedClock is NOT cleared here: the
+//     lease is the policy for "is this offset still trustworthy",
+//     and a momentary link drop does not invalidate the underlying
+//     clock math. Reconnect's first apply overwrites the offset
+//     cleanly; if the link stays down past the lease window, the
+//     clock falls out of sync on its own via lease expiry.
 //   - When link.is_ready() is false: poll() is a no-op.
 //   - When ready: send pings on schedule, drain responses, feed the
 //     filter, write SyncedClock once enough samples have accumulated.
 //
-// The client owns the clear_sync() call because it's the producer that
-// just noticed its writes have stopped being meaningful. Asking the
-// App to coordinate that would be needless orchestration.
+// The client owns these internal resets because it's the producer
+// that just noticed its writes have stopped landing. Asking the App
+// to coordinate that would be needless orchestration.
 //
 // Sim parity: same code on ESP and sim. Sim runs against a controller
 // process on the same host, so the measured offset is ~0; that's not
@@ -60,7 +64,8 @@ public:
     // Single per-tick entry point. Called unconditionally by the App
     // (no outer is_up()/is_ready() guard). Self-gates: no-op when
     // !link.is_ready(); on the tick where link readiness drops it
-    // resets internal filter state and calls SyncedClock::clear_sync().
+    // resets internal filter/socket state but does NOT clear
+    // SyncedClock -- the offset rides its lease until it ages out.
     void poll();
 
     // WINDOW_N visible here so the embedded sample buffer can be
@@ -84,7 +89,8 @@ private:
 
     // Called when poll() observes link.is_ready() going from true
     // to false. Wipes filter window, outstanding round, and burst
-    // counter; calls SyncedClock::clear_sync().
+    // counter, and closes the UDP socket. Does NOT call
+    // SyncedClock::clear_sync(); the lease ages out on its own.
     void on_link_down_();
 
     // True iff the next ping is due. Initializes the schedule on

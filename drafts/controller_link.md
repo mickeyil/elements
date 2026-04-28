@@ -43,12 +43,12 @@ express.
 > module self-gates and handles prerequisite loss.**
 
 There is *no* `if (network.is_up())` guard wrapping the link and sync
-calls. Wrapping them would be a bug: on the tick Wi-Fi drops, the
-guarded calls don't run, the link's state machine never observes its
-prerequisite going false, and `ClockSyncClient` never sees that the
-link just dropped — so it never clears stale sync state.
-`SyncedClock::is_synced()` would keep returning true for up to a full
-lease (~55 s) while the controller is unreachable.
+calls. Wrapping them would be a bug: each module owns internal state
+that has to be reset on prerequisite loss — the link's TCP socket and
+parser buffer, the sync client's filter window, outstanding round, and
+UDP socket. If the App skipped their `poll()` calls while the network
+was down, those resets wouldn't run, and the next time the prerequisite
+came back the modules would resume from stale state.
 
 Instead:
 
@@ -57,14 +57,17 @@ Instead:
   tears down TCP and discovery. On the tick where the network comes
   back it starts a fresh discovery cycle.
 - `ClockSyncClient::poll()` reads `link.is_ready()` internally. On
-  the tick where the link drops it resets its filter window and calls
-  `SyncedClock::clear_sync()` so consumers see the unsynced flip
-  immediately rather than waiting for the lease to age out.
+  the tick where the link drops it resets its filter window, drops
+  any outstanding round, and releases its UDP socket. It does **not**
+  clear `SyncedClock`: the offset rides its lease until expiry, on
+  the principle that the lease is the policy for "trust this offset
+  for N seconds without renewal" and a link drop doesn't invalidate
+  the math. See `drafts/synced_clock.md` for the full discussion.
 
 Within one tick the cascade completes: `network.poll()` flips
 `is_up()` false → `link.poll()` observes that and tears down →
-`sync.poll()` observes `is_ready()` false and clears. No
-orchestration in a wrapper class, no conditional gating in the App.
+`sync.poll()` observes `is_ready()` false and resets its internals.
+No orchestration in a wrapper class, no conditional gating in the App.
 
 ## How a device joins
 

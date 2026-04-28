@@ -31,15 +31,18 @@ means:
 - `sync.poll()` reads `link.is_ready()` and `link.controller_ip_addr()`
   internally to decide whether to ping and where to ping.
 - On the tick where `link.is_ready()` goes from true to false, the
-  client resets its filter window (so a stale pre-disconnect offset
-  doesn't blend with a fresh post-reconnect measurement) and calls
-  `SyncedClock::clear_sync()` so consumers see the unsynced flip
-  immediately rather than waiting for the lease to age out.
+  client resets its filter window, drops any outstanding round, and
+  closes its UDP socket so a fresh post-reconnect measurement starts
+  from clean state. `SyncedClock` is **not** cleared on link-down:
+  the lease is the policy for "is this offset still trustworthy",
+  and a link drop doesn't invalidate the underlying clock math. The
+  offset rides its lease until it ages out — or, if the link comes
+  back inside the lease window, until reconnect produces a fresh
+  apply that overwrites it.
 
-The client owns the `clear_sync()` call because it's the producer that
-just noticed its writes have stopped being meaningful — wiping the
-consumer-visible state is a derivable consequence of detach, not
-something the App should have to coordinate.
+The client owns these internal resets because it's the producer that
+just noticed its writes have stopped landing — the App shouldn't have
+to coordinate that.
 
 ## Why the direction flipped
 
@@ -219,10 +222,15 @@ Tuning (`WINDOW_N`, `BEST_K_BY_RTT`, `MIN_SAMPLES_TO_APPLY`,
   into the shared `DeviceIdentity`. The next PING carries the new
   token; the controller sees the bump and discards anything it had
   cached for the old boot.
-- On link disconnect, `ClockSyncClient::poll()` resets its window
-  and calls `SyncedClock::clear_sync()` directly so consumers see the
-  unsynced flip immediately rather than waiting for the lease to age
-  out. The App does not need to participate.
+- On link disconnect, `ClockSyncClient::poll()` resets its filter
+  window, drops any outstanding round, and releases the UDP socket.
+  It does **not** call `SyncedClock::clear_sync()`; the offset rides
+  its lease until expiry. The lease is the policy for "trust this
+  offset for N seconds without renewal," and a link drop doesn't
+  change the underlying clock math. If the link comes back inside
+  the lease window, reconnect's first apply overwrites the offset
+  cleanly; if it stays down past the lease, `is_synced()` flips
+  false on its own via expiry.
 - The "what does playback do when sync is lost mid-program" policy
   belongs to Playback / firmware mode, not to `ClockSyncClient`. See
   `drafts/TODO.md` § Playback (loss-of-sync lifecycle).

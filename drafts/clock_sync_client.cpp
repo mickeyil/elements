@@ -150,6 +150,16 @@ void ClockSyncClient::poll()
 
 void ClockSyncClient::on_link_down_()
 {
+    // Reset internal state so a fresh post-reconnect measurement
+    // doesn't blend with stale pre-disconnect samples or fire on top
+    // of an outstanding round whose PONG will never arrive.
+    //
+    // SyncedClock is deliberately NOT cleared here. The lease is the
+    // policy for "trust this offset for N seconds without renewal";
+    // a link drop does not invalidate the underlying clock math
+    // (expected drift is small relative to the lease window). The
+    // offset rides its lease until expiry, and reconnect's first
+    // apply_filter_() will overwrite it cleanly.
     _samples_count     = 0;
     _round_outstanding = false;
     _seq               = 0;
@@ -159,8 +169,6 @@ void ClockSyncClient::on_link_down_()
     // Release the socket. Next time the link comes back up, poll()
     // will re-bind.
     mark_unbound_();
-
-    _clock.clear_sync();
 }
 
 void ClockSyncClient::mark_unbound_()
