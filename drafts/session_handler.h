@@ -3,7 +3,6 @@
 #include <cstdint>
 
 #include "handler_result.h"
-#include "tcp_transport.h"
 
 class SyncedClock;
 
@@ -11,64 +10,56 @@ namespace controller_link {
 
 class WireReader;
 
-// Owns the attach state for the active controller connection and processes
-// category 0x0_ commands:
-//   0x00 SetProfile  -- apply hardware profile (allowed pre-attach)
-//   0x01 Attach      -- claim the connection (id + frame port); records
-//                       controller_ipv4 from TcpTransport::peer_address()
-//                       so the outbound UDP frame loop has a destination.
-//   0x02 SyncLease   -- u16 seq, u32 boot_token, i64 offset_us,
-//                       u32 valid_for_ms; converts ms -> us and forwards
-//                       to SyncedClock::apply_sync_offset.
+// Handles category 0x0_ inbound commands FROM the controller after the
+// DEVICE_HELLO handshake has completed:
+//   0x01 SetProfile -- u16 strip_length; applies to Playback's hardware
+//                      profile.
+//   0x02 SyncLease  -- u16 seq, u32 boot_token, i64 offset_us,
+//                      u32 valid_for_ms; converts ms -> us and forwards
+//                      to SyncedClock::apply_sync_offset.
 //
-// Other handlers read is_attached() to gate their own commands.
-// firmware_app / sim main read controller_ipv4() and frame_port() for the
-// outbound UDP path.
+// DEVICE_HELLO (0x00) is NOT handled here -- it's a one-shot outbound
+// message sent by send_device_hello() during connect, before
+// CommandParser starts. The dispatch case for inbound 0x00 is
+// AckStatus::UnknownCommand (controllers don't send DEVICE_HELLO).
+//
+// SetProfile may invalidate the currently loaded program if the strip
+// length changes. Playback drops the program in that case; the
+// controller is expected to re-load and re-start.
 
 class SessionHandler {
 public:
-    SessionHandler(SyncedClock& clock, const TcpTransport& transport);
+    explicit SessionHandler(SyncedClock& clock);
 
-    // Dispatch entry for category 0x0_.
     HandlerResult handle(uint8_t opcode, WireReader& r);
 
-    // True between successful Attach and disconnect / reset_session().
-    bool is_attached() const { return _attached; }
+    // Boot token, sent in DEVICE_HELLO and validated against
+    // controller-supplied SyncLease packets to reject stale leases
+    // from a previous boot.
+    uint32_t boot_token() const { return _boot_token; }
+    void set_boot_token(uint32_t t) { _boot_token = t; }
 
-    uint16_t device_id() const         { return _device_id; }
-    uint16_t frame_port() const        { return _frame_port; }
-    uint32_t controller_ipv4_be() const { return _controller_ipv4_be; }
-    uint32_t boot_token() const        { return _boot_token; }
-
-    // Wipe attach state and sync seq. Called on disconnect, on simulated
-    // reboot, and on SetProfile-while-attached when the new profile
-    // differs from the active one.
+    // Reset session-scoped state (sync seq counter). Called on
+    // disconnect and on simulated reboot.
     void reset_session();
 
-    // TODO: boot_token source. Today DeviceIdentity holds it on firmware.
-    // SimSystemPlatform needs to write a fresh value here on simulated
-    // reboot; pick: setter on this class, or pass DeviceIdentity& at
-    // construction and re-read it.
+    // TODO: who feeds boot_token? Today firmware::DeviceIdentity holds
+    // it; SimSystemPlatform regenerates it on simulated reboot. Either
+    // pass an identity reference at construction, or expose set_boot_token
+    // and let the platform impl call it. Setter is simpler.
+
+    // TODO: SetProfile applies the hardware profile to Playback. Decide
+    // whether SessionHandler holds a Playback& or a narrower
+    // ProfileSink interface. Playback& is simpler; the narrow
+    // interface costs an extra class for one method.
 
 private:
     HandlerResult handle_set_profile_(WireReader& r);
-    HandlerResult handle_attach_(WireReader& r);
     HandlerResult handle_sync_lease_(WireReader& r);
 
-    SyncedClock&        _clock;
-    const TcpTransport& _transport;
-
-    bool     _attached = false;
-    uint16_t _device_id = 0;
-    uint16_t _frame_port = 0;
-    uint32_t _controller_ipv4_be = 0;
-    uint16_t _last_sync_seq = 0;
+    SyncedClock& _clock;
     uint32_t _boot_token = 0;
-
-    // TODO: SetProfile reaches into Playback (apply_hardware_profile). Two
-    // options: hold a Playback& here, or extract a narrow ProfileSink
-    // interface. The narrow interface costs a class and an extra include;
-    // lean toward holding Playback& unless that creates a layer ick.
+    uint16_t _last_sync_seq = 0;
 };
 
 }  // namespace controller_link

@@ -7,16 +7,14 @@
 namespace controller_link {
 
 class WireReader;
-class SessionHandler;
 class BackgroundStore;
 
-// Pass-through handler for category 0x2_. Routes StoreBackground /
-// ClearBackground to the platform's BackgroundStore impl. Requires
-// session attachment.
+// Pass-through for category 0x2_ commands (StoreBackground,
+// ClearBackground) into BackgroundStore.
 
 class StorageHandler {
 public:
-    StorageHandler(BackgroundStore& store, const SessionHandler& session);
+    explicit StorageHandler(BackgroundStore& store);
 
     HandlerResult handle(uint8_t opcode, WireReader& r);
 
@@ -24,8 +22,7 @@ private:
     HandlerResult handle_store_background_(WireReader& r);
     HandlerResult handle_clear_background_(WireReader& r);
 
-    BackgroundStore&      _store;
-    const SessionHandler& _session;
+    BackgroundStore& _store;
 };
 
 }  // namespace controller_link

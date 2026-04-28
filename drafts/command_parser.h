@@ -16,10 +16,21 @@ class StorageHandler;
 class StatusHandler;
 class SystemHandler;
 
-// CommandParser sits between TcpTransport and the five category handlers.
-// One module: byte buffering, length-frame extraction, nibble dispatch,
-// ACK encoding. Static wiring -- handlers are passed by reference at
-// construction and live at least as long as the parser.
+// Sits above TcpTransport and below the handlers. Buffers incoming
+// bytes, extracts complete length-prefixed messages, dispatches each
+// on the high nibble of the opcode, encodes ACKs back to the
+// controller, and surfaces control signals (today: reboot) to the
+// outer loop.
+//
+// Platform-agnostic: both ESP and sim use the same instantiation.
+// Static wiring -- handlers are passed by reference at construction
+// and live at least as long as the parser.
+//
+// poll() is the single entry point per main-loop tick. The outer loop
+// only calls it while transport.is_connected() is true. After the
+// connection drops (poll() returns disconnected = true), the outer
+// loop disconnects, calls reset_buffer(), and goes back to discovery
+// + connect + send_device_hello before calling poll() again.
 
 class CommandParser {
 public:
@@ -37,27 +48,26 @@ public:
         bool reboot_requested = false;
     };
 
-    // Drain bytes from the transport, parse complete messages, dispatch
-    // each, send ACKs. One call per main-loop tick.
     PollResult poll();
 
-    // Wipe the inbound buffer. Called on accept and on disconnect.
+    // Wipe the inbound buffer. Called after a connection drop, and
+    // again after a fresh connect succeeds (before send_device_hello).
     void reset_buffer();
 
-    // TODO: malformed-frame policy. Length over TCP_MSG_MAX, or any byte
-    // arriving that can never form a valid frame, drops the connection.
-    // Well-formed frame with unknown opcode -> AckStatus::UnknownCommand,
-    // connection stays up. Encode this discipline in the dispatch code.
+    // TODO: malformed-frame policy. Length zero, length over
+    // TCP_MSG_MAX, socket EOF -> drop. Well-formed frame with unknown
+    // opcode -> ACK UnknownCommand, connection stays up. Encode this
+    // discipline in the dispatch path.
 
-    // TODO: backpressure on send. write() failure today drops the client;
-    // confirm that's still right under the new transport interface, or
-    // distinguish "would block" from "fatal" if the transport API exposes
-    // that.
+    // TODO: backpressure on send. write() failure today drops the
+    // client; confirm that's still right under the new transport
+    // interface, or distinguish "would block" from "fatal" if the
+    // transport API exposes that.
 
 private:
     HandlerResult dispatch_(uint8_t cmd_type, WireReader& reader);
 
-    bool send_ack_(AckStatus status,
+    bool send_ack_(uint8_t status,
                    const uint8_t* payload, size_t payload_len);
 
     TcpTransport&    _transport;
