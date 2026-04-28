@@ -1,31 +1,55 @@
 # Controller Link
 
-This is the device side of the controller↔device wire. It receives commands
-from the controller over a single TCP connection, dispatches them to the
-right domain handler (`Playback`, `BackgroundStore`, etc.), and sends ACKs
-back. It replaces the v2 monolith in `src/firmware/controller_connection.{h,cpp}`
-and the duplicated parser in `src/network_sim.cpp`.
+This is the device side of the controller↔device wire. It owns
+discovery, the outbound TCP dial, the `DEVICE_HELLO` handshake, and the
+parser that runs above the connected socket. It replaces the v2
+monolith in `src/firmware/controller_connection.{h,cpp}` and the
+duplicated parser in `src/network_sim.cpp`.
+
+## Where it sits
+
+Three sibling modules make up "everything between this device and the
+controller." Each owns one concern; the App ticks them in order.
+
+```
+NetworkInterface     "am I on a usable LAN?"          (this doc: out of scope)
+ControllerLink       "do I have an active command link?"   (this doc)
+ClockSyncClient      "is SyncedClock being kept fresh?"    (drafts/synced_clock.md)
+```
+
+`NetworkInterface` brings up Wi-Fi (or, in sim, just reports up) and
+reports transitions. Reconnect is its internal concern; nothing above
+gets a `reconnect()` knob. `ClockSyncClient` is a separate UDP loop on
+its own port that feeds `SyncedClock`. Both are described in their own
+files; this doc is about the link itself.
+
+The link does not own Wi-Fi. The earlier draft considered bundling them
+on the grounds that all current network consumers are link-family, but
+the *network up, no controller, background playing* state is a
+first-class app state and gets muddier when Wi-Fi disappears inside the
+link. Keeping them as separate siblings makes that state cheap to
+express.
 
 ## How a device joins
 
-The device makes the TCP connection, not the other way around. This is the
-key difference from v2.
+The device makes the TCP connection, not the other way around. This is
+the key direction-flip from v2.
 
 When the device boots and Wi-Fi is up, it broadcasts a small UDP HELLO
 packet on the local network announcing itself: "I'm device `<uid>`,
 looking for a controller." A controller listening on the discovery port
-sees the HELLO, decides whether it wants to take this device, and replies
-with a UDP OFFER directly back: "I'm at `<ip:tcp_port>`, here's a nonce,
-this offer is valid for `<ttl_ms>` milliseconds."
+sees the HELLO, decides whether it wants to take this device, and
+replies with a UDP OFFER directly back: "I'm at `<ip:tcp_port>`, here's
+a nonce, this offer is valid for `<ttl_ms>` milliseconds."
 
 The device receives the OFFER, opens an outbound TCP connection to the
 controller, and immediately sends a `DEVICE_HELLO` message carrying its
-identity and the nonce it just received. The controller validates that —
-known UID, fresh nonce, compatible protocol version — and either starts
-sending commands (the connection is good) or silently closes (the device
-goes back to discovery).
+identity and the nonce it just received. The controller validates that
+— known UID, fresh nonce, compatible protocol version — and either
+starts sending commands (the connection is good) or silently closes
+(the device goes back to discovery).
 
-Once `DEVICE_HELLO` is on the wire, the connection is "open" in the
+Once `DEVICE_HELLO` is on the wire, the link is **Ready** in the
 everyday sense: controller sends commands, device executes and ACKs,
 until one side hangs up.
 
@@ -34,20 +58,59 @@ until one side hangs up.
 Two reasons that justify the wire break.
 
 The device doesn't run a TCP server. No listening port means no attack
-surface to harden, no duplicate-connection rejection logic, and no fiddly
-"is the server bound after Wi-Fi reconnect?" dance. The device makes one
-outbound connection and either has it or doesn't.
+surface to harden, no duplicate-connection rejection logic, and no
+fiddly "is the server bound after Wi-Fi reconnect?" dance. The device
+makes one outbound connection and either has it or doesn't.
 
 It's also the conventional shape. Outbound TCP from device to a known
-server matches every IoT library, MQTT client, HTTP poller, and embedded
-networking example. Server-side device is the unusual choice that has to
-justify itself; client-side has zero overhead in operator intuition.
+server matches every IoT library, MQTT client, HTTP poller, and
+embedded networking example. Server-side device is the unusual choice
+that has to justify itself; client-side has zero overhead in operator
+intuition.
 
 The price is that the controller has to respond to HELLO with an OFFER
-instead of just listening passively, but that's a small protocol addition
-on the more capable side of the link.
+instead of just listening passively, but that's a small protocol
+addition on the more capable side of the link.
 
-## The layers
+## Public surface
+
+The link exposes a deliberately small API:
+
+```cpp
+class ControllerLink {
+public:
+    void poll();
+    bool is_ready() const;
+    uint32_t controller_ip_addr() const;   // network byte order
+};
+```
+
+`poll()` is the single per-tick entry point. It advances whichever
+stage the link is in: drives discovery if Wi-Fi is up but no OFFER has
+landed, dials TCP after an OFFER, writes `DEVICE_HELLO` once connected,
+runs the parser once Ready. Safe to call when Wi-Fi is down (no-op).
+
+`is_ready()` is the one-bit summary the App keys mode transitions off.
+True iff the TCP socket is up and `DEVICE_HELLO` has been written. The
+App's "controlled vs background" branch is `if (link.is_ready())`.
+
+`controller_ip_addr()` returns the controller's IPv4 address in network
+byte order, valid only when `is_ready()`. `ClockSyncClient` reads this
+each tick to know where to ping. The TCP port the link uses internally
+isn't exposed (the link is the only thing that needs it); the sync port
+isn't exposed because it's a project-wide constant `ClockSyncClient`
+already knows from configuration.
+
+A `LinkState` enum exists internally (`NetworkDown / Discovering /
+Connecting / Ready`) and drives `poll()`'s dispatch, but is not on the
+public surface. A `state()` accessor can be added later when
+diagnostics need it; until then, exposing it would be a hook with no
+caller.
+
+There's also no `controller_endpoint()` returning a struct with
+ports/nonces. That information is the link's internal business.
+
+## Internal layers
 
 ```
 TcpTransport            platform TCP I/O (ESP / Posix)
@@ -67,15 +130,15 @@ interface.
 commands. It buffers incoming bytes, extracts complete length-prefixed
 messages, dispatches each on the high nibble of the opcode, encodes
 ACKs, and surfaces control signals (today: "reboot was requested") to
-the outer loop. Platform-agnostic — the same source compiles on ESP and
-host.
+the outer loop. Platform-agnostic — the same source compiles on ESP
+and host.
 
 The five **handlers** are where the protocol semantics live. Each owns
 exactly one opcode category (the 16 opcodes that share a high nibble),
 and most are pass-throughs to a domain owner:
 
-- **Session** applies hardware-profile changes and forwards sync leases
-  to `SyncedClock`.
+- **Session** applies the hardware profile (`SetProfile` is its only
+  opcode after sync left for UDP).
 - **Playback** routes the playback transport commands (load, start,
   jump, pause, resume, stop) into `Playback` and ACKs based on its
   return.
@@ -90,30 +153,38 @@ optional control signal }`. The parser sends the ACK; handlers don't
 touch the socket directly, which keeps "did this handler remember to
 ACK?" out of the bug catalog.
 
-## Joining is its own ritual
+## Becoming Ready is its own ritual
 
 Connecting and identifying happen *before* the parser starts running.
-The sequence is:
+The sequence inside `poll()` when an OFFER lands is:
 
-1. The discovery layer (outside this module) gets an OFFER from the
-   controller and stashes it in a `ControllerOffer` snapshot for the
-   link layer to consume.
-2. The outer loop calls `TcpTransport::connect(controller_ip, tcp_port)`.
-   The implementation has a hard cap on how long this can block (~500ms
-   on ESP via `WiFiClient::connect(ip, port, timeout_ms)`).
-3. On success, the outer loop calls `send_device_hello(transport,
-   identity, offer.nonce)`, which writes a single framed `DEVICE_HELLO`
-   message carrying the device's UID, boot token, the OFFER nonce, and
-   the protocol version.
-4. The outer loop hands off to `CommandParser::poll()` for the rest of
-   the lifetime of this connection.
+1. The discovery side (private to this module) has stashed a fresh
+   `ControllerOffer` snapshot.
+2. `TcpTransport::connect(controller_ip, tcp_port)` is called. The
+   implementation has a hard cap on how long this can block (~500ms on
+   ESP via `WiFiClient::connect(ip, port, timeout_ms)`).
+3. On success, `send_device_hello(transport, identity, offer.nonce)`
+   writes a single framed `DEVICE_HELLO` message carrying the device's
+   UID, boot token, the OFFER nonce, and the protocol version.
+4. The link is now **Ready**. Subsequent `poll()` ticks drive
+   `CommandParser::poll()` for the rest of the lifetime of this
+   connection.
 
 If `DEVICE_HELLO` is rejected, the controller closes the socket. The
-device notices via the next `read()` returning `< 0`, the parser reports
-`disconnected`, the outer loop disconnects and goes back to step 1
-(probably with a fresh discovery cycle). There's deliberately no
-separate ACK for `DEVICE_HELLO` — "the controller is still here a
-moment later" is the de-facto acceptance signal.
+device notices via the next `read()` returning `< 0`, the parser
+reports `disconnected`, the link drops back to **Discovering**.
+There's deliberately no separate ACK for `DEVICE_HELLO` — "the
+controller is still here a moment later" is the de-facto acceptance
+signal, and avoiding the ACK keeps the handshake to one round-trip.
+
+There's a small window between writing `DEVICE_HELLO` and the
+controller accepting (or rejecting) it during which `is_ready()` is
+true. Under the device-initiated sync flow (see `synced_clock.md`),
+that means a sync ping might briefly fire at a controller that's about
+to close. That's fine: sync packets carry UID and boot_token (same
+robustness the OFFER nonce gives the TCP handshake), and a controller
+that doesn't recognize them just discards. We are *not* reintroducing a
+`DEVICE_HELLO_ACK` to close that window.
 
 ## ACKs and errors
 
@@ -127,17 +198,17 @@ The ACK status set is small but covers the rejections that actually
 happen: `Ok`, `Error`, `WrongState`, `ProfileMismatch`, `BadPayload`,
 `UnknownCommand`, `Unsynced`.
 
-A malformed *frame* (length zero, length over the cap, socket EOF) drops
-the connection — the sender is corrupt or the peer is gone. A
-well-formed frame with an unknown opcode just ACKs `UnknownCommand` and
-the connection continues; that's the normal protocol-evolution case
-(controller knows about a command this firmware doesn't).
+A malformed *frame* (length zero, length over the cap, socket EOF)
+drops the connection — the sender is corrupt or the peer is gone. A
+well-formed frame with an unknown opcode just ACKs `UnknownCommand`
+and the connection continues; that's the normal protocol-evolution
+case (controller knows about a command this firmware doesn't).
 
 ## Identity
 
-UID is the canonical identifier. There is no numeric `device_id` in v3 —
-the UID alone names the device on the wire, in logs, and in controller
-state.
+UID is the canonical identifier. There is no numeric `device_id` in v3
+— the UID alone names the device on the wire, in logs, and in
+controller state.
 
 UIDs are **fixed 16-byte ASCII slots**, null-padded if shorter. Two
 prefix conventions tell you what kind of device you're looking at
@@ -162,17 +233,18 @@ The `DEVICE_HELLO` payload carries four things:
   Lets the controller detect "device rebooted, drop stale state on my
   end."
 - **offer_nonce** — the nonce the controller sent in OFFER. Lets the
-  controller reject TCP connections that aren't following a fresh OFFER
-  (stale-OFFER race after a controller restart, etc.).
-- **protocol_version** — the wire protocol generation (`3` for v3). The
-  controller can refuse devices whose version it doesn't understand.
+  controller reject TCP connections that aren't following a fresh
+  OFFER (stale-OFFER race after a controller restart, etc.).
+- **protocol_version** — the wire protocol generation (`3` for v3).
+  The controller can refuse devices whose version it doesn't
+  understand.
 
 Notably absent: any cryptographic auth (HMAC, TLS). For a LAN-scoped
 controller with a small device fleet, the threat model doesn't justify
 the complexity (mbedTLS dependency, key provisioning, key rotation,
-debugging cost). If a remote (VPS) controller ever becomes a real plan,
-that's the moment auth earns its weight — and adding it is a v4 wire
-break, which is fine in this project's "no legacy" stance.
+debugging cost). If a remote (VPS) controller ever becomes a real
+plan, that's the moment auth earns its weight — and adding it is a v4
+wire break, which is fine in this project's "no legacy" stance.
 
 `protocol_version` is the cheap escape hatch that makes v4 possible
 without painful migrations. Always include it; ignore it for now.
@@ -196,9 +268,13 @@ the device or the protocol.
 
 ## Sim parity
 
-The two platform-specific transport impls are `EspTcpTransport` (wraps
-`WiFiClient`) and `PosixTcpTransport` (wraps BSD sockets). The
-system-handler's reboot has two impls: `EspSystemPlatform` calls
+`network_sim.cpp`'s ~660-line monolith collapses to: socket setup, a
+`PosixTcpTransport` and `PosixUdpTransport`, the same shared
+parser/handlers/`ClockSyncClient` that firmware uses, and the sim-only
+RGB frame send loop. The duplicate parser/dispatch/framing is **deleted
+in the same change** — no half-migrated state.
+
+The system handler's reboot has two impls: `EspSystemPlatform` calls
 `ESP.restart()` after a short flush delay; `SimSystemPlatform`
 simulates an observable reboot — disconnects, resets volatile session
 state, generates a fresh `boot_token`, resumes discovery. Background
@@ -206,16 +282,20 @@ storage persists across the simulated reboot the same way ESP flash
 does.
 
 Everything else is shared: the parser, all five handlers, `WireReader`,
-`HandlerResult`, opcode constants, `send_device_hello`. When
-`network_sim.cpp` migrates to this layer, its ~660-line `main` collapses
-to socket setup, transport adapter, handler wiring, and the UDP
-discovery + frame send loops. The duplicate parser/dispatch/framing is
-**deleted in the same change** — no half-migrated state.
+`HandlerResult`, opcode constants, `send_device_hello`,
+`ClockSyncClient`. Sim runs the same sync code as firmware against a
+controller process on the same host; the measured offset is ~0 because
+the clocks happen to be the same machine, and that's the truth, not a
+stub.
 
 ## Out of scope for this module
 
-- **UDP discovery and OFFER handling** — separate module that hands a
-  populated `ControllerOffer` to the outer loop.
+- **Wi-Fi / LAN connectivity** — `NetworkInterface` brings the network
+  up; this module assumes there's a network and gates its work on
+  `network.is_up()`.
+- **Clock sync** — `ClockSyncClient` is a sibling that ticks alongside
+  this module and reads `controller_ip_addr()` to know where to ping.
+  See `drafts/synced_clock.md`.
 - **Sim frame UDP** — sim binary only. Real ESP firmware writes pixels
   to FastLED, not the network. The sim sends RGB previews to the
   controller's `sim_frame_port` (6042) for UI rendering. The frame
@@ -223,21 +303,43 @@ discovery + frame send loops. The duplicate parser/dispatch/framing is
   so the controller can demux multiple sims (loopback IP collisions
   rule out source-IP demux). This is its own protocol, not controller
   link.
-- **UDP sync ping responses** — handled by the discovery service (kept
-  on UDP for now; could move to TCP if remote-controller becomes real).
-- **Wi-Fi connectivity** — `WifiManager` brings the network up;
-  `controller_link` assumes there's a network.
 
-## Open items
+## Open decisions
+
+These are pinned but not yet settled. Most don't block writing the
+link itself; they show up where flagged.
+
+- **Where sync math runs** — device-computes (2 UDP messages, simple
+  median filter on the device) vs controller-computes (4 UDP messages,
+  policy stays where it is in v2). See `drafts/synced_clock.md`. Does
+  not affect this module directly; ClockSyncClient owns the choice.
+- **Reboot signal path out of `poll()`** — either `ControllerLink::poll()`
+  returns a small result struct, or the App reads a getter after each
+  tick. Same content either way; pick whichever reads better in the
+  App's loop.
+- **Whether `ClockSyncClient` takes `ControllerLink&` directly** — or
+  just a getter for "is the controller IP available right now."
+  Style choice; `ControllerLink&` is what's drafted.
+- **Whether to expose `state()` and `LinkState` publicly** — deferred
+  until diagnostics need it. Easy to add when something starts logging
+  link state transitions.
+- **Whether to add a `ConnectionLayer` wrapper** — defer until the App
+  orchestration of `(network, link, sync)` proves duplicated between
+  firmware and sim. Currently the App just ticks them in order.
+- **Trimmed `SessionHandler` fate** — one opcode left after
+  `SyncLease` moved off TCP. Cosmetic; could fold into another
+  handler.
+
+## Open items (engineering work, separate from decisions)
 
 - `Playback::handle_start` / `handle_resume` / `handle_jump` need to
   return status. Tracked in `drafts/TODO.md` § Playback.
 - `BackgroundStore` needs a sim impl that survives simulated reboot.
-  Interface is defined in `drafts/background_store.h`; backing decision
-  is for the impl phase.
+  Interface is defined in `drafts/background_store.h`; backing
+  decision is for the impl phase.
 - `boot_token` source on simulated reboot — `SimSystemPlatform`
-  generates a fresh one and writes it to `SessionHandler` (or a shared
-  identity struct). Wiring is in the impl phase.
+  generates a fresh one and writes it to the shared `DeviceIdentity`.
+  Wiring is in the impl phase.
 
 ---
 
@@ -252,19 +354,18 @@ Length-prefixed framing for both directions:
 └──────────────┴──────┴─────────────┘
 ```
 
-`length` counts `type + payload` (not itself). All multi-byte values are
-little-endian. All floats must be finite.
+`length` counts `type + payload` (not itself). All multi-byte values
+are little-endian. All floats must be finite.
 
 ## Appendix B: opcodes and payloads
 
-Opcodes are organized by high nibble (`opcode >> 4`); see "The layers"
-above.
+Opcodes are organized by high nibble (`opcode >> 4`); see "Internal
+layers" above.
 
 | Opcode | Cmd                 | Direction       | Payload                                                            |
 |--------|---------------------|-----------------|--------------------------------------------------------------------|
 | 0x00   | `DeviceHello`       | device → ctrlr  | `char uid[16], u32 boot_token, u32 offer_nonce, u8 protocol_version` |
 | 0x01   | `SetProfile`        | ctrlr → device  | `u16 strip_length`                                                 |
-| 0x02   | `SyncLease`         | ctrlr → device  | `u16 seq, u32 boot_token, i64 offset_us, u32 valid_for_ms`         |
 | 0x10   | `Load`              | ctrlr → device  | `u8[] blob`                                                        |
 | 0x11   | `Start`             | ctrlr → device  | `i64 program_start_us` (synced: anchor; unsynced: ignored)         |
 | 0x12   | `Jump`              | ctrlr → device  | `f32 t_program`                                                    |
@@ -280,6 +381,9 @@ above.
 `uid[16]` is null-padded ASCII. See "Identity" above for the parser
 rule.
 
+`0x02` is reserved (was `SyncLease` in an earlier v3 draft). Sync now
+lives entirely on UDP, see `drafts/synced_clock.md`.
+
 `QueryDeviceStatus` ACK payload (14 bytes):
 
 | u8   | u8    | u16                  | u16                       | u32                  | u32              |
@@ -290,19 +394,19 @@ rule.
 3 detached_background. `flags`: bit0 profile_present, bit1
 background_present.
 
-`DeviceHello` is sent device → controller as the first TCP message after
-connect; it never appears in the inbound dispatch. If the controller
-ever sends opcode 0x00 to the device, the parser ACKs `UnknownCommand`
-(but this is a controller bug — the device doesn't speak that direction
-for 0x00).
+`DeviceHello` is sent device → controller as the first TCP message
+after connect; it never appears in the inbound dispatch. If the
+controller ever sends opcode 0x00 to the device, the parser ACKs
+`UnknownCommand` (but this is a controller bug — the device doesn't
+speak that direction for 0x00).
 
 Unknown high nibbles (anything not `0x0_..0x4_`), and stray inbound
 0x8_ replies, get `AckStatus::UnknownCommand`.
 
 ## Appendix C: discovery packets (UDP, port 6040)
 
-These are outside the controller_link module per se but are part of the
-link story.
+These are owned by this module (the discovery side of the link), kept
+in the appendix because they're reference data rather than narrative.
 
 **HELLO** (device → broadcast, every ~500 ms while looking for a
 controller):
@@ -325,24 +429,6 @@ Total: 15 bytes.
 `reason` = 0x01 for duplicate UID. Device backs off HELLOs for 5 s on
 receipt.
 
-## Appendix E: port allocation
-
-Three UDP/TCP ports total, in a contiguous block for friendly firewall
-rules:
-
-| Port | Protocol | Purpose                                                          |
-|------|----------|------------------------------------------------------------------|
-| 6040 | UDP      | Discovery: HELLO broadcast, OFFER unicast, sync-ping request/reply, REJECT |
-| 6041 | TCP      | Controller listens; devices dial in (controller-link)            |
-| 6042 | UDP      | Sim → controller frame previews (sim-only, dev convenience)      |
-
-The controller config carries all three numbers. The device side gets
-the TCP port from each OFFER (so the device doesn't hardcode anything
-about the controller). The discovery port is the one well-known number
-the device side has at compile time. The sim frame port lives only in
-the sim's CLI flags and the controller's UI receiver; real ESP firmware
-never references it.
-
 ## Appendix D: ACK status codes
 
 | Code | Name              | When                                                        |
@@ -354,3 +440,22 @@ never references it.
 | 4    | `BadPayload`      | payload too short, malformed, or non-finite floats          |
 | 5    | `UnknownCommand`  | opcode not recognized by any handler                        |
 | 6    | `Unsynced`        | synced program rejected because `is_synced()` is false      |
+
+## Appendix E: port allocation
+
+Four UDP/TCP ports total, in a contiguous block for friendly firewall
+rules:
+
+| Port | Protocol | Purpose                                                                  |
+|------|----------|--------------------------------------------------------------------------|
+| 6040 | UDP      | Discovery: HELLO broadcast, OFFER unicast, REJECT unicast                |
+| 6041 | TCP      | Controller listens; devices dial in (controller-link)                    |
+| 6042 | UDP      | Sim → controller frame previews (sim-only, dev convenience)              |
+| 6043 | UDP      | Clock sync: device-initiated ping/pong (see drafts/synced_clock.md)      |
+
+The controller config carries all four numbers. The device side gets
+the TCP port from each OFFER (so the device doesn't hardcode anything
+about the controller). The discovery and sync ports are the
+well-known numbers the device side has at compile time. The sim frame
+port lives only in the sim's CLI flags and the controller's UI
+receiver; real ESP firmware never references it.

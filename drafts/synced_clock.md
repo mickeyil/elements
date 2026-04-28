@@ -1,154 +1,228 @@
-# SyncedClock: Sync Policy, Wire Format, and Integration
+# Clock Sync (v3)
 
-Controller-side sync policy, wire format, and firmware integration for the
-`SyncedClock` abstraction. The firmware-side API lives in
-`src/synced_clock.h`.
+How the device keeps `SyncedClock` fresh against the controller in v3.
+The big shift from v2: the **device initiates** sync instead of
+responding to it, and sync runs on its **own UDP port** instead of
+piggybacking on discovery (UDP) and TCP (`CMD_SYNC_LEASE`/`CMD_SYNC_RESULT`).
 
-## Model
+`SyncedClock` itself is unchanged — it's still the passive container in
+`src/synced_clock.h` that holds an offset and a validity window and
+answers `is_synced()` / `now_remote_us()`. What's new is the feeder:
+**`ClockSyncClient`** (device-side, sibling to `SyncedClock` and to
+`ControllerLink`).
 
-Each sync update is a **lease**: an offset and a validity duration.
+## Where it sits
 
-- The controller samples RTT to the device, filters offsets, and periodically
-  emits a lease.
-- The firmware applies the lease and trusts the remote-time estimate until
-  the lease expires.
-- No drift estimation or outlier filtering on the firmware side. The
-  controller owns sync quality.
-- Every successful sync round on the controller emits exactly one wire
-  message. The deadband and sign-flip defer branches no longer suppress the
-  wire message; they only suppress the confirm-probe burst.
+`ClockSyncClient` is the third sibling alongside `NetworkInterface` and
+`ControllerLink` (see `drafts/controller_link.md`). The App ticks it
+each loop alongside the link:
 
-## Wire Format
+```
+network.poll();
+if (network.is_up()) {
+    link.poll();
+    sync.poll();   // no-op when !link.is_ready(); resets on the down-edge
+}
+```
 
-Command: `CMD_SYNC_LEASE` (replaces the legacy `CMD_SYNC_RESULT`).
+`sync.poll()` reads `link.is_ready()` and `link.controller_ip_addr()`
+to know whether to ping and where to ping. When the link drops, the
+client wipes its filter window so a stale pre-detach offset doesn't
+blend with a fresh post-attach measurement. `SyncedClock`'s lease will
+expire on its own; the App can also call `clock.clear_sync()` on
+disconnect for an immediate flip.
 
-Payload:
+## Why the direction flipped
 
-| Field          | Type | Units | Notes                                      |
-|----------------|------|-------|--------------------------------------------|
-| `seq`          | u16  |       | latest probe processed; used for firmware ordering/freshness gating, not necessarily the probe that produced `offset_us` |
-| `boot_token`   | u32  |       | firmware boot identifier                   |
-| `offset_us`    | i64  | µs    | local clock minus remote clock             |
-| `valid_for_ms` | u32  | ms    | lease duration, anchored at firmware receipt time |
+In v2, the controller pings, the device responds with timestamps, and
+the controller computes the offset and pushes it back over TCP as
+`CMD_SYNC_LEASE`. That made sense when the controller was the
+"server-shaped" side of the link. With v3 inverting the connection
+model (device dials), making the controller the active sync initiator
+becomes structurally weird — the controller doesn't know where to ping
+until the device has discovered it, and once the device has discovered
+it, the device is the one doing things.
 
-Controller encoder: `encode_sync_lease(seq, boot_token, offset_us, valid_for_ms)`
-in `controller/elemctl/device_protocol.py`. Update the docstring to reflect
-the lease semantics — the message is a *current-sync snapshot*, not an
-imperative correction.
+So sync follows the same direction as the rest of v3: device-initiated.
 
-## Controller Constants
+## Sim parity
 
-Add to `controller/elemctl/clock_sync.py`:
+Same code on ESP and sim. The sim runs `ClockSyncClient` against a
+controller process on the same host; the measured offset is ~0 because
+the local clock and the controller's clock are literally the same
+kernel clock. That's the truth, not a stub. The sync wire protocol
+gets exercised on every sim run, so framing or lease bugs are catchable
+on a laptop instead of only on hardware.
 
-- `SYNC_LEASE_MS = 55_000` — lease duration. Satisfies:
-  `steady probe 15s  <  renewal 15s  ≤  lease 55s  <  stale 60s`.
-  Survives one missed renewal comfortably; usually survives two. Firmware
-  expires before the controller gives up, which is the safe ordering.
+There is no sim-only stub that "skips" sync. If a future setup runs the
+controller on a different host and the sim against it, the same client
+measures the real offset and feeds `SyncedClock` the same way. No
+divergence to maintain.
 
-Existing constants still in use (unchanged):
+## Wire flow
 
-- `_STEADY_INTERVAL_NS = 15s` — probe cadence, now also lease-renewal cadence.
-- `_STALE_TIMEOUT_NS = 60s` — controller stops sending if no sample arrives.
-- `_CORRECTION_DEADBAND_US = 2ms` — gates real corrections only; does not
-  gate wire emission.
+The wire flow depends on the open device-vs-controller-computes
+decision (next section). Both options share the first two messages:
 
-The tolerance concept (previously "MAX_SYNCED_OFFSET_US = 20ms") is a
-controller-only policy knob that drives the derivation of `SYNC_LEASE_MS`.
-Firmware does not see it.
+```
+device → controller   PING   uid + boot_token + seq + t1
+controller → device   PONG   echoes uid + seq + t1, adds t2 + t3
+```
 
-## `SyncUpdate` Dataclass Rename
+The device can compute offset and RTT from `(t1, t2, t3, t4)` where
+`t4` is its receive time. From there, the two options diverge in
+whether the device or the controller does the smoothing and lease
+issuance.
 
-In `clock_sync.py`:
+`uid` and `boot_token` are in every device-to-controller packet for
+the same reason the OFFER nonce is in `DEVICE_HELLO`: between
+`is_ready()` becoming true and the controller actually accepting the
+attachment, the device may briefly send pings to a controller that's
+about to close. The controller validates the UID/boot_token and
+discards stale ones. This costs ~20 bytes per ping and removes a small
+race window.
 
-| Old                          | New                  | Meaning                              |
-|------------------------------|----------------------|--------------------------------------|
-| `send_correction`            | `send_sync_lease`    | emit `CMD_SYNC_LEASE` on the wire    |
-| `correction_offset_us`       | `lease_offset_us`    | offset value carried on the wire     |
-| —                            | `is_new_correction`  | triggers confirm-probe burst         |
-| —                            | `valid_for_ms`       | lease duration for this update       |
+Cadence: roughly one round per 15 seconds in steady state (matches
+v2's `_STEADY_INTERVAL_NS`), with a faster burst right after the link
+becomes Ready so the lease is established before the first synced
+program is loaded.
 
-`send_sync_lease` is a wire-emission flag. `is_new_correction` is an internal
-scheduling flag. They are now independent.
+## Open: device-computes vs controller-computes
 
-Lease delivery to firmware and status reporting to clients are separate
-controller outputs: lease renewals must not depend on whether a status
-event is emitted. Status updates fire when a user-visible sync state or
-value meaningfully changes; steady deadband renewals emit only a wire
-lease, not a status event.
+This is the live decision. Both work; the trade is wire complexity
+against device-side code complexity and operator visibility.
 
-## Controller Branches
+**Device computes (2 UDP messages per round)**
 
-In `_process_round_samples`, every successful round returns
-`send_sync_lease=True`. `is_new_correction` distinguishes lease refreshes
-from real corrections.
+The device runs the standard NTP four-timestamp formula on its own
+samples, keeps a small ring buffer (last N), discards outliers by
+RTT, takes the median, and calls `SyncedClock::apply_sync_offset` with
+a self-issued lease window. Filter is ~40 lines of platform-agnostic
+C++.
 
-- **Deadband hit** (`|residual| < _CORRECTION_DEADBAND_US`):
-  - `is_new_correction = False`
-  - `lease_offset_us = state.applied_offset_us`
-  - `valid_for_ms = SYNC_LEASE_MS`
-  - no confirm-probe burst.
-- **Sign-flip defer** (new residual sign != `prev_delta_sign`):
-  - same shape as deadband — lease refresh only, no burst.
-- **Real correction** (same-sign residual past deadband, or first correction):
-  - `is_new_correction = True`
-  - `lease_offset_us = smoothed_offset_us`
-  - `valid_for_ms = SYNC_LEASE_MS`
-  - call `_schedule_confirm_probes(state, now_ns)` as today.
+- Half the wire traffic per round — and a dropped UDP packet kills
+  one round, not the report leg of every round.
+- The math lives where the timestamps originate; no need to ship them
+  back to the controller and wait.
+- Lease validity is a device-side constant (e.g., 55 s, same as the
+  v2 `SYNC_LEASE_MS`).
+- Cost: the controller no longer sees per-device offset/RTT
+  telemetry. If the operator dashboard wants that, the device has to
+  push its sync status back over TCP — either folded into
+  `QueryDeviceStatus` or as its own opcode.
 
-## Stale Recovery
+**Controller computes (4 UDP messages per round)**
 
-In `_collect_stale_updates`, when a device is flipped to `'stale'`, also
-discard correction history:
+The device sends PING, receives PONG with `(t2, t3)`, then sends a
+REPORT with its `t4`, and the controller replies with a LEASE
+containing `(offset_us, valid_for_ms)` after smoothing. The device
+just calls `apply_sync_offset` with whatever the controller said.
 
-- `applied_offset_us = None`
-- `latest_smoothed_offset_us = None`
-- `residual_offset_us = None`
-- `prev_delta_sign = 0`
-- `last_correction_ns` is telemetry-only — leave as is.
+- Centralized policy: the controller already has
+  `_CORRECTION_DEADBAND_US`, sign-flip hysteresis, and the per-device
+  state machine in `controller/elemctl/clock_sync.py` from v2; that
+  code mostly survives.
+- Per-device telemetry stays on the controller for free.
+- Cost: 4 messages per round, larger blast radius from a single
+  packet loss, more wire format to specify, and an opcode-shaped
+  thing on UDP.
 
-The first good smoothed value after recovery then takes the
-`applied_offset_us is None` branch — a real correction with a fresh lease
-and confirm burst. This avoids reviving a pre-stale lease.
+**Lean.** Device-computes is the cleaner shape: the math is small,
+data flows in one direction, and the controller stops being an
+oracle for something the device can compute itself. The deciding
+factor is whether the operator will actually look at per-device sync
+telemetry — if yes, the small "device → controller sync status" push
+is worth it; if no, device-computes wins outright.
 
-## Firmware Integration
+## What `ClockSyncClient` does each tick
 
-In `src/firmware/controller_connection.{h,cpp}`:
+Independent of the device-vs-controller decision:
 
-- `CMD_SYNC_RESULT` → `CMD_SYNC_LEASE`.
-- `handle_sync_result_` → `handle_sync_lease_`.
-- Parse the additional `valid_for_ms` field.
-- Call `_clock.apply_sync_offset(offset_us, int64_t(valid_for_ms) * 1000)`.
-- `boot_token` and `seq` gating unchanged.
-- Wires directly into `SyncedClock`; `PlaybackDevice` is not in the path.
+1. If `!link.is_ready()`: reset the filter window and any in-flight
+   round state. Return.
+2. If a round is due (no current round in flight, cadence interval
+   elapsed): build a PING with current timestamp, UID, boot_token,
+   seq; `udp.send(...)` to `link.controller_ip_addr()` on the sync
+   port.
+3. Drain `udp.recv(...)`. For each packet: validate it's a PONG (or
+   LEASE under controller-computes), validate UID/boot_token/seq,
+   feed into the filter (device-computes) or apply the lease
+   directly (controller-computes).
+4. If a fresh accepted offset is ready, call
+   `clock.apply_sync_offset(offset_us, lease_us)`.
 
-Dead code removed from `PlaybackDevice`:
+Cadence and budget are local concerns: the client owns its own
+schedule, doesn't share state with the link's discovery cadence.
 
-- `handle_sync_result()`
-- `clear_sync()`
-- fields: `_sync_offset`, `_sync_valid`, `_playback_uses_sync`
+## Boot/reset behavior
 
-`SyncedClock::clear_sync()` is called from the controller-connection layer
-on detach/disconnect, not from playback.
+- On simulated reboot, `SimSystemPlatform` writes a fresh `boot_token`
+  into the shared `DeviceIdentity`. The next PING carries the new
+  token; the controller sees the bump and discards anything it had
+  cached for the old boot.
+- On link disconnect, `ClockSyncClient::poll()` resets its window. The
+  App may also call `SyncedClock::clear_sync()` to flip `is_synced()`
+  to false immediately rather than waiting for the lease to age out.
+- The "what does playback do when sync is lost mid-program" policy
+  belongs to Playback / firmware mode, not to `ClockSyncClient`. See
+  `drafts/TODO.md` § Playback (loss-of-sync lifecycle).
 
-## Push-Revoke
+## Open decisions
 
-A controller that wants to force firmware unsynced without dropping the TCP
-session sends `CMD_SYNC_LEASE` with `valid_for_ms = 0`. Under the
-strict-less-than check in `is_synced()`, this naturally yields an
-immediately-expired lease. No special case in firmware.
+- **Device-computes vs controller-computes** (above).
+- **If device-computes wins: a "device → controller sync status"
+  push** so the operator dashboard isn't dark. Probably folded into
+  `QueryDeviceStatus`'s ACK payload (extra fields), not a new opcode.
+- **Lease window length** under device-computes (55 s carries over
+  from v2; revisit only if cadence changes).
+- **Initial-burst cadence** right after `is_ready()` flips true.
+  Probably a few quick rounds (1 s spacing) until the first lease,
+  then settle to the steady 15 s cadence.
+- **Whether `ClockSyncClient` takes `ControllerLink&` directly** or
+  just the two getters it needs. Style choice; `ControllerLink&` is
+  what's drafted in `clock_sync_client.h`.
 
-## What Is Not Changing
+## What is not changing
 
-- UDP probe/response path: `CMD_SYNC_REQ`, `SYNC_RESP`, `parse_sync_resp`.
-  These measure RTT and feed the controller's filter; they are not leases.
-- Controller filtering: 3-best-by-RTT per round, 5-round median window, RTT
-  gate (`0 < rtt ≤ 200ms`), deadband value, sign-flip hysteresis.
-- Boot token and seq gating on the firmware side.
+- `SyncedClock` itself (`src/synced_clock.h`) — passive container,
+  stays as-is.
+- The high-level "synced program needs a lease before play"
+  invariant — `Playback` continues to check `clock.is_synced()` and
+  return `Unsynced` for synced START/RESUME/JUMP without one. The
+  ACK story is unchanged.
+- Boot token semantics — still a fresh u32 generated every (real or
+  simulated) boot, included in identity.
 
-## Test Seam (Principle)
+---
 
-Deterministic tests control the platform raw-time source — not `SyncedClock`
-or `Playback` through virtual or callback APIs. This keeps each as a single
-concrete production class while still allowing lease-expiry and
-render-cursor behavior to be exercised without real sleep. Implementation
-details are out of scope for this doc.
+## Appendix A: sync UDP packets (port 6043)
+
+These are tentative — the exact bytes depend on the device-vs-controller
+decision. Listed here as the most likely shape under device-computes.
+
+**PING** (device → controller, ~every 15 s steady, faster initial
+burst):
+
+| u8 type=0x01 | char uid[16] | u32 boot_token | u32 seq | i64 t1_us |
+
+Total: 33 bytes.
+
+**PONG** (controller → device, unicast reply):
+
+| u8 type=0x02 | u32 seq | i64 t1_us | i64 t2_us | i64 t3_us |
+
+Total: 29 bytes. `t1_us` is echoed so the device doesn't need to
+remember per-seq state if it doesn't want to.
+
+Under controller-computes the same PING/PONG carry the round, plus:
+
+**REPORT** (device → controller):
+
+| u8 type=0x03 | char uid[16] | u32 boot_token | u32 seq | i64 t4_us |
+
+**LEASE** (controller → device):
+
+| u8 type=0x04 | u32 seq | i64 offset_us | u32 valid_for_ms |
+
+Either family fits comfortably in one MTU. Final layout pinned when
+the open decision lands.

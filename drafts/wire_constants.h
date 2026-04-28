@@ -33,7 +33,10 @@ constexpr size_t UID_SIZE = 16;
 constexpr uint8_t CMD_DEVICE_HELLO = 0x00;
 
 constexpr uint8_t CMD_SET_PROFILE  = 0x01;
-constexpr uint8_t CMD_SYNC_LEASE   = 0x02;
+
+// 0x02 is reserved (was SyncLease in an earlier v3 draft). Sync is now
+// device-initiated UDP on its own port, not a TCP opcode. See
+// drafts/synced_clock.md.
 
 // ---- Playback (0x1_) ------------------------------------------------------
 
