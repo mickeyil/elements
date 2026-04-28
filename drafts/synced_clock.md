@@ -14,23 +14,32 @@ answers `is_synced()` / `now_remote_us()`. What's new is the feeder:
 ## Where it sits
 
 `ClockSyncClient` is the third sibling alongside `NetworkInterface` and
-`ControllerLink` (see `drafts/controller_link.md`). The App ticks it
-each loop alongside the link:
+`ControllerLink` (see `drafts/controller_link.md`). The App ticks all
+three unconditionally in dependency order each loop:
 
 ```
 network.poll();
-if (network.is_up()) {
-    link.poll();
-    sync.poll();   // no-op when !link.is_ready(); resets on the down-edge
-}
+link.poll();
+sync.poll();
 ```
 
-`sync.poll()` reads `link.is_ready()` and `link.controller_ip_addr()`
-to know whether to ping and where to ping. When the link drops, the
-client wipes its filter window so a stale pre-detach offset doesn't
-blend with a fresh post-attach measurement. `SyncedClock`'s lease will
-expire on its own; the App can also call `clock.clear_sync()` on
-disconnect for an immediate flip.
+There's no `if (network.is_up())` guard. The polling contract (see
+`controller_link.md` § "The polling contract") is that each module
+self-gates and handles prerequisite loss. For the sync client that
+means:
+
+- `sync.poll()` reads `link.is_ready()` and `link.controller_ip_addr()`
+  internally to decide whether to ping and where to ping.
+- On the tick where `link.is_ready()` goes from true to false, the
+  client resets its filter window (so a stale pre-disconnect offset
+  doesn't blend with a fresh post-reconnect measurement) and calls
+  `SyncedClock::clear_sync()` so consumers see the unsynced flip
+  immediately rather than waiting for the lease to age out.
+
+The client owns the `clear_sync()` call because it's the producer that
+just noticed its writes have stopped being meaningful — wiping the
+consumer-visible state is a derivable consequence of detach, not
+something the App should have to coordinate.
 
 ## Why the direction flipped
 
@@ -134,25 +143,63 @@ factor is whether the operator will actually look at per-device sync
 telemetry — if yes, the small "device → controller sync status" push
 is worth it; if no, device-computes wins outright.
 
-## What `ClockSyncClient` does each tick
+## Filter strategy (device-computes path)
 
-Independent of the device-vs-controller decision:
+The device runs the standard NTP four-timestamp formula on each
+PING/PONG round and feeds the resulting `(offset, RTT)` pair into a
+small ring-buffer filter. The filter trusts samples with lower RTT
+more than samples with higher RTT, rather than averaging across the
+whole window equally.
 
-1. If `!link.is_ready()`: reset the filter window and any in-flight
-   round state. Return.
-2. If a round is due (no current round in flight, cadence interval
-   elapsed): build a PING with current timestamp, UID, boot_token,
-   seq; `udp.send(...)` to `link.controller_ip_addr()` on the sync
-   port.
-3. Drain `udp.recv(...)`. For each packet: validate it's a PONG (or
-   LEASE under controller-computes), validate UID/boot_token/seq,
-   feed into the filter (device-computes) or apply the lease
-   directly (controller-computes).
-4. If a fresh accepted offset is ready, call
-   `clock.apply_sync_offset(offset_us, lease_us)`.
+The reason traces back to the offset formula's hidden assumption:
+it's exact only if the one-way network delay is the same outbound and
+inbound. When that's wrong, the offset estimate is wrong by
+roughly half the asymmetry. The total RTT bounds how big the
+asymmetry can possibly be — so a sample with low RTT has a tighter
+bound on its offset error than a sample with high RTT.
 
-Cadence and budget are local concerns: the client owns its own
-schedule, doesn't share state with the link's discovery cadence.
+Concretely: each fresh sample is added to a window of recent
+samples; the filter sorts that window by RTT, keeps the K with
+lowest RTT, and takes the median of their offsets. That median goes
+into `SyncedClock::apply_sync_offset` with a fresh lease.
+
+Three rules govern when the filter actually fires:
+
+- **RTT gate.** A sample with negative RTT (clock anomaly) or RTT
+  above a sanity threshold is dropped before it ever enters the
+  window.
+- **Minimum samples before first apply.** No `apply_sync_offset`
+  happens until the window holds at least K accepted samples. This
+  is what the burst-at-attach is for — it fills the window quickly
+  so the first synced program doesn't have to wait for the normal
+  ping interval.
+- **One apply per accepted sample.** Each new accepted sample
+  re-runs the filter and re-issues a lease, even if the offset
+  changed by very little. Lease renewal and real corrections share
+  the same code path.
+
+This is the same insight NTP uses in its `clock_filter`. NTP itself
+takes K=1 (just the single lowest-RTT sample); we use K=3 so a
+single unlucky-but-low-RTT sample doesn't dominate.
+
+Tuning (`WINDOW_N`, `BEST_K_BY_RTT`, `MIN_SAMPLES_TO_APPLY`,
+`RTT_GATE_US`, lease, ping interval) lives in the `.cpp` as
+`constexpr`s. The defaults aim at typical Wi-Fi LAN behavior with
+~5–30 ms RTT during normal operation and occasional spikes.
+
+## Ping schedule
+
+- **Burst at link-up.** When `link.is_ready()` first flips true, the
+  client sends a short series of pings ~500 ms apart to fill the
+  filter window quickly. Without the burst, the first apply could be
+  30–45 s after the link comes up.
+- **Normal interval.** After the burst, one round every ~15 s.
+  Renews the lease (~55 s) with comfortable headroom for one missed
+  renewal.
+- **Schedule jitter at scale.** With more than ~20 devices on the
+  same LAN, add a small random offset (e.g., ±2 s) to ping times so
+  devices don't end up sending at the same instants and producing
+  periodic contention spikes on the controller's Wi-Fi.
 
 ## Boot/reset behavior
 
@@ -174,10 +221,10 @@ schedule, doesn't share state with the link's discovery cadence.
   push** so the operator dashboard isn't dark. Probably folded into
   `QueryDeviceStatus`'s ACK payload (extra fields), not a new opcode.
 - **Lease window length** under device-computes (55 s carries over
-  from v2; revisit only if cadence changes).
-- **Initial-burst cadence** right after `is_ready()` flips true.
-  Probably a few quick rounds (1 s spacing) until the first lease,
-  then settle to the steady 15 s cadence.
+  from v2; revisit only if the ping interval changes).
+- **Initial-burst spacing** right after `is_ready()` flips true.
+  Currently 500 ms × 5 pings; revisit if the window doesn't fill in
+  time on real Wi-Fi.
 - **Whether `ClockSyncClient` takes `ControllerLink&` directly** or
   just the two getters it needs. Style choice; `ControllerLink&` is
   what's drafted in `clock_sync_client.h`.

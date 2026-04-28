@@ -9,7 +9,14 @@ duplicated parser in `src/network_sim.cpp`.
 ## Where it sits
 
 Three sibling modules make up "everything between this device and the
-controller." Each owns one concern; the App ticks them in order.
+controller." Each owns one concern; the App ticks them in dependency
+order each loop:
+
+```
+network.poll();
+link.poll();
+sync.poll();
+```
 
 ```
 NetworkInterface     "am I on a usable LAN?"          (this doc: out of scope)
@@ -29,6 +36,35 @@ the *network up, no controller, background playing* state is a
 first-class app state and gets muddier when Wi-Fi disappears inside the
 link. Keeping them as separate siblings makes that state cheap to
 express.
+
+### The polling contract
+
+> **The App polls modules unconditionally in dependency order; each
+> module self-gates and handles prerequisite loss.**
+
+There is *no* `if (network.is_up())` guard wrapping the link and sync
+calls. Wrapping them would be a bug: on the tick Wi-Fi drops, the
+guarded calls don't run, the link's state machine never observes its
+prerequisite going false, and `ClockSyncClient` never sees that the
+link just dropped — so it never clears stale sync state.
+`SyncedClock::is_synced()` would keep returning true for up to a full
+lease (~55 s) while the controller is unreachable.
+
+Instead:
+
+- `ControllerLink::poll()` reads `network.is_up()` internally. On the
+  tick where the network drops it transitions to `NetworkDown` and
+  tears down TCP and discovery. On the tick where the network comes
+  back it starts a fresh discovery cycle.
+- `ClockSyncClient::poll()` reads `link.is_ready()` internally. On
+  the tick where the link drops it resets its filter window and calls
+  `SyncedClock::clear_sync()` so consumers see the unsynced flip
+  immediately rather than waiting for the lease to age out.
+
+Within one tick the cascade completes: `network.poll()` flips
+`is_up()` false → `link.poll()` observes that and tears down →
+`sync.poll()` observes `is_ready()` false and clears. No
+orchestration in a wrapper class, no conditional gating in the App.
 
 ## How a device joins
 

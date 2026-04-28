@@ -18,7 +18,8 @@
 //     the controller's sync port; recvs pongs).
 //
 // Both treat send() as fire-and-forget (UDP loss is normal and the
-// upper layer retries on cadence) and recv() as non-blocking drain.
+// upper layer retries on its own schedule) and recv() as
+// non-blocking drain.
 
 namespace controller_link {
 
@@ -36,8 +37,9 @@ public:
     virtual void close() = 0;
 
     // Send len bytes to dst_ip:dst_port. dst_ip is in network byte
-    // order. Returns false on socket error or if not bound; the caller
-    // does not retry (the upper layer's cadence handles loss).
+    // order. Returns false on socket error or if not bound; the
+    // caller does not retry (the upper layer's own schedule handles
+    // loss).
     virtual bool send(const uint8_t* src, size_t len,
                       uint32_t dst_ip, uint16_t dst_port) = 0;
 

@@ -47,7 +47,17 @@ enum class LinkState {
 //
 // Lifetime: one instance for the life of the program. poll() is the
 // single per-tick entry point; it advances whichever stage the link is
-// in. Callers gate everything else on is_ready().
+// in.
+//
+// Polling contract (see drafts/controller_link.md): the App calls
+// poll() unconditionally each tick. The link self-gates on
+// network.is_up() internally -- on the tick where the network drops
+// it transitions to NetworkDown and tears down TCP and discovery; on
+// the tick where the network comes back it starts a fresh discovery
+// cycle. Callers do NOT wrap poll() in an is_up() guard.
+//
+// Downstream consumers (ClockSyncClient, App mode logic) read
+// is_ready() to decide their own behavior.
 //
 // Construction wires in:
 //   - NetworkInterface : checked each poll() to decide whether to do
