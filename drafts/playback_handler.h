@@ -22,8 +22,8 @@ public:
 
     // TODO: Playback::handle_start, handle_resume, and handle_jump are void
     // today (src/playback.cpp). The v3 design requires them to return a
-    // status so this handler can ACK truthfully. Track the API change in
-    // playback.md and TODO.md; this handler's switch maps the return values
+    // status so this handler can ACK truthfully. Tracked in drafts/TODO.md
+    // under "## Playback"; this handler's switch maps the return values
     // onto AckStatus codes (Unsynced, WrongState, BadPayload, Ok).
 
 private:

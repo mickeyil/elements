@@ -164,8 +164,9 @@ program. It drives three decisions:
 
 **Not a decision.** `target_fps` is **not** a firmware LOAD admission
 gate. Firmware runs the program regardless and reports render/present
-slack so the composer can lower complexity or the declared rate. Owner
-presentation loops are documented in `playback.md`.
+slack so the composer can lower complexity or the declared rate. The
+owner presentation contract is tracked in `drafts/TODO.md` under the
+`## Playback` section.
 
 ## 4. Requires Sync Flag
 
@@ -186,7 +187,7 @@ into every v3 strip blob header. Read once at `LOAD` and stored on
 `Playback`; drives clock-domain selection (`now_remote_us()` vs.
 `now_local_us()`) and admission of `START` / `RESUME` / `JUMP`
 (rejected while `SyncedClock::is_synced()` is false). Runtime behavior
-is detailed in `playback.md`.
+lives in `src/playback.{h,cpp}`.
 
 **Compiler-emitted, runtime-enforced.** The compiler just carries the
 flag; it doesn't know whether the target device will be synced at play

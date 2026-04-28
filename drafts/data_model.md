@@ -1,8 +1,8 @@
 # Time-Naming Policy
 
 Canonical naming conventions for time-related identifiers in the
-runtime. `synced_clock.md`, `playback.md`, and `compiler.md` link here
-as the source of truth.
+runtime. `synced_clock.md` and `compiler.md` link here as the source of
+truth; runtime semantics for `Playback` live in `src/playback.{h,cpp}`.
 
 ## Rules
 

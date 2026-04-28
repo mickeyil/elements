@@ -3,8 +3,9 @@
 Ordered plan for moving v3 draft modules into `src/` with tests. Each step
 lands a module (header + impl where applicable) and its unit tests before
 the next step starts. Design contracts live in `blob_format.md`,
-`playback.md`, `synced_clock.md`, `compiler.md`; the time-naming
-vocabulary is in `data_model.md`. This file is the migration sequence.
+`synced_clock.md`, `compiler.md` (Playback's contract is now the source
+in `src/playback.{h,cpp}`); the time-naming vocabulary is in
+`data_model.md`. This file is the migration sequence.
 
 ## Settled Policies
 
@@ -357,5 +358,7 @@ themselves. Resolves the only open decision blocking this step.
   compiler changes independently; do not gate runtime migration on
   them.
 - **Offline render and firmware owners** are rewired after step 20
-  onto the `Playback` / `SyncedClock` / `GammaCorrection` surface
-  described in `playback.md §Firmware / Sim / Offline-render`.
+  onto the `Playback` / `SyncedClock` / `GammaCorrection` surface.
+  See the `## Playback` section of `drafts/TODO.md` for the owner
+  presentation contract, the online/offline matrix, and the
+  loss-of-sync lifecycle.

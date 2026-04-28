@@ -181,8 +181,8 @@ so the outbound UDP frame loop has the destination.
 
 Pure pass-through to `Playback` — no per-command state. **Requires**
 `Playback::handle_start / handle_jump / handle_resume` to return a status
-instead of `void`, so this handler can ACK truthfully. See the API change
-note in `playback.md`.
+instead of `void`, so this handler can ACK truthfully. See `drafts/TODO.md`
+for the deferred API change.
 
 ### Storage (`0x2_`)
 
@@ -246,8 +246,8 @@ left behind for follow-up.
 ## Open items
 
 - **`Playback` API change.** `handle_start` / `handle_resume` /
-  `handle_jump` return void today; need to return status. Coordinate with
-  `playback.md`.
+  `handle_jump` return void today; need to return status. Tracked in
+  `drafts/TODO.md`.
 - **`BackgroundStore` impl on sim.** The shared interface is in
   `background_store.h`; sim backing must survive a simulated reboot
   (ESP flash does). Backing choice — file under a stable path, in-process
