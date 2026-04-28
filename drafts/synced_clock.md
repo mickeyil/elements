@@ -75,7 +75,7 @@ decision (next section). Both options share the first two messages:
 
 ```
 device → controller   PING   uid + boot_token + seq + t1
-controller → device   PONG   echoes uid + seq + t1, adds t2 + t3
+controller → device   PONG   echoes seq + t1, adds t2 + t3
 ```
 
 The device can compute offset and RTT from `(t1, t2, t3, t4)` where
@@ -83,18 +83,24 @@ The device can compute offset and RTT from `(t1, t2, t3, t4)` where
 whether the device or the controller does the smoothing and lease
 issuance.
 
-`uid` and `boot_token` are in every device-to-controller packet for
+PONG does not echo `uid` because the device knows what it sent and
+doesn't need to be told; the `(seq, t1)` pair uniquely identifies the
+outstanding round on the device side. Identity validation on PONG
+happens by source IP (`src_ip == link.controller_ip_addr()`) — good
+enough for the LAN threat model and avoids spending 16 bytes per
+PONG echoing back identity that's already known.
+
+`uid` and `boot_token` are in every device-to-controller PING for
 the same reason the OFFER nonce is in `DEVICE_HELLO`: between
 `is_ready()` becoming true and the controller actually accepting the
 attachment, the device may briefly send pings to a controller that's
 about to close. The controller validates the UID/boot_token and
-discards stale ones. This costs ~20 bytes per ping and removes a small
-race window.
+discards stale ones. This costs ~20 bytes per ping and removes a
+small race window.
 
-Cadence: roughly one round per 15 seconds in steady state (matches
-v2's `_STEADY_INTERVAL_NS`), with a faster burst right after the link
-becomes Ready so the lease is established before the first synced
-program is loaded.
+One round per ~15 seconds during normal operation, with a faster
+burst right after the link becomes Ready so the lease is established
+before the first synced program is loaded.
 
 ## Open: device-computes vs controller-computes
 
@@ -203,13 +209,20 @@ Tuning (`WINDOW_N`, `BEST_K_BY_RTT`, `MIN_SAMPLES_TO_APPLY`,
 
 ## Boot/reset behavior
 
+- The UDP socket is bound lazily inside `poll()` the first time
+  `link.is_ready()` is true, not in the constructor. A bind attempt
+  during boot can fail when the network isn't up yet; binding lazily
+  means a failure just delays the first ping to the next tick rather
+  than stranding the client. A socket error during `recv` clears the
+  bound state and the next tick re-binds.
 - On simulated reboot, `SimSystemPlatform` writes a fresh `boot_token`
   into the shared `DeviceIdentity`. The next PING carries the new
   token; the controller sees the bump and discards anything it had
   cached for the old boot.
-- On link disconnect, `ClockSyncClient::poll()` resets its window. The
-  App may also call `SyncedClock::clear_sync()` to flip `is_synced()`
-  to false immediately rather than waiting for the lease to age out.
+- On link disconnect, `ClockSyncClient::poll()` resets its window
+  and calls `SyncedClock::clear_sync()` directly so consumers see the
+  unsynced flip immediately rather than waiting for the lease to age
+  out. The App does not need to participate.
 - The "what does playback do when sync is lost mid-program" policy
   belongs to Playback / firmware mode, not to `ClockSyncClient`. See
   `drafts/TODO.md` § Playback (loss-of-sync lifecycle).

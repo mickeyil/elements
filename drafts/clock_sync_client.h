@@ -91,10 +91,17 @@ private:
     // the first call after the link became ready.
     bool schedule_due_();
 
-    // Build and send a PING. Marks a round as outstanding, stamps
-    // t1, increments seq, and schedules the next ping (burst spacing
-    // while the window fills, then the normal interval).
+    // Build and send a PING. State commits (round outstanding, seq,
+    // t1, next-ping schedule) happen only after the send succeeds;
+    // a failed send marks the socket unbound and backs off briefly.
     void send_ping_();
+
+    // Close the UDP socket and clear _bound. Idempotent. Used on
+    // link-down and on socket errors so the next poll() re-binds
+    // cleanly (rather than asking the transport to re-bind on top
+    // of an already-bound state, which the udp_transport contract
+    // doesn't promise to handle for ephemeral ports).
+    void mark_unbound_();
 
     // Drain all available PONGs from the UDP socket. For each:
     // validate framing, validate it matches the outstanding round,
@@ -122,6 +129,14 @@ private:
     // detect the moment readiness drops and run the disconnect
     // handler exactly once.
     bool _was_ready = false;
+
+    // True iff the UDP socket is currently bound and usable. The
+    // socket is bound lazily inside poll() the first time the link
+    // becomes ready -- a constructor-time bind can fail when the
+    // network isn't up yet, and we'd have no good way to recover.
+    // A socket error during recv clears this so the next tick
+    // re-binds.
+    bool _bound = false;
 
     // Ping schedule. _next_ping_due_us is the local timestamp at
     // which send_ping_() should next fire; _bursts_remaining counts

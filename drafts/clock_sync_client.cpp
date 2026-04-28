@@ -101,11 +101,9 @@ ClockSyncClient::ClockSyncClient(
     const DeviceIdentity& identity)
     : _udp(udp), _link(link), _clock(clock), _identity(identity)
 {
-    // Bind an ephemeral local UDP port. We're the initiator; the
-    // controller replies to whatever source port the PING arrived on.
-    // If bind fails (network not up yet), poll() effectively no-ops
-    // until the next opportunity.
-    _udp.bind(0);
+    // Bind happens lazily inside poll(). A constructor-time bind
+    // can fail because the network isn't up yet during boot, and
+    // there's no good recovery path from here.
 }
 
 void ClockSyncClient::poll()
@@ -122,6 +120,20 @@ void ClockSyncClient::poll()
         return;
     }
 
+    // Lazy bind / re-bind. A bind failure here just delays the
+    // first ping to the next tick; the network may come up shortly.
+    //
+    // TODO: add backoff if bind keeps failing. The skeleton retries
+    // every tick, which is fine for correctness but on ESP a
+    // persistent failure could spam logs / waste loop budget. Impl
+    // can layer a simple "next bind attempt at +N ms" in here.
+    if (!_bound) {
+        _bound = _udp.bind(0);
+        if (!_bound) {
+            return;
+        }
+    }
+
     // 1. Drain any PONGs already in the socket buffer.
     drain_responses_();
 
@@ -131,7 +143,7 @@ void ClockSyncClient::poll()
     }
 
     // 3. Send the next PING if the schedule is due and we're idle.
-    if (!_round_outstanding && schedule_due_()) {
+    if (_bound && !_round_outstanding && schedule_due_()) {
         send_ping_();
     }
 }
@@ -143,7 +155,20 @@ void ClockSyncClient::on_link_down_()
     _seq               = 0;
     _next_ping_due_us  = 0;
     _bursts_remaining  = 0;
+
+    // Release the socket. Next time the link comes back up, poll()
+    // will re-bind.
+    mark_unbound_();
+
     _clock.clear_sync();
+}
+
+void ClockSyncClient::mark_unbound_()
+{
+    if (_bound) {
+        _udp.close();
+        _bound = false;
+    }
 }
 
 bool ClockSyncClient::schedule_due_()
@@ -152,9 +177,17 @@ bool ClockSyncClient::schedule_due_()
 
     // First call after the link became ready: prime the schedule
     // and the burst counter so the first ping fires immediately.
+    //
+    // Burst semantics: BURST_PING_COUNT is the total number of
+    // burst-spaced pings we want (5). _bursts_remaining counts
+    // burst pings still to send AFTER the current one. So the
+    // initial value is BURST_PING_COUNT - 1: send 1 now, then
+    // remaining 4 more at burst spacing, then transition to the
+    // normal interval. This keeps the total at exactly
+    // BURST_PING_COUNT.
     if (_next_ping_due_us == 0) {
         _next_ping_due_us = now;
-        _bursts_remaining = BURST_PING_COUNT;
+        _bursts_remaining = BURST_PING_COUNT - 1;
     }
 
     return now >= _next_ping_due_us;
@@ -169,27 +202,42 @@ void ClockSyncClient::send_ping_()
         return;
     }
 
-    _seq              += 1;
-    _round_seq         = _seq;
-    _round_t1_us       = now_us_();
-    _round_outstanding = true;
+    // Build the PING using locals; only commit to client state if
+    // the send succeeds. Failure should not consume a sequence
+    // number or mark a round outstanding.
+    const uint32_t seq = _seq + 1;
+    const int64_t  t1  = now_us_();
 
     uint8_t pkt[PING_WIRE_SIZE];
     pkt[0] = PKT_PING;
-    std::memcpy(pkt + 1,  _identity.uid,           UID_SIZE);
-    std::memcpy(pkt + 17, &_identity.boot_token,   4);
-    std::memcpy(pkt + 21, &_round_seq,             4);
-    std::memcpy(pkt + 25, &_round_t1_us,           8);
+    std::memcpy(pkt + 1,  _identity.uid,         UID_SIZE);
+    std::memcpy(pkt + 17, &_identity.boot_token, 4);
+    std::memcpy(pkt + 21, &seq,                  4);
+    std::memcpy(pkt + 25, &t1,                   8);
 
-    _udp.send(pkt, sizeof(pkt), controller_ip, SYNC_PORT);
+    if (!_udp.send(pkt, sizeof(pkt), controller_ip, SYNC_PORT)) {
+        // Transport failed (socket error, network gone, etc.).
+        // Close the socket and mark unbound so poll() re-binds
+        // cleanly next tick; back the schedule off briefly so we
+        // don't spin.
+        mark_unbound_();
+        _next_ping_due_us = t1 + BURST_INTERVAL_US;
+        return;
+    }
+
+    // Send succeeded -- commit state.
+    _seq               = seq;
+    _round_seq         = seq;
+    _round_t1_us       = t1;
+    _round_outstanding = true;
 
     // Schedule the next ping. Burst spacing while the window fills,
     // then the normal interval.
     if (_bursts_remaining > 0) {
         _bursts_remaining -= 1;
-        _next_ping_due_us = _round_t1_us + BURST_INTERVAL_US;
+        _next_ping_due_us = t1 + BURST_INTERVAL_US;
     } else {
-        _next_ping_due_us = _round_t1_us + STEADY_INTERVAL_US;
+        _next_ping_due_us = t1 + STEADY_INTERVAL_US;
 
         // TODO: schedule jitter. With more than ~20 devices on the
         // same LAN, add a small random offset (e.g., +/-2 s) here so
@@ -207,11 +255,28 @@ void ClockSyncClient::drain_responses_()
 
     while (true) {
         const int n = _udp.recv(buf, sizeof(buf), &src_ip, &src_port);
-        if (n <= 0) {
-            break;  // 0 = no data; <0 = socket error (transport handles it)
+        if (n == 0) {
+            break;  // no data right now
+        }
+        if (n < 0) {
+            // Socket error. Close + mark unbound so the next tick
+            // re-binds cleanly. Drop any outstanding round; whatever
+            // was in flight is lost with this socket.
+            mark_unbound_();
+            _round_outstanding = false;
+            break;
         }
         if (n != static_cast<int>(PONG_WIRE_SIZE) || buf[0] != PKT_PONG) {
             continue;  // junk; ignore
+        }
+
+        // Identity validation by source IP. PONG carries no UID or
+        // boot_token in its payload (see drafts/synced_clock.md
+        // "Wire flow"); the source address has to do the work.
+        // Source port is not checked -- the controller may reply
+        // from an ephemeral port depending on its socket impl.
+        if (src_ip != _link.controller_ip_addr()) {
+            continue;
         }
 
         // Parse: type[1] + seq[4] + t1[8] + t2[8] + t3[8]
@@ -226,10 +291,10 @@ void ClockSyncClient::drain_responses_()
 
         // Match against the outstanding round. A PONG that doesn't
         // match (late retransmit, stale boot, replay) is dropped.
-        // Note: there is no explicit boot_token in PONG -- we rely
-        // on (seq, t1) being unique per round. Controller-side
-        // validation of boot_token in the PING discards stale
-        // attachments before they ever produce a PONG.
+        // (seq, t1) is the unique round identifier on the device
+        // side; controller-side validation of boot_token in the
+        // PING discards stale attachments before they ever produce
+        // a PONG.
         if (!_round_outstanding || seq != _round_seq || t1 != _round_t1_us) {
             continue;
         }
