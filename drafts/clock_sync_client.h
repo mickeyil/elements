@@ -18,12 +18,12 @@ class ControllerLink;
 // each accepted update.
 //
 // Producer / shared state / consumers:
-//   ClockSyncClient  -- producer; writes to SyncedClock via apply_sync_offset()
-//   SyncedClock      -- shared state; standalone, anyone can read
-//   Playback (etc.)  -- consumers; read SyncedClock to drive timing
+//   ClockSyncClient: producer; writes to SyncedClock via apply_sync_offset()
+//   SyncedClock:     shared state; standalone, anyone can read
+//   Playback (etc.): consumers; read SyncedClock to drive timing
 // All three are owned by the App at the same level. ClockSyncClient
 // holds a SyncedClock reference for the write channel, but does NOT
-// wrap or own the clock -- that would hide shared state behind a
+// wrap or own the clock; that would hide shared state behind a
 // networking object and couple the two unnecessarily.
 //
 // poll() runs every tick. What it does depends on the link:
@@ -64,15 +64,8 @@ private:
 
     // Build and send a PING. State commits (round outstanding, seq,
     // t1, next-ping schedule) happen only after the send succeeds;
-    // a failed send marks the socket unbound and backs off briefly.
+    // a failed send closes the socket and backs off briefly.
     void send_ping_();
-
-    // Close the UDP socket and clear _bound. Idempotent. Used on
-    // link-down and on socket errors so the next poll() re-binds
-    // cleanly (rather than asking the transport to re-bind on top
-    // of an already-bound state, which the udp_transport contract
-    // doesn't promise to handle for ephemeral ports).
-    void mark_unbound_();
 
     // Drain all available PONGs from the UDP socket. For each:
     // validate framing, validate it matches the outstanding round,
@@ -101,14 +94,6 @@ private:
     // handler exactly once.
     bool _was_ready = false;
 
-    // True iff the UDP socket is currently bound and usable. The
-    // socket is bound lazily inside poll() the first time the link
-    // becomes ready -- a constructor-time bind can fail when the
-    // network isn't up yet, and we'd have no good way to recover.
-    // A socket error during recv clears this so the next tick
-    // re-binds.
-    bool _bound = false;
-
     // Ping schedule. _next_ping_due_us is the local timestamp at
     // which send_ping_() should next fire; _bursts_remaining counts
     // down the initial fast-fill series.
@@ -122,16 +107,16 @@ private:
     SyncSample _samples[WINDOW_N];
     size_t     _samples_count = 0;
 
+    // Last seq successfully sent. Next ping carries _last_sent_seq+1.
+    // Lifetime-of-boot counter; not reset on link-down.
+    uint32_t _last_sent_seq = 0;
+
     // Outstanding-round bookkeeping. Only one round is outstanding
     // at a time; a second ping doesn't fire until the previous round
-    // completes or times out.
-    bool     _round_outstanding = false;
-    uint32_t _round_seq         = 0;
-    int64_t  _round_t1_us       = 0;
-
-    // Monotonic sequence number on PINGs. Wraps; PONG matches by
-    // exact equality against _round_seq.
-    uint32_t _seq = 0;
+    // completes or times out. While outstanding, the in-flight seq
+    // equals _last_sent_seq; PONGs are matched on (_last_sent_seq, _round_t1_us).
+    bool    _round_outstanding = false;
+    int64_t _round_t1_us       = 0;
 };
 
 }  // namespace controller_link

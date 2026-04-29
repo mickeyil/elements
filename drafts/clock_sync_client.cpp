@@ -1,4 +1,4 @@
-// SKELETON -- not expected to compile. Represents the algorithm and
+// SKELETON: not expected to compile. Represents the algorithm and
 // state transitions that fall out of the decisions in
 // drafts/synced_clock.md. Real impl will fill in headers, error
 // handling, and any platform glue.
@@ -98,7 +98,7 @@ ClockSyncClient::ClockSyncClient(UdpTransport& udp, const ControllerLink& link,
                                  SyncedClock& clock, const DeviceIdentity& identity)
     : _udp(udp), _link(link), _clock(clock), _identity(identity)
 {
-    // No work here -- socket bind is lazy in poll().
+    // No work here: socket bind is lazy in poll().
 }
 
 void ClockSyncClient::poll()
@@ -115,18 +115,10 @@ void ClockSyncClient::poll()
         return;
     }
 
-    // Lazy bind / re-bind. A bind failure here just delays the
-    // first ping to the next tick; the network may come up shortly.
-    //
-    // TODO: add backoff if bind keeps failing. The skeleton retries
-    // every tick, which is fine for correctness but on ESP a
-    // persistent failure could spam logs / waste loop budget. Impl
-    // can layer a simple "next bind attempt at +N ms" in here.
-    if (!_bound) {
-        _bound = _udp.bind(0);
-        if (!_bound) {
-            return;
-        }
+    // Lazy (re)bind; failure delays one tick.
+    // TODO: backoff on persistent bind failure.
+    if (!_udp.is_bound() && !_udp.bind(0)) {
+        return;
     }
 
     // 1. Drain any PONGs already in the socket buffer.
@@ -138,40 +130,23 @@ void ClockSyncClient::poll()
     }
 
     // 3. Send the next PING if the schedule is due and we're idle.
-    if (_bound && !_round_outstanding && schedule_due_()) {
+    //    (drain may have closed the socket on error; recheck.)
+    if (_udp.is_bound() && !_round_outstanding && schedule_due_()) {
         send_ping_();
     }
 }
 
 void ClockSyncClient::on_link_down_()
 {
-    // Reset internal state so a fresh post-reconnect measurement
-    // doesn't blend with stale pre-disconnect samples or fire on top
-    // of an outstanding round whose PONG will never arrive.
-    //
-    // SyncedClock is deliberately NOT cleared here. The lease is the
-    // policy for "trust this offset for N seconds without renewal";
-    // a link drop does not invalidate the underlying clock math
-    // (expected drift is small relative to the lease window). The
-    // offset rides its lease until expiry, and reconnect's first
-    // apply_filter_() will overwrite it cleanly.
+    // Wipe filter, schedule, and outstanding round; close the socket.
+    // _last_sent_seq keeps running across link sessions (packet-level
+    // identity, not session state). SyncedClock is left alone; its
+    // lease ages out on its own.
     _samples_count     = 0;
     _round_outstanding = false;
-    _seq               = 0;
     _next_ping_due_us  = 0;
     _bursts_remaining  = 0;
-
-    // Release the socket. Next time the link comes back up, poll()
-    // will re-bind.
-    mark_unbound_();
-}
-
-void ClockSyncClient::mark_unbound_()
-{
-    if (_bound) {
-        _udp.close();
-        _bound = false;
-    }
+    _udp.close();
 }
 
 bool ClockSyncClient::schedule_due_()
@@ -208,7 +183,7 @@ void ClockSyncClient::send_ping_()
     // Build the PING using locals; only commit to client state if
     // the send succeeds. Failure should not consume a sequence
     // number or mark a round outstanding.
-    const uint32_t seq = _seq + 1;
+    const uint32_t seq = _last_sent_seq + 1;
     const int64_t  t1  = now_us_();
 
     uint8_t pkt[PING_WIRE_SIZE];
@@ -219,18 +194,14 @@ void ClockSyncClient::send_ping_()
     std::memcpy(pkt + 25, &t1,                   8);
 
     if (!_udp.send(pkt, sizeof(pkt), controller_ip, SYNC_PORT)) {
-        // Transport failed (socket error, network gone, etc.).
-        // Close the socket and mark unbound so poll() re-binds
-        // cleanly next tick; back the schedule off briefly so we
-        // don't spin.
-        mark_unbound_();
+        // Send failed: close so next tick rebinds, brief backoff.
+        _udp.close();
         _next_ping_due_us = t1 + BURST_INTERVAL_US;
         return;
     }
 
-    // Send succeeded -- commit state.
-    _seq               = seq;
-    _round_seq         = seq;
+    // Send succeeded. Commit state.
+    _last_sent_seq     = seq;
     _round_t1_us       = t1;
     _round_outstanding = true;
 
@@ -262,10 +233,8 @@ void ClockSyncClient::drain_responses_()
             break;  // no data right now
         }
         if (n < 0) {
-            // Socket error. Close + mark unbound so the next tick
-            // re-binds cleanly. Drop any outstanding round; whatever
-            // was in flight is lost with this socket.
-            mark_unbound_();
+            // Socket error: next tick rebinds. Drop the round.
+            _udp.close();
             _round_outstanding = false;
             break;
         }
@@ -273,10 +242,14 @@ void ClockSyncClient::drain_responses_()
             continue;  // junk; ignore
         }
 
+        // Capture t4 as close to packet receipt as possible; later
+        // checks must not push the receive timestamp later.
+        const int64_t t4 = now_us_();
+
         // Identity validation by source IP. PONG carries no UID or
         // boot_token in its payload (see drafts/synced_clock.md
         // "Wire flow"); the source address has to do the work.
-        // Source port is not checked -- the controller may reply
+        // Source port is not checked; the controller may reply
         // from an ephemeral port depending on its socket impl.
         if (src_ip != _link.controller_ip_addr()) {
             continue;
@@ -294,17 +267,13 @@ void ClockSyncClient::drain_responses_()
 
         // Match against the outstanding round. A PONG that doesn't
         // match (late retransmit, stale boot, replay) is dropped.
-        // (seq, t1) is the unique round identifier on the device
-        // side; controller-side validation of boot_token in the
-        // PING discards stale attachments before they ever produce
-        // a PONG.
-        if (!_round_outstanding || seq != _round_seq || t1 != _round_t1_us) {
+        // While outstanding, in-flight seq == _last_sent_seq, so the
+        // pair (_last_sent_seq, _round_t1_us) is the round id.
+        if (!_round_outstanding || seq != _last_sent_seq || t1 != _round_t1_us) {
             continue;
         }
 
-        const int64_t t4 = now_us_();
         _round_outstanding = false;
-
         process_round_(t1, t2, t3, t4);
     }
 }

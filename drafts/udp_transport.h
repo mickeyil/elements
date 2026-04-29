@@ -36,6 +36,10 @@ public:
     // Release the local port. Idempotent. Always succeeds.
     virtual void close() = 0;
 
+    // True iff a local port is currently bound. Does not promise
+    // the next send/recv will succeed; only that a socket is open.
+    virtual bool is_bound() const = 0;
+
     // Send len bytes to dst_ip:dst_port. dst_ip is in network byte
     // order. Returns false on socket error or if not bound; the
     // caller does not retry (the upper layer's own schedule handles
