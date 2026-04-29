@@ -86,20 +86,23 @@ The device can compute offset and RTT from `(t1, t2, t3, t4)` where
 whether the device or the controller does the smoothing and lease
 issuance.
 
-PONG does not echo `uid` because the device knows what it sent and
-doesn't need to be told; the `(seq, t1)` pair uniquely identifies the
-outstanding round on the device side. Identity validation on PONG
-happens by source IP (`src_ip == link.controller_ip_addr()`) — good
-enough for the LAN threat model and avoids spending 16 bytes per
-PONG echoing back identity that's already known.
+Each field on the wire has one job:
 
-`uid` and `boot_token` are in every device-to-controller PING for
-the same reason the OFFER nonce is in `DEVICE_HELLO`: between
-`is_ready()` becoming true and the controller actually accepting the
-attachment, the device may briefly send pings to a controller that's
-about to close. The controller validates the UID/boot_token and
-discards stale ones. This costs ~20 bytes per ping and removes a
-small race window.
+| Field            | Whose job                                                                             |
+|------------------|---------------------------------------------------------------------------------------|
+| `uid` (PING)     | Controller demux key; the controller talks to many devices and `(src_ip, src_port)` isn't a stable per-device identity (sim sharing 127.0.0.1; DHCP IP churn; ephemeral port changes on rebind). |
+| `boot_token` (PING) | Controller admission check: "is this packet from the currently accepted boot/session for this UID?" Mismatch leads to **discard only**, never to mutating attachment state (UDP is unauthenticated; letting it tear down TCP sessions would be a DoS primitive). |
+| `seq + t1` (both) | Device-side round matching. Echoed in PONG so the device can pair the reply with the outstanding round. |
+| (PONG omits UID/boot_token) | The device only listens to one peer, validated by `src_ip == link.controller_ip_addr()`. Combined with `(seq, t1)`, that's enough; echoing back identity the device already knows would just spend 20 bytes for nothing. |
+
+Note on cross-boot stale PONGs on the device side: ESP's monotonic
+clock resets on reboot, so a numerically-identical `t1` between boots
+is theoretically possible. In practice the previous-boot UDP socket
+is gone before the new one binds, and the new ephemeral port usually
+differs, so a stale PONG would have to: reach the new socket, carry a
+matching `seq`, and carry the same `t1_us`. The conjunction is
+extremely improbable. If we ever wanted formal cleanliness here, the
+fix is to echo `boot_token` in PONG too; not worth doing now.
 
 One round per ~15 seconds during normal operation, with a faster
 burst right after the link becomes Ready so the lease is established

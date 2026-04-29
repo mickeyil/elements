@@ -265,10 +265,12 @@ void ClockSyncClient::drain_responses_()
         std::memcpy(&t2,  buf + 13, 8);
         std::memcpy(&t3,  buf + 21, 8);
 
-        // Match against the outstanding round. A PONG that doesn't
-        // match (late retransmit, stale boot, replay) is dropped.
-        // While outstanding, in-flight seq == _last_sent_seq, so the
-        // pair (_last_sent_seq, _round_t1_us) is the round id.
+        // Match against the outstanding round. Within a single boot,
+        // (_last_sent_seq, _round_t1_us) is the round id; while
+        // outstanding the in-flight seq equals _last_sent_seq.
+        // Late retransmits and replays are dropped here; cross-boot
+        // stale PONGs are blocked at the socket layer (previous-boot
+        // socket is closed before the new one binds).
         if (!_round_outstanding || seq != _last_sent_seq || t1 != _round_t1_us) {
             continue;
         }
