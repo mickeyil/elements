@@ -26,71 +26,36 @@ class ControllerLink;
 // wrap or own the clock -- that would hide shared state behind a
 // networking object and couple the two unnecessarily.
 //
-// Polling contract (see drafts/controller_link.md): the App calls
-// poll() unconditionally each tick. The client self-gates internally:
-//   - When link.is_ready() goes from true to false in a single tick,
-//     poll() resets the filter window, drops any outstanding round,
-//     and closes the UDP socket so a fresh post-reconnect measurement
-//     starts from clean state. SyncedClock is NOT cleared here: the
-//     lease is the policy for "is this offset still trustworthy",
-//     and a momentary link drop does not invalidate the underlying
-//     clock math. Reconnect's first apply overwrites the offset
-//     cleanly; if the link stays down past the lease window, the
-//     clock falls out of sync on its own via lease expiry.
-//   - When link.is_ready() is false: poll() is a no-op.
-//   - When ready: send pings on schedule, drain responses, feed the
-//     filter, write SyncedClock once enough samples have accumulated.
-//
-// The client owns these internal resets because it's the producer
-// that just noticed its writes have stopped landing. Asking the App
-// to coordinate that would be needless orchestration.
-//
-// Sim parity: same code on ESP and sim. Sim runs against a controller
-// process on the same host, so the measured offset is ~0; that's not
-// faked, it's the truth. The sync wire is exercised on every sim run.
-//
-// See drafts/synced_clock.md for the wire flow, filter rationale, and
-// the open device-computes vs controller-computes decision.
+// poll() runs every tick. What it does depends on the link:
+//   - link not ready: do nothing.
+//   - link just became not-ready: reset the filter, throw away the
+//     in-flight ping, close the socket. SyncedClock is left alone
+//     so its offset stays usable until its lease runs out.
+//   - link ready: send pings on schedule, read replies, write the
+//     measured offset to SyncedClock once enough samples are in.
+// See drafts/controller_link.md for why poll() runs every tick.
+
+// One accepted sync round. Filter ranks by rtt_us ascending.
+struct SyncSample {
+    int64_t offset_us;  // remote minus local time, in us
+    int64_t rtt_us;     // network round-trip, in us
+};
 
 class ClockSyncClient {
 public:
-    ClockSyncClient(
-        UdpTransport&         udp,
-        const ControllerLink& link,
-        SyncedClock&          clock,
-        const DeviceIdentity& identity
-    );
+    ClockSyncClient(UdpTransport& udp, const ControllerLink& link,
+                    SyncedClock& clock, const DeviceIdentity& identity);
 
-    // Single per-tick entry point. Called unconditionally by the App
-    // (no outer is_up()/is_ready() guard). Self-gates: no-op when
-    // !link.is_ready(); on the tick where link readiness drops it
-    // resets internal filter/socket state but does NOT clear
-    // SyncedClock -- the offset rides its lease until it ages out.
+    // Called every tick. Sends pings and processes replies when the
+    // link is ready; does nothing otherwise.
     void poll();
 
-    // WINDOW_N visible here so the embedded sample buffer can be
-    // sized at compile time without exposing the whole tuning block.
+    // Filter window size.
     static constexpr size_t WINDOW_N = 5;
 
 private:
-    // One accepted RTT sample. The filter sorts the window by
-    // rtt_us ascending and takes the K lowest.
-    struct Sample {
-        // Controller clock minus device clock, microseconds, computed
-        // by the NTP four-timestamp formula. Stored in this sign so
-        // the median is taken in a natural direction; negated when
-        // written to SyncedClock (which stores local - remote).
-        int64_t remote_minus_local_us;
-
-        // Network-only round-trip time in microseconds:
-        // (t4 - t1) - (t3 - t2). Used as the trust ranking.
-        int64_t rtt_us;
-    };
-
-    // Called when poll() observes link.is_ready() going from true
-    // to false. Wipes filter window, outstanding round, and burst
-    // counter, and closes the UDP socket. Does NOT call
-    // SyncedClock::clear_sync(); the lease ages out on its own.
+    // Called on the link-down transition. Resets sync state;
+    // SyncedClock keeps its offset until its lease expires.
     void on_link_down_();
 
     // True iff the next ping is due. Initializes the schedule on
@@ -154,8 +119,8 @@ private:
     // is the live entry count (<= WINDOW_N). Samples are kept in
     // arrival order; the filter sorts copies it doesn't mutate the
     // window in place.
-    Sample _samples[WINDOW_N];
-    size_t _samples_count = 0;
+    SyncSample _samples[WINDOW_N];
+    size_t     _samples_count = 0;
 
     // Outstanding-round bookkeeping. Only one round is outstanding
     // at a time; a second ping doesn't fire until the previous round

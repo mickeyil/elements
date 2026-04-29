@@ -94,16 +94,11 @@ int64_t median_in_place(int64_t* values, size_t count) {
 
 // ------------------------------------------------------------------------
 
-ClockSyncClient::ClockSyncClient(
-    UdpTransport&         udp,
-    const ControllerLink& link,
-    SyncedClock&          clock,
-    const DeviceIdentity& identity)
+ClockSyncClient::ClockSyncClient(UdpTransport& udp, const ControllerLink& link,
+                                 SyncedClock& clock, const DeviceIdentity& identity)
     : _udp(udp), _link(link), _clock(clock), _identity(identity)
 {
-    // Bind happens lazily inside poll(). A constructor-time bind
-    // can fail because the network isn't up yet during boot, and
-    // there's no good recovery path from here.
+    // No work here -- socket bind is lazy in poll().
 }
 
 void ClockSyncClient::poll()
@@ -320,8 +315,8 @@ void ClockSyncClient::process_round_(int64_t t1, int64_t t2, int64_t t3, int64_t
     // if one-way delay is the same outbound and inbound; total RTT
     // bounds how far off that assumption can be. See
     // drafts/synced_clock.md "What RTT means" for the derivation.
-    const int64_t rtt = (t4 - t1) - (t3 - t2);
-    const int64_t remote_minus_local = ((t2 - t1) + (t3 - t4)) / 2;
+    const int64_t rtt    = (t4 - t1) - (t3 - t2);
+    const int64_t offset = ((t2 - t1) + (t3 - t4)) / 2;
 
     // Sanity gate: drop nonsense or grossly inflated samples before
     // they enter the window.
@@ -336,8 +331,8 @@ void ClockSyncClient::process_round_(int64_t t1, int64_t t2, int64_t t3, int64_t
         }
         _samples_count = WINDOW_N - 1;
     }
-    _samples[_samples_count].remote_minus_local_us = remote_minus_local;
-    _samples[_samples_count].rtt_us                = rtt;
+    _samples[_samples_count].offset_us = offset;
+    _samples[_samples_count].rtt_us    = rtt;
     _samples_count += 1;
 
     // Hold off the first apply until the window has enough
@@ -360,12 +355,12 @@ void ClockSyncClient::apply_filter_()
     // minimum-delay sample); we use K=3 so a single unlucky-but-low
     // sample doesn't dominate.
 
-    Sample sorted[WINDOW_N];
+    SyncSample sorted[WINDOW_N];
     for (size_t i = 0; i < _samples_count; ++i) {
         sorted[i] = _samples[i];
     }
     std::sort(sorted, sorted + _samples_count,
-              [](const Sample& a, const Sample& b) {
+              [](const SyncSample& a, const SyncSample& b) {
                   return a.rtt_us < b.rtt_us;
               });
 
@@ -373,14 +368,14 @@ void ClockSyncClient::apply_filter_()
 
     int64_t offsets[BEST_K_BY_RTT];
     for (size_t i = 0; i < k; ++i) {
-        offsets[i] = sorted[i].remote_minus_local_us;
+        offsets[i] = sorted[i].offset_us;
     }
 
-    const int64_t median_remote_minus_local = median_in_place(offsets, k);
+    const int64_t median_offset = median_in_place(offsets, k);
 
     // SyncedClock stores offset = local - remote. Negate before
     // writing.
-    const int64_t synced_clock_offset_us = -median_remote_minus_local;
+    const int64_t synced_clock_offset_us = -median_offset;
 
     _clock.apply_sync_offset(synced_clock_offset_us, LEASE_US);
 }
