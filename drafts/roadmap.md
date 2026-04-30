@@ -346,6 +346,19 @@ ops + spark event.
 consume them and the host-side sim/network paths track per-call gen
 themselves. Resolves the only open decision blocking this step.
 
+### 21. `udp_transport.h` + `posix_udp_transport.{h,cpp}` + `firmware/esp_udp_transport.{h,cpp}` — DONE
+
+ABC promoted from `drafts/udp_transport.h` to `src/udp_transport.h`
+with rebind semantics phrased in terms of the current bound port and
+empty datagrams folded onto `recv() == 0`. POSIX impl works on both
+Linux and macOS off plain BSD sockets; uses `getsockname()` to record
+the actual ephemeral port and exposes a concrete `local_port()` for
+tests. ESP impl wraps `WiFiUDP` and is added to `platformio.ini`'s
+`build_src_filter`. `test_udp_transport` covers lifecycle, rebind
+rules, round-trip with source-address population, multi-datagram
+drain, truncation, empty-datagram drop, and unbound-state behavior;
+70 assertions across 11 cases, clean under valgrind.
+
 ## Notes
 
 - **Old `src/` callers break during the migration.** Legacy

@@ -18,6 +18,7 @@ add_library(elements_core STATIC
     src/copy_ops.cpp
     src/gamma.cpp
     src/platform_clock_host.cpp
+    src/posix_udp_transport.cpp
     src/pixel_buffer_pool.cpp
     src/pixel_view.cpp
     src/pixel_views.cpp
@@ -196,6 +197,13 @@ if(BUILD_TESTS)
     # test_synced_clock is also standalone during the v3 migration: it
     # links the test platform_clock fake (test/platform_clock_test.cpp)
     # instead of any production platform_clock impl.
+    add_executable(test_udp_transport
+        test/test_udp_transport.cpp
+        src/posix_udp_transport.cpp
+    )
+    target_include_directories(test_udp_transport PRIVATE src)
+    target_link_libraries(test_udp_transport Catch2::Catch2WithMain)
+
     add_executable(test_synced_clock
         test/test_synced_clock.cpp
         test/platform_clock_test.cpp
@@ -334,6 +342,8 @@ if(BUILD_TESTS)
     add_test(NAME test_program COMMAND test_program
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_synced_clock COMMAND test_synced_clock
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    add_test(NAME test_udp_transport COMMAND test_udp_transport
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_compositor COMMAND test_compositor
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
@@ -477,6 +487,15 @@ if(BUILD_TESTS)
                     --error-exitcode=1 $<TARGET_FILE:test_program>
         )
         set_tests_properties(test_program_memcheck PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        )
+        add_test(
+            NAME test_udp_transport_memcheck
+            COMMAND ${VALGRIND} --leak-check=full
+                    --errors-for-leak-kinds=definite,indirect,possible
+                    --error-exitcode=1 $<TARGET_FILE:test_udp_transport>
+        )
+        set_tests_properties(test_udp_transport_memcheck PROPERTIES
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         )
         add_test(
