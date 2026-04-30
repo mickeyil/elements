@@ -194,9 +194,6 @@ if(BUILD_TESTS)
     target_include_directories(test_program PRIVATE src)
     target_link_libraries(test_program Catch2::Catch2WithMain)
 
-    # test_synced_clock is also standalone during the v3 migration: it
-    # links the test platform_clock fake (test/platform_clock_test.cpp)
-    # instead of any production platform_clock impl.
     add_executable(test_udp_transport
         test/test_udp_transport.cpp
         src/posix_udp_transport.cpp
@@ -204,6 +201,9 @@ if(BUILD_TESTS)
     target_include_directories(test_udp_transport PRIVATE src)
     target_link_libraries(test_udp_transport Catch2::Catch2WithMain)
 
+    # test_synced_clock is also standalone during the v3 migration: it
+    # links the test platform_clock fake (test/platform_clock_test.cpp)
+    # instead of any production platform_clock impl.
     add_executable(test_synced_clock
         test/test_synced_clock.cpp
         test/platform_clock_test.cpp

@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstring>
 #include <thread>
+#include <vector>
 
 #include "../src/posix_udp_transport.h"
 
@@ -204,6 +205,20 @@ TEST_CASE("zero-byte datagram is consumed and folded onto no-data", "[udp_transp
     const int n = drain_once(receiver, buf, sizeof(buf), &ip, &port);
     REQUIRE(n == 1);
     CHECK(buf[0] == 0x77);
+}
+
+TEST_CASE("send rejects payloads above the per-datagram cap", "[udp_transport]") {
+    PosixUdpTransport sender;
+    REQUIRE(sender.bind(0));
+
+    // The cap mirrors WiFiUDP's tx-buffer flush boundary; POSIX enforces
+    // it too so both impls obey the same one-call/one-datagram contract.
+    std::vector<uint8_t> too_big(controller_link::UDP_TRANSPORT_MAX_DATAGRAM_BYTES + 1, 0xAB);
+    CHECK_FALSE(sender.send(too_big.data(), too_big.size(), LOOPBACK_BE, 65000));
+    // Right at the cap is allowed (delivery itself isn't checked here;
+    // a 1460-byte loopback datagram is fine on Linux/macOS).
+    std::vector<uint8_t> at_cap(controller_link::UDP_TRANSPORT_MAX_DATAGRAM_BYTES, 0xCD);
+    CHECK(sender.send(at_cap.data(), at_cap.size(), LOOPBACK_BE, 65000));
 }
 
 TEST_CASE("send fails when not bound", "[udp_transport]") {

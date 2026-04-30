@@ -22,6 +22,9 @@ bool EspUdpTransport::bind(uint16_t local_port)
     }
 
     if (_udp.begin(local_port) != 1) {
+        // Defensive: own the cleanup rather than trust WiFiUDP's
+        // failure path. stop() is safe on uninitialized state.
+        _udp.stop();
         return false;
     }
 
@@ -32,17 +35,22 @@ bool EspUdpTransport::bind(uint16_t local_port)
 
 void EspUdpTransport::close()
 {
-    if (_bound) {
-        _udp.stop();
-        _bound      = false;
-        _bound_port = 0;
-    }
+    // Unconditional stop(). It's safe before any begin() and idempotent
+    // after, so we don't have to gate on _bound and risk drifting away
+    // from WiFiUDP's actual state.
+    _udp.stop();
+    _bound      = false;
+    _bound_port = 0;
 }
 
 bool EspUdpTransport::send(const uint8_t* src, size_t len,
                            uint32_t dst_ip, uint16_t dst_port)
 {
     if (!_bound) return false;
+    // WiFiUDP::write auto-flushes its 1460-byte tx buffer mid-payload,
+    // splitting longer writes into multiple datagrams. Reject before
+    // beginPacket() so the contract holds: one send, one datagram.
+    if (len > UDP_TRANSPORT_MAX_DATAGRAM_BYTES) return false;
 
     // dst_ip is in network byte order: byte 0 is the first dotted
     // octet, byte 3 is the last. Construct IPAddress through its
@@ -71,9 +79,19 @@ int EspUdpTransport::recv(uint8_t* dst, size_t n,
 
     const int r = _udp.read(dst, n);
     if (r <= 0) {
-        // parsePacket said something was there but read failed: treat
-        // as a transport hiccup, not a hard error. Caller retries.
+        // parsePacket said something was there but read failed: drop
+        // any leftover bytes so the next parsePacket() can fetch a
+        // fresh datagram (WiFiUDP returns 0 from parsePacket while its
+        // rx_buffer holds residue).
+        _udp.flush();
         return 0;
+    }
+    if (r < avail) {
+        // Caller supplied a smaller buffer than the datagram. Match
+        // POSIX recvfrom behavior: return what fits, discard the tail.
+        // Without this, residue in WiFiUDP's rx_buffer would block
+        // every subsequent parsePacket() until close/rebind.
+        _udp.flush();
     }
 
     const IPAddress ip = _udp.remoteIP();

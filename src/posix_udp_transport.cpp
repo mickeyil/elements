@@ -82,6 +82,7 @@ bool PosixUdpTransport::send(const uint8_t* src, size_t len,
                              uint32_t dst_ip, uint16_t dst_port)
 {
     if (_fd < 0) return false;
+    if (len > UDP_TRANSPORT_MAX_DATAGRAM_BYTES) return false;
 
     sockaddr_in dst{};
     dst.sin_family      = AF_INET;

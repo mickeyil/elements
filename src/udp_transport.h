@@ -44,6 +44,14 @@
 
 namespace controller_link {
 
+// Largest payload one send() call may emit as a single UDP datagram.
+// Bounded by Arduino's WiFiUDP, which flushes its internal tx buffer
+// every 1460 bytes and would otherwise silently fragment a longer
+// payload into several datagrams. POSIX has no such limit but matches
+// the cap so both impls obey the same contract. All current callers
+// (HELLO/OFFER/REJECT/PING/PONG) are well under this.
+constexpr size_t UDP_TRANSPORT_MAX_DATAGRAM_BYTES = 1460;
+
 class UdpTransport {
 public:
     virtual ~UdpTransport() = default;
@@ -69,12 +77,14 @@ public:
     // the next send/recv will succeed; only that a socket is open.
     virtual bool is_bound() const = 0;
 
-    // Send len bytes to dst_ip:dst_port. dst_ip is in network byte
-    // order. Returns false on socket error or if not bound; the
-    // caller does not retry (the upper layer's own schedule handles
-    // loss). A failed send does NOT release the socket; the bound
-    // state is unchanged. Callers that want to recover by re-binding
-    // must call close() then bind() explicitly.
+    // Send len bytes to dst_ip:dst_port as a single UDP datagram.
+    // dst_ip is in network byte order. Returns false on socket error,
+    // if not bound, or if len > UDP_TRANSPORT_MAX_DATAGRAM_BYTES (the
+    // caller would otherwise observe silent fragmentation on the ESP
+    // impl). The caller does not retry (the upper layer's own schedule
+    // handles loss). A failed send does NOT release the socket; the
+    // bound state is unchanged. Callers that want to recover by
+    // re-binding must call close() then bind() explicitly.
     virtual bool send(const uint8_t* src, size_t len,
                       uint32_t dst_ip, uint16_t dst_port) = 0;
 
