@@ -36,8 +36,10 @@ public:
     // Drop the connection. Idempotent. Always succeeds.
     virtual void disconnect() = 0;
 
-    // True iff the connection is currently usable. Flips to false the
-    // moment a read or write detects the socket is dead.
+    // True iff the connection is currently usable. Cheap getter --
+    // returns transport-owned cached state, never issues a probe.
+    // Flips to false only when read() or write() detects the socket
+    // is dead, or after disconnect().
     virtual bool is_connected() const = 0;
 
     // Read up to n bytes from the connected client into dst.
@@ -52,11 +54,13 @@ public:
     // Calling while !is_connected() returns < 0.
     virtual int read(uint8_t* dst, size_t n) = 0;
 
-    // Send all len bytes. Blocks the caller (within the impl's own
-    // internal limits) until the kernel accepts every byte. Returns:
-    //   true   all len bytes were accepted by the socket layer;
-    //   false  the socket reported an error or partial write; the
-    //          transport considers itself not connected after this.
+    // Send all len bytes. All-or-fail within an impl-defined timeout
+    // (~500 ms on ESP, similar on host). Returns:
+    //   true   all len bytes were accepted by the socket layer within
+    //          the timeout;
+    //   false  socket error, partial write, peer close, or timeout;
+    //          the transport considers itself not connected after this
+    //          and is_connected() returns false.
     //
     // Calling while !is_connected() returns false.
     virtual bool write(const uint8_t* src, size_t len) = 0;

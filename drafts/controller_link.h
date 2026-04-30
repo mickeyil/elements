@@ -62,8 +62,10 @@ enum class LinkState {
 // Construction wires in:
 //   - NetworkInterface : checked each poll() to decide whether to do
 //                        anything at all.
-//   - UdpTransport     : the discovery socket (binds the well-known
-//                        discovery port).
+//   - UdpTransport     : the discovery socket (binds ephemeral; sends
+//                        HELLO broadcasts to the controller's
+//                        well-known discovery port; recvs OFFER/REJECT
+//                        unicast back). See drafts/udp_transport.h.
 //   - TcpTransport     : the command socket.
 //   - DeviceIdentity   : UID / boot_token / protocol_version, sent in
 //                        HELLO and DEVICE_HELLO.
