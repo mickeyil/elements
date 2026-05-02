@@ -10,14 +10,10 @@
 // Arduino-WiFiUDP implementation of UdpTransport. Selected for the
 // ARDUINO build via platformio.ini's build_src_filter.
 //
-// WiFiUDP already non-blocks (parsePacket returns 0 when nothing is
-// queued) and already permits broadcast sends, so neither needs an
-// explicit setup step here. Bind tracking mirrors PosixUdpTransport so
-// the rebind contract is identical: bind(p) on a port that matches
-// the current bound port no-ops; bind(0) while bound no-ops; any
-// other mismatch fails.
+// WiFiUDP already non-blocks and already permits broadcast sends, so
+// neither needs an explicit setup step here.
 //
-// Owns a WiFiUDP socket: copy and move are deleted.
+// Owns a WiFiUDP socket; copy and move are deleted.
 
 namespace controller_link {
 

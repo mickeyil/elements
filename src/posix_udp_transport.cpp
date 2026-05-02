@@ -19,10 +19,9 @@ PosixUdpTransport::~PosixUdpTransport()
 bool PosixUdpTransport::bind(uint16_t local_port)
 {
     if (_fd >= 0) {
-        // Rebind rules. Match against the kernel-assigned port, not
-        // the original argument: bind(0) populates _bound_port with
-        // the ephemeral port, so a caller who happened to pass that
-        // exact number to a follow-up bind() also gets a clean no-op.
+        // Rebind: match against the kernel-assigned port, not the
+        // original argument. After bind(0) _bound_port holds the
+        // ephemeral port, so passing that exact number is a no-op too.
         if (local_port == _bound_port) return true;
         if (local_port == 0)           return true;
         return false;
@@ -37,9 +36,8 @@ bool PosixUdpTransport::bind(uint16_t local_port)
         return false;
     }
 
-    // Preserve any flags the kernel set on the new fd, then add
-    // O_NONBLOCK. F_GETFL on a fresh SOCK_DGRAM normally returns 0,
-    // but the canonical pattern is read-modify-write.
+    // Read-modify-write: preserve whatever flags the kernel set, then
+    // add O_NONBLOCK.
     int flags = ::fcntl(fd, F_GETFL, 0);
     if (flags < 0 || ::fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
         ::close(fd);
@@ -55,8 +53,8 @@ bool PosixUdpTransport::bind(uint16_t local_port)
         return false;
     }
 
-    // Read back the kernel-assigned port. For a non-zero local_port
-    // this round-trips; for bind(0) it reveals the ephemeral choice.
+    // Read back the kernel-assigned port. For bind(0) this reveals
+    // the ephemeral choice; otherwise it round-trips local_port.
     sockaddr_in actual{};
     socklen_t   alen = sizeof(actual);
     if (::getsockname(fd, reinterpret_cast<sockaddr*>(&actual), &alen) < 0) {
@@ -82,7 +80,7 @@ bool PosixUdpTransport::send(const uint8_t* src, size_t len,
                              uint32_t dst_ip, uint16_t dst_port)
 {
     if (_fd < 0) return false;
-    if (len > UDP_TRANSPORT_MAX_DATAGRAM_BYTES) return false;
+    if (len > MAX_PAYLOAD_SIZE) return false;
 
     sockaddr_in dst{};
     dst.sin_family      = AF_INET;
@@ -110,8 +108,8 @@ int PosixUdpTransport::recv(uint8_t* dst, size_t n,
         return static_cast<int>(r);
     }
     if (r == 0) {
-        // Empty datagram. Consumed; folded onto "no useful datagram"
-        // per the UdpTransport contract.
+        // Empty packet, consumed. Folded onto "nothing useful" per
+        // the contract.
         return 0;
     }
     if (errno == EAGAIN || errno == EWOULDBLOCK) {

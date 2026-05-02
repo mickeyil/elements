@@ -6,16 +6,14 @@
 #include "udp_transport.h"
 
 // BSD-sockets implementation of UdpTransport. Compiles on Linux and
-// macOS off the same source; no platform fork.
+// macOS off the same source.
 //
 // Owns one non-blocking AF_INET/SOCK_DGRAM socket between bind() and
 // close(). SO_BROADCAST is enabled on every bound socket so the
 // discovery side of ControllerLink can send HELLOs to 255.255.255.255
-// without per-call configuration.
+// without per-call setup.
 //
-// Owns an fd: copy and move are deleted. If a future caller needs to
-// pass a transport across object boundaries, wrap it in a unique_ptr
-// and pass the pointer.
+// Owns an fd; copy and move are deleted.
 
 namespace controller_link {
 
@@ -37,10 +35,8 @@ public:
     int  recv(uint8_t* dst, size_t n,
               uint32_t* src_ip, uint16_t* src_port) override;
 
-    // Test-only accessor. The actual port assigned by the kernel,
-    // captured via getsockname() after every successful bind. After
-    // bind(0) this is the ephemeral port the OS picked; after
-    // bind(p) with p != 0 it is p. Returns 0 when not bound.
+    // Test-only. The kernel-assigned port (the ephemeral after
+    // bind(0); p after bind(p)). Returns 0 when unbound.
     uint16_t local_port() const { return _bound_port; }
 
 private:
