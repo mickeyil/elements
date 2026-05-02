@@ -18,6 +18,7 @@ add_library(elements_core STATIC
     src/copy_ops.cpp
     src/gamma.cpp
     src/platform_clock_host.cpp
+    src/posix_tcp_transport.cpp
     src/posix_udp_transport.cpp
     src/pixel_buffer_pool.cpp
     src/pixel_view.cpp
@@ -201,6 +202,13 @@ if(BUILD_TESTS)
     target_include_directories(test_udp_transport PRIVATE src)
     target_link_libraries(test_udp_transport Catch2::Catch2WithMain)
 
+    add_executable(test_tcp_transport
+        test/test_tcp_transport.cpp
+        src/posix_tcp_transport.cpp
+    )
+    target_include_directories(test_tcp_transport PRIVATE src)
+    target_link_libraries(test_tcp_transport Catch2::Catch2WithMain)
+
     # test_synced_clock is also standalone during the v3 migration: it
     # links the test platform_clock fake (test/platform_clock_test.cpp)
     # instead of any production platform_clock impl.
@@ -344,6 +352,8 @@ if(BUILD_TESTS)
     add_test(NAME test_synced_clock COMMAND test_synced_clock
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_udp_transport COMMAND test_udp_transport
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    add_test(NAME test_tcp_transport COMMAND test_tcp_transport
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_compositor COMMAND test_compositor
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
@@ -496,6 +506,15 @@ if(BUILD_TESTS)
                     --error-exitcode=1 $<TARGET_FILE:test_udp_transport>
         )
         set_tests_properties(test_udp_transport_memcheck PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        )
+        add_test(
+            NAME test_tcp_transport_memcheck
+            COMMAND ${VALGRIND} --leak-check=full
+                    --errors-for-leak-kinds=definite,indirect,possible
+                    --error-exitcode=1 $<TARGET_FILE:test_tcp_transport>
+        )
+        set_tests_properties(test_tcp_transport_memcheck PROPERTIES
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         )
         add_test(
