@@ -3,102 +3,60 @@
 #include <cstddef>
 #include <cstdint>
 
-// Abstract UDP transport. Two impls live elsewhere:
-//   - PosixUdpTransport (BSD sockets on host/sim; src/posix_udp_transport.{h,cpp})
-//   - EspUdpTransport   (Arduino WiFiUDP on firmware; src/firmware/esp_udp_transport.{h,cpp})
+// A thin wrapper around the platform's UDP socket. Lets the app send
+// and receive UDP packets without caring whether it runs on Arduino
+// (WiFiUDP) or POSIX (BSD sockets).
 //
-// IPv4-only. Addresses are uint32_t in network byte order; the same byte
-// layout the OS already uses (sin_addr.s_addr, IPAddress's 4-byte view).
+// Usage:
+//   bind(port)               claim a local port (0 = OS-assigned).
+//   send(buf, len, ip, port) send one UDP packet to a peer.
+//   recv(buf, n, &ip, &port) read one packet, learn who sent it.
+//   close()                  release the local port.
 //
-// Single-threaded. The App ticks transport consumers from one loop;
-// callers do not synchronize across threads. Impls do no internal
-// locking.
+// IPv4-only. Addresses are uint32_t in network byte order.
+// Single-threaded; implementations do no internal locking.
 //
-// UDP is connectionless: bind a local port (or 0 for ephemeral), then
-// send/recv with explicit destination/source addresses. There is no
-// connect/disconnect symmetry with TcpTransport.
-//
-// Two callers use this interface; both bind ephemeral local ports:
-//   - the discovery side of ControllerLink (binds ephemeral; broadcasts
-//     HELLO to the controller's well-known discovery port; recvs
-//     OFFER/REJECT unicast back at that ephemeral port). The well-known
-//     discovery port belongs to the controller, which binds it to
-//     listen for HELLOs; the device never binds it. This also lets
-//     multiple sim devices coexist on one host without fighting over a
-//     shared port.
-//   - ClockSyncClient (binds an ephemeral local port; sends pings to
-//     the controller's sync port; recvs pongs).
-//
-// Broadcast: impls enable broadcast on every bound socket (SO_BROADCAST
-// on Posix; no-op on Arduino, which already permits broadcast sends).
-// There is no broadcast knob on the interface.
-//
-// Connection state: send/recv failures do NOT auto-release the socket;
-// UDP has no connection state to lose. close() is the only call that
-// releases the bound port. Callers that want to recover from a send
-// error by re-binding must call close() then bind() themselves.
-//
-// Both callers treat send() as fire-and-forget (UDP loss is normal and
-// the upper layer retries on its own schedule) and recv() as
-// non-blocking drain.
+// Implementations:
+//   - PosixUdpTransport (host/sim, BSD sockets)
+//   - EspUdpTransport   (firmware, Arduino WiFiUDP)
 
 namespace controller_link {
 
-// Largest payload one send() call may emit as a single UDP datagram.
-// Bounded by Arduino's WiFiUDP, which flushes its internal tx buffer
-// every 1460 bytes and would otherwise silently fragment a longer
-// payload into several datagrams. POSIX has no such limit but matches
-// the cap so both impls obey the same contract. All current callers
-// (HELLO/OFFER/REJECT/PING/PONG) are well under this.
-constexpr size_t UDP_TRANSPORT_MAX_DATAGRAM_BYTES = 1460;
+// Largest payload that fits in one UDP packet. Anything bigger gets
+// silently split into multiple packets by the underlying implementation.
+constexpr size_t MAX_PAYLOAD_SIZE = 1460;
 
 class UdpTransport {
 public:
     virtual ~UdpTransport() = default;
 
-    // Bind a local port. Pass 0 for an OS-assigned ephemeral port.
-    // Returns false if the bind fails (port in use, no permission,
-    // network down).
+    // Claim a local port. Pass 0 for an OS-assigned ephemeral port
+    // (client mode; the usual choice). Specific port numbers belong to
+    // server mode, where peers send to a known address. Returns false if
+    // the bind fails (port in use, no permission, network down).
     //
-    // Rebind semantics, in terms of the current bound port (which after
-    // bind(0) is the actual OS-assigned port, not 0):
-    //   - bind(p) where p == current bound port: no-op, returns true.
-    //   - bind(p) where p != current bound port and p != 0: returns
-    //     false; the caller must close() first.
-    //   - bind(0) while already bound: no-op against the current port,
-    //     returns true. Treating this as "give me a new port" would
-    //     force impls to silently rotate sockets, which no caller wants.
+    // Re-binding while already bound: same port is a no-op success;
+    // different port fails (call close() first); bind(0) is a no-op
+    // success against the current port; it never rotates.
     virtual bool bind(uint16_t local_port) = 0;
 
-    // Release the local port. Idempotent. Always succeeds.
+    // Release the local port.
     virtual void close() = 0;
 
-    // True iff a local port is currently bound. Does not promise
-    // the next send/recv will succeed; only that a socket is open.
+    // Is a local port currently bound? bind()/close() are the only things
+    // that change this.
     virtual bool is_bound() const = 0;
 
-    // Send len bytes to dst_ip:dst_port as a single UDP datagram.
-    // dst_ip is in network byte order. Returns false on socket error,
-    // if not bound, or if len > UDP_TRANSPORT_MAX_DATAGRAM_BYTES (the
-    // caller would otherwise observe silent fragmentation on the ESP
-    // impl). The caller does not retry (the upper layer's own schedule
-    // handles loss). A failed send does NOT release the socket; the
-    // bound state is unchanged. Callers that want to recover by
-    // re-binding must call close() then bind() explicitly.
+    // Send len bytes to dst_ip:dst_port as a single UDP packet. Returns
+    // false if not bound, on socket error, or if len > MAX_PAYLOAD_SIZE.
     virtual bool send(const uint8_t* src, size_t len,
                       uint32_t dst_ip, uint16_t dst_port) = 0;
 
-    // Read up to n bytes from the bound socket into dst. On a returned
-    // count > 0, the source address is written into *src_ip and
-    // *src_port (both pointers must be non-null). Returns:
-    //   >  0  packet received; src_ip/src_port populated.
-    //   == 0  no useful datagram available right now (try again next
-    //         tick). A genuinely-empty datagram is consumed and folded
-    //         onto this case; the protocol never produces zero-byte
-    //         packets, and ESP's WiFiUDP cannot distinguish an empty
-    //         datagram from no datagram in any event.
-    //   <  0  socket error or not bound. Like send(), this does NOT
-    //         release the socket; close() is the only release call.
+    // Read up to n bytes from the bound socket into dst. Returns:
+    //   >  0  bytes received (1..n); src_ip/src_port populated.
+    //   == 0  nothing useful: no packet waiting, or an empty packet
+    //         (this protocol never sends empty packets).
+    //   <  0  socket error or not bound.
     virtual int recv(uint8_t* dst, size_t n,
                      uint32_t* src_ip, uint16_t* src_port) = 0;
 };
