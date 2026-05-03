@@ -28,13 +28,7 @@ struct AnimationEvent {
 
 class Layer {
 public:
-    Layer() = default;
     ~Layer();
-
-    Layer(const Layer&) = delete;
-    Layer& operator=(const Layer&) = delete;
-    Layer(Layer&&) = delete;
-    Layer& operator=(Layer&&) = delete;
 
     // Adopt the event array. Layer takes ownership; reset/destruction frees the
     // array and each event's animation.

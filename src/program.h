@@ -12,13 +12,7 @@
 // which keeps it until shutdown. Free with free_program().
 
 struct Program {
-    Program() = default;
     ~Program();
-
-    Program(const Program&) = delete;
-    Program& operator=(const Program&) = delete;
-    Program(Program&&) = delete;
-    Program& operator=(Program&&) = delete;
 
     // How long the program plays, in seconds.
     float duration = 0.0f;

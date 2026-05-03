@@ -14,13 +14,7 @@ namespace controller_link {
 
 class PosixTcpTransport : public TcpTransport {
 public:
-    PosixTcpTransport() = default;
     ~PosixTcpTransport() override;
-
-    PosixTcpTransport(const PosixTcpTransport&) = delete;
-    PosixTcpTransport& operator=(const PosixTcpTransport&) = delete;
-    PosixTcpTransport(PosixTcpTransport&&) = delete;
-    PosixTcpTransport& operator=(PosixTcpTransport&&) = delete;
 
     bool connect(uint32_t dst_ip, uint16_t dst_port) override;
     void disconnect() override;

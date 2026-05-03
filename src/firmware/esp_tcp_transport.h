@@ -22,13 +22,7 @@ namespace controller_link {
 
 class EspTcpTransport : public TcpTransport {
 public:
-    EspTcpTransport() = default;
     ~EspTcpTransport() override;
-
-    EspTcpTransport(const EspTcpTransport&) = delete;
-    EspTcpTransport& operator=(const EspTcpTransport&) = delete;
-    EspTcpTransport(EspTcpTransport&&) = delete;
-    EspTcpTransport& operator=(EspTcpTransport&&) = delete;
 
     bool connect(uint32_t dst_ip, uint16_t dst_port) override;
     void disconnect() override;

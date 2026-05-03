@@ -23,11 +23,6 @@ public:
 
     ~Engine();
 
-    Engine(const Engine&) = delete;
-    Engine& operator=(const Engine&) = delete;
-    Engine(Engine&&) = delete;
-    Engine& operator=(Engine&&) = delete;
-
     // Render the frame at program time `t_program` into `out`. Returns false
     // if `t_program` is outside [0, program duration).
     bool render_frame(float t_program, Strip& out);

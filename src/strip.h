@@ -18,13 +18,7 @@ static_assert(sizeof(rgb_t) == 3, "Strip assumes packed rgb_t storage");
 
 class Strip {
 public:
-    Strip() = default;
     ~Strip();
-
-    Strip(const Strip&) = delete;
-    Strip& operator=(const Strip&) = delete;
-    Strip(Strip&&) = delete;
-    Strip& operator=(Strip&&) = delete;
 
     // Allocate storage for `size` pixels (zeroed). Returns false on allocation
     // failure; the strip is left empty.

@@ -20,13 +20,7 @@
 
 class PixelBufferPool {
 public:
-    PixelBufferPool() = default;
     ~PixelBufferPool();
-
-    PixelBufferPool(const PixelBufferPool&) = delete;
-    PixelBufferPool& operator=(const PixelBufferPool&) = delete;
-    PixelBufferPool(PixelBufferPool&&) = delete;
-    PixelBufferPool& operator=(PixelBufferPool&&) = delete;
 
     // Allocate buffer_count logical buffers from the given pixel-count list.
     // Returns false on allocation failure (the pool is left empty).

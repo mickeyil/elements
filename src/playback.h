@@ -38,11 +38,6 @@ public:
     Playback(uint16_t strip_length, SyncedClock& clock);
     ~Playback();
 
-    Playback(const Playback&) = delete;
-    Playback& operator=(const Playback&) = delete;
-    Playback(Playback&&) = delete;
-    Playback& operator=(Playback&&) = delete;
-
     bool has_hardware_profile() const;
     const HardwareProfile& hardware_profile() const;
 

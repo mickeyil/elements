@@ -22,13 +22,7 @@ struct CopyOp {
 
 class CopyOps {
 public:
-    CopyOps() = default;
     ~CopyOps();
-
-    CopyOps(const CopyOps&) = delete;
-    CopyOps& operator=(const CopyOps&) = delete;
-    CopyOps(CopyOps&&) = delete;
-    CopyOps& operator=(CopyOps&&) = delete;
 
     // Copy `count` records into the table. Returns false on allocation
     // failure (the table is left empty).

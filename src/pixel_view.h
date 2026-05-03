@@ -23,13 +23,7 @@
 
 class PixelView {
 public:
-    PixelView() = default;
     ~PixelView();
-
-    PixelView(const PixelView&) = delete;
-    PixelView& operator=(const PixelView&) = delete;
-    PixelView(PixelView&&) = delete;
-    PixelView& operator=(PixelView&&) = delete;
 
     // Bind the view to a buffer with optional indirection arrays.
     //

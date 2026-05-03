@@ -39,13 +39,7 @@ struct PixelViewSpec {
 
 class PixelViews {
 public:
-    PixelViews() = default;
     ~PixelViews();
-
-    PixelViews(const PixelViews&) = delete;
-    PixelViews& operator=(const PixelViews&) = delete;
-    PixelViews(PixelViews&&) = delete;
-    PixelViews& operator=(PixelViews&&) = delete;
 
     // Build the table from `count` specs. The pool resolves each spec's
     // buffer_idx to a real hsva_t buffer. Returns false on validation
