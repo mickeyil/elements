@@ -15,8 +15,6 @@
 #define MSG_NOSIGNAL 0
 #endif
 
-namespace controller_link {
-
 PosixTcpTransport::~PosixTcpTransport()
 {
     disconnect();
@@ -156,5 +154,3 @@ bool PosixTcpTransport::write(const uint8_t* src, size_t len)
     }
     return true;
 }
-
-}  // namespace controller_link

@@ -9,8 +9,6 @@
 #include <cerrno>
 #include <cstring>
 
-namespace controller_link {
-
 PosixUdpTransport::~PosixUdpTransport()
 {
     close();
@@ -117,5 +115,3 @@ int PosixUdpTransport::recv(uint8_t* dst, size_t n,
     }
     return -1;
 }
-
-}  // namespace controller_link

@@ -20,8 +20,6 @@
 //   - PosixUdpTransport (host/sim, BSD sockets)
 //   - EspUdpTransport   (firmware, Arduino WiFiUDP)
 
-namespace controller_link {
-
 // Largest payload that fits in one UDP packet. Anything bigger gets
 // silently split into multiple packets by the underlying implementation.
 constexpr size_t MAX_PAYLOAD_SIZE = 1460;
@@ -60,5 +58,3 @@ public:
     virtual int recv(uint8_t* dst, size_t n,
                      uint32_t* src_ip, uint16_t* src_port) = 0;
 };
-
-}  // namespace controller_link

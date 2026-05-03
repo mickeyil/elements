@@ -2,8 +2,6 @@
 
 #include <cstring>
 
-namespace controller_link {
-
 EspUdpTransport::~EspUdpTransport()
 {
     close();
@@ -97,5 +95,3 @@ int EspUdpTransport::recv(uint8_t* dst, size_t n,
     *src_port = _udp.remotePort();
     return r;
 }
-
-}  // namespace controller_link

@@ -15,8 +15,6 @@
 //
 // Owns an fd; copy and move are deleted.
 
-namespace controller_link {
-
 class PosixUdpTransport : public UdpTransport {
 public:
     ~PosixUdpTransport() override;
@@ -37,5 +35,3 @@ private:
     int      _fd = -1;
     uint16_t _bound_port = 0;
 };
-
-}  // namespace controller_link

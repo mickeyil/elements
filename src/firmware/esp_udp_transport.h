@@ -15,8 +15,6 @@
 //
 // Owns a WiFiUDP socket; copy and move are deleted.
 
-namespace controller_link {
-
 class EspUdpTransport : public UdpTransport {
 public:
     ~EspUdpTransport() override;
@@ -34,5 +32,3 @@ private:
     bool     _bound = false;
     uint16_t _bound_port = 0;
 };
-
-}  // namespace controller_link

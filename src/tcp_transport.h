@@ -22,8 +22,6 @@
 //   - PosixTcpTransport (host/sim, BSD sockets)
 //   - EspTcpTransport   (firmware, Arduino WiFiClient)
 
-namespace controller_link {
-
 class TcpTransport {
 public:
     // Maximum time connect() and write() may block before failing.
@@ -55,5 +53,3 @@ public:
     // is_connected() flips false on any of those.
     virtual bool write(const uint8_t* src, size_t len) = 0;
 };
-
-}  // namespace controller_link

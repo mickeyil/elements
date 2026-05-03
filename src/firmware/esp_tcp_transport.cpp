@@ -2,8 +2,6 @@
 
 #include <cstring>
 
-namespace controller_link {
-
 EspTcpTransport::~EspTcpTransport()
 {
     disconnect();
@@ -79,5 +77,3 @@ bool EspTcpTransport::write(const uint8_t* src, size_t len)
     }
     return true;
 }
-
-}  // namespace controller_link

@@ -13,8 +13,6 @@
 
 #include "../src/posix_tcp_transport.h"
 
-using controller_link::PosixTcpTransport;
-
 namespace {
 
 constexpr uint32_t LOOPBACK_BE = 0x0100007F;  // 127.0.0.1, network byte order

@@ -18,8 +18,6 @@
 //
 // Owns a WiFiClient; copy and move are deleted.
 
-namespace controller_link {
-
 class EspTcpTransport : public TcpTransport {
 public:
     ~EspTcpTransport() override;
@@ -34,5 +32,3 @@ private:
     WiFiClient _client;
     bool       _connected = false;
 };
-
-}  // namespace controller_link

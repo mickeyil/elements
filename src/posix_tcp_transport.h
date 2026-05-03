@@ -10,8 +10,6 @@
 // SIGPIPE on peer-close mid-write is suppressed; the caller never
 // has to install a signal handler.
 
-namespace controller_link {
-
 class PosixTcpTransport : public TcpTransport {
 public:
     ~PosixTcpTransport() override;
@@ -25,5 +23,3 @@ public:
 private:
     int _fd = -1;
 };
-
-}  // namespace controller_link

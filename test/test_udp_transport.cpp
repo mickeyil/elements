@@ -10,8 +10,6 @@
 
 #include "../src/posix_udp_transport.h"
 
-using controller_link::PosixUdpTransport;
-
 namespace {
 
 constexpr uint32_t LOOPBACK_BE = 0x0100007F;  // 127.0.0.1 in network byte order
@@ -213,11 +211,11 @@ TEST_CASE("send rejects payloads above the per-datagram cap", "[udp_transport]")
 
     // The cap mirrors WiFiUDP's tx-buffer flush boundary; POSIX enforces
     // it too so both impls obey the same one-call/one-datagram contract.
-    std::vector<uint8_t> too_big(controller_link::MAX_PAYLOAD_SIZE + 1, 0xAB);
+    std::vector<uint8_t> too_big(MAX_PAYLOAD_SIZE + 1, 0xAB);
     CHECK_FALSE(sender.send(too_big.data(), too_big.size(), LOOPBACK_BE, 65000));
     // Right at the cap is allowed (delivery itself isn't checked here;
     // a 1460-byte loopback datagram is fine on Linux/macOS).
-    std::vector<uint8_t> at_cap(controller_link::MAX_PAYLOAD_SIZE, 0xCD);
+    std::vector<uint8_t> at_cap(MAX_PAYLOAD_SIZE, 0xCD);
     CHECK(sender.send(at_cap.data(), at_cap.size(), LOOPBACK_BE, 65000));
 }
 
