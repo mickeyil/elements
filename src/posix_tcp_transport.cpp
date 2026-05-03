@@ -54,15 +54,27 @@ bool PosixTcpTransport::connect(uint32_t dst_ip, uint16_t dst_port)
     }
 
     if (rc < 0) {
-        // Wait for writability (or timeout).
-        fd_set wfds;
-        FD_ZERO(&wfds);
-        FD_SET(fd, &wfds);
-        timeval tv{};
-        tv.tv_sec  = TIMEOUT_MS / 1000;
-        tv.tv_usec = (TIMEOUT_MS % 1000) * 1000;
-        const int s = ::select(fd + 1, nullptr, &wfds, nullptr, &tv);
-        if (s <= 0) {
+        // Wait for writability up to the deadline, retrying on EINTR.
+        const auto deadline = std::chrono::steady_clock::now()
+                            + std::chrono::milliseconds(TIMEOUT_MS);
+        for (;;) {
+            const auto now = std::chrono::steady_clock::now();
+            if (now >= deadline) {
+                ::close(fd);
+                return false;
+            }
+            const auto left =
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    deadline - now);
+            timeval tv{};
+            tv.tv_sec  = left.count() / 1000000;
+            tv.tv_usec = left.count() % 1000000;
+            fd_set wfds;
+            FD_ZERO(&wfds);
+            FD_SET(fd, &wfds);
+            const int s = ::select(fd + 1, nullptr, &wfds, nullptr, &tv);
+            if (s > 0) break;
+            if (s < 0 && errno == EINTR) continue;
             ::close(fd);
             return false;
         }
@@ -93,6 +105,7 @@ void PosixTcpTransport::disconnect()
 int PosixTcpTransport::read(uint8_t* dst, size_t n)
 {
     if (_fd < 0) return -1;
+    if (n == 0)  return 0;
 
     const ssize_t r = ::recv(_fd, dst, n, 0);
     if (r > 0) return static_cast<int>(r);
@@ -104,6 +117,7 @@ int PosixTcpTransport::read(uint8_t* dst, size_t n)
         return -1;
     }
     if (errno == EAGAIN || errno == EWOULDBLOCK) return 0;
+    if (errno == EINTR) return 0;
     disconnect();
     return -1;
 }

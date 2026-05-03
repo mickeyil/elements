@@ -43,6 +43,7 @@ void EspTcpTransport::disconnect()
 int EspTcpTransport::read(uint8_t* dst, size_t n)
 {
     if (!_connected) return -1;
+    if (n == 0)      return 0;
 
     // Drain order matters: when the peer closes, connected() can flip
     // false while bytes are still in the rx buffer. Read those first;
