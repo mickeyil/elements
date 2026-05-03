@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <mutex>
 #include <thread>
 
 #include "../src/posix_tcp_transport.h"
@@ -54,11 +55,21 @@ public:
         _thread = std::thread([this] {
             int client_fd = ::accept(_listen_fd, nullptr, nullptr);
             if (client_fd < 0) return;
+            {
+                std::lock_guard<std::mutex> lk(_mu);
+                _client_fd = client_fd;
+            }
             uint8_t buf[256];
             while (!_stop.load()) {
                 const ssize_t r = ::recv(client_fd, buf, sizeof(buf), 0);
                 if (r <= 0) break;
                 ::send(client_fd, buf, r, 0);
+            }
+            // Reset under the lock before closing so a concurrent
+            // stop() can't shutdown a recycled fd.
+            {
+                std::lock_guard<std::mutex> lk(_mu);
+                _client_fd = -1;
             }
             ::close(client_fd);
         });
@@ -66,6 +77,14 @@ public:
 
     void stop() {
         _stop = true;
+        // Shutdown the accepted connection so a parked recv() returns.
+        // Closing _listen_fd alone leaves recv blocked on a different fd.
+        {
+            std::lock_guard<std::mutex> lk(_mu);
+            if (_client_fd >= 0) {
+                ::shutdown(_client_fd, SHUT_RDWR);
+            }
+        }
         if (_listen_fd >= 0) {
             ::close(_listen_fd);
             _listen_fd = -1;
@@ -75,6 +94,8 @@ public:
 
 private:
     int               _listen_fd = -1;
+    int               _client_fd = -1;
+    std::mutex        _mu;
     uint16_t          _port      = 0;
     std::atomic<bool> _stop{false};
     std::thread       _thread;

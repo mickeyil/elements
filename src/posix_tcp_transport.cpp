@@ -124,6 +124,7 @@ bool PosixTcpTransport::write(const uint8_t* src, size_t len)
             written += static_cast<size_t>(w);
             continue;
         }
+        if (w < 0 && errno == EINTR) continue;
         if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
             // Kernel send buffer full; wait for writability up to
             // the deadline.
@@ -142,6 +143,7 @@ bool PosixTcpTransport::write(const uint8_t* src, size_t len)
             FD_ZERO(&wfds);
             FD_SET(_fd, &wfds);
             const int s = ::select(_fd + 1, nullptr, &wfds, nullptr, &tv);
+            if (s < 0 && errno == EINTR) continue;
             if (s <= 0) {
                 disconnect();
                 return false;

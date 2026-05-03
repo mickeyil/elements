@@ -12,11 +12,10 @@
 // ARDUINO build via platformio.ini's build_src_filter.
 //
 // connect() passes TIMEOUT_MS to WiFiClient::connect. read() is
-// non-blocking via available() + read(). write() loops until every
-// byte is sent; the actual write bound is WiFiClient's own internal
-// timeout, not TIMEOUT_MS.
-//
-// Owns a WiFiClient; copy and move are deleted.
+// non-blocking via available() + read(). write() bypasses
+// WiFiClient::write and uses the underlying lwIP fd directly so the
+// TIMEOUT_MS contract holds: WiFiClient::write resets its own retry
+// budget on partial progress and can block for tens of seconds.
 
 class EspTcpTransport : public TcpTransport {
 public:

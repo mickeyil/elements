@@ -1,5 +1,10 @@
 #include "esp_tcp_transport.h"
 
+#include <sys/select.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+
+#include <cerrno>
 #include <cstring>
 
 EspTcpTransport::~EspTcpTransport()
@@ -63,17 +68,50 @@ bool EspTcpTransport::write(const uint8_t* src, size_t len)
 {
     if (!_connected) return false;
 
-    // WiFiClient::write may return fewer than len on a busy tx buffer.
-    // Loop until the buffer is fully accepted; a 0 return means the
-    // socket is dead (write timed out internally or peer closed).
-    size_t offset = 0;
-    while (offset < len) {
-        const size_t w = _client.write(src + offset, len - offset);
-        if (w == 0) {
-            disconnect();
-            return false;
+    // Bypass WiFiClient::write: its retry budget resets on partial
+    // progress and can block for tens of seconds. Drive the lwIP fd
+    // directly with our own deadline.
+    const int fd = _client.fd();
+    if (fd < 0) {
+        disconnect();
+        return false;
+    }
+
+    const uint32_t start = millis();
+    size_t written = 0;
+    while (written < len) {
+        const ssize_t w = ::send(fd, src + written, len - written,
+                                 MSG_DONTWAIT);
+        if (w > 0) {
+            written += static_cast<size_t>(w);
+            continue;
         }
-        offset += w;
+        if (w < 0 && errno == EINTR) continue;
+        if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            // tx buffer full; wait for writability up to the deadline.
+            const uint32_t elapsed = millis() - start;
+            if (elapsed >= static_cast<uint32_t>(TIMEOUT_MS)) {
+                disconnect();
+                return false;
+            }
+            const uint32_t left_ms = TIMEOUT_MS - elapsed;
+            timeval tv{};
+            tv.tv_sec  = left_ms / 1000;
+            tv.tv_usec = (left_ms % 1000) * 1000;
+            fd_set wfds;
+            FD_ZERO(&wfds);
+            FD_SET(fd, &wfds);
+            const int s = ::select(fd + 1, nullptr, &wfds, nullptr, &tv);
+            if (s < 0 && errno == EINTR) continue;
+            if (s <= 0) {
+                disconnect();
+                return false;
+            }
+            continue;
+        }
+        // Hard error.
+        disconnect();
+        return false;
     }
     return true;
 }
