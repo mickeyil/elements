@@ -17,26 +17,14 @@
 
 namespace controller_link {
 
-namespace {
-
-// Connect timeout. Mirrors WiFiClient::connect(ip, port, timeout_ms)
-// on ESP so both impls answer in the same window.
-constexpr int CONNECT_TIMEOUT_MS = 500;
-
-// Write timeout. All-or-fail within this window per the contract.
-constexpr int WRITE_TIMEOUT_MS = 500;
-
-}  // namespace
-
 PosixTcpTransport::~PosixTcpTransport()
 {
     disconnect();
 }
 
-bool PosixTcpTransport::connect(uint32_t controller_ipv4_be,
-                                uint16_t controller_port)
+bool PosixTcpTransport::connect(uint32_t dst_ip, uint16_t dst_port)
 {
-    if (_fd >= 0) return true;  // idempotent
+    if (_fd >= 0) return true;  // already connected
 
     int fd = ::socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) return false;
@@ -57,8 +45,8 @@ bool PosixTcpTransport::connect(uint32_t controller_ipv4_be,
 
     sockaddr_in addr{};
     addr.sin_family      = AF_INET;
-    addr.sin_addr.s_addr = controller_ipv4_be;  // already network byte order
-    addr.sin_port        = htons(controller_port);
+    addr.sin_addr.s_addr = dst_ip;          // already network byte order
+    addr.sin_port        = htons(dst_port);
 
     const int rc = ::connect(fd, reinterpret_cast<sockaddr*>(&addr),
                              sizeof(addr));
@@ -73,8 +61,8 @@ bool PosixTcpTransport::connect(uint32_t controller_ipv4_be,
         FD_ZERO(&wfds);
         FD_SET(fd, &wfds);
         timeval tv{};
-        tv.tv_sec  = CONNECT_TIMEOUT_MS / 1000;
-        tv.tv_usec = (CONNECT_TIMEOUT_MS % 1000) * 1000;
+        tv.tv_sec  = TIMEOUT_MS / 1000;
+        tv.tv_usec = (TIMEOUT_MS % 1000) * 1000;
         const int s = ::select(fd + 1, nullptr, &wfds, nullptr, &tv);
         if (s <= 0) {
             ::close(fd);
@@ -128,7 +116,7 @@ bool PosixTcpTransport::write(const uint8_t* src, size_t len)
 
     const auto deadline =
         std::chrono::steady_clock::now()
-        + std::chrono::milliseconds(WRITE_TIMEOUT_MS);
+        + std::chrono::milliseconds(TIMEOUT_MS);
 
     size_t written = 0;
     while (written < len) {

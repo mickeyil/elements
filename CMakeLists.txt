@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.14)
 project(elements CXX)
 
-set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(Git QUIET)
 
@@ -31,35 +31,8 @@ add_library(elements_core STATIC
     src/animations/paint.cpp
     src/animations/shift.cpp
     src/playback.cpp
-    src/playback_device.cpp
-    src/esp_simulated.cpp
-    src/sim_controller.cpp
 )
 target_include_directories(elements_core PUBLIC src)
-
-# ---------------------------------------------------------------------------
-# Tools
-# ---------------------------------------------------------------------------
-
-add_executable(network_sim src/network_sim.cpp)
-target_link_libraries(network_sim elements_core)
-set(GENERATED_DIR ${CMAKE_BINARY_DIR}/generated)
-set(ELEMENTS_VERSION_HEADER ${GENERATED_DIR}/elements_version.h)
-add_custom_target(generate_network_sim_version ALL
-    COMMAND ${CMAKE_COMMAND}
-        -DOUTPUT=${ELEMENTS_VERSION_HEADER}
-        -DREPO_ROOT=${CMAKE_SOURCE_DIR}
-        -DGIT_EXECUTABLE=${GIT_EXECUTABLE}
-        -P ${CMAKE_SOURCE_DIR}/cmake/GenerateVersionHeader.cmake
-    BYPRODUCTS ${ELEMENTS_VERSION_HEADER}
-    COMMENT "Generating network_sim version header"
-    VERBATIM
-)
-add_dependencies(network_sim generate_network_sim_version)
-target_include_directories(network_sim PRIVATE ${GENERATED_DIR})
-
-add_executable(strip_render src/strip_render.cpp)
-target_link_libraries(strip_render elements_core)
 
 # ---------------------------------------------------------------------------
 # Tests (Catch2, fetched at configure time)
@@ -270,15 +243,6 @@ if(BUILD_TESTS)
     target_include_directories(test_playback PRIVATE src test)
     target_link_libraries(test_playback Catch2::Catch2WithMain)
 
-    add_executable(test_playback_device test/test_playback_device.cpp)
-    target_link_libraries(test_playback_device elements_core Catch2::Catch2WithMain)
-
-    add_executable(test_esp_simulated test/test_esp_simulated.cpp)
-    target_link_libraries(test_esp_simulated elements_core Catch2::Catch2WithMain)
-
-    add_executable(test_sim_controller test/test_sim_controller.cpp)
-    target_link_libraries(test_sim_controller elements_core Catch2::Catch2WithMain)
-
     add_executable(test_background_crc test/test_background_crc.cpp)
     target_link_libraries(test_background_crc elements_core Catch2::Catch2WithMain)
 
@@ -316,9 +280,6 @@ if(BUILD_TESTS)
                     ${CMAKE_SOURCE_DIR}/test/fixtures/test_dual_shift_left.bin
                     ${CMAKE_SOURCE_DIR}/test/fixtures/test_dual_shift_right.bin
         )
-        add_dependencies(test_playback_device test_fixtures)
-        add_dependencies(test_esp_simulated test_fixtures)
-        add_dependencies(test_sim_controller test_fixtures)
     endif()
 
     add_test(NAME test_decoder COMMAND test_decoder
@@ -360,12 +321,6 @@ if(BUILD_TESTS)
     add_test(NAME test_animations COMMAND test_animations
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_playback COMMAND test_playback
-             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
-    add_test(NAME test_playback_device COMMAND test_playback_device
-             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
-    add_test(NAME test_esp_simulated COMMAND test_esp_simulated
-             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
-    add_test(NAME test_sim_controller COMMAND test_sim_controller
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_background_crc COMMAND test_background_crc
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
@@ -551,33 +506,6 @@ if(BUILD_TESTS)
                     --error-exitcode=1 $<TARGET_FILE:test_playback>
         )
         set_tests_properties(test_playback_memcheck PROPERTIES
-            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-        )
-        add_test(
-            NAME test_playback_device_memcheck
-            COMMAND ${VALGRIND} --leak-check=full
-                    --errors-for-leak-kinds=definite,indirect,possible
-                    --error-exitcode=1 $<TARGET_FILE:test_playback_device>
-        )
-        set_tests_properties(test_playback_device_memcheck PROPERTIES
-            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-        )
-        add_test(
-            NAME test_esp_simulated_memcheck
-            COMMAND ${VALGRIND} --leak-check=full
-                    --errors-for-leak-kinds=definite,indirect,possible
-                    --error-exitcode=1 $<TARGET_FILE:test_esp_simulated>
-        )
-        set_tests_properties(test_esp_simulated_memcheck PROPERTIES
-            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-        )
-        add_test(
-            NAME test_sim_controller_memcheck
-            COMMAND ${VALGRIND} --leak-check=full
-                    --errors-for-leak-kinds=definite,indirect,possible
-                    --error-exitcode=1 $<TARGET_FILE:test_sim_controller>
-        )
-        set_tests_properties(test_sim_controller_memcheck PROPERTIES
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         )
     endif()

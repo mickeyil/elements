@@ -4,32 +4,23 @@
 
 namespace controller_link {
 
-namespace {
-
-// Mirror PosixTcpTransport's connect timeout so both impls answer
-// in the same window.
-constexpr uint32_t CONNECT_TIMEOUT_MS = 500;
-
-}  // namespace
-
 EspTcpTransport::~EspTcpTransport()
 {
     disconnect();
 }
 
-bool EspTcpTransport::connect(uint32_t controller_ipv4_be,
-                              uint16_t controller_port)
+bool EspTcpTransport::connect(uint32_t dst_ip, uint16_t dst_port)
 {
     if (_connected) return true;
 
-    // controller_ipv4_be is network byte order: byte 0 is the first
-    // dotted octet, byte 3 the last. Use IPAddress's 4-arg ctor; the
-    // uint32_t one has varying byte-order interpretation across cores.
+    // dst_ip is network byte order: byte 0 is the first dotted octet,
+    // byte 3 the last. Use IPAddress's 4-arg ctor; the uint32_t one
+    // has varying byte-order interpretation across cores.
     uint8_t o[4];
-    std::memcpy(o, &controller_ipv4_be, 4);
+    std::memcpy(o, &dst_ip, 4);
     IPAddress ip(o[0], o[1], o[2], o[3]);
 
-    if (_client.connect(ip, controller_port, CONNECT_TIMEOUT_MS) != 1) {
+    if (_client.connect(ip, dst_port, TIMEOUT_MS) != 1) {
         // Defensive: own the cleanup rather than trust WiFiClient's
         // failure path.
         _client.stop();
