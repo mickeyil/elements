@@ -56,18 +56,19 @@ Instead:
   tick where the network drops it transitions to `NetworkDown` and
   tears down TCP and discovery. On the tick where the network comes
   back it starts a fresh discovery cycle.
-- `ClockSyncClient::poll()` reads `link.is_ready()` internally. On
-  the tick where the link drops it resets its filter window, drops
-  any outstanding round, and releases its UDP socket. It does **not**
-  clear `SyncedClock`: the offset rides its lease until expiry, on
-  the principle that the lease is the policy for "trust this offset
-  for N seconds without renewal" and a link drop doesn't invalidate
-  the math. See `drafts/synced_clock.md` for the full discussion.
+- The App bridges link → sync with one explicit line:
+  `sync.set_controller(link.controller_ip_addr())`.
+  `controller_ip_addr()` returns 0 when the link is not ready, so the
+  setter goes idle on link-down and re-targets on link-up without any
+  conditional. `ClockSyncClient` does not depend on `ControllerLink`;
+  see `drafts/synced_clock.md` for what the sync side does on each
+  reset trigger.
 
 Within one tick the cascade completes: `network.poll()` flips
 `is_up()` false → `link.poll()` observes that and tears down →
-`sync.poll()` observes `is_ready()` false and resets its internals.
-No orchestration in a wrapper class, no conditional gating in the App.
+the App's `sync.set_controller(...)` line passes through 0 →
+`sync.poll()` is the no-op idle path. No orchestration in a wrapper
+class, no conditional gating in the App.
 
 ## How a device joins
 
@@ -134,11 +135,13 @@ True iff the TCP socket is up and `DEVICE_HELLO` has been written. The
 App's "controlled vs background" branch is `if (link.is_ready())`.
 
 `controller_ip_addr()` returns the controller's IPv4 address in network
-byte order, valid only when `is_ready()`. `ClockSyncClient` reads this
-each tick to know where to ping. The TCP port the link uses internally
-isn't exposed (the link is the only thing that needs it); the sync port
-isn't exposed because it's a project-wide constant `ClockSyncClient`
-already knows from configuration.
+byte order, or 0 when `!is_ready()`. The App pipes this directly into
+`sync.set_controller(...)` each tick: a non-zero value targets the
+sync client at the active controller; the 0 sentinel takes it idle.
+The TCP port the link uses internally isn't exposed (the link is the
+only thing that needs it); the sync port isn't exposed because it's a
+project-wide constant `ClockSyncClient` already knows from
+configuration.
 
 A `LinkState` enum exists internally (`NetworkDown / Discovering /
 Connecting / Ready`) and drives `poll()`'s dispatch, but is not on the
@@ -333,8 +336,9 @@ stub.
   up; this module assumes there's a network and gates its work on
   `network.is_up()`.
 - **Clock sync** — `ClockSyncClient` is a sibling that ticks alongside
-  this module and reads `controller_ip_addr()` to know where to ping.
-  See `drafts/synced_clock.md`.
+  this module. The App pipes `controller_ip_addr()` into
+  `sync.set_controller(...)` each tick; the sync client is otherwise
+  standalone. See `drafts/synced_clock.md`.
 - **Sim frame UDP** — sim binary only. Real ESP firmware writes pixels
   to FastLED, not the network. The sim sends RGB previews to the
   controller's `sim_frame_port` (6042) for UI rendering. The frame
@@ -348,17 +352,15 @@ stub.
 These are pinned but not yet settled. Most don't block writing the
 link itself; they show up where flagged.
 
-- **Where sync math runs** — device-computes (2 UDP messages, simple
-  median filter on the device) vs controller-computes (4 UDP messages,
-  policy stays where it is in v2). See `drafts/synced_clock.md`. Does
-  not affect this module directly; ClockSyncClient owns the choice.
 - **Reboot signal path out of `poll()`** — either `ControllerLink::poll()`
   returns a small result struct, or the App reads a getter after each
   tick. Same content either way; pick whichever reads better in the
   App's loop.
-- **Whether `ClockSyncClient` takes `ControllerLink&` directly** — or
-  just a getter for "is the controller IP available right now."
-  Style choice; `ControllerLink&` is what's drafted.
+- **`ClockSyncClient` is standalone.** It takes neither
+  `ControllerLink&` nor any link-readiness getter. The App bridges
+  the two with `sync.set_controller(link.controller_ip_addr())` each
+  tick; remote clock epoch identity travels in the PONG payload as a
+  `controller_boot_token` field. See `drafts/synced_clock.md`.
 - **Whether to expose `state()` and `LinkState` publicly** — deferred
   until diagnostics need it. Easy to add when something starts logging
   link state transitions.

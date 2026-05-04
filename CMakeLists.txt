@@ -31,6 +31,7 @@ add_library(elements_core STATIC
     src/animations/paint.cpp
     src/animations/shift.cpp
     src/playback.cpp
+    src/clock_sync_client.cpp
 )
 target_include_directories(elements_core PUBLIC src)
 
@@ -192,6 +193,18 @@ if(BUILD_TESTS)
     target_include_directories(test_synced_clock PRIVATE src test)
     target_link_libraries(test_synced_clock Catch2::Catch2WithMain)
 
+    # test_clock_sync_client follows the same standalone pattern: it
+    # uses the test platform_clock fake (so SyncedClock advances under
+    # test control) and a fake UdpTransport defined in the test TU. No
+    # link to elements_core (which links platform_clock_host).
+    add_executable(test_clock_sync_client
+        test/test_clock_sync_client.cpp
+        test/platform_clock_test.cpp
+        src/clock_sync_client.cpp
+    )
+    target_include_directories(test_clock_sync_client PRIVATE src test)
+    target_link_libraries(test_clock_sync_client Catch2::Catch2WithMain)
+
     add_executable(test_compositor
         test/test_compositor.cpp
         src/compositor.cpp
@@ -311,6 +324,8 @@ if(BUILD_TESTS)
     add_test(NAME test_program COMMAND test_program
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_synced_clock COMMAND test_synced_clock
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    add_test(NAME test_clock_sync_client COMMAND test_clock_sync_client
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_udp_transport COMMAND test_udp_transport
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
@@ -479,6 +494,15 @@ if(BUILD_TESTS)
                     --error-exitcode=1 $<TARGET_FILE:test_synced_clock>
         )
         set_tests_properties(test_synced_clock_memcheck PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        )
+        add_test(
+            NAME test_clock_sync_client_memcheck
+            COMMAND ${VALGRIND} --leak-check=full
+                    --errors-for-leak-kinds=definite,indirect,possible
+                    --error-exitcode=1 $<TARGET_FILE:test_clock_sync_client>
+        )
+        set_tests_properties(test_clock_sync_client_memcheck PROPERTIES
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         )
         add_test(

@@ -15,34 +15,48 @@ answers `is_synced()` / `now_remote_us()`. What's new is the feeder:
 
 `ClockSyncClient` is the third sibling alongside `NetworkInterface` and
 `ControllerLink` (see `drafts/controller_link.md`). The App ticks all
-three unconditionally in dependency order each loop:
+three unconditionally in dependency order each loop, and feeds the
+sync target across one explicit line:
 
 ```
 network.poll();
 link.poll();
+sync.set_controller(link.controller_ip_addr());  // 0 when !is_ready
 sync.poll();
 ```
 
-There's no `if (network.is_up())` guard. The polling contract (see
-`controller_link.md` § "The polling contract") is that each module
-self-gates and handles prerequisite loss. For the sync client that
-means:
+`ClockSyncClient` does not depend on `ControllerLink`. Its scope is
+exactly clock estimation against a configured peer. Authority — who is
+allowed to be the controller, what TCP commands have been accepted —
+lives entirely in `ControllerLink`. The bridging line above is the
+only place those concerns meet, and it stays in the App.
 
-- `sync.poll()` reads `link.is_ready()` and `link.controller_ip_addr()`
-  internally to decide whether to ping and where to ping.
-- On the tick where `link.is_ready()` goes from true to false, the
-  client resets its filter window, drops any outstanding round, and
-  closes its UDP socket so a fresh post-reconnect measurement starts
-  from clean state. `SyncedClock` is **not** cleared on link-down:
-  the lease is the policy for "is this offset still trustworthy",
-  and a link drop doesn't invalidate the underlying clock math. The
-  offset rides its lease until it ages out — or, if the link comes
-  back inside the lease window, until reconnect produces a fresh
-  apply that overwrites it.
+`controller_ip_addr()` returns 0 when the link is not ready, so the
+single-line bridge collapses both branches: setter is idempotent on
+unchanged values, and a 0 sentinel goes idle.
 
-The client owns these internal resets because it's the producer that
-just noticed its writes have stopped landing — the App shouldn't have
-to coordinate that.
+Reset triggers are all local to the client:
+
+- **target IP changes** (via `set_controller`): reset filter, drop
+  outstanding round, clear the remembered controller boot token,
+  restart the burst if the new target is non-zero. `SyncedClock` is
+  **not** cleared: the lease is the policy for "is this offset still
+  trustworthy", and a transient drop doesn't invalidate the math.
+- **`controller_boot_token` in `PONG` changes**: remote clock epoch
+  jumped (controller rebooted on the same hardware). Clear
+  `SyncedClock`, reset filter, drop outstanding round, discard the
+  triggering PONG, restart the burst.
+- **local `DeviceIdentity.boot_token` changes**: in-process simulated
+  reboot. Local monotonic timeline reset; the existing lease anchored
+  against the old timeline is meaningless. Clear `SyncedClock`, reset
+  filter, drop the round; if a target is set, restart the burst. The
+  check runs before the no-target early-return in `poll()` so a
+  reboot-while-idle still invalidates the old lease.
+
+The client owns these resets because the signals that trigger them
+(IP setter, PONG token field, identity field change) are observable
+from inside `poll()`; no App-side coordination is required beyond the
+one bridging line.
 
 ## Why the direction flipped
 
@@ -73,89 +87,55 @@ divergence to maintain.
 
 ## Wire flow
 
-The wire flow depends on the open device-vs-controller-computes
-decision (next section). Both options share the first two messages:
-
 ```
-device → controller   PING   uid + boot_token + seq + t1
-controller → device   PONG   echoes seq + t1, adds t2 + t3
+device → controller   PING   uid + device_boot_token + seq + t1
+controller → device   PONG   controller_boot_token + seq + t1 + t2 + t3
 ```
 
-The device can compute offset and RTT from `(t1, t2, t3, t4)` where
-`t4` is its receive time. From there, the two options diverge in
-whether the device or the controller does the smoothing and lease
-issuance.
+The device runs the standard NTP four-timestamp formula on `(t1, t2,
+t3, t4)` where `t4` is its receive time. Smoothing and lease issuance
+happen entirely on the device (see "Filter strategy" below).
 
 Each field on the wire has one job:
 
-| Field            | Whose job                                                                             |
-|------------------|---------------------------------------------------------------------------------------|
-| `uid` (PING)     | Controller demux key; the controller talks to many devices and `(src_ip, src_port)` isn't a stable per-device identity (sim sharing 127.0.0.1; DHCP IP churn; ephemeral port changes on rebind). |
-| `boot_token` (PING) | Controller admission check: "is this packet from the currently accepted boot/session for this UID?" Mismatch leads to **discard only**, never to mutating attachment state (UDP is unauthenticated; letting it tear down TCP sessions would be a DoS primitive). |
-| `seq + t1` (both) | Device-side round matching. Echoed in PONG so the device can pair the reply with the outstanding round. |
-| (PONG omits UID/boot_token) | The device only listens to one peer, validated by `src_ip == link.controller_ip_addr()`. Combined with `(seq, t1)`, that's enough; echoing back identity the device already knows would just spend 20 bytes for nothing. |
+| Field                              | Whose job                                                                         |
+|------------------------------------|-----------------------------------------------------------------------------------|
+| `uid` (PING)                       | Controller demux key; `(src_ip, src_port)` isn't a stable per-device identity (sim sharing 127.0.0.1; DHCP IP churn; ephemeral port changes on rebind). |
+| `device_boot_token` (PING)         | Controller admission check: "is this packet from the currently accepted boot/session for this UID?" Mismatch leads to discard only, never to mutating attachment state. |
+| `controller_boot_token` (PONG)     | Device-side remote-epoch identity. First matched PONG seeds the value; subsequent change means the controller rebooted on the same hardware (same IP, fresh monotonic clock). Triggers a clean reset. |
+| `seq + t1` (both)                  | Device-side round matching. Echoed in PONG so the device can pair the reply with the outstanding round. |
 
-Note on cross-boot stale PONGs on the device side: ESP's monotonic
-clock resets on reboot, so a numerically-identical `t1` between boots
-is theoretically possible. In practice the previous-boot UDP socket
-is gone before the new one binds, and the new ephemeral port usually
-differs, so a stale PONG would have to: reach the new socket, carry a
-matching `seq`, and carry the same `t1_us`. The conjunction is
-extremely improbable. If we ever wanted formal cleanliness here, the
-fix is to echo `boot_token` in PONG too; not worth doing now.
+The PONG carries `controller_boot_token` rather than echoing UID or
+the device boot token: the device only listens to one peer (validated
+by `src_ip == _target_ip`), so its own identity doesn't need to come
+back, but the *remote* identity must, so the device can detect a
+controller reboot before the lease drifts.
 
 One round per ~15 seconds during normal operation, with a faster
-burst right after the link becomes Ready so the lease is established
+burst right after a target is configured so the lease is established
 before the first synced program is loaded.
 
-## Open: device-computes vs controller-computes
+## Decided: device-computes
 
-This is the live decision. Both work; the trade is wire complexity
-against device-side code complexity and operator visibility.
+The device runs the NTP four-timestamp formula on its own samples,
+keeps a small ring buffer, discards outliers by RTT, takes the
+median, and calls `SyncedClock::apply_sync_offset` with a self-issued
+lease window. Filter is ~40 lines of platform-agnostic C++.
 
-**Device computes (2 UDP messages per round)**
+Why this shape over controller-computes:
 
-The device runs the standard NTP four-timestamp formula on its own
-samples, keeps a small ring buffer (last N), discards outliers by
-RTT, takes the median, and calls `SyncedClock::apply_sync_offset` with
-a self-issued lease window. Filter is ~40 lines of platform-agnostic
-C++.
-
-- Half the wire traffic per round — and a dropped UDP packet kills
-  one round, not the report leg of every round.
-- The math lives where the timestamps originate; no need to ship them
-  back to the controller and wait.
-- Lease validity is a device-side constant (e.g., 55 s, same as the
-  v2 `SYNC_LEASE_MS`).
+- Half the wire traffic per round; a dropped UDP packet kills one
+  round, not the report leg of every round.
+- The math lives where the timestamps originate; no round trip back
+  to the controller for the answer.
+- Lease validity is a device-side constant (55 s, matching v2's
+  `SYNC_LEASE_MS`).
 - Cost: the controller no longer sees per-device offset/RTT
-  telemetry. If the operator dashboard wants that, the device has to
-  push its sync status back over TCP — either folded into
-  `QueryDeviceStatus` or as its own opcode.
+  telemetry. If the operator dashboard wants that, the device pushes
+  sync status back over TCP, folded into `QueryDeviceStatus` rather
+  than as its own opcode.
 
-**Controller computes (4 UDP messages per round)**
-
-The device sends PING, receives PONG with `(t2, t3)`, then sends a
-REPORT with its `t4`, and the controller replies with a LEASE
-containing `(offset_us, valid_for_ms)` after smoothing. The device
-just calls `apply_sync_offset` with whatever the controller said.
-
-- Centralized policy: the controller already has
-  `_CORRECTION_DEADBAND_US`, sign-flip hysteresis, and the per-device
-  state machine in `controller/elemctl/clock_sync.py` from v2; that
-  code mostly survives.
-- Per-device telemetry stays on the controller for free.
-- Cost: 4 messages per round, larger blast radius from a single
-  packet loss, more wire format to specify, and an opcode-shaped
-  thing on UDP.
-
-**Lean.** Device-computes is the cleaner shape: the math is small,
-data flows in one direction, and the controller stops being an
-oracle for something the device can compute itself. The deciding
-factor is whether the operator will actually look at per-device sync
-telemetry — if yes, the small "device → controller sync status" push
-is worth it; if no, device-computes wins outright.
-
-## Filter strategy (device-computes path)
+## Filter strategy
 
 The device runs the standard NTP four-timestamp formula on each
 PING/PONG round and feeds the resulting `(offset, RTT)` pair into a
@@ -201,57 +181,79 @@ Tuning (`WINDOW_N`, `BEST_K_BY_RTT`, `MIN_SAMPLES_TO_APPLY`,
 
 ## Ping schedule
 
-- **Burst at link-up.** When `link.is_ready()` first flips true, the
-  client sends a short series of pings ~500 ms apart to fill the
-  filter window quickly. Without the burst, the first apply could be
-  30–45 s after the link comes up.
-- **Normal interval.** After the burst, one round every ~15 s.
-  Renews the lease (~55 s) with comfortable headroom for one missed
-  renewal.
+- **Burst on target acquisition.** When `set_controller` receives a
+  non-zero IP that differs from the current target, the client enters
+  burst mode: cadence drops to 500 ms. Burst exits on the first
+  applied lease, or when the burst deadline (10 s) elapses, whichever
+  comes first. Without the burst, the first apply could be 30 s after
+  the link came up.
+- **Normal interval.** Outside burst, one round every ~15 s. Renews
+  the lease (~55 s) with comfortable headroom for one missed renewal.
 - **Schedule jitter at scale.** With more than ~20 devices on the
   same LAN, add a small random offset (e.g., ±2 s) to ping times so
   devices don't end up sending at the same instants and producing
-  periodic contention spikes on the controller's Wi-Fi.
+  periodic contention spikes on the controller's Wi-Fi. Open item;
+  not implemented in the first cut.
 
 ## Boot/reset behavior
 
-- The UDP socket is bound lazily inside `poll()` the first time
-  `link.is_ready()` is true, not in the constructor. A bind attempt
-  during boot can fail when the network isn't up yet; binding lazily
-  means a failure just delays the first ping to the next tick rather
-  than stranding the client. A socket error during `recv` clears the
-  bound state and the next tick re-binds.
+The reset triggers and what each one invalidates:
+
+| Trigger                                            | Filter | Outstanding round | UDP socket | `_last_controller_boot_token` | `SyncedClock`               |
+|----------------------------------------------------|--------|-------------------|------------|-------------------------------|-----------------------------|
+| `set_controller(0)` (target cleared)               | reset  | dropped           | closed     | rides with lease              | left alone (lease rides)    |
+| `set_controller(new_ip)` (target changed)          | reset  | dropped           | closed     | rides with lease              | left alone (lease rides)    |
+| Remote `controller_boot_token` change in PONG      | reset  | dropped           | left bound | updated to new value          | **cleared**                 |
+| Local `_identity.boot_token` change (sim reboot)   | reset  | dropped           | left bound | left alone                    | **cleared**                 |
+| `recv` / `send` socket error                       | left   | left              | closed     | left alone                    | left alone                  |
+
+The token rides through `set_controller(0)` and target IP changes for
+the same reason `SyncedClock`'s lease does: the two encode a single
+fact ("this is the offset, measured against this remote epoch"), and
+splitting them lets a same-IP-different-epoch reconnect within the
+lease window silently re-seed against a new controller's clock
+without ever detecting the change.
+
+Notes:
+
+- The UDP socket binds lazily inside `poll()` on the first tick a
+  target is set; a bind failure just delays the first ping to the
+  next tick rather than stranding the client.
+- The local-boot check runs **before** the no-target early-return in
+  `poll()` so a simulated reboot while idle still invalidates the now
+  meaningless lease.
+- On a remote epoch change the triggering PONG is **discarded** (not
+  processed as a sample): it's the witness of change, not a usable
+  measurement against the new epoch. The next ping fires immediately
+  and starts the new epoch's first round.
+- Validation order on incoming PONGs is round-match first, then
+  token check. A stale or duplicate PONG that doesn't match the
+  current `(seq, t1)` is discarded silently and cannot trigger a
+  spurious epoch reset, regardless of what token it carries. The
+  token check fires only on a PONG that round-matches our most
+  recent PING; that's the only PONG fresh enough to be evidence of
+  a real epoch change.
+- Closing the UDP socket to flush the kernel queue on token change
+  is unnecessary: stale queued PONGs from before the reboot all fail
+  the round-match check (their seq is older than `_last_sent_seq`).
 - On simulated reboot, `SimSystemPlatform` writes a fresh `boot_token`
-  into the shared `DeviceIdentity`. The next PING carries the new
-  token; the controller sees the bump and discards anything it had
-  cached for the old boot.
-- On link disconnect, `ClockSyncClient::poll()` resets its filter
-  window, drops any outstanding round, and releases the UDP socket.
-  It does **not** call `SyncedClock::clear_sync()`; the offset rides
-  its lease until expiry. The lease is the policy for "trust this
-  offset for N seconds without renewal," and a link drop doesn't
-  change the underlying clock math. If the link comes back inside
-  the lease window, reconnect's first apply overwrites the offset
-  cleanly; if it stays down past the lease, `is_synced()` flips
-  false on its own via expiry.
+  into the shared `DeviceIdentity`; the local-boot check picks that
+  up on the next tick.
 - The "what does playback do when sync is lost mid-program" policy
   belongs to Playback / firmware mode, not to `ClockSyncClient`. See
   `drafts/TODO.md` § Playback (loss-of-sync lifecycle).
 
 ## Open decisions
 
-- **Device-computes vs controller-computes** (above).
-- **If device-computes wins: a "device → controller sync status"
-  push** so the operator dashboard isn't dark. Probably folded into
-  `QueryDeviceStatus`'s ACK payload (extra fields), not a new opcode.
-- **Lease window length** under device-computes (55 s carries over
-  from v2; revisit only if the ping interval changes).
-- **Initial-burst spacing** right after `is_ready()` flips true.
-  Currently 500 ms × 5 pings; revisit if the window doesn't fill in
-  time on real Wi-Fi.
-- **Whether `ClockSyncClient` takes `ControllerLink&` directly** or
-  just the two getters it needs. Style choice; `ControllerLink&` is
-  what's drafted in `clock_sync_client.h`.
+- **Device → controller sync status push** so the operator dashboard
+  isn't dark. Probably folded into `QueryDeviceStatus`'s ACK payload
+  (extra fields), not a new opcode.
+- **Lease window length** (55 s carries over from v2; revisit only if
+  the ping interval changes).
+- **Initial-burst spacing.** Currently 500 ms with a 10 s deadline;
+  revisit if the window doesn't fill in time on real Wi-Fi.
+- **Schedule jitter at scale.** Add ±2 s random offset to steady-mode
+  pings if the fleet ever crosses ~20 devices per LAN.
 
 ## What is not changing
 
@@ -268,32 +270,29 @@ Tuning (`WINDOW_N`, `BEST_K_BY_RTT`, `MIN_SAMPLES_TO_APPLY`,
 
 ## Appendix A: sync UDP packets (port 6043)
 
-These are tentative — the exact bytes depend on the device-vs-controller
-decision. Listed here as the most likely shape under device-computes.
-
 **PING** (device → controller, ~every 15 s steady, faster initial
 burst):
 
-| u8 type=0x01 | char uid[16] | u32 boot_token | u32 seq | i64 t1_us |
+| `u8 type=0x01` | `char uid[16]` | `u32 device_boot_token` | `u32 seq` | `i64 t1_us` |
 
 Total: 33 bytes.
 
 **PONG** (controller → device, unicast reply):
 
-| u8 type=0x02 | u32 seq | i64 t1_us | i64 t2_us | i64 t3_us |
+| `u8 type=0x02` | `u32 controller_boot_token` | `u32 seq` | `i64 t1_us` | `i64 t2_us` | `i64 t3_us` |
 
-Total: 29 bytes. `t1_us` is echoed so the device doesn't need to
-remember per-seq state if it doesn't want to.
+Total: 33 bytes. `controller_boot_token` is generated by the
+controller process at startup; the device uses changes in this value
+to detect a controller reboot on the same hardware.
 
-Under controller-computes the same PING/PONG carry the round, plus:
+`controller_boot_token` **must be non-zero**. The value 0 is reserved
+on the device side as the unseeded sentinel (`_last_controller_boot_token`
+starts at 0 before the first matched PONG seeds it). Controller
+implementations that draw the token from a random source must
+regenerate any zero result, mirroring how the device handles its own
+`boot_token` (`src/firmware/device_identity.cpp:14`). The device
+silently treats a zero-token PONG as "still unseeded" and never
+detects a token change against it.
 
-**REPORT** (device → controller):
-
-| u8 type=0x03 | char uid[16] | u32 boot_token | u32 seq | i64 t4_us |
-
-**LEASE** (controller → device):
-
-| u8 type=0x04 | u32 seq | i64 offset_us | u32 valid_for_ms |
-
-Either family fits comfortably in one MTU. Final layout pinned when
-the open decision lands.
+`t1_us` is echoed so the device matches replies to the outstanding
+round without keeping per-seq state beyond a single in-flight round.

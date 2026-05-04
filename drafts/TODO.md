@@ -5,6 +5,86 @@ Claude to act without spelunking.
 
 ---
 
+## Rewrite `src/firmware/discovery_service.{h,cpp}` for v3
+
+**Today.** The v2 discovery service binds the device-side UDP port
+6040 and answers controller-initiated sync requests on the same
+socket (`handle_sync_request_` in `src/firmware/discovery_service.cpp`).
+The HELLO format is the v2 4-byte broadcast (`magic | tcp_port |
+uid_len | uid[]`); the controller replies with a v2 OFFER that the
+v2 controller-connection accept loop pairs with an inbound TCP
+connection.
+
+**Action.** Replace with the v3 discovery side described in
+`drafts/controller_link.md` § "How a device joins" and Appendix C:
+
+- HELLO is now `u16 magic | char uid[16] | u32 boot_token | u8 protocol_version`
+  (23 bytes, broadcast every ~500 ms while no OFFER outstanding).
+- OFFER carries `(controller_ipv4_be, tcp_port, nonce, ttl_ms)`. The
+  device stashes a `ControllerOffer` snapshot and hands it to the
+  controller link's TCP-dial path.
+- Sync no longer rides this socket; sync UDP lives on its own port
+  (6043) inside `src/clock_sync_client.cpp`. Drop the
+  `handle_sync_request_` path entirely.
+- Discovery is now an internal piece of `ControllerLink` per the
+  draft, not its own top-level service. Decide during impl whether
+  to fold the file into the link or keep it as a private collaborator.
+- The new `DeviceIdentity` has `uid` as a NUL-terminated C string in
+  `src/device_identity.h`; existing `strlen(_identity->uid)` calls
+  still work but the wire format wants the fixed 16-byte slot
+  (`min(strlen, UID_WIRE_SIZE)` bytes copied, rest zero-padded).
+
+This work is currently broken on the v2 firmware build because the
+v3 `DeviceIdentity` struct shape and `wire_constants.h` location
+moved out from under it (intentional; firmware app is deprecated).
+
+---
+
+## Rewrite `src/firmware/controller_connection.{h,cpp}` for v3
+
+**Today.** The 660-line v2 monolith binds a TCP server, accepts an
+inbound controller connection, runs a handler switch on v2 opcodes
+(`kCmdAttach = 0x06`, `kSyncResult = 0x03`, etc.), and tracks an
+`attached` flag.
+
+**Action.** Replace with the v3 device-initiated dial described in
+`drafts/controller_link.md`:
+
+- The device dials outbound TCP using the IP/port from the latest
+  OFFER. No `WiFiServer` on the device.
+- First message is `DEVICE_HELLO` (carries UID, `boot_token`,
+  `offer_nonce`, `protocol_version`). See `drafts/device_hello.h`.
+- Above the connected socket, run `CommandParser` from
+  `drafts/command_parser.h` against the five handlers (Session,
+  Playback, Storage, Status, System).
+- Drop the v2 sync-result handler; sync is now a sibling on UDP.
+
+Currently broken on the v2 firmware build for the same struct/header
+movements as above.
+
+---
+
+## Rewrite `src/firmware/firmware_app.{h,cpp}` to wire v3 siblings
+
+**Today.** `FirmwareApp::run_once` ticks `WifiManager`,
+`DiscoveryService`, and `ControllerConnection` and centralizes the
+attached/detached mode logic.
+
+**Action.** Replace with the three-sibling polling contract:
+
+- `network.poll()` (Wi-Fi up/down)
+- `link.poll()` (discovery + dial + parser)
+- `sync.set_controller(link.controller_ip_addr())` then `sync.poll()`
+
+Mode logic keys off `link.is_ready()`. Handlers (Session, Playback,
+Storage, Status, System) are constructed once at boot and reused
+across reconnects; `CommandParser` is owned by the link.
+
+Currently broken on the v2 firmware build for the same reasons as
+the two items above.
+
+---
+
 ## Move JUMP `t_program` finiteness check to the wire layer
 
 **Today.** `Playback::handle_jump(float t_program)` rejects non-finite
