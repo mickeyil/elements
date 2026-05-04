@@ -8,8 +8,7 @@ namespace {
 uint32_t make_sim_boot_token_()
 {
     std::random_device random;
-    uint32_t token =
-        (static_cast<uint32_t>(random()) << 16) ^ static_cast<uint32_t>(random());
+    uint32_t token = static_cast<uint32_t>(random());
     if (token == 0) {
         token = 1;
     }
