@@ -76,7 +76,7 @@ int main(int argc, char** argv)
     device.handle_start(0);
 
     for (int64_t i = 1; ; i++) {
-        device.set_now((i * 1000000LL) / fps);
+        device.set_now((i * 1'000'000LL) / fps);
         if (!device.tick_once())
             break;
     }

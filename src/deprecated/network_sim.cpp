@@ -464,7 +464,7 @@ static int64_t now_us()
 {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (int64_t)ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
+    return (int64_t)ts.tv_sec * 1'000'000 + ts.tv_nsec / 1000;
 }
 
 static void send_hello(int udp_fd, const sockaddr_in& dest,
@@ -580,7 +580,7 @@ int main(int argc, char** argv)
                args.discovery_host.c_str(), args.discovery_port, args.device_uid.c_str());
 
     static constexpr int64_t HELLO_INTERVAL_US = 500000; // 500ms
-    static constexpr int64_t HELLO_BACKOFF_US = 5000000; // 5s
+    static constexpr int64_t HELLO_BACKOFF_US = 5'000'000; // 5s
     int64_t last_hello_us = 0;
     int64_t hello_backoff_until_us = 0;
 

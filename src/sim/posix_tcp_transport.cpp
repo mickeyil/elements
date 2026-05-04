@@ -67,8 +67,8 @@ bool PosixTcpTransport::connect(uint32_t dst_ip, uint16_t dst_port)
                 std::chrono::duration_cast<std::chrono::microseconds>(
                     deadline - now);
             timeval tv{};
-            tv.tv_sec  = left.count() / 1000000;
-            tv.tv_usec = left.count() % 1000000;
+            tv.tv_sec  = left.count() / 1'000'000;
+            tv.tv_usec = left.count() % 1'000'000;
             fd_set wfds;
             FD_ZERO(&wfds);
             FD_SET(fd, &wfds);
@@ -151,8 +151,8 @@ bool PosixTcpTransport::write(const uint8_t* src, size_t len)
                 std::chrono::duration_cast<std::chrono::microseconds>(
                     deadline - now);
             timeval tv{};
-            tv.tv_sec  = left.count() / 1000000;
-            tv.tv_usec = left.count() % 1000000;
+            tv.tv_sec  = left.count() / 1'000'000;
+            tv.tv_usec = left.count() % 1'000'000;
             fd_set wfds;
             FD_ZERO(&wfds);
             FD_SET(_fd, &wfds);

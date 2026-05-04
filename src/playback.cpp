@@ -6,7 +6,7 @@
 
 namespace {
 
-constexpr float US_PER_SECOND = 1000000.0f;
+constexpr float US_PER_SECOND = 1'000'000.0f;
 
 int64_t t_program_to_us(float t_program)
 {
