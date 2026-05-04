@@ -74,13 +74,11 @@ void ClockSyncClient::set_controller(uint32_t ip_addr)
 
     reset_filter_();
     _udp.close();
-    // Don't clear _last_controller_boot_token: SyncedClock's lease
-    // rides across target changes, so a same-IP reconnect after a
-    // controller reboot still needs the old token to detect that
-    // the controller has rebooted.
+    // Keep _last_controller_boot_token: needed to detect a reboot
+    // during disconnect.
 
     if (ip_addr == 0) {
-        // Going idle. Drop schedule; SyncedClock keeps its lease.
+        // No controller: stop sending; keep the existing lease.
         _in_burst         = false;
         _next_ping_due_us = 0;
         return;
@@ -193,10 +191,9 @@ void ClockSyncClient::send_ping_()
 
 void ClockSyncClient::drain_responses_()
 {
-    // Buffer larger than PONG_WIRE_SIZE so an oversized datagram
-    // returns its real length and gets rejected by the size check
-    // below, rather than being silently truncated to 33 bytes.
-    uint8_t  buf[64];
+    // One byte larger than PONG_WIRE_SIZE so the size check below
+    // can reject oversized datagrams.
+    uint8_t  buf[PONG_WIRE_SIZE + 1];
     uint32_t src_ip   = 0;
     uint16_t src_port = 0;
 
@@ -229,10 +226,9 @@ void ClockSyncClient::drain_responses_()
         std::memcpy(&t2,               buf + PONG_OFF_T2,    8);
         std::memcpy(&t3,               buf + PONG_OFF_T3,    8);
 
-        // Match the round before checking the token. A stale or
-        // duplicate PONG must not be able to wipe SyncedClock just
-        // by carrying a different token; only a PONG matching our
-        // in-flight ping is trustworthy evidence of a reboot.
+        // Match the in-flight ping before checking the token,
+        // so a stale PONG carrying a different token can't
+        // wipe SyncedClock.
         if (!_ping_in_flight) continue;
         if (seq != _last_sent_seq) continue;
         if (t1 != _ping_t1_us)    continue;
