@@ -11,33 +11,31 @@
 
 namespace {
 
-// ---- Filter and timing tuning -------------------------------------------
-//
-// All knobs in one place. See drafts/synced_clock.md for the rationale.
-// The short version: tuned for typical Wi-Fi LAN with 5-30 ms RTT in
-// normal operation, occasional spikes, and the LED-sync visual
-// tolerance (~10 ms perceptible).
+// Filter and timing tuning. All knobs in one place; see
+// drafts/synced_clock.md for the rationale. Tuned for typical
+// Wi-Fi LAN (5-30 ms RTT, occasional spikes) against the LED-sync
+// ~10 ms perceptible threshold.
 
 constexpr size_t  WINDOW_N             = ClockSyncClient::WINDOW_N;
 constexpr size_t  BEST_K_BY_RTT        = 3;
 constexpr size_t  MIN_SAMPLES_TO_APPLY = BEST_K_BY_RTT;
 
-// RTTs above this are almost certainly Wi-Fi retransmits or controller
-// stalls, not signal. Carries over from the v2 controller filter.
-constexpr int64_t RTT_GATE_US     = 200 * 1000;            // 200 ms
+// RTTs above this are almost certainly Wi-Fi retransmits or
+// controller stalls, not signal.
+constexpr int64_t RTT_GATE_US        = 200'000;     // 200 ms
 
-// Steady cadence: one ping per 15 s renews the LEASE_US (55 s) lease
-// with comfortable headroom for one missed renewal.
-constexpr int64_t STEADY_INTERVAL_US = 15LL * 1000 * 1000; // 15 s
+// Steady interval: one ping per 15 s renews the 55 s lease with
+// comfortable headroom for one missed renewal.
+constexpr int64_t STEADY_INTERVAL_US = 15'000'000;  // 15 s
 
-// Burst cadence: 500 ms between pings while the filter window fills.
-// Burst exits on the first applied lease or on the deadline below.
-constexpr int64_t BURST_INTERVAL_US  = 500 * 1000;         // 500 ms
-constexpr int64_t BURST_DURATION_US  = 10LL * 1000 * 1000; // 10 s
+// Burst interval: 500 ms between pings while the filter window
+// fills. Burst exits on the first applied lease or on the
+// deadline below.
+constexpr int64_t BURST_INTERVAL_US  = 500'000;     // 500 ms
+constexpr int64_t BURST_DURATION_US  = 10'000'000;  // 10 s
 
-// Lease handed to SyncedClock with each apply. Carries from v2's
-// SYNC_LEASE_MS (55 s).
-constexpr int64_t LEASE_US           = 55LL * 1000 * 1000; // 55 s
+// Lease handed to SyncedClock with each apply.
+constexpr int64_t LEASE_US           = 55'000'000;  // 55 s
 
 // Sync UDP port. See drafts/controller_link.md appendix E.
 constexpr uint16_t SYNC_PORT = 6043;
@@ -46,15 +44,11 @@ constexpr uint16_t SYNC_PORT = 6043;
 constexpr uint8_t PKT_PING = 0x01;
 constexpr uint8_t PKT_PONG = 0x02;
 
-// Wire layouts. See drafts/synced_clock.md appendix A.
-//   PING : type | uid[16] | device_boot_token | seq | t1
-//          1   + 16       + 4                 + 4   + 8 = 33 bytes
-//   PONG : type | controller_boot_token | seq | t1 | t2 | t3
-//          1   + 4                      + 4   + 8  + 8  + 8  = 33 bytes
+// Wire layouts: see drafts/synced_clock.md appendix A.
 constexpr size_t PING_WIRE_SIZE = 33;
 constexpr size_t PONG_WIRE_SIZE = 33;
 
-// PONG field offsets (post type byte).
+// PONG field offsets (after the type byte).
 constexpr size_t PONG_OFF_TOKEN = 1;
 constexpr size_t PONG_OFF_SEQ   = 5;
 constexpr size_t PONG_OFF_T1    = 9;
@@ -63,38 +57,30 @@ constexpr size_t PONG_OFF_T3    = 25;
 
 }  // namespace
 
-// ------------------------------------------------------------------------
-
 ClockSyncClient::ClockSyncClient(UdpTransport& udp, SyncedClock& clock,
                                  const DeviceIdentity& identity)
     : _udp(udp), _clock(clock), _identity(identity)
 {
-    // Socket bind is lazy in poll(); a bind during construction would
-    // fight the network stack at boot when Wi-Fi may not yet be up.
+    // Bind is lazy: at boot the Wi-Fi stack may not be up yet.
 }
 
-void ClockSyncClient::set_controller(uint32_t ipv4_be)
+void ClockSyncClient::set_controller(uint32_t ip_addr)
 {
-    if (ipv4_be == _target_ip) {
-        // Idempotent: the App calls this every tick from
-        // link.controller_ip_addr(), which is stable while the link
-        // stays in the same state.
+    if (ip_addr == _target_ip) {
         return;
     }
 
-    _target_ip = ipv4_be;
+    _target_ip = ip_addr;
 
     reset_filter_();
     _udp.close();
-    // _last_controller_boot_token is intentionally NOT cleared here.
-    // SyncedClock's lease rides across target changes; the token that
-    // lease was measured against has to ride with it, otherwise a same
-    // IP reconnect after a controller reboot would silently re-seed
-    // and never detect the epoch change.
+    // Don't clear _last_controller_boot_token: SyncedClock's lease
+    // rides across target changes, so a same-IP reconnect after a
+    // controller reboot still needs the old token to detect that
+    // the controller has rebooted.
 
-    if (ipv4_be == 0) {
-        // Going idle. Drop schedule; SyncedClock keeps its lease so a
-        // transient drop does not invalidate the math.
+    if (ip_addr == 0) {
+        // Going idle. Drop schedule; SyncedClock keeps its lease.
         _in_burst         = false;
         _next_ping_due_us = 0;
         return;
@@ -109,8 +95,8 @@ void ClockSyncClient::poll()
         return;
     }
 
-    // Lazy bind. A failure here just delays the first ping by a tick;
-    // no special backoff path.
+    // Lazy bind. A failure just delays the first ping; retry
+    // next tick.
     if (!_udp.is_bound() && !_udp.bind(0)) {
         return;
     }
@@ -123,22 +109,20 @@ void ClockSyncClient::poll()
     }
 
     if (schedule_due_()) {
-        // The schedule is also the round budget: any round still
-        // outstanding when the next send time arrives is treated as
-        // lost (no PONG within one cadence), and the new ping
-        // replaces it. This is what gives burst-with-loss any chance
-        // of progressing, and what lets a transient recv error
-        // recover on the next tick.
-        _round_outstanding = false;
+        // If a previous ping is still in flight when the next send
+        // time arrives, treat it as lost (no PONG within one
+        // interval) and replace it. Lets bursts make progress
+        // under packet loss.
+        _ping_in_flight = false;
         send_ping_();
     }
 }
 
 void ClockSyncClient::reset_filter_()
 {
-    _samples_count     = 0;
-    _round_outstanding = false;
-    _round_t1_us       = 0;
+    _samples_count  = 0;
+    _ping_in_flight = false;
+    _ping_t1_us     = 0;
 }
 
 void ClockSyncClient::start_burst_()
@@ -146,15 +130,14 @@ void ClockSyncClient::start_burst_()
     const int64_t now    = now_us_();
     _in_burst            = true;
     _burst_deadline_us   = now + BURST_DURATION_US;
-    _next_ping_due_us    = now;  // fire immediately on the next poll()
+    _next_ping_due_us    = now;  // fire next poll()
 }
 
 void ClockSyncClient::on_remote_epoch_change_()
 {
-    // Controller rebooted on the same hardware: same IP, fresh
-    // monotonic. Mixing pre- and post-reboot samples produces a
-    // meaningless median, and the existing lease refers to the old
-    // remote timeline.
+    // Controller rebooted: fresh monotonic timeline. Mixing pre-
+    // and post-reboot samples gives a meaningless median, and the
+    // existing lease points at the old timeline.
     _clock.clear_sync();
     reset_filter_();
     start_burst_();
@@ -164,8 +147,8 @@ bool ClockSyncClient::schedule_due_()
 {
     const int64_t now = now_us_();
 
-    // Burst exit on deadline: caps the runaway-cadence window if no
-    // PONG ever lands. The other exit path (first lease applied) lives
+    // Burst exit on deadline: caps the burst window if no PONG
+    // ever lands. The other exit path (first applied lease) is
     // in apply_filter_().
     if (_in_burst && now >= _burst_deadline_us) {
         _in_burst = false;
@@ -182,9 +165,9 @@ void ClockSyncClient::send_ping_()
     uint8_t pkt[PING_WIRE_SIZE] = {};
     pkt[0] = PKT_PING;
 
-    // Copy up to UID_SIZE bytes of the C-string uid into the
-    // fixed-size wire slot. The buffer is zero-initialized, so any
-    // bytes past strlen are already null padding.
+    // Copy up to UID_SIZE bytes from uid into the wire slot. The
+    // packet was zero-initialized, so any bytes past the UID's
+    // length are already null padding.
     const size_t uid_len = std::min(std::strlen(_identity.uid),
                                     static_cast<size_t>(UID_SIZE));
     std::memcpy(pkt + 1, _identity.uid, uid_len);
@@ -195,26 +178,24 @@ void ClockSyncClient::send_ping_()
 
     if (!_udp.send(pkt, sizeof(pkt), _target_ip, SYNC_PORT)) {
         // Send failed: close so next tick rebinds. The schedule is
-        // left where it was; the next poll() will see _next_ping_due_us
-        // already past and try again. No state commit happened.
+        // unchanged, so the next poll() will retry immediately.
         _udp.close();
         return;
     }
 
-    _last_sent_seq     = seq;
-    _round_t1_us       = t1;
-    _round_outstanding = true;
+    _last_sent_seq    = seq;
+    _ping_t1_us       = t1;
+    _ping_in_flight   = true;
 
     const int64_t interval = _in_burst ? BURST_INTERVAL_US : STEADY_INTERVAL_US;
-    _next_ping_due_us      = t1 + interval;
+    _next_ping_due_us = t1 + interval;
 }
 
 void ClockSyncClient::drain_responses_()
 {
     // Buffer larger than PONG_WIRE_SIZE so an oversized datagram
-    // returns its actual length (some larger value) and gets rejected
-    // by the size check, instead of being truncated to exactly 33
-    // bytes and slipping through.
+    // returns its real length and gets rejected by the size check
+    // below, rather than being silently truncated to 33 bytes.
     uint8_t  buf[64];
     uint32_t src_ip   = 0;
     uint16_t src_port = 0;
@@ -248,38 +229,32 @@ void ClockSyncClient::drain_responses_()
         std::memcpy(&t2,               buf + PONG_OFF_T2,    8);
         std::memcpy(&t3,               buf + PONG_OFF_T3,    8);
 
-        // Round match BEFORE token check. A stale or duplicate PONG
-        // that doesn't match our outstanding round must not be able to
-        // wipe SyncedClock just by carrying a different token; only a
-        // PONG that round-matches our most recent PING is fresh enough
-        // to be trusted as evidence of an epoch change.
-        if (!_round_outstanding) continue;
+        // Match the round before checking the token. A stale or
+        // duplicate PONG must not be able to wipe SyncedClock just
+        // by carrying a different token; only a PONG matching our
+        // in-flight ping is trustworthy evidence of a reboot.
+        if (!_ping_in_flight) continue;
         if (seq != _last_sent_seq) continue;
-        if (t1 != _round_t1_us)    continue;
+        if (t1 != _ping_t1_us)    continue;
 
         // Round consumed regardless of what we do with the timestamps.
-        _round_outstanding = false;
+        _ping_in_flight = false;
 
-        // Token check on the matched round.
-        //
-        // _last_controller_boot_token == 0 is the unseeded sentinel;
-        // the protocol reserves 0 (controllers regenerate a non-zero
-        // token if rand happens to produce 0, mirroring how the device
-        // side handles its own boot_token).
+        // Token check on the matched round. Skip until we've seen
+        // a token at least once (0 is the unseeded sentinel).
         if (_last_controller_boot_token != 0 &&
             _last_controller_boot_token != controller_token) {
-            // Remote epoch changed between our send and this reply.
-            // The PONG's t2/t3 are from the new epoch's monotonic
-            // timeline, so we discard it as a sample (no
-            // process_round_) and let the burst restart yield a clean
-            // first measurement against the new epoch.
+            // Controller rebooted between our send and this reply.
+            // The PONG's t2/t3 belong to the new timeline, so we
+            // drop this sample; the restarted burst will produce
+            // a clean first measurement.
             _last_controller_boot_token = controller_token;
             on_remote_epoch_change_();
             continue;
         }
 
-        // Seed on first matched round; subsequent matched rounds
-        // reassign the same value (no-op).
+        // Seed on first matched round; same-token rounds re-assign
+        // the same value.
         _last_controller_boot_token = controller_token;
 
         process_round_(t1, t2, t3, t4);
@@ -288,9 +263,9 @@ void ClockSyncClient::drain_responses_()
 
 void ClockSyncClient::process_round_(int64_t t1, int64_t t2, int64_t t3, int64_t t4)
 {
-    // NTP four-timestamp formula. SyncedClock stores offset as
-    // local minus remote; rearrange to that sign so we do not negate
-    // at apply time.
+    // NTP four-timestamp formula. Sign convention: local minus
+    // remote, matching SyncedClock's storage so apply doesn't
+    // need to negate.
     const int64_t rtt    = (t4 - t1) - (t3 - t2);
     const int64_t offset = ((t1 - t2) + (t4 - t3)) / 2;
 
@@ -334,10 +309,10 @@ void ClockSyncClient::apply_filter_()
 
     _clock.apply_sync_offset(median_offset, LEASE_US);
 
-    // First applied lease exits the burst. Reschedule the next ping on
-    // the steady cadence; otherwise the previous send's burst-cadence
-    // _next_ping_due_us would produce one stale near-immediate send
-    // before steady kicks in.
+    // First applied lease exits the burst. Reschedule on the
+    // steady interval, otherwise the previous send's burst-interval
+    // due time would produce one stale near-immediate send before
+    // steady kicks in.
     if (_in_burst) {
         _in_burst         = false;
         _next_ping_due_us = now_us_() + STEADY_INTERVAL_US;
