@@ -15,7 +15,7 @@
 
 class FirmwareApp {
 public:
-    void begin();
+    void begin(DeviceIdentity identity);
     void run_once();
 
 private:

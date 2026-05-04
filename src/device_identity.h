@@ -38,7 +38,4 @@ struct DeviceIdentity {
     uint8_t  protocol_version  = PROTOCOL_VERSION;
 };
 
-// Platform-implemented factory. ESP impl reads the chip MAC and seeds
-// boot_token from esp_random(); sim impl reads CLI args. Each platform
-// links exactly one definition of this symbol.
-DeviceIdentity read_device_identity();
+// Platform-specific factories live beside platform entry points.

@@ -17,13 +17,13 @@ static constexpr char kProfileStripLengthKey[] = "prof_len";
 
 }  // namespace
 
-void FirmwareApp::begin()
+void FirmwareApp::begin(DeviceIdentity identity)
 {
     Serial.begin(115200);
     delay(200);
 
     esp_device_init_leds();
-    _identity = read_device_identity();
+    _identity = identity;
 
     log_line("[boot] elements esp32 runtime starting");
     log_line("[boot] build=%s %s", __DATE__, __TIME__);

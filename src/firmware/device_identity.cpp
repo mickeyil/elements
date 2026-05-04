@@ -1,4 +1,4 @@
-#include "device_identity.h"
+#include "esp_device_identity.h"
 
 #include <Esp.h>
 #include <esp_system.h>
@@ -28,7 +28,7 @@ void make_device_uid_(char* out, size_t out_size)
     snprintf(
         out,
         out_size,
-        "esp32-%02x%02x%02x%02x%02x%02x",
+        "esp-%02x%02x%02x%02x%02x%02x",
         mac0,
         mac1,
         mac2,
@@ -40,7 +40,7 @@ void make_device_uid_(char* out, size_t out_size)
 
 }  // namespace
 
-DeviceIdentity read_device_identity()
+DeviceIdentity make_esp32_device_identity()
 {
     DeviceIdentity identity;
     make_device_uid_(identity.uid, UID_CAPACITY);

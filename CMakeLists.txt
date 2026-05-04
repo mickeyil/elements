@@ -259,6 +259,13 @@ if(BUILD_TESTS)
     add_executable(test_background_crc test/test_background_crc.cpp)
     target_link_libraries(test_background_crc elements_core Catch2::Catch2WithMain)
 
+    add_executable(test_sim_device_identity
+        test/test_sim_device_identity.cpp
+        src/sim_device_identity.cpp
+    )
+    target_include_directories(test_sim_device_identity PRIVATE src)
+    target_link_libraries(test_sim_device_identity Catch2::Catch2WithMain)
+
     # Auto-generate test fixtures if missing
     find_program(PYTHON3 python3)
     if(PYTHON3)
@@ -338,6 +345,8 @@ if(BUILD_TESTS)
     add_test(NAME test_playback COMMAND test_playback
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_background_crc COMMAND test_background_crc
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    add_test(NAME test_sim_device_identity COMMAND test_sim_device_identity
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
     # Valgrind memcheck (optional)

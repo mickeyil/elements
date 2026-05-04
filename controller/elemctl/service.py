@@ -56,7 +56,7 @@ _PROBE_INTERVAL_NS = 1_000_000_000  # 1 second
 _LIVENESS_TIMEOUT_NS = 6_000_000_000  # 6 seconds
 _DEVICE_UID_RE = re.compile(r'^[A-Za-z0-9._:-]+$')
 _STRIP_ID_RE = re.compile(r'^[A-Za-z0-9_-]+$')
-_ESP32_CANONICAL_UID_RE = re.compile(r'^esp32-([0-9a-f]{12})$')
+_ESP32_CANONICAL_UID_RE = re.compile(r'^esp-([0-9a-f]{12})$')
 _ESP32_FULL_HEX_RE = re.compile(r'^[0-9a-f]{12}$')
 _ESP32_SHORT_HEX_RE = re.compile(r'^[0-9a-f]{6}$')
 _SESSION_ROLE_AUTO = object()
@@ -1110,7 +1110,7 @@ class ControllerService:
             if parsed is None:
                 return device_uid.lower()
             if parsed['kind'] == 'full':
-                return f"esp32-{parsed['full_hex']}"
+                return f"esp-{parsed['full_hex']}"
             return parsed['suffix']
         return device_uid
 
@@ -1844,7 +1844,7 @@ class ControllerService:
         if device_type == 'esp32':
             if ControllerService._parse_esp32_uid(device_uid) is None:
                 raise ValueError(
-                    "esp32 device uid must be 6 hex, 12 hex, or esp32-<12 hex>"
+                    "esp32 device uid must be 6 hex, 12 hex, or esp-<12 hex>"
                 )
 
     @staticmethod

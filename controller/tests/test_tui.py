@@ -184,7 +184,7 @@ class TestFormatEvent:
         msg = {
             'type': 'event', 'event': 'device_status',
             'source': 'clock',
-            'device_uid': 'esp32-246f28b5f190',
+            'device_uid': 'esp-246f28b5f190',
             'strip': 'ring8',
             'length': 8,
             'connected': True,

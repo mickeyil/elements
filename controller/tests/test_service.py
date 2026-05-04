@@ -2063,7 +2063,7 @@ class TestRebootDevice:
             devices=[
                 DeviceConfig(
                     device_id=1,
-                    device_uid='esp32-246f28b5f190',
+                    device_uid='esp-246f28b5f190',
                     device_type='esp32',
                     host='127.0.0.1',
                     tcp_port=9001,
@@ -2082,11 +2082,11 @@ class TestRebootDevice:
         reply = svc.handle_cmd({
             'id': 1,
             'cmd': 'reboot_device',
-            'device_uid': 'esp32-246f28b5f190',
+            'device_uid': 'esp-246f28b5f190',
         })
 
         assert reply['ok'] is True
-        assert reply['result']['message'] == 'reboot requested for esp32-246f28b5f190'
+        assert reply['result']['message'] == 'reboot requested for esp-246f28b5f190'
         assert fake.reboot_calls == 1
         assert fake.is_connected is False
         assert svc._disconnect_reasons[1] == 'reboot requested'
@@ -2124,7 +2124,7 @@ class TestRebootDevice:
             devices=[
                 DeviceConfig(
                     device_id=1,
-                    device_uid='esp32-246f28b5f190',
+                    device_uid='esp-246f28b5f190',
                     device_type='esp32',
                     host='127.0.0.1',
                     tcp_port=9001,
@@ -2143,7 +2143,7 @@ class TestRebootDevice:
         reply = svc.handle_cmd({
             'id': 1,
             'cmd': 'reboot_device',
-            'device_uid': 'esp32-246f28b5f190',
+            'device_uid': 'esp-246f28b5f190',
         })
 
         assert reply['ok'] is False
@@ -2194,9 +2194,9 @@ class TestConfigMutations:
         })
 
         assert reply['ok'] is True
-        assert reply['result']['message'] == 'added device esp32-246f28b5f190'
+        assert reply['result']['message'] == 'added device esp-246f28b5f190'
         saved = load_config(str(path))
-        assert [dc.device_uid for dc in saved.devices] == ['sim-1', 'esp32-246f28b5f190']
+        assert [dc.device_uid for dc in saved.devices] == ['sim-1', 'esp-246f28b5f190']
 
     def test_add_device_rejects_esp32_short_uid_conflicting_with_full_uid(self, tmp_path):
         config = Config(
@@ -2205,7 +2205,7 @@ class TestConfigMutations:
             devices=[
                 DeviceConfig(
                     device_id=1,
-                    device_uid='esp32-246f28b5f190',
+                    device_uid='esp-246f28b5f190',
                     device_type='esp32',
                     host='',
                     tcp_port=0,
@@ -2239,7 +2239,7 @@ class TestConfigMutations:
             devices=[
                 DeviceConfig(
                     device_id=1,
-                    device_uid='esp32-246f28b5f190',
+                    device_uid='esp-246f28b5f190',
                     device_type='esp32',
                     host='',
                     tcp_port=0,
@@ -2264,7 +2264,7 @@ class TestConfigMutations:
         })
 
         assert reply['ok'] is False
-        assert reply['error'] == 'device uid already exists: esp32-246f28b5f190'
+        assert reply['error'] == 'device uid already exists: esp-246f28b5f190'
 
     def test_add_device_reuses_unchanged_devices_and_saves(self, tmp_path):
         config = _make_config(n_devices=2)
@@ -3000,7 +3000,7 @@ class TestPresenceEvents:
             devices=[
                 DeviceConfig(
                     device_id=1,
-                    device_uid='esp32-246f28b5f190',
+                    device_uid='esp-246f28b5f190',
                     device_type='esp32',
                     host='127.0.0.1',
                     tcp_port=9001,
@@ -4072,17 +4072,17 @@ class TestDiscoveryIntegration:
             discovery_factory=lambda port: fake_disc,
         )
 
-        fake_disc.inject('esp32-246f28b5f190', '10.0.0.5', 8001)
+        fake_disc.inject('esp-246f28b5f190', '10.0.0.5', 8001)
         svc.tick_once()
 
         assert len(created) == 2
         assert created[0].close_calls == 1
-        assert [dc.device_uid for dc in svc._device_configs] == ['esp32-246f28b5f190']
+        assert [dc.device_uid for dc in svc._device_configs] == ['esp-246f28b5f190']
         assert svc._devices[0]._host == '10.0.0.5'
         assert svc._devices[0]._tcp_port == 8001
 
         saved = load_config(str(path))
-        assert [dc.device_uid for dc in saved.devices] == ['esp32-246f28b5f190']
+        assert [dc.device_uid for dc in saved.devices] == ['esp-246f28b5f190']
 
     def test_discovery_promotes_provisional_esp32_full_hex_uid(self, tmp_path):
         config = Config(
@@ -4117,17 +4117,17 @@ class TestDiscoveryIntegration:
             discovery_factory=lambda port: fake_disc,
         )
 
-        fake_disc.inject('esp32-246f28b5f190', '10.0.0.5', 8001)
+        fake_disc.inject('esp-246f28b5f190', '10.0.0.5', 8001)
         svc.tick_once()
 
         assert len(created) == 2
         assert created[0].close_calls == 1
-        assert [dc.device_uid for dc in svc._device_configs] == ['esp32-246f28b5f190']
+        assert [dc.device_uid for dc in svc._device_configs] == ['esp-246f28b5f190']
         assert svc._devices[0]._host == '10.0.0.5'
         assert svc._devices[0]._tcp_port == 8001
 
         saved = load_config(str(path))
-        assert [dc.device_uid for dc in saved.devices] == ['esp32-246f28b5f190']
+        assert [dc.device_uid for dc in saved.devices] == ['esp-246f28b5f190']
 
     def test_discovery_defers_provisional_esp32_promotion_while_runtime_active(
         self, tmp_path, caplog
@@ -4180,7 +4180,7 @@ sp.schedule(s.pixels('0-59'), at=0, duration=sec(0.5))
         old_device = svc._devices[0]
 
         with caplog.at_level(logging.INFO):
-            fake_disc.inject('esp32-246f28b5f190', '10.0.0.5', 8001)
+            fake_disc.inject('esp-246f28b5f190', '10.0.0.5', 8001)
             svc.tick_once()
 
         assert svc._controller is old_controller
@@ -4188,12 +4188,12 @@ sp.schedule(s.pixels('0-59'), at=0, duration=sec(0.5))
         assert len(created) == 1
         assert created[0].close_calls == 0
         assert [dc.device_uid for dc in svc._device_configs] == ['b5f190']
-        assert svc._discovery_cache['esp32-246f28b5f190'] == ('10.0.0.5', 8001)
+        assert svc._discovery_cache['esp-246f28b5f190'] == ('10.0.0.5', 8001)
         saved = load_config(str(path))
         assert [dc.device_uid for dc in saved.devices] == ['b5f190']
         assert (
             'discovery: deferring esp32 uid promotion until controller is quiescent: '
-            'esp32-246f28b5f190'
+            'esp-246f28b5f190'
         ) in caplog.text
 
     def test_discovery_leaves_ambiguous_provisional_esp32_uid_unpromoted(
@@ -4234,7 +4234,7 @@ sp.schedule(s.pixels('0-59'), at=0, duration=sec(0.5))
         )
 
         caplog.set_level(logging.ERROR)
-        fake_disc.inject('esp32-246f28b5f190', '10.0.0.5', 8001)
+        fake_disc.inject('esp-246f28b5f190', '10.0.0.5', 8001)
         svc.tick_once()
 
         assert [dc.device_uid for dc in svc._device_configs] == ['b5f190', '246f28b5f190']
