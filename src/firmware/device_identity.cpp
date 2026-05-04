@@ -43,7 +43,7 @@ void make_device_uid_(char* out, size_t out_size)
 DeviceIdentity read_device_identity()
 {
     DeviceIdentity identity;
-    make_device_uid_(identity.uid, kDeviceUidCapacity);
+    make_device_uid_(identity.uid, UID_CAPACITY);
     identity.boot_token = make_boot_token_();
     return identity;
 }
