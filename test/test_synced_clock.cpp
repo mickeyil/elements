@@ -1,7 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "../src/synced_clock.h"
-#include "platform_clock_test.h"
+#include "test_platform_clock.h"
 
 // ---------------------------------------------------------------------------
 // Initial state

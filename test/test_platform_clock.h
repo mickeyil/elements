@@ -3,7 +3,7 @@
 #include <cstdint>
 
 // Test-only control surface for the platform clock fake. Only the test
-// translation unit (test/platform_clock_test.cpp) defines these alongside
+// translation unit (test/test_platform_clock.cpp) defines these alongside
 // now_us(); production builds neither include this header
 // nor link the fake.
 

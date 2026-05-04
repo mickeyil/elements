@@ -67,10 +67,10 @@ with the v3 `Strip`.
 
 ### 3. `platform_clock.{h,cpp}` — DONE
 
-Landed as `src/platform_clock.h` + `src/platform_clock_host.cpp`
-(host) + `src/platform_clock_esp.cpp` (ARDUINO). Single-function seam:
-`int64_t now_us()`. The fake lives at
-`test/platform_clock_test.{h,cpp}` and exposes `set_test_now_us` /
+Landed as `src/platform_clock.h` + `src/sim/host_platform_clock.cpp`
+(host) + `src/firmware/esp_platform_clock.cpp` (ARDUINO). Single-function
+seam: `int64_t now_us()`. The fake lives at
+`test/test_platform_clock.{h,cpp}` and exposes `set_test_now_us` /
 `advance_test_us`. Production impl is selected at link time. The host
 TU is now compiled by `elements_core`; the ESP TU is added to
 `platformio.ini`'s `build_src_filter` once firmware first consumes

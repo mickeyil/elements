@@ -17,7 +17,7 @@ add_library(elements_core STATIC
     src/colors.cpp
     src/copy_ops.cpp
     src/gamma.cpp
-    src/platform_clock_host.cpp
+    src/sim/host_platform_clock.cpp
     src/sim/posix_tcp_transport.cpp
     src/sim/posix_udp_transport.cpp
     src/pixel_buffer_pool.cpp
@@ -184,11 +184,11 @@ if(BUILD_TESTS)
     target_link_libraries(test_tcp_transport Catch2::Catch2WithMain)
 
     # test_synced_clock is also standalone during the v3 migration: it
-    # links the test platform_clock fake (test/platform_clock_test.cpp)
+    # links the test platform_clock fake (test/test_platform_clock.cpp)
     # instead of any production platform_clock impl.
     add_executable(test_synced_clock
         test/test_synced_clock.cpp
-        test/platform_clock_test.cpp
+        test/test_platform_clock.cpp
     )
     target_include_directories(test_synced_clock PRIVATE src test)
     target_link_libraries(test_synced_clock Catch2::Catch2WithMain)
@@ -196,10 +196,10 @@ if(BUILD_TESTS)
     # test_clock_sync_client follows the same standalone pattern: it
     # uses the test platform_clock fake (so SyncedClock advances under
     # test control) and a fake UdpTransport defined in the test TU. No
-    # link to elements_core (which links platform_clock_host).
+    # link to elements_core (which links host_platform_clock).
     add_executable(test_clock_sync_client
         test/test_clock_sync_client.cpp
-        test/platform_clock_test.cpp
+        test/test_platform_clock.cpp
         src/clock_sync_client.cpp
     )
     target_include_directories(test_clock_sync_client PRIVATE src test)
@@ -229,11 +229,11 @@ if(BUILD_TESTS)
     target_link_libraries(test_animations Catch2::Catch2WithMain)
 
     # test_playback is standalone: it links the test platform_clock fake
-    # (test/platform_clock_test.cpp) instead of the production impl, so
+    # (test/test_platform_clock.cpp) instead of the production impl, so
     # SyncedClock advances under test control.
     add_executable(test_playback
         test/test_playback.cpp
-        test/platform_clock_test.cpp
+        test/test_platform_clock.cpp
         src/playback.cpp
         src/decoder.cpp
         src/engine.cpp

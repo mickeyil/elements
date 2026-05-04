@@ -287,7 +287,7 @@ on the device side as the unseeded sentinel (`_last_controller_boot_token`
 starts at 0 before the first matched PONG seeds it). Controller
 implementations that draw the token from a random source must
 regenerate any zero result, mirroring how the device handles its own
-`boot_token` (`src/firmware/device_identity.cpp:14`). The device
+`boot_token` (`src/firmware/esp_device_identity.cpp:14`). The device
 silently treats a zero-token PONG as "still unseeded" and never
 detects a token change against it.
 

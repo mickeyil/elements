@@ -1,5 +1,5 @@
 #include "platform_clock.h"
-#include "platform_clock_test.h"
+#include "test_platform_clock.h"
 
 namespace {
 int64_t g_now_us = 0;

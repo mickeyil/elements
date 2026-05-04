@@ -9,7 +9,7 @@
 #include "../src/device_identity.h"
 #include "../src/synced_clock.h"
 #include "../src/udp_transport.h"
-#include "platform_clock_test.h"
+#include "test_platform_clock.h"
 
 // What is and is not tested here.
 //
