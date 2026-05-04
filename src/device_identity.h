@@ -5,29 +5,17 @@
 
 #include "link_protocol.h"
 
-// The device's stable identity. Held by the App; read each tick by the
-// link (DEVICE_HELLO write) and the sync client (PING send). Two
-// prefix conventions name what kind of device a UID belongs to:
+// The device's stable identity. Constructed once at boot, then read by
+// the controller link (DEVICE_HELLO) and the sync client (PING).
 //
-//   esp-XXXXXXXXXXXX   real ESP device. The 12 hex chars are the last
-//                      six bytes of the chip MAC. Composed by the ESP
-//                      factory; always exactly 16 visible bytes.
-//   sim-...........    sim binary process. The operator/launcher passes
-//                      a full UID (e.g. "sim-foo") and the device binary
-//                      copies it verbatim into the wire slot. The
-//                      "sim-" prefix is launcher/config policy, not
-//                      enforced by this code.
+// UID prefix conventions:
+//   esp-XXXXXXXXXXXX   real ESP. The 12 hex chars are the last six
+//                      bytes of the chip MAC.
+//   sim-...........    simulated device. "sim-" followed by up to 12
+//                      characters.
 //
-// On the wire, the uid occupies a fixed UID_SIZE (16) byte slot.
-// In memory, uid is a NUL-terminated C string in a UID_CAPACITY (24)
-// buffer; that gives strlen / printf room without changing the wire
-// shape. Serialization copies min(strlen, UID_SIZE) bytes and
-// zero-pads the rest of the slot.
-//
-// boot_token       fresh u32 on every boot. Lets the controller drop
-//                  stale device-side state when it sees the bump.
-// protocol_version wire generation. Present in DEVICE_HELLO so the
-//                  controller can refuse devices it doesn't speak.
+// boot_token lets the controller detect a fresh boot and drop state
+// cached for the previous one.
 
 constexpr size_t UID_CAPACITY = 24;
 
@@ -36,5 +24,3 @@ struct DeviceIdentity {
     uint32_t boot_token        = 0;
     uint8_t  protocol_version  = PROTOCOL_VERSION;
 };
-
-// Platform-specific factories live beside platform entry points.
