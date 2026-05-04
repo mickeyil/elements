@@ -182,16 +182,16 @@ void ClockSyncClient::send_ping_()
     uint8_t pkt[PING_WIRE_SIZE] = {};
     pkt[0] = PKT_PING;
 
-    // Copy up to UID_WIRE_SIZE bytes of the C-string uid into the
+    // Copy up to UID_SIZE bytes of the C-string uid into the
     // fixed-size wire slot. The buffer is zero-initialized, so any
     // bytes past strlen are already null padding.
     const size_t uid_len = std::min(std::strlen(_identity.uid),
-                                    static_cast<size_t>(UID_WIRE_SIZE));
+                                    static_cast<size_t>(UID_SIZE));
     std::memcpy(pkt + 1, _identity.uid, uid_len);
 
-    std::memcpy(pkt + 1 + UID_WIRE_SIZE,     &_identity.boot_token, 4);
-    std::memcpy(pkt + 1 + UID_WIRE_SIZE + 4, &seq,                  4);
-    std::memcpy(pkt + 1 + UID_WIRE_SIZE + 8, &t1,                   8);
+    std::memcpy(pkt + 1 + UID_SIZE,     &_identity.boot_token, 4);
+    std::memcpy(pkt + 1 + UID_SIZE + 4, &seq,                  4);
+    std::memcpy(pkt + 1 + UID_SIZE + 8, &t1,                   8);
 
     if (!_udp.send(pkt, sizeof(pkt), _target_ip, SYNC_PORT)) {
         // Send failed: close so next tick rebinds. The schedule is

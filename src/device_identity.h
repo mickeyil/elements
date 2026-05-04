@@ -18,10 +18,10 @@
 //                      "sim-" prefix is launcher/config policy, not
 //                      enforced by this code.
 //
-// On the wire, the uid occupies a fixed UID_WIRE_SIZE (16) byte slot.
+// On the wire, the uid occupies a fixed UID_SIZE (16) byte slot.
 // In memory, uid is a NUL-terminated C string in a UID_CAPACITY (24)
 // buffer; that gives strlen / printf room without changing the wire
-// shape. Serialization copies min(strlen, UID_WIRE_SIZE) bytes and
+// shape. Serialization copies min(strlen, UID_SIZE) bytes and
 // zero-pads the rest of the slot.
 //
 // boot_token       fresh u32 on every boot. Lets the controller drop

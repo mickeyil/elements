@@ -32,7 +32,7 @@ connection.
 - The new `DeviceIdentity` has `uid` as a NUL-terminated C string in
   `src/device_identity.h`; existing `strlen(_identity->uid)` calls
   still work but the wire format wants the fixed 16-byte slot
-  (`min(strlen, UID_WIRE_SIZE)` bytes copied, rest zero-padded).
+  (`min(strlen, UID_SIZE)` bytes copied, rest zero-padded).
 
 This work is currently broken on the v2 firmware build because the
 v3 `DeviceIdentity` struct shape and `link_protocol.h` location
