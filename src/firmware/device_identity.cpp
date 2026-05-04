@@ -40,7 +40,7 @@ void make_device_uid_(char* out, size_t out_size)
 
 }  // namespace
 
-DeviceIdentity make_esp32_device_identity()
+DeviceIdentity make_esp_device_identity()
 {
     DeviceIdentity identity;
     make_device_uid_(identity.uid, UID_CAPACITY);

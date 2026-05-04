@@ -266,6 +266,30 @@ the device side currently observes a runtime `boot_token` change.
 
 ---
 
+## Sim UID policy enforcement in the launcher
+
+**Today.** `make_sim_device_identity` in `src/sim_device_identity.cpp`
+copies whatever string it is handed into the wire slot, with only a
+length sanity check. The wire spec
+(`drafts/controller_link.md` § Identity) says sim UIDs must start with
+`sim-` and be printable ASCII; that policy is currently unenforced
+because the factory deliberately stays shape-only.
+
+**Action.** When the Python launcher (`elemctl sim` / `controller/elemctl/sim.py`)
+gets focus, validate `--device-uid` (or the config-resolved UID for the
+selected device) before spawning the sim binary:
+
+- non-empty, ≤ 16 bytes
+- starts with `sim-`
+- all bytes printable ASCII
+
+Reject at the launcher with a clear error; never invoke the sim binary
+with a UID that violates the policy. The device-side factory stays
+trusting; controller-side `DEVICE_HELLO` validation is the second line
+of defence.
+
+---
+
 ### Loss-of-sync lifecycle
 
 **Today.** `SyncedClock::is_synced()` flips false automatically when the

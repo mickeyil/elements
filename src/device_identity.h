@@ -10,11 +10,13 @@
 // prefix conventions name what kind of device a UID belongs to:
 //
 //   esp-XXXXXXXXXXXX   real ESP device. The 12 hex chars are the last
-//                      six bytes of the chip MAC. Always exactly 16
-//                      visible bytes.
-//   sim-...........    sim binary process. Suffix is whatever the
-//                      developer passed via --device-uid, padded with
-//                      \0 to fill the wire slot.
+//                      six bytes of the chip MAC. Composed by the ESP
+//                      factory; always exactly 16 visible bytes.
+//   sim-...........    sim binary process. The operator/launcher passes
+//                      a full UID (e.g. "sim-foo") and the device binary
+//                      copies it verbatim into the wire slot. The
+//                      "sim-" prefix is launcher/config policy, not
+//                      enforced by this code.
 //
 // On the wire, the uid occupies a fixed UID_WIRE_SIZE (16) byte slot.
 // In memory, uid is a NUL-terminated C string in a UID_CAPACITY (24)

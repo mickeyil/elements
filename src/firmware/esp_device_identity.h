@@ -2,4 +2,4 @@
 
 #include "device_identity.h"
 
-DeviceIdentity make_esp32_device_identity();
+DeviceIdentity make_esp_device_identity();

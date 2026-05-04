@@ -9,7 +9,7 @@ FirmwareApp g_app;
 
 void setup()
 {
-    g_app.begin(make_esp32_device_identity());
+    g_app.begin(make_esp_device_identity());
 }
 
 void loop()

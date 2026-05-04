@@ -258,10 +258,14 @@ without any out-of-band lookup:
 
 - **`esp-XXXXXXXXXXXX`** — real ESP devices. The 12 hex chars are the
   last six bytes of the chip's MAC address. Always exactly 16 bytes
-  long.
-- **`sim-...........`** — sim binary processes. The suffix is whatever
-  the developer passes via `--device-uid`, padded with `\0` to fill
-  16 bytes.
+  long, composed by the device's ESP-side factory.
+- **`sim-...........`** — sim binary processes. The operator (or its
+  config) passes a full UID like `sim-foo` to the launcher; the
+  launcher hands it to the sim binary verbatim, the binary copies it
+  into the wire slot, and the slot is null-padded to 16 bytes. The
+  `sim-` prefix is **launcher/config policy** — the device binary
+  itself is shape-only and trusts what it is given. Controller-side
+  validation on `DEVICE_HELLO` is the second line of defence.
 
 Parser rule on receive: read exactly 16 bytes, trim at the first `\0`,
 require any remaining bytes to also be `\0`, and require the trimmed

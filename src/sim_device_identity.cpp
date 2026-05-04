@@ -18,20 +18,10 @@ uint32_t make_sim_boot_token_()
 
 }  // namespace
 
-bool make_sim_device_identity(const char* uid, DeviceIdentity* out)
+DeviceIdentity make_sim_device_identity(const char* uid)
 {
-    if (uid == nullptr || out == nullptr) {
-        return false;
-    }
-
-    const size_t uid_len = std::strlen(uid);
-    if (uid_len == 0 || uid_len > UID_WIRE_SIZE) {
-        return false;
-    }
-
     DeviceIdentity identity;
-    std::memcpy(identity.uid, uid, uid_len);
+    std::memcpy(identity.uid, uid, std::strlen(uid));
     identity.boot_token = make_sim_boot_token_();
-    *out = identity;
-    return true;
+    return identity;
 }
