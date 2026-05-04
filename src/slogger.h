@@ -10,19 +10,15 @@
 #include <string>
 #include <sys/stat.h>
 
-namespace slog {
+inline std::mutex& slog_mutex() { static std::mutex m; return m; }
+inline std::ofstream& slog_file() { static std::ofstream f; return f; }
 
-namespace detail {
-    inline std::mutex& mutex() { static std::mutex m; return m; }
-    inline std::ofstream& file() { static std::ofstream f; return f; }
-}  // namespace detail
-
-inline std::string timestamp_now()
+inline std::string slog_timestamp_now()
 {
-    using namespace std::chrono;
-    const auto now = system_clock::now();
-    const auto millis = duration_cast<milliseconds>(now.time_since_epoch()) % 1000;
-    const auto tt = system_clock::to_time_t(now);
+    const auto now = std::chrono::system_clock::now();
+    const auto millis =
+        std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;
+    const auto tt = std::chrono::system_clock::to_time_t(now);
 
     std::tm tm{};
     localtime_r(&tt, &tm);
@@ -33,14 +29,14 @@ inline std::string timestamp_now()
     return out.str();
 }
 
-inline void init(const std::string& log_file = {})
+inline void slog_init(const std::string& log_file = {})
 {
     if (log_file.empty()) {
         return;
     }
 
-    std::lock_guard<std::mutex> lock(detail::mutex());
-    if (detail::file().is_open()) {
+    std::lock_guard<std::mutex> lock(slog_mutex());
+    if (slog_file().is_open()) {
         return;
     }
 
@@ -54,51 +50,49 @@ inline void init(const std::string& log_file = {})
         }
     }
 
-    detail::file().open(log_file, std::ios::app);
-    if (!detail::file().is_open()) {
+    slog_file().open(log_file, std::ios::app);
+    if (!slog_file().is_open()) {
         std::fprintf(stderr, "slogger: failed to open log file: %s\n", log_file.c_str());
     }
 }
 
-inline void vlog(char level, const char* fmt, va_list ap)
+inline void slog_vlog(char level, const char* fmt, va_list ap)
 {
     char message[1024];
     std::vsnprintf(message, sizeof(message), fmt, ap);
 
     const std::string line =
-        "[" + timestamp_now() + "] -" + std::string(1, level) + "- : " + message;
+        "[" + slog_timestamp_now() + "] -" + std::string(1, level) + "- : " + message;
 
-    std::lock_guard<std::mutex> lock(detail::mutex());
+    std::lock_guard<std::mutex> lock(slog_mutex());
     std::fprintf(stdout, "%s\n", line.c_str());
     std::fflush(stdout);
-    if (detail::file().is_open()) {
-        detail::file() << line << '\n';
-        detail::file().flush();
+    if (slog_file().is_open()) {
+        slog_file() << line << '\n';
+        slog_file().flush();
     }
 }
 
-inline void info(const char* fmt, ...)
+inline void slog_info(const char* fmt, ...)
 {
     va_list ap;
     va_start(ap, fmt);
-    vlog('I', fmt, ap);
+    slog_vlog('I', fmt, ap);
     va_end(ap);
 }
 
-inline void warn(const char* fmt, ...)
+inline void slog_warn(const char* fmt, ...)
 {
     va_list ap;
     va_start(ap, fmt);
-    vlog('W', fmt, ap);
+    slog_vlog('W', fmt, ap);
     va_end(ap);
 }
 
-inline void error(const char* fmt, ...)
+inline void slog_error(const char* fmt, ...)
 {
     va_list ap;
     va_start(ap, fmt);
-    vlog('E', fmt, ap);
+    slog_vlog('E', fmt, ap);
     va_end(ap);
 }
-
-} // namespace slog

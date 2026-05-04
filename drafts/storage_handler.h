@@ -4,8 +4,6 @@
 
 #include "handler_result.h"
 
-namespace controller_link {
-
 class WireReader;
 class BackgroundStore;
 
@@ -24,5 +22,3 @@ private:
 
     BackgroundStore& _store;
 };
-
-}  // namespace controller_link

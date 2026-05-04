@@ -1,8 +1,6 @@
 #include "platform_clock.h"
 #include "platform_clock_test.h"
 
-namespace platform_clock {
-
 namespace {
 int64_t g_now_us = 0;
 }  // namespace
@@ -21,5 +19,3 @@ void advance_test_us(int64_t delta_us)
 {
     g_now_us += delta_us;
 }
-
-}  // namespace platform_clock

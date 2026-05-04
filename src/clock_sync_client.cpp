@@ -367,5 +367,5 @@ void ClockSyncClient::apply_filter_()
 
 int64_t ClockSyncClient::now_us_() const
 {
-    return platform_clock::now_us();
+    return now_us();
 }

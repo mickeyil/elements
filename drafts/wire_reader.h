@@ -9,8 +9,6 @@
 //
 // Every read returns false on under-run and leaves the cursor untouched.
 
-namespace controller_link {
-
 class WireReader {
 public:
     WireReader(const uint8_t* data, size_t len);
@@ -38,5 +36,3 @@ private:
     size_t _len;
     size_t _pos;
 };
-
-}  // namespace controller_link

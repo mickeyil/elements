@@ -1,7 +1,5 @@
 #pragma once
 
-namespace controller_link {
-
 // Reports a Wi-Fi / LAN association change observed during the most
 // recent poll(). `none` is the usual return; `came_up` and
 // `went_down` fire on the tick the change is first seen.
@@ -46,5 +44,3 @@ public:
     // Steady-state. Flips alongside the transition returned by poll().
     virtual bool is_up() const = 0;
 };
-
-}  // namespace controller_link

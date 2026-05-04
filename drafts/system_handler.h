@@ -4,8 +4,6 @@
 
 #include "handler_result.h"
 
-namespace controller_link {
-
 class WireReader;
 
 // Handler for category 0x3_. Today this is just Reboot, which returns
@@ -24,5 +22,3 @@ public:
 private:
     HandlerResult handle_reboot_(WireReader& r);
 };
-
-}  // namespace controller_link

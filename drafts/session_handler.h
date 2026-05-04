@@ -6,8 +6,6 @@
 
 class Playback;
 
-namespace controller_link {
-
 class WireReader;
 
 // Handles category 0x0_ inbound commands FROM the controller after the
@@ -43,5 +41,3 @@ private:
 
     Playback& _playback;
 };
-
-}  // namespace controller_link

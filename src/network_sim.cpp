@@ -183,7 +183,7 @@ static int poll_tcp_commands(int tcp_fd,
 
         // Reject absurdly large messages to prevent OOM from corrupted headers
         if (msg_len > TCP_MSG_MAX) {
-            slog::error("network_sim: message too large (%u bytes), closing connection", msg_len);
+            slog_error("network_sim: message too large (%u bytes), closing connection", msg_len);
             return -1;
         }
 
@@ -225,7 +225,7 @@ static int poll_tcp_commands(int tcp_fd,
             }
 
             if (was_attached && !same_profile) {
-                slog::info(
+                slog_info(
                     "network_sim: profile changed while attached; detaching device_id=%u old_len=%u new_len=%u",
                     static_cast<unsigned>(state.device_id),
                     static_cast<unsigned>(had_profile ? current.strip_length : 0),
@@ -233,7 +233,7 @@ static int poll_tcp_commands(int tcp_fd,
                 );
                 reset_attach_state(state, controller_addr);
             } else {
-                slog::info(
+                slog_info(
                     "network_sim: set_profile ok strip_length=%u%s",
                     static_cast<unsigned>(profile.strip_length),
                     same_profile && was_attached ? " (unchanged, still attached)" : ""
@@ -272,7 +272,7 @@ static int poll_tcp_commands(int tcp_fd,
                 controller_ip,
                 sizeof(controller_ip)
             );
-            slog::info(
+            slog_info(
                 "network_sim: attach ok device_id=%u frame_port=%u controller=%s",
                 static_cast<unsigned>(device_id),
                 static_cast<unsigned>(frame_port),
@@ -501,7 +501,7 @@ static bool poll_discovery_reject(int udp_fd, const std::string& device_uid)
         if (buf[3] != DISCOVERY_REASON_DUPLICATE_UID)
             continue;
 
-        slog::warn(
+        slog_warn(
             "network_sim: duplicate uid reject received for %s; suppressing HELLO temporarily",
             device_uid.c_str()
         );
@@ -515,8 +515,8 @@ int main(int argc, char** argv)
     if (!parse_args(argc, argv, args))
         return 1;
 
-    slog::init(args.log_file);
-    slog::info("elements simulator started. version: %s", ELEMENTS_VERSION);
+    slog_init(args.log_file);
+    slog_info("elements simulator started. version: %s", ELEMENTS_VERSION);
 
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
@@ -575,8 +575,8 @@ int main(int argc, char** argv)
     std::vector<uint8_t> tcp_buf(TCP_BUF_INITIAL);
     size_t tcp_buf_used = 0;
 
-    slog::info("network_sim: listening on tcp=%d", args.tcp_port);
-    slog::info("network_sim: discovery -> %s:%d uid=%s",
+    slog_info("network_sim: listening on tcp=%d", args.tcp_port);
+    slog_info("network_sim: discovery -> %s:%d uid=%s",
                args.discovery_host.c_str(), args.discovery_port, args.device_uid.c_str());
 
     static constexpr int64_t HELLO_INTERVAL_US = 500000; // 500ms
@@ -585,7 +585,7 @@ int main(int argc, char** argv)
     int64_t hello_backoff_until_us = 0;
 
     while (g_running) {
-        slog::info("Waiting for controller on port %d...", args.tcp_port);
+        slog_info("Waiting for controller on port %d...", args.tcp_port);
 
         // Non-blocking accept loop — interleave with HELLO sends
         int tcp_fd = -1;
@@ -609,7 +609,7 @@ int main(int argc, char** argv)
         }
         if (!g_running) break;
 
-        slog::info("Controller connected.");
+        slog_info("Controller connected.");
 
         // Learn controller IP from accepted connection
         sockaddr_in peer{};
@@ -650,7 +650,7 @@ int main(int argc, char** argv)
         }
 
         close(tcp_fd);
-        slog::info("Controller disconnected.");
+        slog_info("Controller disconnected.");
 
         device.reset_for_detach();
         reset_attach_state(state, controller_addr);
@@ -658,6 +658,6 @@ int main(int argc, char** argv)
 
     close(udp_fd);
     close(tcp_server);
-    slog::info("network_sim: shutdown.");
+    slog_info("network_sim: shutdown.");
     return 0;
 }

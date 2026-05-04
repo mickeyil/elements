@@ -6,8 +6,6 @@
 
 class Playback;
 
-namespace controller_link {
-
 class WireReader;
 
 // Pass-through for category 0x1_ commands (Load, Start, Jump, Pause,
@@ -39,5 +37,3 @@ private:
 
     Playback& _playback;
 };
-
-}  // namespace controller_link

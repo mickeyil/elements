@@ -172,7 +172,7 @@ void exchange_round(ClockSyncClient& client, FakeUdpTransport& udp,
 
     const int64_t t2 = ping.t1 + controller_offset_us + rtt_us / 2;
     const int64_t t3 = t2 + 10;  // 10us controller "processing"
-    platform_clock::advance_test_us(rtt_us);
+    advance_test_us(rtt_us);
 
     udp.inject(controller_ip, build_pong(controller_token,
                                          ping.seq, ping.t1, t2, t3));
@@ -197,7 +197,7 @@ DeviceIdentity make_identity(uint32_t boot_token = 0xDEADBEEF) {
 
 TEST_CASE("set_controller(0) at construction is the idle path",
           "[clock_sync_client]") {
-    platform_clock::set_test_now_us(1'000'000);
+    set_test_now_us(1'000'000);
 
     SyncedClock      clock;
     DeviceIdentity   id  = make_identity();
@@ -212,7 +212,7 @@ TEST_CASE("set_controller(0) at construction is the idle path",
 
 TEST_CASE("set_controller(non-zero) starts a burst and binds lazily",
           "[clock_sync_client]") {
-    platform_clock::set_test_now_us(1'000'000);
+    set_test_now_us(1'000'000);
 
     SyncedClock      clock;
     DeviceIdentity   id  = make_identity();
@@ -236,7 +236,7 @@ TEST_CASE("set_controller(non-zero) starts a burst and binds lazily",
 
 TEST_CASE("set_controller(0) closes UDP and leaves SyncedClock alone",
           "[clock_sync_client]") {
-    platform_clock::set_test_now_us(1'000'000);
+    set_test_now_us(1'000'000);
 
     SyncedClock      clock;
     DeviceIdentity   id  = make_identity();
@@ -250,7 +250,7 @@ TEST_CASE("set_controller(0) closes UDP and leaves SyncedClock alone",
     for (int i = 0; i < 3; ++i) {
         exchange_round(client, udp, CONTROLLER_IP_A, 0xC0FFEEU,
                        /*offset*/ 1'000'000);
-        platform_clock::advance_test_us(BURST_INTERVAL_US);
+        advance_test_us(BURST_INTERVAL_US);
     }
     REQUIRE(clock.is_synced());
 
@@ -272,7 +272,7 @@ TEST_CASE("set_controller(0) closes UDP and leaves SyncedClock alone",
 
 TEST_CASE("changing target IP resets filter and restarts burst",
           "[clock_sync_client]") {
-    platform_clock::set_test_now_us(1'000'000);
+    set_test_now_us(1'000'000);
 
     SyncedClock      clock;
     DeviceIdentity   id  = make_identity();
@@ -283,7 +283,7 @@ TEST_CASE("changing target IP resets filter and restarts burst",
     for (int i = 0; i < 3; ++i) {
         exchange_round(client, udp, CONTROLLER_IP_A, 0xC0FFEEU,
                        /*offset*/ 1'000'000);
-        platform_clock::advance_test_us(BURST_INTERVAL_US);
+        advance_test_us(BURST_INTERVAL_US);
     }
     REQUIRE(clock.is_synced());
 
@@ -298,7 +298,7 @@ TEST_CASE("changing target IP resets filter and restarts burst",
     CHECK(udp.sent.back().dst_ip == CONTROLLER_IP_B);
 
     // Burst is back: the next ping is due at +500 ms, not +15 s.
-    platform_clock::advance_test_us(BURST_INTERVAL_US);
+    advance_test_us(BURST_INTERVAL_US);
     client.poll();
     CHECK(udp.sent.size() == sent_before + 2);
 }
@@ -309,7 +309,7 @@ TEST_CASE("changing target IP resets filter and restarts burst",
 
 TEST_CASE("first PONG seeds controller_boot_token and is processed",
           "[clock_sync_client]") {
-    platform_clock::set_test_now_us(1'000'000);
+    set_test_now_us(1'000'000);
 
     SyncedClock      clock;
     DeviceIdentity   id  = make_identity();
@@ -323,7 +323,7 @@ TEST_CASE("first PONG seeds controller_boot_token and is processed",
     for (int i = 0; i < 3; ++i) {
         exchange_round(client, udp, CONTROLLER_IP_A, 0xAAAAU,
                        /*offset*/ 1'000'000, /*rtt*/ 1000);
-        platform_clock::advance_test_us(BURST_INTERVAL_US);
+        advance_test_us(BURST_INTERVAL_US);
     }
 
     REQUIRE(clock.is_synced());
@@ -331,7 +331,7 @@ TEST_CASE("first PONG seeds controller_boot_token and is processed",
 
 TEST_CASE("controller_boot_token change clears SyncedClock and discards PONG",
           "[clock_sync_client]") {
-    platform_clock::set_test_now_us(1'000'000);
+    set_test_now_us(1'000'000);
 
     SyncedClock      clock;
     DeviceIdentity   id  = make_identity();
@@ -342,7 +342,7 @@ TEST_CASE("controller_boot_token change clears SyncedClock and discards PONG",
     for (int i = 0; i < 3; ++i) {
         exchange_round(client, udp, CONTROLLER_IP_A, 0xAAAAU,
                        /*offset*/ 1'000'000);
-        platform_clock::advance_test_us(BURST_INTERVAL_US);
+        advance_test_us(BURST_INTERVAL_US);
     }
     REQUIRE(clock.is_synced());
 
@@ -352,14 +352,14 @@ TEST_CASE("controller_boot_token change clears SyncedClock and discards PONG",
     // the changed-token reply. Round-first matching means a token
     // change carried by an already-consumed round wouldn't trigger
     // anything.
-    platform_clock::advance_test_us(STEADY_INTERVAL_US);
+    advance_test_us(STEADY_INTERVAL_US);
     const size_t sent_before_change = udp.sent.size();
     client.poll();
     REQUIRE(udp.sent.size() == sent_before_change + 1);
 
     const ParsedPing ping = parse_ping(udp.sent.back().bytes);
 
-    platform_clock::advance_test_us(1000);
+    advance_test_us(1000);
     udp.inject(CONTROLLER_IP_A,
                build_pong(0xBBBBU, ping.seq, ping.t1,
                           ping.t1 + 1'500'000, ping.t1 + 1'500'010));
@@ -378,7 +378,7 @@ TEST_CASE("controller_boot_token change clears SyncedClock and discards PONG",
 
 TEST_CASE("local boot_token change clears SyncedClock while idle",
           "[clock_sync_client]") {
-    platform_clock::set_test_now_us(1'000'000);
+    set_test_now_us(1'000'000);
 
     SyncedClock      clock;
     DeviceIdentity   id  = make_identity(0x11111111U);
@@ -389,7 +389,7 @@ TEST_CASE("local boot_token change clears SyncedClock while idle",
     for (int i = 0; i < 3; ++i) {
         exchange_round(client, udp, CONTROLLER_IP_A, 0xAAAAU,
                        /*offset*/ 1'000'000);
-        platform_clock::advance_test_us(BURST_INTERVAL_US);
+        advance_test_us(BURST_INTERVAL_US);
     }
     REQUIRE(clock.is_synced());
 
@@ -408,7 +408,7 @@ TEST_CASE("local boot_token change clears SyncedClock while idle",
 
 TEST_CASE("local boot_token change while active clears and restarts burst",
           "[clock_sync_client]") {
-    platform_clock::set_test_now_us(1'000'000);
+    set_test_now_us(1'000'000);
 
     SyncedClock      clock;
     DeviceIdentity   id  = make_identity(0x33333333U);
@@ -419,7 +419,7 @@ TEST_CASE("local boot_token change while active clears and restarts burst",
     for (int i = 0; i < 3; ++i) {
         exchange_round(client, udp, CONTROLLER_IP_A, 0xAAAAU,
                        /*offset*/ 1'000'000);
-        platform_clock::advance_test_us(BURST_INTERVAL_US);
+        advance_test_us(BURST_INTERVAL_US);
     }
     REQUIRE(clock.is_synced());
 
@@ -442,7 +442,7 @@ TEST_CASE("local boot_token change while active clears and restarts burst",
 
 TEST_CASE("PONG with wrong source IP is discarded",
           "[clock_sync_client]") {
-    platform_clock::set_test_now_us(1'000'000);
+    set_test_now_us(1'000'000);
 
     SyncedClock      clock;
     DeviceIdentity   id  = make_identity();
@@ -454,7 +454,7 @@ TEST_CASE("PONG with wrong source IP is discarded",
     REQUIRE(!udp.sent.empty());
     const ParsedPing ping = parse_ping(udp.sent.back().bytes);
 
-    platform_clock::advance_test_us(1000);
+    advance_test_us(1000);
     udp.inject(WRONG_IP, build_pong(0xAAAAU, ping.seq, ping.t1,
                                     ping.t1 + 1'000'000,
                                     ping.t1 + 1'000'010));
@@ -466,7 +466,7 @@ TEST_CASE("PONG with wrong source IP is discarded",
 
 TEST_CASE("PONG with wrong size or type is discarded",
           "[clock_sync_client]") {
-    platform_clock::set_test_now_us(1'000'000);
+    set_test_now_us(1'000'000);
 
     SyncedClock      clock;
     DeviceIdentity   id  = make_identity();
@@ -492,7 +492,7 @@ TEST_CASE("PONG with wrong size or type is discarded",
     wrong_type[0] = 0x99;
     udp.inject(CONTROLLER_IP_A, std::move(wrong_type));
 
-    platform_clock::advance_test_us(1000);
+    advance_test_us(1000);
     client.poll();
 
     CHECK_FALSE(clock.is_synced());
@@ -500,7 +500,7 @@ TEST_CASE("PONG with wrong size or type is discarded",
 
 TEST_CASE("PONG with wrong seq or t1 is discarded",
           "[clock_sync_client]") {
-    platform_clock::set_test_now_us(1'000'000);
+    set_test_now_us(1'000'000);
 
     SyncedClock      clock;
     DeviceIdentity   id  = make_identity();
@@ -521,7 +521,7 @@ TEST_CASE("PONG with wrong seq or t1 is discarded",
                build_pong(0xAAAAU, ping.seq, ping.t1 + 999,
                           ping.t1 + 1'000'000, ping.t1 + 1'000'010));
 
-    platform_clock::advance_test_us(1000);
+    advance_test_us(1000);
     client.poll();
 
     CHECK_FALSE(clock.is_synced());
@@ -529,7 +529,7 @@ TEST_CASE("PONG with wrong seq or t1 is discarded",
 
 TEST_CASE("PONG with RTT past the gate is dropped",
           "[clock_sync_client]") {
-    platform_clock::set_test_now_us(1'000'000);
+    set_test_now_us(1'000'000);
 
     SyncedClock      clock;
     DeviceIdentity   id  = make_identity();
@@ -544,12 +544,12 @@ TEST_CASE("PONG with RTT past the gate is dropped",
         REQUIRE(!udp.sent.empty());
         const ParsedPing ping = parse_ping(udp.sent.back().bytes);
         const int64_t huge_rtt = 500 * 1000;  // 500ms > 200ms gate
-        platform_clock::advance_test_us(huge_rtt);
+        advance_test_us(huge_rtt);
         udp.inject(CONTROLLER_IP_A,
                    build_pong(0xAAAAU, ping.seq, ping.t1,
                               ping.t1 + 100'000, ping.t1 + 100'010));
         client.poll();
-        platform_clock::advance_test_us(BURST_INTERVAL_US);
+        advance_test_us(BURST_INTERVAL_US);
     }
 
     CHECK_FALSE(clock.is_synced());
@@ -561,7 +561,7 @@ TEST_CASE("PONG with RTT past the gate is dropped",
 
 TEST_CASE("three accepted rounds apply a lease with the correct sign",
           "[clock_sync_client]") {
-    platform_clock::set_test_now_us(1'000'000);
+    set_test_now_us(1'000'000);
 
     SyncedClock      clock;
     DeviceIdentity   id  = make_identity();
@@ -575,7 +575,7 @@ TEST_CASE("three accepted rounds apply a lease with the correct sign",
         exchange_round(client, udp, CONTROLLER_IP_A, 0xAAAAU,
                        /*offset_remote_minus_local*/ 1'000'000,
                        /*rtt*/ 1000);
-        platform_clock::advance_test_us(BURST_INTERVAL_US);
+        advance_test_us(BURST_INTERVAL_US);
     }
 
     REQUIRE(clock.is_synced());
@@ -595,7 +595,7 @@ TEST_CASE("three accepted rounds apply a lease with the correct sign",
 
 TEST_CASE("burst exits on the first applied lease",
           "[clock_sync_client]") {
-    platform_clock::set_test_now_us(1'000'000);
+    set_test_now_us(1'000'000);
 
     SyncedClock      clock;
     DeviceIdentity   id  = make_identity();
@@ -608,7 +608,7 @@ TEST_CASE("burst exits on the first applied lease",
     for (int i = 0; i < 3; ++i) {
         exchange_round(client, udp, CONTROLLER_IP_A, 0xAAAAU,
                        /*offset*/ 1'000'000);
-        platform_clock::advance_test_us(BURST_INTERVAL_US);
+        advance_test_us(BURST_INTERVAL_US);
     }
     REQUIRE(clock.is_synced());
 
@@ -616,19 +616,19 @@ TEST_CASE("burst exits on the first applied lease",
     // Advance just past BURST_INTERVAL_US: not enough for the next
     // ping if we're now on 15 s.
     const size_t sent_before = udp.sent.size();
-    platform_clock::advance_test_us(BURST_INTERVAL_US + 1);
+    advance_test_us(BURST_INTERVAL_US + 1);
     client.poll();
     CHECK(udp.sent.size() == sent_before);
 
     // Advance through the 15 s steady interval; ping fires.
-    platform_clock::advance_test_us(STEADY_INTERVAL_US);
+    advance_test_us(STEADY_INTERVAL_US);
     client.poll();
     CHECK(udp.sent.size() == sent_before + 1);
 }
 
 TEST_CASE("burst exits on deadline if no replies come back",
           "[clock_sync_client]") {
-    platform_clock::set_test_now_us(1'000'000);
+    set_test_now_us(1'000'000);
 
     SyncedClock      clock;
     DeviceIdentity   id  = make_identity();
@@ -644,8 +644,8 @@ TEST_CASE("burst exits on deadline if no replies come back",
         const size_t before = udp.sent.size();
         client.poll();
         if (udp.sent.size() > before) pings_in_window += 1;
-        platform_clock::advance_test_us(BURST_INTERVAL_US);
-        if (platform_clock::now_us() > 1'000'000 + BURST_DURATION_US) break;
+        advance_test_us(BURST_INTERVAL_US);
+        if (now_us() > 1'000'000 + BURST_DURATION_US) break;
     }
 
     // Burst should have produced multiple pings (~20 at 500ms over 10s).
@@ -654,12 +654,12 @@ TEST_CASE("burst exits on deadline if no replies come back",
     // Now we are past the burst deadline. Advancing a second BURST
     // interval should NOT fire another ping; we are on STEADY now.
     const size_t after_burst = udp.sent.size();
-    platform_clock::advance_test_us(BURST_INTERVAL_US);
+    advance_test_us(BURST_INTERVAL_US);
     client.poll();
     CHECK(udp.sent.size() == after_burst);
 
     // Steady cadence: a 15 s advance fires the next ping.
-    platform_clock::advance_test_us(STEADY_INTERVAL_US);
+    advance_test_us(STEADY_INTERVAL_US);
     client.poll();
     CHECK(udp.sent.size() == after_burst + 1);
 }
@@ -670,7 +670,7 @@ TEST_CASE("burst exits on deadline if no replies come back",
 
 TEST_CASE("send failure closes the socket, next tick rebinds",
           "[clock_sync_client]") {
-    platform_clock::set_test_now_us(1'000'000);
+    set_test_now_us(1'000'000);
 
     SyncedClock      clock;
     DeviceIdentity   id  = make_identity();
@@ -695,7 +695,7 @@ TEST_CASE("send failure closes the socket, next tick rebinds",
 
 TEST_CASE("recv error closes the socket and skips this tick's send",
           "[clock_sync_client]") {
-    platform_clock::set_test_now_us(1'000'000);
+    set_test_now_us(1'000'000);
 
     SyncedClock      clock;
     DeviceIdentity   id  = make_identity();
@@ -707,7 +707,7 @@ TEST_CASE("recv error closes the socket and skips this tick's send",
     REQUIRE(udp.sent.size() == 1);
 
     // Advance so a ping is scheduled, then trigger a recv error.
-    platform_clock::advance_test_us(BURST_INTERVAL_US);
+    advance_test_us(BURST_INTERVAL_US);
     udp.force_recv_error = true;
     const size_t sent_before = udp.sent.size();
     client.poll();

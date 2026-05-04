@@ -81,7 +81,7 @@ std::vector<uint8_t> build_paint_blob(float duration, bool requires_sync,
 // ---------------------------------------------------------------------------
 
 void set_clock_us(int64_t now_us) {
-    platform_clock::set_test_now_us(now_us);
+    set_test_now_us(now_us);
 }
 
 bool strip_is_red(const Playback& pb) {

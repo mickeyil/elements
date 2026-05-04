@@ -25,7 +25,7 @@ class SyncedClock {
 public:
     // True iff an offset has been applied and its lease has not yet expired.
     bool is_synced() const {
-        return _has_offset && platform_clock::now_us() < _valid_until_local_us;
+        return _has_offset && now_us() < _valid_until_local_us;
     }
 
     // Current remote-clock estimate in microseconds, computed as
@@ -34,12 +34,12 @@ public:
     // first. After clear_sync(), returns now_local_us() (the offset is
     // wiped).
     int64_t now_remote_us() const {
-        return platform_clock::now_us() - _offset_us;
+        return now_us() - _offset_us;
     }
 
     // Current local monotonic clock in microseconds.
     int64_t now_local_us() const {
-        return platform_clock::now_us();
+        return now_us();
     }
 
     // Apply a new sync offset with a validity window.
@@ -52,7 +52,7 @@ public:
     void apply_sync_offset(int64_t offset_us, int64_t valid_for_us) {
         assert(valid_for_us >= 0);
         _offset_us = offset_us;
-        _valid_until_local_us = platform_clock::now_us() + valid_for_us;
+        _valid_until_local_us = now_us() + valid_for_us;
         _has_offset = true;
     }
 

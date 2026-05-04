@@ -3,8 +3,6 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace controller_link {
-
 // ACK status carried in the outbound 0x80 reply. Wire encoding is one byte.
 enum class AckStatus : uint8_t {
     Ok              = 0,
@@ -39,5 +37,3 @@ struct HandlerResult {
     static HandlerResult error(AckStatus s);
     static HandlerResult reboot();
 };
-
-}  // namespace controller_link

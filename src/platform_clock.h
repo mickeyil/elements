@@ -8,8 +8,4 @@
 // controllable fake (test/platform_clock_test.cpp). SyncedClock and any
 // other time-aware module call only this one symbol.
 
-namespace platform_clock {
-
 int64_t now_us();
-
-}  // namespace platform_clock

@@ -120,7 +120,7 @@ private:
     void apply_filter_();
 
     // Local monotonic clock in microseconds. Indirection point for
-    // tests; production reads platform_clock::now_us() directly.
+    // tests; production reads now_us() directly.
     int64_t now_us_() const;
 
     UdpTransport&         _udp;

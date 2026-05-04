@@ -11,8 +11,6 @@
 //                        session/sync state, generate a new boot_token,
 //                        resume discovery. Background storage persists.
 
-namespace controller_link {
-
 class SystemPlatform {
 public:
     virtual ~SystemPlatform() = default;
@@ -25,5 +23,3 @@ public:
     // TODO: a future "factory reset" command (clear NVS, clear background)
     // would land here next. Out of scope for v3.
 };
-
-}  // namespace controller_link

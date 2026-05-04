@@ -1,6 +1,5 @@
 #include "background_crc.h"
 
-namespace elements {
 namespace {
 
 uint32_t update_byte_(uint32_t crc, uint8_t byte)
@@ -28,5 +27,3 @@ uint32_t crc32_ieee(const uint8_t* data, size_t len)
 {
     return crc32_ieee_continue(0, data, len);
 }
-
-}  // namespace elements

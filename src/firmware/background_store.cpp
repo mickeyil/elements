@@ -247,7 +247,7 @@ bool BackgroundStore::validate_committed_file_(
             file.close();
             return false;
         }
-        crc = elements::crc32_ieee_continue(crc, buffer, static_cast<size_t>(n));
+        crc = crc32_ieee_continue(crc, buffer, static_cast<size_t>(n));
         total += static_cast<size_t>(n);
     }
     file.close();

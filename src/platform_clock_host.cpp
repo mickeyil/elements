@@ -2,10 +2,9 @@
 
 #include <chrono>
 
-int64_t platform_clock::now_us()
+int64_t now_us()
 {
-    using namespace std::chrono;
-    return duration_cast<microseconds>(
-               steady_clock::now().time_since_epoch())
+    return std::chrono::duration_cast<std::chrono::microseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
         .count();
 }

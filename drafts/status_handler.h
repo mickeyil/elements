@@ -6,8 +6,6 @@
 
 class Playback;
 
-namespace controller_link {
-
 class WireReader;
 class BackgroundStore;
 
@@ -39,5 +37,3 @@ private:
     // parser sends the frame.
     uint8_t _scratch[14] = {};
 };
-
-}  // namespace controller_link

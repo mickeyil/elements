@@ -6,8 +6,6 @@
 
 #include "handler_result.h"
 
-namespace controller_link {
-
 class TcpTransport;
 class WireReader;
 class SessionHandler;
@@ -80,5 +78,3 @@ private:
     std::vector<uint8_t> _buf;
     size_t _buf_used = 0;
 };
-
-}  // namespace controller_link

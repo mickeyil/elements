@@ -8,7 +8,7 @@
 // ---------------------------------------------------------------------------
 
 TEST_CASE("SyncedClock: default-constructed is unsynced", "[synced_clock]") {
-    platform_clock::set_test_now_us(1'000'000);
+    set_test_now_us(1'000'000);
 
     SyncedClock c;
     CHECK_FALSE(c.is_synced());
@@ -23,7 +23,7 @@ TEST_CASE("SyncedClock: default-constructed is unsynced", "[synced_clock]") {
 // ---------------------------------------------------------------------------
 
 TEST_CASE("SyncedClock: positive offset means local leads remote", "[synced_clock]") {
-    platform_clock::set_test_now_us(1'000'000);
+    set_test_now_us(1'000'000);
 
     SyncedClock c;
     c.apply_sync_offset(/*offset*/ 250, /*valid_for*/ 1'000'000);
@@ -35,7 +35,7 @@ TEST_CASE("SyncedClock: positive offset means local leads remote", "[synced_cloc
 }
 
 TEST_CASE("SyncedClock: negative offset means remote leads local", "[synced_clock]") {
-    platform_clock::set_test_now_us(1'000'000);
+    set_test_now_us(1'000'000);
 
     SyncedClock c;
     c.apply_sync_offset(/*offset*/ -250, /*valid_for*/ 1'000'000);
@@ -50,25 +50,25 @@ TEST_CASE("SyncedClock: negative offset means remote leads local", "[synced_cloc
 // ---------------------------------------------------------------------------
 
 TEST_CASE("SyncedClock: lease expires at the exact boundary", "[synced_clock]") {
-    platform_clock::set_test_now_us(1'000'000);
+    set_test_now_us(1'000'000);
 
     SyncedClock c;
     c.apply_sync_offset(/*offset*/ 0, /*valid_for*/ 500'000);
     REQUIRE(c.is_synced());
 
     // is_synced() uses strict less-than: valid_until is exclusive.
-    platform_clock::set_test_now_us(1'499'999);
+    set_test_now_us(1'499'999);
     CHECK(c.is_synced());
 
-    platform_clock::set_test_now_us(1'500'000);
+    set_test_now_us(1'500'000);
     CHECK_FALSE(c.is_synced());
 
-    platform_clock::set_test_now_us(1'500'001);
+    set_test_now_us(1'500'001);
     CHECK_FALSE(c.is_synced());
 }
 
 TEST_CASE("SyncedClock: valid_for_us == 0 expires immediately", "[synced_clock]") {
-    platform_clock::set_test_now_us(42);
+    set_test_now_us(42);
 
     SyncedClock c;
     c.apply_sync_offset(/*offset*/ 1000, /*valid_for*/ 0);
@@ -80,34 +80,34 @@ TEST_CASE("SyncedClock: valid_for_us == 0 expires immediately", "[synced_clock]"
 }
 
 TEST_CASE("SyncedClock: re-apply refreshes the lease relative to current now", "[synced_clock]") {
-    platform_clock::set_test_now_us(1'000'000);
+    set_test_now_us(1'000'000);
 
     SyncedClock c;
     c.apply_sync_offset(/*offset*/ 0, /*valid_for*/ 500'000);
     // First lease covers [1'000'000, 1'500'000).
 
     // Time advances within the active lease.
-    platform_clock::set_test_now_us(1'200'000);
+    set_test_now_us(1'200'000);
     REQUIRE(c.is_synced());
 
     // Re-apply: the new lease is anchored to now=1'200'000, not stacked.
     c.apply_sync_offset(/*offset*/ 0, /*valid_for*/ 500'000);
     // New lease covers [1'200'000, 1'700'000).
 
-    platform_clock::set_test_now_us(1'699'999);
+    set_test_now_us(1'699'999);
     CHECK(c.is_synced());
 
-    platform_clock::set_test_now_us(1'700'000);
+    set_test_now_us(1'700'000);
     CHECK_FALSE(c.is_synced());
 }
 
 TEST_CASE("SyncedClock: remote mapping persists across lease expiry", "[synced_clock]") {
-    platform_clock::set_test_now_us(1'000'000);
+    set_test_now_us(1'000'000);
 
     SyncedClock c;
     c.apply_sync_offset(/*offset*/ 300, /*valid_for*/ 100);
 
-    platform_clock::set_test_now_us(1'500'000);
+    set_test_now_us(1'500'000);
 
     // Lease is long gone, but the last-known offset is still applied to
     // now_remote_us(). Callers gate on is_synced() if they need a fresh
@@ -121,7 +121,7 @@ TEST_CASE("SyncedClock: remote mapping persists across lease expiry", "[synced_c
 // ---------------------------------------------------------------------------
 
 TEST_CASE("SyncedClock: clear_sync drops sync and wipes the offset", "[synced_clock]") {
-    platform_clock::set_test_now_us(1'000'000);
+    set_test_now_us(1'000'000);
 
     SyncedClock c;
     c.apply_sync_offset(/*offset*/ 300, /*valid_for*/ 1'000'000);
@@ -136,12 +136,12 @@ TEST_CASE("SyncedClock: clear_sync drops sync and wipes the offset", "[synced_cl
 }
 
 TEST_CASE("SyncedClock: clear_sync is idempotent on an already-expired lease", "[synced_clock]") {
-    platform_clock::set_test_now_us(1'000'000);
+    set_test_now_us(1'000'000);
 
     SyncedClock c;
     c.apply_sync_offset(/*offset*/ 300, /*valid_for*/ 10);
 
-    platform_clock::set_test_now_us(2'000'000);
+    set_test_now_us(2'000'000);
     REQUIRE_FALSE(c.is_synced());
 
     c.clear_sync();
@@ -151,7 +151,7 @@ TEST_CASE("SyncedClock: clear_sync is idempotent on an already-expired lease", "
 }
 
 TEST_CASE("SyncedClock: re-apply after clear_sync restores synced state", "[synced_clock]") {
-    platform_clock::set_test_now_us(1'000'000);
+    set_test_now_us(1'000'000);
 
     SyncedClock c;
     c.apply_sync_offset(/*offset*/ 100, /*valid_for*/ 500'000);
@@ -174,7 +174,7 @@ TEST_CASE("SyncedClock: int64 arithmetic holds at year-scale magnitudes", "[sync
     // narrowing in the math path.
     constexpr int64_t LOCAL_US  = 1'000'000'000'000'000LL;  // ~31.7 years
     constexpr int64_t OFFSET_US =   100'000'000'000'000LL;  //  ~3.17 years
-    platform_clock::set_test_now_us(LOCAL_US);
+    set_test_now_us(LOCAL_US);
 
     SyncedClock c;
     c.apply_sync_offset(OFFSET_US, /*valid_for*/ 1'000'000'000LL);

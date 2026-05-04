@@ -12,8 +12,6 @@
 // platform-specific class. The current BackgroundStore in src/firmware/
 // becomes one impl of this.
 
-namespace controller_link {
-
 struct BackgroundMetadata {
     bool     present = false;
     uint16_t strip_length = 0;
@@ -51,5 +49,3 @@ public:
     // session lifetime that outlives the simulated reboot. Pick during
     // impl phase based on whether sim tests span reboots.
 };
-
-}  // namespace controller_link

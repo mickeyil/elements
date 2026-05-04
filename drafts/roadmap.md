@@ -12,7 +12,7 @@ in `src/playback.{h,cpp}`); the time-naming vocabulary is in
 - **Colors cutover.** `gamma_correct` is gone; old callers intentionally
   break until step 12 rewires through the new gamma path. No shim layer.
   No legacy compatibility window.
-- **SyncedClock test seam.** A small `platform_clock::now_us()` module
+- **SyncedClock test seam.** A small `now_us()` module
   selects `esp_timer_get_time()` on ARDUINO and `steady_clock` on host;
   tests link a controllable implementation. SyncedClock itself stays
   concrete — no virtuals, templates, or callbacks. Pinned by
@@ -69,7 +69,7 @@ with the v3 `Strip`.
 
 Landed as `src/platform_clock.h` + `src/platform_clock_host.cpp`
 (host) + `src/platform_clock_esp.cpp` (ARDUINO). Single-function seam:
-`int64_t platform_clock::now_us()`. The fake lives at
+`int64_t now_us()`. The fake lives at
 `test/platform_clock_test.{h,cpp}` and exposes `set_test_now_us` /
 `advance_test_us`. Production impl is selected at link time. The host
 TU is now compiled by `elements_core`; the ESP TU is added to
@@ -79,7 +79,7 @@ TU is now compiled by `elements_core`; the ESP TU is added to
 ### 4. `synced_clock.{h,cpp}` — DONE
 
 Landed in `src/synced_clock.{h,cpp}`. Reads time through
-`platform_clock::now_us()`; no `#ifdef ARDUINO`. Test target
+`now_us()`; no `#ifdef ARDUINO`. Test target
 `test_synced_clock` is standalone (mirrors `test_gamma`) and links the
 fake clock instead of any production impl. Coverage: initially
 unsynced; sign-convention round-trip (positive and negative offsets);

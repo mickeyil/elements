@@ -4,8 +4,6 @@
 
 #include "device_hello.h"
 
-namespace controller_link {
-
 class NetworkInterface;
 class TcpTransport;
 class UdpTransport;
@@ -112,5 +110,3 @@ private:
     // Discovery state, current OFFER snapshot, parser, etc. -- private
     // members. Not part of the public surface.
 };
-
-}  // namespace controller_link

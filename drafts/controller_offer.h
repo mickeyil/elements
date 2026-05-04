@@ -17,12 +17,8 @@
 // and no frame_port (sim-only frame UDP is configured outside the link
 // layer, in sim CLI flags). See controller_link.md for the rationale.
 
-namespace controller_link {
-
 struct ControllerOffer {
     uint32_t controller_ipv4_be = 0;
     uint16_t tcp_port = 0;
     uint32_t nonce = 0;
 };
-
-}  // namespace controller_link
