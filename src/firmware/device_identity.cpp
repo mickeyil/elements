@@ -43,7 +43,7 @@ void make_device_uid_(char* out, size_t out_size)
 DeviceIdentity make_esp_device_identity()
 {
     DeviceIdentity identity;
-    make_device_uid_(identity.uid, UID_CAPACITY);
+    make_device_uid_(identity.uid, UID_BUF_SIZE);
     identity.boot_token = make_boot_token_();
     return identity;
 }

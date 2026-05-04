@@ -21,7 +21,7 @@ uint32_t make_sim_boot_token_()
 DeviceIdentity make_sim_device_identity(const char* uid)
 {
     DeviceIdentity identity;
-    std::memcpy(identity.uid, uid, std::strlen(uid));
+    std::memcpy(identity.uid, uid, strnlen(uid, UID_SIZE));
     identity.boot_token = make_sim_boot_token_();
     return identity;
 }
