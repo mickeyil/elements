@@ -103,11 +103,11 @@ One compiled strip blob per device, persisted in LittleFS with metadata in NVS:
 
 ## Shared C++ Core (`src/`)
 
-Used by both firmware and simulator:
+Used by firmware, active v3 sim work, and host-side tests:
 
 | File | Role |
 |------|------|
-| `playback_device.h/cpp` | Abstract base: state machine, blob loading, tick loop, sync offset |
+| `playback.h/cpp` | Concrete playback state machine and frame rendering |
 | `decoder.h/cpp` | Binary blob parser → `Program` struct tree |
 | `engine.h/cpp` | Timeline cursor, animation lifecycle, remap scatter-copy |
 | `compositor.h/cpp` | Layer blending, HSV→RGB, gamma LUT |

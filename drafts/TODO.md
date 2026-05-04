@@ -134,7 +134,7 @@ plain bool, no `DecodeError` channel. `wire_constants.h` only defines
    identify the exact rejection reason without a debugger.
 
 This is part of the post-step-20 firmware owner rewire called out in
-`roadmap.md` Notes ("Old `src/` callers break during the migration").
+`roadmap.md` Notes ("Old simulator callers are staged for deletion").
 
 ---
 

@@ -142,7 +142,9 @@ Device backs off for 5 seconds on rejection.
 
 ### Clock Sync
 
-The controller probes each ESP32 to measure clock offset. Simulators skip sync (shared clock domain, offset = 0).
+The controller probes devices to measure clock offset. In v3, sims use
+the same sync path as firmware; on localhost the measured offset should
+be near zero because both endpoints share the host clock domain.
 
 ```
 Controller                           Device

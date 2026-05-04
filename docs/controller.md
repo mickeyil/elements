@@ -148,7 +148,7 @@ The compiler identifies time ranges where no event carries prior state, making e
 |------|------|
 | `controller/elemctl/service.py` | Core service logic: command handlers, compilation, device lifecycle |
 | `controller/elemctl/server.py` | Unix socket server, client management, tick loop |
-| `controller/elemctl/controller.py` | Python controller state machine (mirrors C++ SimController) |
+| `controller/elemctl/controller.py` | Python controller state machine |
 | `controller/elemctl/network_device.py` | TCP/UDP device transport (lazy connect, optimistic state) |
 | `controller/elemctl/config.py` | Config loading and validation |
 | `controller/elemctl/config_edit.py` | Atomic config mutations (add/edit/remove device) |
@@ -160,7 +160,7 @@ The compiler identifies time ranges where no event carries prior state, making e
 | `controller/elemctl/library.py` | Program catalog, metadata extraction, artifact cache |
 | `controller/elemctl/tui.py` | Interactive terminal UI (writer client) |
 | `controller/elemctl/run.py` | Standalone playback runner (no persistent service) |
-| `controller/elemctl/sim.py` | Legacy launcher for deprecated `network_sim` processes |
+| `controller/elemctl/sim.py` | Legacy launcher for deprecated `network_sim` processes; v3 sim launcher work is pending |
 | `compiler/elements/dsl.py` | User-facing DSL functions |
 | `compiler/elements/compiler.py` | Full compilation pipeline |
 | `compiler/elements/blob.py` | Binary blob serialization/deserialization |
@@ -171,9 +171,11 @@ The compiler identifies time ranges where no event carries prior state, making e
 ```bash
 ./elemctl server                        # start controller service using instance/config.json
 ./elemctl tui                           # connect TUI as writer
-./elemctl sim sim-1                     # launch a simulator using instance/config.json
 ./elemctl web                           # start web UI server (observer client)
 ./elemctl run program.py                # standalone: compile + play
 ```
+
+`./elemctl sim` still points at the deprecated `network_sim` path. The
+v3 sim launcher is not the active smoke-test path yet.
 
 `elemctl` is a self-bootstrapping script that creates/maintains a managed venv at `local/venv`.

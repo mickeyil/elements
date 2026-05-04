@@ -1,5 +1,10 @@
 # Playback Redesign
 
+> **Archived.** This file is historical context, not current design
+> authority. Prefer the active drafts and current source tree. In
+> particular, the old simulator stack now lives under `src/deprecated/`
+> and is staged for deletion after v3 sim support lands.
+>
 > Working draft for a more concrete replacement of `PlaybackDevice`.
 > This document is intentionally biased toward simplifying firmware first.
 > Simulation should follow firmware semantics, not the other way around.

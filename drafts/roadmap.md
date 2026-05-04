@@ -361,11 +361,10 @@ drain, truncation, empty-datagram drop, and unbound-state behavior;
 
 ## Notes
 
-- **Old `src/` callers break during the migration.** Legacy
-  `PlaybackDevice`, `ControllerDevice`, `SimDevice`, `ESPSimulated`,
-  and their tests depend on v2 shapes. They get retired (or rewritten
-  as thin owners) after step 20, not kept alive on the side. Tests
-  that block the build during the window are tolerated.
+- **Old simulator callers are staged for deletion.** Legacy
+  `ControllerDevice`, `SimDevice`, `ESPSimulated`, `network_sim`, and
+  their tests live under `src/deprecated/` and `test/deprecated/` until
+  v3 sim support replaces them. They are not part of the normal build.
 - **Compiler-side work is parallelizable.** v3 compiler emits the new
   blob per `blob_format.md` regardless of runtime progress. Schedule
   compiler changes independently; do not gate runtime migration on

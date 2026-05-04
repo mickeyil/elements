@@ -1,5 +1,9 @@
 # Redesign: Core Animation Data Structures
 
+> **Archived.** This file is historical context, not current design
+> authority. Prefer the active drafts and current source tree. Paths,
+> runtime ownership, and simulator details may be stale.
+>
 > **Superseded.** This document has been split into smaller, tighter pieces.
 > Read those instead of this file:
 >
