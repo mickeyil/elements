@@ -5,7 +5,7 @@
 #include <cstdarg>
 #include <cstdio>
 
-#include "wire_constants.h"
+#include "link_protocol.h"
 
 namespace {
 

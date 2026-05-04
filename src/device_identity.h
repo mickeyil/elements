@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "wire_constants.h"
+#include "link_protocol.h"
 
 // The device's stable identity. Held by the App; read each tick by the
 // link (DEVICE_HELLO write) and the sync client (PING send). Two

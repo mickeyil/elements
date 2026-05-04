@@ -3,7 +3,7 @@
 #include <Arduino.h>
 
 #include "diagnostics.h"
-#include "wire_constants.h"
+#include "link_protocol.h"
 
 #if __has_include("secrets.h")
 #include "secrets.h"

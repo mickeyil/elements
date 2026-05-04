@@ -35,7 +35,7 @@ connection.
   (`min(strlen, UID_WIRE_SIZE)` bytes copied, rest zero-padded).
 
 This work is currently broken on the v2 firmware build because the
-v3 `DeviceIdentity` struct shape and `wire_constants.h` location
+v3 `DeviceIdentity` struct shape and `link_protocol.h` location
 moved out from under it (intentional; firmware app is deprecated).
 
 ---
@@ -104,7 +104,7 @@ raw bytes that `memcpy` into a float at the wire-protocol parser:
 
 **Action.** Validate `std::isfinite(t_rel)` in the wire parser(s), log
 with full context, and ACK an error code (e.g., extend
-`wire_constants.h` if the existing `kAckError` bucket is too coarse).
+`link_protocol.h` if the existing `kAckError` bucket is too coarse).
 
 **Open question for that PR.** Whether to keep the Playback check as a
 belt-and-suspenders invariant or drop it once the wire layer is honest.
@@ -119,12 +119,12 @@ trust their callers, and a lone finiteness check there is asymmetric.
 **Today.** `ControllerConnection::handle_load_` in
 `src/firmware/controller_connection.cpp` still uses the v2 load
 signature: `_device->handle_load(blob, blob_len, gen)` returning a
-plain bool, no `DecodeError` channel. `wire_constants.h` only defines
+plain bool, no `DecodeError` channel. `link_protocol.h` only defines
 `kAckOk`, `kAckError`, `kAckWrongState`.
 
 **Action.**
 
-1. Add `kAckProfileMismatch = 3` to `src/firmware/wire_constants.h`.
+1. Add `kAckProfileMismatch = 3` to `src/link_protocol.h`.
 2. Rewire `handle_load_` onto `Playback::handle_load(blob, blob_len,
    &err)`. Mapping:
    - `DecodeError::Ok` → `kAckOk`

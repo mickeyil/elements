@@ -7,7 +7,7 @@
 #include "platform_clock.h"
 #include "synced_clock.h"
 #include "udp_transport.h"
-#include "wire_constants.h"
+#include "link_protocol.h"
 
 namespace {
 

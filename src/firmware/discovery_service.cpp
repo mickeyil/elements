@@ -7,7 +7,7 @@
 #include <cstring>
 
 #include "diagnostics.h"
-#include "wire_constants.h"
+#include "link_protocol.h"
 
 
 void DiscoveryService::begin(const DeviceIdentity& identity)

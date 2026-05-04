@@ -7,7 +7,7 @@
 #include "diagnostics.h"
 #include "esp_device.h"
 #include "hardware_profile.h"
-#include "wire_constants.h"
+#include "link_protocol.h"
 
 namespace {
 

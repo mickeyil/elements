@@ -8,7 +8,7 @@
 
 #include "diagnostics.h"
 #include "hardware_profile.h"
-#include "wire_constants.h"
+#include "link_protocol.h"
 
 namespace {
 
