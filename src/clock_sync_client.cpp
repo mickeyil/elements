@@ -67,8 +67,7 @@ constexpr size_t PONG_OFF_T3    = 25;
 
 ClockSyncClient::ClockSyncClient(UdpTransport& udp, SyncedClock& clock,
                                  const DeviceIdentity& identity)
-    : _udp(udp), _clock(clock), _identity(identity),
-      _last_local_boot_token(identity.boot_token)
+    : _udp(udp), _clock(clock), _identity(identity)
 {
     // Socket bind is lazy in poll(); a bind during construction would
     // fight the network stack at boot when Wi-Fi may not yet be up.
@@ -106,12 +105,6 @@ void ClockSyncClient::set_controller(uint32_t ipv4_be)
 
 void ClockSyncClient::poll()
 {
-    // Local-boot detection runs first so an in-process simulated reboot
-    // while idle still clears the now-meaningless lease.
-    if (_identity.boot_token != _last_local_boot_token) {
-        on_local_boot_change_();
-    }
-
     if (_target_ip == 0) {
         return;
     }
@@ -154,20 +147,6 @@ void ClockSyncClient::start_burst_()
     _in_burst            = true;
     _burst_deadline_us   = now + BURST_DURATION_US;
     _next_ping_due_us    = now;  // fire immediately on the next poll()
-}
-
-void ClockSyncClient::on_local_boot_change_()
-{
-    // Local monotonic timeline reset. The existing lease anchored
-    // _valid_until_local_us against the old timeline and is no longer
-    // meaningful; the offset itself was also computed against samples
-    // from the old timeline.
-    _last_local_boot_token = _identity.boot_token;
-    _clock.clear_sync();
-    reset_filter_();
-    if (_target_ip != 0) {
-        start_burst_();
-    }
 }
 
 void ClockSyncClient::on_remote_epoch_change_()

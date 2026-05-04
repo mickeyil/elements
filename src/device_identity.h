@@ -22,11 +22,8 @@
 // shape. Serialization copies min(strlen, UID_WIRE_SIZE) bytes and
 // zero-pads the rest of the slot.
 //
-// boot_token       fresh u32 on every (real or simulated) boot. Lets
-//                  the controller drop stale device-side state when it
-//                  sees the bump. The local code path also tracks
-//                  changes to this field to clear SyncedClock on
-//                  in-process simulated reboot.
+// boot_token       fresh u32 on every boot. Lets the controller drop
+//                  stale device-side state when it sees the bump.
 // protocol_version wire generation. Present in DEVICE_HELLO so the
 //                  controller can refuse devices it doesn't speak.
 

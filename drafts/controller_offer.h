@@ -9,7 +9,7 @@
 //   - TcpTransport::connect()  reads controller_ipv4_be + tcp_port
 //   - send_device_hello()      reads nonce
 //
-// Lifetime: set on OFFER, cleared on disconnect or simulated reboot.
+// Lifetime: set on OFFER, cleared on disconnect.
 // Most-recent-OFFER-wins; a fresh OFFER replaces any stale snapshot.
 //
 // Note: this struct deliberately holds only the bare minimum the link

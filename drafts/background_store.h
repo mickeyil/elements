@@ -5,8 +5,9 @@
 
 // Abstract background-blob store. Two impls:
 //   - EspBackgroundStore: NVS metadata + LittleFS blob (firmware).
-//   - SimBackgroundStore: process-stable backing (host/sim) that survives
-//                         a simulated reboot, since ESP flash does.
+//   - SimBackgroundStore: file at a stable path on disk; survives the
+//                         launcher-driven re-exec on sim reboot, the
+//                         same way ESP flash survives a chip restart.
 //
 // StorageHandler and StatusHandler depend on this interface, never on a
 // platform-specific class. The current BackgroundStore in src/firmware/
@@ -43,9 +44,7 @@ public:
     // blob is present, sizes don't match, or read fails.
     virtual bool read_blob(uint8_t* out, size_t out_len) const = 0;
 
-    // TODO: sim impl needs to persist across SimSystemPlatform::reboot().
-    // Two reasonable backings: a file under a stable path (XDG runtime
-    // dir, /tmp/elements-bg-<uid>), or an in-process store wired to a
-    // session lifetime that outlives the simulated reboot. Pick during
-    // impl phase based on whether sim tests span reboots.
+    // TODO: sim impl backs the store with a file at a stable path
+    // (e.g. XDG runtime dir, /tmp/elements-bg-<uid>) so it survives
+    // the launcher-driven re-exec on sim reboot.
 };

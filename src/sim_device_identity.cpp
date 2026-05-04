@@ -3,7 +3,9 @@
 #include <cstring>
 #include <random>
 
-uint32_t make_sim_boot_token()
+namespace {
+
+uint32_t make_sim_boot_token_()
 {
     std::random_device random;
     uint32_t token =
@@ -13,6 +15,8 @@ uint32_t make_sim_boot_token()
     }
     return token;
 }
+
+}  // namespace
 
 bool make_sim_device_identity(const char* uid, DeviceIdentity* out)
 {
@@ -27,7 +31,7 @@ bool make_sim_device_identity(const char* uid, DeviceIdentity* out)
 
     DeviceIdentity identity;
     std::memcpy(identity.uid, uid, uid_len);
-    identity.boot_token = make_sim_boot_token();
+    identity.boot_token = make_sim_boot_token_();
     *out = identity;
     return true;
 }

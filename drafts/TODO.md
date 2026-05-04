@@ -232,6 +232,40 @@ to map the returns onto the wire ACKs.
 
 ---
 
+## Sim launcher: process-restart on reboot command
+
+**Today.** No supervisor exists. The earlier design assumed in-process
+simulated reboot (`SimSystemPlatform` resetting subsystems in memory);
+that is being dropped in favor of process restart so the sim's RAM is
+truly wiped, `boot_token` regenerates through the normal startup path,
+and the "remember every piece of state to reset" hazard goes away. The
+sim binary itself only needs to exit on reboot; the supervisor that
+re-execs it is the deferred work tracked here.
+
+**Action.**
+
+1. Sim binary: on `SystemHandler` reboot request, flush the ACK then
+   call `_exit(SIM_REBOOT_EXIT_CODE)` (e.g. 64). Normal exits (0) and
+   crashes (other nonzero) stay as-is.
+2. Supervisor lives in `elemctl sim` (or a small sibling). It execs
+   the sim binary with the resolved argv and waits.
+3. Reboot sentinel exit code: re-exec with the same argv. Any other
+   exit code: surface it, do not restart.
+4. Argv preserved across re-exec: `--device-uid`, log path, background
+   storage path. `--tcp-port 0` (ephemeral) is fine; the relaunched
+   process gets a new port and discovery announces it.
+5. Crash-loop guard: more than N restarts within a short window means
+   give up and surface the error.
+6. Signal handling: `SIGTERM` is graceful exit, no restart. Abnormal
+   death without the sentinel is also no restart.
+
+**Depends on.** `SystemHandler` being available so the reboot opcode
+can be wired to `_exit(SIM_REBOOT_EXIT_CODE)`. The in-process-reboot
+detection in `ClockSyncClient` has already been removed; nothing on
+the device side currently observes a runtime `boot_token` change.
+
+---
+
 ### Loss-of-sync lifecycle
 
 **Today.** `SyncedClock::is_synced()` flips false automatically when the

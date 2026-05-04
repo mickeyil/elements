@@ -25,19 +25,15 @@ struct DeviceIdentity;
 //
 // Reset triggers, all self-contained:
 //   - target IP changes (set_controller)            : reset filter and
-//     drop outstanding round; clear remembered controller boot token;
-//     restart burst (or go idle on 0). SyncedClock is left alone so
-//     its lease can ride to expiry on a transient drop.
+//     drop outstanding round; restart burst (or go idle on 0).
+//     SyncedClock is left alone so its lease can ride to expiry on a
+//     transient drop. The remembered controller boot token rides too,
+//     so a same-IP reconnect can still detect a controller reboot
+//     against the lease's original token.
 //   - controller boot token in PONG changes         : remote clock
 //     epoch jumped (controller rebooted on the same hardware). Clear
 //     SyncedClock, reset filter, drop the round, discard the
 //     triggering PONG, restart burst. Next ping fires immediately.
-//   - local DeviceIdentity.boot_token changes       : in-process sim
-//     reboot. Local monotonic timeline reset; the existing lease
-//     refers to the old timeline. Clear SyncedClock, reset filter,
-//     drop the round; if a target is set, restart burst. Checked
-//     before the no-target early-return so a reboot-while-idle still
-//     invalidates the old lease.
 //
 // Burst: 500 ms cadence, exits on the first applied lease or on a
 // 10 s deadline (whichever comes first). Steady cadence is 15 s.
@@ -71,8 +67,8 @@ public:
     // no-op so the App can call this every tick unconditionally.
     void set_controller(uint32_t ipv4_be);
 
-    // Single per-tick entry point. Drives the local-boot-token check,
-    // the schedule, sends, and reply processing.
+    // Single per-tick entry point. Drives the schedule, sends, and
+    // reply processing.
     void poll();
 
     // Filter window size. Tests reach for this when constructing
@@ -87,10 +83,6 @@ private:
     // Begin or restart the burst window: fast cadence until first
     // lease applied or BURST_DURATION_US elapses, whichever first.
     void start_burst_();
-
-    // Detected via _identity.boot_token changing under us. Local
-    // timeline reset; the existing lease is meaningless.
-    void on_local_boot_change_();
 
     // Detected via PONG.controller_boot_token differing from the seeded
     // value. Remote timeline reset.
@@ -130,12 +122,6 @@ private:
     // 0 means idle. Non-zero is the controller's IPv4 in network byte
     // order (matches UdpTransport's send/recv addressing convention).
     uint32_t _target_ip = 0;
-
-    // Last-seen device boot_token. Compared against _identity.boot_token
-    // each tick to detect in-process simulated reboot. Seeded from the
-    // current identity in the ctor so first poll() does not spuriously
-    // fire on_local_boot_change_().
-    uint32_t _last_local_boot_token = 0;
 
     // Last-seen controller boot token, from PONG. 0 is the unseeded
     // sentinel; the protocol reserves 0 (controllers regenerate

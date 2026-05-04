@@ -46,17 +46,15 @@ Reset triggers are all local to the client:
   jumped (controller rebooted on the same hardware). Clear
   `SyncedClock`, reset filter, drop outstanding round, discard the
   triggering PONG, restart the burst.
-- **local `DeviceIdentity.boot_token` changes**: in-process simulated
-  reboot. Local monotonic timeline reset; the existing lease anchored
-  against the old timeline is meaningless. Clear `SyncedClock`, reset
-  filter, drop the round; if a target is set, restart the burst. The
-  check runs before the no-target early-return in `poll()` so a
-  reboot-while-idle still invalidates the old lease.
+
+Local reboot is not a reset trigger inside the client: a sim reboot
+is a process restart (handled by the launcher; see `drafts/TODO.md`),
+which constructs a new `ClockSyncClient` with no carried state. The
+`DeviceIdentity` is immutable after construction on both platforms.
 
 The client owns these resets because the signals that trigger them
-(IP setter, PONG token field, identity field change) are observable
-from inside `poll()`; no App-side coordination is required beyond the
-one bridging line.
+(IP setter, PONG token field) are observable from inside `poll()`;
+no App-side coordination is required beyond the one bridging line.
 
 ## Why the direction flipped
 
@@ -204,8 +202,13 @@ The reset triggers and what each one invalidates:
 | `set_controller(0)` (target cleared)               | reset  | dropped           | closed     | rides with lease              | left alone (lease rides)    |
 | `set_controller(new_ip)` (target changed)          | reset  | dropped           | closed     | rides with lease              | left alone (lease rides)    |
 | Remote `controller_boot_token` change in PONG      | reset  | dropped           | left bound | updated to new value          | **cleared**                 |
-| Local `_identity.boot_token` change (sim reboot)   | reset  | dropped           | left bound | left alone                    | **cleared**                 |
 | `recv` / `send` socket error                       | left   | left              | closed     | left alone                    | left alone                  |
+
+A local (device) reboot is not a row in this table because it isn't
+observed in-process: on ESP it's `ESP.restart()`, on sim it's
+`_exit(SIM_REBOOT_EXIT_CODE)` followed by a fresh launcher-driven
+process. Either way the next `ClockSyncClient` is constructed from
+scratch.
 
 The token rides through `set_controller(0)` and target IP changes for
 the same reason `SyncedClock`'s lease does: the two encode a single
@@ -219,9 +222,6 @@ Notes:
 - The UDP socket binds lazily inside `poll()` on the first tick a
   target is set; a bind failure just delays the first ping to the
   next tick rather than stranding the client.
-- The local-boot check runs **before** the no-target early-return in
-  `poll()` so a simulated reboot while idle still invalidates the now
-  meaningless lease.
 - On a remote epoch change the triggering PONG is **discarded** (not
   processed as a sample): it's the witness of change, not a usable
   measurement against the new epoch. The next ping fires immediately
@@ -236,9 +236,6 @@ Notes:
 - Closing the UDP socket to flush the kernel queue on token change
   is unnecessary: stale queued PONGs from before the reboot all fail
   the round-match check (their seq is older than `_last_sent_seq`).
-- On simulated reboot, `SimSystemPlatform` writes a fresh `boot_token`
-  into the shared `DeviceIdentity`; the local-boot check picks that
-  up on the next tick.
 - The "what does playback do when sync is lost mid-program" policy
   belongs to Playback / firmware mode, not to `ClockSyncClient`. See
   `drafts/TODO.md` § Playback (loss-of-sync lifecycle).

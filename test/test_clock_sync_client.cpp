@@ -15,10 +15,9 @@
 //
 // In scope (testable without a controller):
 //   - target set / clear / change behavior (UDP socket, filter, lease)
+//   - first PING carries the identity boot_token
 //   - first PONG seeds controller_boot_token; subsequent change triggers
 //     a clean reset and discards the triggering PONG
-//   - local DeviceIdentity.boot_token change clears SyncedClock, even
-//     when idle
 //   - PONG validation gates (src_ip, size, type, seq, t1)
 //   - filter applies a lease once enough samples land
 //   - burst exits on first lease, falls back on deadline
@@ -179,8 +178,6 @@ void exchange_round(ClockSyncClient& client, FakeUdpTransport& udp,
     client.poll();
 }
 
-// Construct an identity with a known boot_token so test-side mutation is
-// distinguishable from the constructor seed.
 DeviceIdentity make_identity(uint32_t boot_token = 0xDEADBEEF) {
     DeviceIdentity id;
     std::strncpy(id.uid, "sim-test-uid", UID_CAPACITY - 1);
@@ -304,6 +301,27 @@ TEST_CASE("changing target IP resets filter and restarts burst",
 }
 
 // ---------------------------------------------------------------------------
+// PING wire content
+// ---------------------------------------------------------------------------
+
+TEST_CASE("first PING carries the identity boot_token",
+          "[clock_sync_client]") {
+    set_test_now_us(1'000'000);
+
+    SyncedClock      clock;
+    DeviceIdentity   id  = make_identity(0x12345678U);
+    FakeUdpTransport udp;
+    ClockSyncClient  client(udp, clock, id);
+
+    client.set_controller(CONTROLLER_IP_A);
+    client.poll();
+
+    REQUIRE(udp.sent.size() == 1);
+    const ParsedPing ping = parse_ping(udp.sent.back().bytes);
+    CHECK(ping.device_boot_token == 0x12345678U);
+}
+
+// ---------------------------------------------------------------------------
 // Controller boot token (remote epoch)
 // ---------------------------------------------------------------------------
 
@@ -370,70 +388,6 @@ TEST_CASE("controller_boot_token change clears SyncedClock and discards PONG",
     // Epoch change started a fresh burst: the same poll() that
     // detected the change also fired the immediate-due ping.
     CHECK(udp.sent.size() == sent_before_change + 2);
-}
-
-// ---------------------------------------------------------------------------
-// Local boot token (in-process simulated reboot)
-// ---------------------------------------------------------------------------
-
-TEST_CASE("local boot_token change clears SyncedClock while idle",
-          "[clock_sync_client]") {
-    set_test_now_us(1'000'000);
-
-    SyncedClock      clock;
-    DeviceIdentity   id  = make_identity(0x11111111U);
-    FakeUdpTransport udp;
-    ClockSyncClient  client(udp, clock, id);
-
-    client.set_controller(CONTROLLER_IP_A);
-    for (int i = 0; i < 3; ++i) {
-        exchange_round(client, udp, CONTROLLER_IP_A, 0xAAAAU,
-                       /*offset*/ 1'000'000);
-        advance_test_us(BURST_INTERVAL_US);
-    }
-    REQUIRE(clock.is_synced());
-
-    // Go idle. Lease still rides.
-    client.set_controller(0);
-    CHECK(clock.is_synced());
-
-    // Simulated reboot: identity boot_token changes underneath the
-    // client. Local timeline reset; the lease's _valid_until_local_us
-    // is meaningless. poll() should observe and clear.
-    id.boot_token = 0x22222222U;
-    client.poll();
-
-    CHECK_FALSE(clock.is_synced());
-}
-
-TEST_CASE("local boot_token change while active clears and restarts burst",
-          "[clock_sync_client]") {
-    set_test_now_us(1'000'000);
-
-    SyncedClock      clock;
-    DeviceIdentity   id  = make_identity(0x33333333U);
-    FakeUdpTransport udp;
-    ClockSyncClient  client(udp, clock, id);
-
-    client.set_controller(CONTROLLER_IP_A);
-    for (int i = 0; i < 3; ++i) {
-        exchange_round(client, udp, CONTROLLER_IP_A, 0xAAAAU,
-                       /*offset*/ 1'000'000);
-        advance_test_us(BURST_INTERVAL_US);
-    }
-    REQUIRE(clock.is_synced());
-
-    // Reboot while target is still set. Lease cleared, burst restarted.
-    id.boot_token = 0x44444444U;
-    const size_t sent_before = udp.sent.size();
-    client.poll();
-
-    CHECK_FALSE(clock.is_synced());
-    CHECK(udp.sent.size() == sent_before + 1);  // immediate burst ping
-
-    // The new PING carries the new boot_token.
-    const ParsedPing ping = parse_ping(udp.sent.back().bytes);
-    CHECK(ping.device_boot_token == 0x44444444U);
 }
 
 // ---------------------------------------------------------------------------

@@ -317,11 +317,12 @@ RGB frame send loop. The duplicate parser/dispatch/framing is **deleted
 in the same change** — no half-migrated state.
 
 The system handler's reboot has two impls: `EspSystemPlatform` calls
-`ESP.restart()` after a short flush delay; `SimSystemPlatform`
-simulates an observable reboot — disconnects, resets volatile session
-state, generates a fresh `boot_token`, resumes discovery. Background
-storage persists across the simulated reboot the same way ESP flash
-does.
+`ESP.restart()` after a short flush delay; `SimSystemPlatform` exits
+with the reboot sentinel code so the launcher re-execs the binary.
+RAM is wiped naturally, `boot_token` is regenerated through the
+normal startup path, and file-backed background storage survives
+because the file does. The launcher contract is tracked in
+`drafts/TODO.md` § "Sim launcher: process-restart on reboot command".
 
 Everything else is shared: the parser, all five handlers, `WireReader`,
 `HandlerResult`, opcode constants, `send_device_hello`,
@@ -375,12 +376,9 @@ link itself; they show up where flagged.
 
 - `Playback::handle_start` / `handle_resume` / `handle_jump` need to
   return status. Tracked in `drafts/TODO.md` § Playback.
-- `BackgroundStore` needs a sim impl that survives simulated reboot.
-  Interface is defined in `drafts/background_store.h`; backing
-  decision is for the impl phase.
-- `boot_token` source on simulated reboot — `SimSystemPlatform`
-  generates a fresh one and writes it to the shared `DeviceIdentity`.
-  Wiring is in the impl phase.
+- `BackgroundStore` needs a sim impl. Backing is a file at a stable
+  path; re-exec on reboot preserves it the same way ESP flash does.
+  Interface is defined in `drafts/background_store.h`.
 
 ---
 
