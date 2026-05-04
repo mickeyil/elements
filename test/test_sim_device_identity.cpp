@@ -1,4 +1,4 @@
-#include "../src/sim_device_identity.h"
+#include "sim/sim_device_identity.h"
 
 #include <catch2/catch_test_macros.hpp>
 

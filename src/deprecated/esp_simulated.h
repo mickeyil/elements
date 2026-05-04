@@ -24,7 +24,7 @@ public:
     ESPSimulated();
     explicit ESPSimulated(uint16_t strip_length);
 
-    // Drain queued frames/telemetry — destructive, order-preserving
+    // Drain queued frames/telemetry : destructive, order-preserving
     std::vector<SimRgbFrame> drain_frames();
     std::vector<SimTelemetry> drain_telemetry();
 

@@ -98,7 +98,7 @@ raw bytes that `memcpy` into a float at the wire-protocol parser:
 - `src/firmware/controller_connection.cpp::handle_jump_` — TCP path; can
   log the bad payload (seq, gen, hex) and ACK the controller with a
   meaningful error code instead of silently dropping the command.
-- `src/sim_controller.cpp` — host-side caller that constructs `t_program`
+- `src/deprecated/sim_controller.cpp` — host-side caller that constructs `t_program`
   before calling `handle_jump`; same UB exposure if a NaN ever leaks in,
   but no wire to reject from.
 
@@ -162,7 +162,7 @@ header or other drafts.
 
 ### Firmware and sim owner presentation loop
 
-**Today.** `src/firmware/esp_device.{h,cpp}` and `src/esp_simulated.{h,cpp}`
+**Today.** `src/firmware/esp_device.{h,cpp}` and `src/deprecated/esp_simulated.{h,cpp}`
 still derive from the legacy `PlaybackDevice`. There is no owner that
 drives `src/playback.{h,cpp}`; the post-step-20 owner rewire is unstarted.
 
@@ -268,7 +268,7 @@ the device side currently observes a runtime `boot_token` change.
 
 ## Sim UID policy enforcement in the launcher
 
-**Today.** `make_sim_device_identity` in `src/sim_device_identity.cpp`
+**Today.** `make_sim_device_identity` in `src/sim/sim_device_identity.cpp`
 copies whatever string it is handed into the wire slot, with only a
 length sanity check. The wire spec
 (`drafts/controller_link.md` § Identity) says sim UIDs must start with

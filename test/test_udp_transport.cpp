@@ -8,7 +8,7 @@
 #include <thread>
 #include <vector>
 
-#include "../src/posix_udp_transport.h"
+#include "sim/posix_udp_transport.h"
 
 namespace {
 

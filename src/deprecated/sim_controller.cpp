@@ -41,13 +41,13 @@ void SimController::queue_event(ControllerEvent::Kind kind, const std::string& m
 
 bool SimController::load(const CompiledManifest& manifest, bool loop)
 {
-    // Validate strip count — manifest must cover all configured strips
+    // Validate strip count : manifest must cover all configured strips
     if (manifest.strips.size() != _strips.size()) {
         queue_event(ControllerEvent::ERROR, "strip count mismatch");
         return false;
     }
 
-    // Order-independent matching: map manifest strips → canonical indices
+    // Order-independent matching: map manifest strips -> canonical indices
     std::vector<size_t> prog_to_canon(manifest.strips.size());
     std::vector<bool> seen(_strips.size(), false);
 
@@ -83,7 +83,7 @@ bool SimController::load(const CompiledManifest& manifest, bool loop)
         const auto& sb = manifest.strips[pi];
         if (!_strips[ci].device->handle_load(sb.blob.data(), sb.blob.size(), new_gen)) {
             // handle_load is destructive (deletes old engine), so already-loaded
-            // devices retain the new program. Stop them (→ LOADED, inert).
+            // devices retain the new program. Stop them (-> LOADED, inert).
             // The failed device is IDLE. Next load() overwrites everything.
             for (size_t li : loaded)
                 _strips[li].device->handle_stop();
@@ -101,7 +101,7 @@ bool SimController::load(const CompiledManifest& manifest, bool loop)
         loaded.push_back(ci);
     }
 
-    // All devices loaded — commit identity
+    // All devices loaded : commit identity
     _session_id++;
     _epoch = 0;
     _gen = new_gen;
@@ -216,9 +216,9 @@ void SimController::debug_seek(float t_rel)
     _buckets.clear();
 
     if (_state == ControllerState::PLAYING) {
-        // Stay PLAYING — debug_seek adjusts t0 for PLAYING devices
+        // Stay PLAYING : debug_seek adjusts t0 for PLAYING devices
     } else {
-        // LOADED, PAUSED, ENDED → PAUSED
+        // LOADED, PAUSED, ENDED -> PAUSED
         _paused_t_rel = 0.0f;
         for (auto& s : _strips) {
             float t = s.device->current_t_rel();

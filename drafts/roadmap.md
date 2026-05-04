@@ -346,7 +346,7 @@ ops + spark event.
 consume them and the host-side sim/network paths track per-call gen
 themselves. Resolves the only open decision blocking this step.
 
-### 21. `udp_transport.h` + `posix_udp_transport.{h,cpp}` + `firmware/esp_udp_transport.{h,cpp}` — DONE
+### 21. `udp_transport.h` + `sim/posix_udp_transport.{h,cpp}` + `firmware/esp_udp_transport.{h,cpp}` — DONE
 
 ABC promoted from `drafts/udp_transport.h` to `src/udp_transport.h`
 with rebind semantics phrased in terms of the current bound port and

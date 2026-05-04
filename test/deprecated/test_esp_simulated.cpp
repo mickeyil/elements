@@ -1,6 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
-#include "../src/esp_simulated.h"
+#include "deprecated/esp_simulated.h"
 
 #include <cstdio>
 #include <cstring>
@@ -8,7 +8,7 @@
 #include <vector>
 
 // ---------------------------------------------------------------------------
-// ControlledESPSimulated — deterministic clock for testing
+// ControlledESPSimulated : deterministic clock for testing
 // ---------------------------------------------------------------------------
 
 class ControlledESPSimulated : public ESPSimulated {
@@ -26,7 +26,7 @@ private:
 };
 
 // ---------------------------------------------------------------------------
-// MiniSimController — test-local frame assembler
+// MiniSimController : test-local frame assembler
 // ---------------------------------------------------------------------------
 
 struct ProgramFrame {
@@ -253,7 +253,7 @@ TEST_CASE("Frame emission on normal playback tick", "[espsim]") {
     CHECK(frames[0].frame_index == 0);
     CHECK(frames[0].t_rel == Catch::Approx(0.5f));
 
-    // Tick at t=1.0 — shift activates, snapshots paint, no shift yet
+    // Tick at t=1.0 : shift activates, snapshots paint, no shift yet
     dev.set_time(1'000'000);
     dev.tick_once();
 
@@ -264,14 +264,14 @@ TEST_CASE("Frame emission on normal playback tick", "[espsim]") {
     CHECK(frames[0].t_rel == Catch::Approx(1.0f));
     REQUIRE(frames[0].rgb.size() == 15);
 
-    // Verify RGB: shift snapshot of paint → [51, 102, 153, 204, 255]
+    // Verify RGB: shift snapshot of paint -> [51, 102, 153, 204, 255]
     check_pixel_vec(frames[0].rgb, 0, 51);
     check_pixel_vec(frames[0].rgb, 1, 102);
     check_pixel_vec(frames[0].rgb, 2, 153);
     check_pixel_vec(frames[0].rgb, 3, 204);
     check_pixel_vec(frames[0].rgb, 4, 255);
 
-    // Tick at t=2.0 — shift has moved pixels right by 1
+    // Tick at t=2.0 : shift has moved pixels right by 1
     dev.set_time(2'000'000);
     dev.tick_once();
 
@@ -298,12 +298,12 @@ TEST_CASE("No frame for future-start pre-roll", "[espsim]") {
     dev.drain_telemetry();
     dev.drain_frames();
 
-    // Tick at t=1s — before t0, no frame emitted
+    // Tick at t=1s : before t0, no frame emitted
     dev.set_time(1'000'000);
     dev.tick_once();
     CHECK(dev.drain_frames().empty());
 
-    // Tick at t=3s — now past t0, t_rel = 1.0
+    // Tick at t=3s : now past t0, t_rel = 1.0
     dev.set_time(3'000'000);
     dev.tick_once();
     auto frames = dev.drain_frames();
@@ -418,7 +418,7 @@ TEST_CASE("debug_seek from PAUSED stays PAUSED", "[espsim][debug]") {
 
     CHECK(frames[0].t_rel == Catch::Approx(2.0f));
 
-    // At t=2.0: shifted right by 1 → [0, 51, 102, 153, 204]
+    // At t=2.0: shifted right by 1 -> [0, 51, 102, 153, 204]
     check_pixel_vec(frames[0].rgb, 0, 0);
     check_pixel_vec(frames[0].rgb, 1, 51);
     check_pixel_vec(frames[0].rgb, 4, 204);
@@ -518,7 +518,7 @@ TEST_CASE("debug_step clamps at boundaries", "[espsim][debug]") {
     auto blob = load_blob(SHIFT_FIXTURE);
     REQUIRE(dev.handle_load(blob.data(), blob.size(), 1));
 
-    // Step backward from 0 — stays at 0
+    // Step backward from 0 : stays at 0
     dev.debug_seek(0.0f);
     dev.drain_frames();
     dev.debug_step(-1);
@@ -530,12 +530,12 @@ TEST_CASE("debug_step clamps at boundaries", "[espsim][debug]") {
 TEST_CASE("debug_step ignored in invalid states", "[espsim][debug]") {
     ControlledESPSimulated dev(5);
 
-    // IDLE — no-op
+    // IDLE : no-op
     dev.debug_step(1);
     CHECK(dev.state() == DeviceState::IDLE);
     CHECK(dev.drain_frames().empty());
 
-    // PLAYING — no-op
+    // PLAYING : no-op
     auto blob = load_blob(SHIFT_FIXTURE);
     REQUIRE(dev.handle_load(blob.data(), blob.size(), 1));
     dev.set_time(0);
@@ -595,7 +595,7 @@ TEST_CASE("Two-strip shared-start program frame assembly", "[espsim][integration
     left.drain_frames();
     right.drain_frames();
 
-    // Tick both at t=1.0 — shift activates, snapshots paint
+    // Tick both at t=1.0 : shift activates, snapshots paint
     left.set_time(1'000'000);
     right.set_time(1'000'000);
     left.tick_once();
@@ -629,7 +629,7 @@ TEST_CASE("Two-strip shared-start program frame assembly", "[espsim][integration
     check_pixel_vec(pframes[0].strips[1], 3, 102);
     check_pixel_vec(pframes[0].strips[1], 4, 51);
 
-    // Tick both at t=2.0 — shift has moved right by 1
+    // Tick both at t=2.0 : shift has moved right by 1
     left.set_time(2'000'000);
     right.set_time(2'000'000);
     left.tick_once();
@@ -690,7 +690,7 @@ TEST_CASE("Complete-only assembly: partial does not emit", "[espsim][integration
     CHECK(ctrl.drain().empty());
     CHECK(ctrl.pending_count() == 1);
 
-    // Now tick right — completes the frame
+    // Now tick right : completes the frame
     right.set_time(1'000'000);
     right.tick_once();
     auto rframes = right.drain_frames();

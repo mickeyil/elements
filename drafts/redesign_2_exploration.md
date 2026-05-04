@@ -12,8 +12,8 @@ future task.
 
 ## ControllerDevice / SimDevice parallel hierarchy
 
-`src/controller_device.h`, `src/sim_device.h`, and
-`src/sim_controller.{h,cpp}` exist so the host-side `SimController`
+`src/deprecated/controller_device.h`, `src/deprecated/sim_device.h`, and
+`src/deprecated/sim_controller.{h,cpp}` exist so the host-side `SimController`
 doesn't depend on `PlaybackDevice` internals. The cost is a parallel
 hierarchy plus a pure-delegation adapter that mirrors part of the
 command surface but omits profile / sync / detach.

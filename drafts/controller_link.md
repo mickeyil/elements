@@ -4,7 +4,7 @@ This is the device side of the controller↔device wire. It owns
 discovery, the outbound TCP dial, the `DEVICE_HELLO` handshake, and the
 parser that runs above the connected socket. It replaces the v2
 monolith in `src/firmware/controller_connection.{h,cpp}` and the
-duplicated parser in `src/network_sim.cpp`.
+duplicated parser in `src/deprecated/network_sim.cpp`.
 
 ## Where it sits
 
@@ -314,11 +314,11 @@ the device or the protocol.
 
 ## Sim parity
 
-`network_sim.cpp`'s ~660-line monolith collapses to: socket setup, a
-`PosixTcpTransport` and `PosixUdpTransport`, the same shared
-parser/handlers/`ClockSyncClient` that firmware uses, and the sim-only
-RGB frame send loop. The duplicate parser/dispatch/framing is **deleted
-in the same change** — no half-migrated state.
+`src/deprecated/network_sim.cpp`'s monolith collapses to: socket setup,
+`PosixTcpTransport` and `PosixUdpTransport` from `src/sim/`, the same
+shared parser/handlers/`ClockSyncClient` that firmware uses, and the
+sim-only RGB frame send loop. The duplicate parser/dispatch/framing is
+**deleted in the same change** — no half-migrated state.
 
 The system handler's reboot has two impls: `EspSystemPlatform` calls
 `ESP.restart()` after a short flush delay; `SimSystemPlatform` exits

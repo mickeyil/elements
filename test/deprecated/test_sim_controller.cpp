@@ -1,15 +1,15 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
-#include "../src/sim_controller.h"
-#include "../src/sim_device.h"
-#include "../src/playback_device.h"
+#include "deprecated/sim_controller.h"
+#include "deprecated/sim_device.h"
+#include "playback_device.h"
 
 #include <cstdio>
 #include <stdexcept>
 #include <vector>
 
 // ---------------------------------------------------------------------------
-// ControlledESPSimulated — deterministic clock for testing
+// ControlledESPSimulated : deterministic clock for testing
 // ---------------------------------------------------------------------------
 
 class ControlledESPSimulated : public ESPSimulated {
@@ -24,7 +24,7 @@ private:
 };
 
 // ---------------------------------------------------------------------------
-// FakeDevice — minimal ControllerDevice with no debug_seek support
+// FakeDevice : minimal ControllerDevice with no debug_seek support
 // ---------------------------------------------------------------------------
 
 class FakeDevice : public ControllerDevice {
@@ -267,8 +267,8 @@ TEST_CASE("Device load failure fails controller load", "[simctrl]") {
     auto evts = ctrl.drain_events();
     CHECK(has_event(evts, ControllerEvent::ERROR));
 
-    // Device asymmetry: strip 0 loaded OK then got handle_stop → LOADED;
-    // strip 1 failed decode → IDLE. Next load() overwrites both.
+    // Device asymmetry: strip 0 loaded OK then got handle_stop -> LOADED;
+    // strip 1 failed decode -> IDLE. Next load() overwrites both.
     CHECK(f.left.state() == DeviceState::LOADED);
     CHECK(f.right.state() == DeviceState::IDLE);
 }
@@ -292,7 +292,7 @@ TEST_CASE("Failed device load does not advance identity", "[simctrl]") {
     ctrl.drain_program_frames();
     ctrl.drain_events();
 
-    // Failed second load (strip 1 bad blob) — strip 0 loads OK then strip 1 fails
+    // Failed second load (strip 1 bad blob) : strip 0 loads OK then strip 1 fails
     auto bad = f.program();
     bad.strips[1].blob = {0xDE, 0xAD};
     CHECK_FALSE(ctrl.load(bad));
@@ -300,7 +300,7 @@ TEST_CASE("Failed device load does not advance identity", "[simctrl]") {
     // Identity must not have advanced
     CHECK(ctrl.session_id() == 1);
     CHECK(ctrl.epoch() == 1);
-    // State goes IDLE — handle_load is destructive, old program is gone
+    // State goes IDLE : handle_load is destructive, old program is gone
     CHECK(ctrl.state() == ControllerState::IDLE);
     // Session data fully cleared
     CHECK(ctrl.duration() == 0.0f);
@@ -337,7 +337,7 @@ TEST_CASE("Failed reload clears session remnants and partial buckets", "[simctrl
     CHECK(ctrl.duration() == Catch::Approx(5.0f));
     CHECK(ctrl.current_t_rel() > 0.0f);
 
-    // Failed reload — bad blob for strip 1
+    // Failed reload : bad blob for strip 1
     auto bad = f.program();
     bad.strips[1].blob = {0xDE, 0xAD};
     CHECK_FALSE(ctrl.load(bad));
@@ -348,7 +348,7 @@ TEST_CASE("Failed reload clears session remnants and partial buckets", "[simctrl
     CHECK(ctrl.current_t_rel() == Catch::Approx(0.0f));
     CHECK(ctrl.drain_program_frames().empty());
 
-    // Recover with a fresh load — old buckets must not leak into new session
+    // Recover with a fresh load : old buckets must not leak into new session
     REQUIRE(ctrl.load(f.program()));
     CHECK(ctrl.drain_program_frames().empty());  // no stale frames
 
@@ -377,7 +377,7 @@ TEST_CASE("Shared-start dual-strip playback", "[simctrl]") {
     CHECK(ctrl.epoch() == 1);
     ctrl.drain_events();
 
-    // Tick at t=0.5 — paint renders
+    // Tick at t=0.5 : paint renders
     f.set_time(500'000);
     ctrl.tick_once();
     auto pf = ctrl.drain_program_frames();
@@ -386,7 +386,7 @@ TEST_CASE("Shared-start dual-strip playback", "[simctrl]") {
     CHECK(pf[0].t_rel == Catch::Approx(0.5f));
     REQUIRE(pf[0].strips.size() == 2);
 
-    // Tick at t=1.0 — shift activates, snapshots paint
+    // Tick at t=1.0 : shift activates, snapshots paint
     f.set_time(1'000'000);
     ctrl.tick_once();
     pf = ctrl.drain_program_frames();
@@ -408,7 +408,7 @@ TEST_CASE("Shared-start dual-strip playback", "[simctrl]") {
     check_pixel_vec(pf[0].strips[1], 3, 102);
     check_pixel_vec(pf[0].strips[1], 4, 51);
 
-    // Tick at t=2.0 — shift has moved right by 1
+    // Tick at t=2.0 : shift has moved right by 1
     f.set_time(2'000'000);
     ctrl.tick_once();
     pf = ctrl.drain_program_frames();
@@ -463,7 +463,7 @@ TEST_CASE("Pause and resume", "[simctrl]") {
     evts = ctrl.drain_events();
     CHECK(has_state_event(evts, ControllerState::PLAYING));
 
-    // Tick after resume — should get a frame near t=1.0 (resume position)
+    // Tick after resume : should get a frame near t=1.0 (resume position)
     ctrl.tick_once();
     auto pf = ctrl.drain_program_frames();
     REQUIRE(pf.size() >= 1);
@@ -590,7 +590,7 @@ TEST_CASE("Stop and restart", "[simctrl]") {
     CHECK(ctrl.state() == ControllerState::PLAYING);
     CHECK(ctrl.epoch() == epoch_before + 1);
 
-    // Tick — should get a frame at t=0
+    // Tick : should get a frame at t=0
     f.set_time(1'000'000);  // same wall time, but t0 was reset
     ctrl.tick_once();
     auto pf = ctrl.drain_program_frames();
@@ -640,7 +640,7 @@ TEST_CASE("Looping program restarts", "[simctrl]") {
     auto evts = ctrl.drain_events();
     CHECK(has_event(evts, ControllerEvent::LOOPED));
 
-    // Tick after loop — should get frames from restart
+    // Tick after loop : should get frames from restart
     f.set_time(5'600'000);
     ctrl.tick_once();
     auto pf = ctrl.drain_program_frames();
@@ -665,10 +665,10 @@ TEST_CASE("Gen filtering across loads", "[simctrl]") {
     auto pf1 = ctrl.drain_program_frames();
     REQUIRE(pf1.size() == 1);
 
-    // Second load (gen=2) — without draining device frames from first load
+    // Second load (gen=2) : without draining device frames from first load
     // First, tick at t=1.0 to generate more frames
     f.set_time(1'000'000);
-    // Don't tick — load directly, leaving stale device frames
+    // Don't tick : load directly, leaving stale device frames
     REQUIRE(ctrl.load(f.program()));
     f.set_time(0);
     ctrl.play();
@@ -810,7 +810,7 @@ TEST_CASE("Debug seek on device without debug_seek emits ERROR and preserves sta
     FakeDevice dev;
     SimController ctrl({{"strip", 5, &dev}});
 
-    // Minimal blob — FakeDevice always succeeds
+    // Minimal blob : FakeDevice always succeeds
     CompiledManifest prog;
     prog.duration = 5.0f;
     prog.strips = {{"strip", 5, {0x01}}};
@@ -822,7 +822,7 @@ TEST_CASE("Debug seek on device without debug_seek emits ERROR and preserves sta
     uint32_t epoch_before = ctrl.epoch();
     ctrl.drain_events();
 
-    // Debug seek should fail — FakeDevice doesn't support debug_seek
+    // Debug seek should fail : FakeDevice doesn't support debug_seek
     ctrl.debug_seek(2.0f);
     CHECK(ctrl.state() == ControllerState::PLAYING);
     CHECK(ctrl.epoch() == epoch_before);  // epoch not advanced
@@ -868,7 +868,7 @@ TEST_CASE("Production seek between intervals snaps to latest before target", "[s
     ctrl.debug_seek(0.5f);
     ctrl.drain_events();
 
-    // Target 2.5 is between [1,2) and [3,4) — should snap to 1.0
+    // Target 2.5 is between [1,2) and [3,4) : should snap to 1.0
     ctrl.seek(2.5f);
     CHECK(ctrl.state() == ControllerState::PAUSED);
 
@@ -889,7 +889,7 @@ TEST_CASE("Production seek before first non-degenerate interval snaps to 0.0", "
     ctrl.debug_seek(3.0f);
     ctrl.drain_events();
 
-    // Target 0.5 is before [2.0, 4.0) — degenerate (0,0) has hi=0 <= 0.5, so snap to 0.0
+    // Target 0.5 is before [2.0, 4.0) : degenerate (0,0) has hi=0 <= 0.5, so snap to 0.0
     ctrl.seek(0.5f);
     CHECK(ctrl.state() == ControllerState::PAUSED);
 
@@ -997,7 +997,7 @@ TEST_CASE("Production seek works on non-sim device (FakeDevice)", "[simctrl][int
     REQUIRE(ctrl.load(prog));
     ctrl.drain_events();
 
-    // Production seek should work — doesn't require debug_seek support
+    // Production seek should work : doesn't require debug_seek support
     ctrl.seek(2.0f);
     CHECK(ctrl.state() == ControllerState::PAUSED);
 

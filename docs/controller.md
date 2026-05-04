@@ -160,7 +160,7 @@ The compiler identifies time ranges where no event carries prior state, making e
 | `controller/elemctl/library.py` | Program catalog, metadata extraction, artifact cache |
 | `controller/elemctl/tui.py` | Interactive terminal UI (writer client) |
 | `controller/elemctl/run.py` | Standalone playback runner (no persistent service) |
-| `controller/elemctl/sim.py` | Launcher for network_sim processes |
+| `controller/elemctl/sim.py` | Legacy launcher for deprecated `network_sim` processes |
 | `compiler/elements/dsl.py` | User-facing DSL functions |
 | `compiler/elements/compiler.py` | Full compilation pipeline |
 | `compiler/elements/blob.py` | Binary blob serialization/deserialization |

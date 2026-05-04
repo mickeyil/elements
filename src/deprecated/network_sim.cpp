@@ -1,4 +1,4 @@
-// network_sim — Standalone TCP/UDP transport wrapper for ESPSimulated.
+// network_sim : Standalone TCP/UDP transport wrapper for ESPSimulated.
 //
 // Listens for a single TCP connection from a Python controller, dispatches
 // commands to an ESPSimulated instance, and sends RGB frames back over UDP.
@@ -60,7 +60,7 @@ struct TransportState {
 // Helpers
 // ---------------------------------------------------------------------------
 
-// Blocking send — temporarily clears O_NONBLOCK so the kernel handles
+// Blocking send : temporarily clears O_NONBLOCK so the kernel handles
 // back-pressure instead of busy-spinning on EAGAIN.
 static bool send_all(int fd, const void* data, size_t len)
 {
@@ -174,7 +174,7 @@ static int poll_tcp_commands(int tcp_fd,
 
         // Validate: msg_len must be >= 1 (at least the type byte)
         if (msg_len < 1) {
-            // Invalid frame — consume the 4-byte header and resync
+            // Invalid frame : consume the 4-byte header and resync
             buf_used -= 4;
             if (buf_used > 0)
                 memmove(buf.data(), buf.data() + 4, buf_used);
@@ -189,7 +189,7 @@ static int poll_tcp_commands(int tcp_fd,
 
         size_t total = 4 + (size_t)msg_len;
         if (buf_used < total) {
-            // Incomplete message — grow buffer if needed to fit it
+            // Incomplete message : grow buffer if needed to fit it
             if (buf.size() < total)
                 buf.resize(total);
             break;
@@ -362,7 +362,7 @@ static int poll_tcp_commands(int tcp_fd,
             break;
         }
         default:
-            // Unknown command — skip
+            // Unknown command : skip
             break;
         }
 
@@ -587,7 +587,7 @@ int main(int argc, char** argv)
     while (g_running) {
         slog_info("Waiting for controller on port %d...", args.tcp_port);
 
-        // Non-blocking accept loop — interleave with HELLO sends
+        // Non-blocking accept loop : interleave with HELLO sends
         int tcp_fd = -1;
         while (g_running && tcp_fd < 0) {
             tcp_fd = accept(tcp_server, nullptr, nullptr);

@@ -18,8 +18,8 @@ add_library(elements_core STATIC
     src/copy_ops.cpp
     src/gamma.cpp
     src/platform_clock_host.cpp
-    src/posix_tcp_transport.cpp
-    src/posix_udp_transport.cpp
+    src/sim/posix_tcp_transport.cpp
+    src/sim/posix_udp_transport.cpp
     src/pixel_buffer_pool.cpp
     src/pixel_view.cpp
     src/pixel_views.cpp
@@ -171,14 +171,14 @@ if(BUILD_TESTS)
 
     add_executable(test_udp_transport
         test/test_udp_transport.cpp
-        src/posix_udp_transport.cpp
+        src/sim/posix_udp_transport.cpp
     )
     target_include_directories(test_udp_transport PRIVATE src)
     target_link_libraries(test_udp_transport Catch2::Catch2WithMain)
 
     add_executable(test_tcp_transport
         test/test_tcp_transport.cpp
-        src/posix_tcp_transport.cpp
+        src/sim/posix_tcp_transport.cpp
     )
     target_include_directories(test_tcp_transport PRIVATE src)
     target_link_libraries(test_tcp_transport Catch2::Catch2WithMain)
@@ -261,7 +261,7 @@ if(BUILD_TESTS)
 
     add_executable(test_sim_device_identity
         test/test_sim_device_identity.cpp
-        src/sim_device_identity.cpp
+        src/sim/sim_device_identity.cpp
     )
     target_include_directories(test_sim_device_identity PRIVATE src)
     target_link_libraries(test_sim_device_identity Catch2::Catch2WithMain)

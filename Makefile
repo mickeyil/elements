@@ -5,17 +5,13 @@ else
 JOBS ?= $(shell nproc)
 endif
 
-.PHONY: build cmake network_sim firmware flash test clean cleanall
+.PHONY: build cmake firmware flash test clean cleanall
 
 build: cmake
 
 cmake:
 	cmake -B build
 	cmake --build build --parallel $(JOBS)
-
-network_sim:
-	cmake -B build
-	cmake --build build --target network_sim --parallel $(JOBS)
 
 firmware:
 	pio run
