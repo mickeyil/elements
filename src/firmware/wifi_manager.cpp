@@ -8,11 +8,10 @@
 #if __has_include("secrets.h")
 #include "secrets.h"
 #else
-static constexpr const firmware::DevWifiCredential* DEV_WIFI_CREDENTIALS = nullptr;
+static constexpr const DevWifiCredential* DEV_WIFI_CREDENTIALS = nullptr;
 static constexpr size_t DEV_WIFI_CREDENTIAL_COUNT = 0;
 #endif
 
-namespace firmware {
 namespace {
 
 void configure_wifi_runtime_()
@@ -179,5 +178,3 @@ void WifiManager::store_last_good_ssid_(const char* ssid)
     _last_good_ssid = ssid;
     log_line("[wifi] cached preferred ssid=%s", _last_good_ssid.c_str());
 }
-
-}  // namespace firmware

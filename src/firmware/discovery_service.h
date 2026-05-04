@@ -7,7 +7,6 @@
 
 #include "device_identity.h"
 
-namespace firmware {
 
 struct DiscoverySnapshot {
     bool started = false;
@@ -36,5 +35,3 @@ private:
     uint32_t _hello_backoff_until_ms = 0;
     uint32_t _hello_count = 0;
 };
-
-}  // namespace firmware

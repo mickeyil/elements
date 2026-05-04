@@ -9,8 +9,8 @@
 //                         a simulated reboot, since ESP flash does.
 //
 // StorageHandler and StatusHandler depend on this interface, never on a
-// platform-specific class. Today's firmware::BackgroundStore in
-// src/firmware/ becomes one impl of this.
+// platform-specific class. The current BackgroundStore in src/firmware/
+// becomes one impl of this.
 
 namespace controller_link {
 

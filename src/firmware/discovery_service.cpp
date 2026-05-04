@@ -9,7 +9,6 @@
 #include "diagnostics.h"
 #include "wire_constants.h"
 
-namespace firmware {
 
 void DiscoveryService::begin(const DeviceIdentity& identity)
 {
@@ -188,5 +187,3 @@ void DiscoveryService::handle_duplicate_reject_()
     _hello_backoff_until_ms = millis() + kDuplicateHelloBackoffMs;
     log_line("[discovery] duplicate uid backoff uid=%s", _identity->uid);
 }
-
-}  // namespace firmware

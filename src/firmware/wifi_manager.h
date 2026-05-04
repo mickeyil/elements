@@ -5,7 +5,6 @@
 
 #include <cstdint>
 
-namespace firmware {
 
 struct DevWifiCredential {
     const char* ssid;
@@ -53,5 +52,3 @@ private:
     uint32_t _connect_attempts = 0;
     uint32_t _connect_successes = 0;
 };
-
-}  // namespace firmware

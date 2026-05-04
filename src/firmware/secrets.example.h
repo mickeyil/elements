@@ -4,7 +4,7 @@
 
 #include "wifi_manager.h"
 
-static constexpr firmware::DevWifiCredential DEV_WIFI_CREDENTIALS[] = {
+static constexpr DevWifiCredential DEV_WIFI_CREDENTIALS[] = {
     // {"example-ssid", "example-password"},
 };
 

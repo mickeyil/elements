@@ -12,7 +12,6 @@
 #include "esp_device.h"
 #include "wifi_manager.h"
 
-namespace firmware {
 
 class FirmwareApp {
 public:
@@ -51,5 +50,3 @@ private:
     bool _reboot_pending = false;
     uint32_t _reboot_deadline_ms = 0;
 };
-
-}  // namespace firmware

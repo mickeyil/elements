@@ -10,7 +10,6 @@
 #include "hardware_profile.h"
 #include "wire_constants.h"
 
-namespace firmware {
 namespace {
 
 static constexpr uint32_t kDetachGraceHoldMs = 5000;
@@ -410,5 +409,3 @@ void FirmwareApp::reboot_if_due()
     delay(20);
     ESP.restart();
 }
-
-}  // namespace firmware

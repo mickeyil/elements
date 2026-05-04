@@ -2,7 +2,6 @@
 
 #include <cstdint>
 
-namespace firmware {
 
 enum class DeviceMode : uint8_t {
     attached_controlled,
@@ -10,5 +9,3 @@ enum class DeviceMode : uint8_t {
     detached_blank,
     detached_background,
 };
-
-}  // namespace firmware

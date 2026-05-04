@@ -7,7 +7,6 @@
 
 #include "wire_constants.h"
 
-namespace firmware {
 namespace {
 
 bool connection_has_client_(ConnectionState state)
@@ -66,5 +65,3 @@ void maybe_log_status(
         static_cast<unsigned long>(connection.stop_count)
     );
 }
-
-}  // namespace firmware

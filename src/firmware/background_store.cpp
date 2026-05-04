@@ -7,7 +7,6 @@
 #include "background_crc.h"
 #include "diagnostics.h"
 
-namespace firmware {
 namespace {
 
 static constexpr char kBackgroundNamespace[] = "background";
@@ -288,5 +287,3 @@ void BackgroundStore::reset_metadata_()
 {
     _metadata = BackgroundMetadata{};
 }
-
-}  // namespace firmware

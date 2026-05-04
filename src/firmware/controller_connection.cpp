@@ -9,7 +9,6 @@
 #include "hardware_profile.h"
 #include "wire_constants.h"
 
-namespace firmware {
 namespace {
 
 bool seq_is_newer_u16(uint16_t seq, uint16_t last)
@@ -662,5 +661,3 @@ bool ControllerConnection::handle_reboot_(ConnectionPollResult& result)
     result.reboot_requested = true;
     return true;
 }
-
-}  // namespace firmware

@@ -6,7 +6,6 @@
 #include "discovery_service.h"
 #include "wifi_manager.h"
 
-namespace firmware {
 
 const char* yes_no(bool value);
 void log_line(const char* fmt, ...);
@@ -17,5 +16,3 @@ void maybe_log_status(
     const DiscoverySnapshot& discovery,
     const ConnectionSnapshot& connection
 );
-
-}  // namespace firmware

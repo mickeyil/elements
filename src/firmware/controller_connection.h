@@ -12,7 +12,6 @@
 
 class ESPDevice;
 
-namespace firmware {
 
 enum class ConnectionState {
     stopped,
@@ -101,5 +100,3 @@ private:
     uint32_t _start_count = 0;
     uint32_t _stop_count = 0;
 };
-
-}  // namespace firmware

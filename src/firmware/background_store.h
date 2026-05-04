@@ -5,7 +5,6 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace firmware {
 
 struct BackgroundMetadata {
     bool present = false;
@@ -39,5 +38,3 @@ private:
     bool _preferences_ready = false;
     BackgroundMetadata _metadata;
 };
-
-}  // namespace firmware

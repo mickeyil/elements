@@ -5,7 +5,6 @@
 
 #include <cstdio>
 
-namespace firmware {
 namespace {
 
 uint32_t make_boot_token_()
@@ -48,5 +47,3 @@ DeviceIdentity read_device_identity()
     identity.boot_token = make_boot_token_();
     return identity;
 }
-
-}  // namespace firmware
