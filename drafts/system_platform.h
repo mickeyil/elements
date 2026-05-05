@@ -21,7 +21,7 @@ public:
     // Reboot the device. ESP version restarts the chip; sim version
     // exits with the reboot sentinel so the supervisor relaunches.
     // Either way the controller sees the TCP connection drop and a
-    // fresh DEVICE_HELLO with a new boot_token.
+    // fresh REGISTER with a new boot_token.
     virtual void reboot() = 0;
 
     // TODO: a future "factory reset" command (clear NVS, clear background)

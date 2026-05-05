@@ -32,6 +32,7 @@ add_library(elements_core STATIC
     src/animations/shift.cpp
     src/playback.cpp
     src/clock_sync_client.cpp
+    src/discovery.cpp
 )
 target_include_directories(elements_core PUBLIC src)
 
@@ -205,6 +206,16 @@ if(BUILD_TESTS)
     target_include_directories(test_clock_sync_client PRIVATE src test)
     target_link_libraries(test_clock_sync_client Catch2::Catch2WithMain)
 
+    # test_discovery follows the same standalone pattern as
+    # test_clock_sync_client.
+    add_executable(test_discovery
+        test/test_discovery.cpp
+        test/test_platform_clock.cpp
+        src/discovery.cpp
+    )
+    target_include_directories(test_discovery PRIVATE src test)
+    target_link_libraries(test_discovery Catch2::Catch2WithMain)
+
     add_executable(test_compositor
         test/test_compositor.cpp
         src/compositor.cpp
@@ -333,6 +344,8 @@ if(BUILD_TESTS)
     add_test(NAME test_synced_clock COMMAND test_synced_clock
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_clock_sync_client COMMAND test_clock_sync_client
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    add_test(NAME test_discovery COMMAND test_discovery
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_udp_transport COMMAND test_udp_transport
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
@@ -512,6 +525,15 @@ if(BUILD_TESTS)
                     --error-exitcode=1 $<TARGET_FILE:test_clock_sync_client>
         )
         set_tests_properties(test_clock_sync_client_memcheck PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        )
+        add_test(
+            NAME test_discovery_memcheck
+            COMMAND ${VALGRIND} --leak-check=full
+                    --errors-for-leak-kinds=definite,indirect,possible
+                    --error-exitcode=1 $<TARGET_FILE:test_discovery>
+        )
+        set_tests_properties(test_discovery_memcheck PROPERTIES
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         )
         add_test(

@@ -21,7 +21,8 @@ constexpr uint16_t MAGIC = 0xD1CC;
 constexpr uint8_t PKT_DISCOVER = 0x01;
 constexpr uint8_t PKT_OFFER    = 0x02;
 
-// Wire layouts. All multi-byte fields are little-endian.
+// Wire layouts. magic and port are little-endian; ipv4 is four
+// octets in network order (matches UdpTransport's dst_ip layout).
 //   DISCOVER : [magic=2B][type=1B][uid=16B]              = 19 bytes
 //   OFFER    : [magic=2B][type=1B][ipv4=4B][port=2B]     = 9  bytes
 constexpr size_t DISCOVER_WIRE_SIZE = 2 + 1 + UID_SIZE;
@@ -55,16 +56,13 @@ void DiscoveryClient::poll()
         return;
     }
 
-    const int64_t now = now_us_();
+    const int64_t now = now_us();
     if (_last_broadcast_us == 0 ||
         now - _last_broadcast_us >= BROADCAST_INTERVAL_US)
     {
         send_discover_();
     }
 }
-
-uint32_t DiscoveryClient::controller_ip() const { return _controller_ip; }
-uint16_t DiscoveryClient::tcp_port() const      { return _tcp_port; }
 
 void DiscoveryClient::send_discover_()
 {
@@ -83,7 +81,7 @@ void DiscoveryClient::send_discover_()
         return;
     }
 
-    _last_broadcast_us = now_us_();
+    _last_broadcast_us = now_us();
 }
 
 void DiscoveryClient::drain_responses_()
@@ -118,9 +116,4 @@ void DiscoveryClient::drain_responses_()
         _controller_ip = ip;
         _tcp_port      = port;
     }
-}
-
-int64_t DiscoveryClient::now_us_() const
-{
-    return now_us();
 }

@@ -28,7 +28,7 @@ class SystemHandler;
 // only calls it while transport.is_connected() is true. After the
 // connection drops (poll() returns disconnected = true), the outer
 // loop disconnects, calls reset_buffer(), and goes back to discovery
-// + connect + send_device_hello before calling poll() again.
+// + connect + send_register before calling poll() again.
 
 class CommandParser {
 public:
@@ -49,7 +49,7 @@ public:
     PollResult poll();
 
     // Wipe the inbound buffer. Called after a connection drop, and
-    // again after a fresh connect succeeds (before send_device_hello).
+    // again after a fresh connect succeeds (before send_register).
     void reset_buffer();
 
     // TODO: malformed-frame policy. Length zero, length over

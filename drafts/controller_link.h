@@ -2,11 +2,11 @@
 
 #include <cstdint>
 
-#include "device_hello.h"
+#include "register.h"
 
 class NetworkInterface;
 class TcpTransport;
-class UdpTransport;
+class DiscoveryClient;
 class CommandParser;
 class SessionHandler;
 class PlaybackHandler;
@@ -17,14 +17,14 @@ class SystemHandler;
 // Internal lifecycle stage. Used by poll() to decide what to do next;
 // not exposed on the public surface (no state() accessor yet).
 //   NetworkDown : NetworkInterface::is_up() is false. Nothing to do.
-//   Discovering : LAN is up; broadcasting HELLO, waiting for an OFFER.
+//   Discovering : LAN is up; DiscoveryClient is polling for an OFFER.
 //   Connecting  : OFFER received; TCP dial in progress (or about to be);
-//                 DEVICE_HELLO write happens in the same poll() tick
+//                 REGISTER write happens in the same poll() tick
 //                 once connect() returns true, so no observable
 //                 "handshaking" sub-state.
-//   Ready       : TCP connected and DEVICE_HELLO written. Parser is
+//   Ready       : TCP connected and REGISTER written. Parser is
 //                 running; controller may send commands. There is
-//                 deliberately no separate ACK for DEVICE_HELLO --
+//                 deliberately no separate ACK for REGISTER;
 //                 controller rejection shows up as the next read
 //                 returning < 0, which drops back to Discovering.
 enum class LinkState {
@@ -36,9 +36,10 @@ enum class LinkState {
 
 // "Have I discovered and opened a controller command link?"
 //
-// Owns: discovery (HELLO broadcast / OFFER recv / REJECT recv on UDP),
-// the outbound TCP dial, the DEVICE_HELLO write, and the CommandParser
-// that runs above the connected TCP socket.
+// Owns: the outbound TCP dial, the REGISTER write, and the
+// CommandParser that runs above the connected TCP socket. Drives a
+// DiscoveryClient (sibling, passed in) to find the controller's
+// address.
 //
 // Does not own: Wi-Fi (NetworkInterface is a sibling), clock sync
 // (ClockSyncClient is a sibling, ticks alongside this one).
@@ -49,10 +50,10 @@ enum class LinkState {
 //
 // Polling contract (see drafts/controller_link.md): the App calls
 // poll() unconditionally each tick. The link self-gates on
-// network.is_up() internally -- on the tick where the network drops
-// it transitions to NetworkDown and tears down TCP and discovery; on
-// the tick where the network comes back it starts a fresh discovery
-// cycle. Callers do NOT wrap poll() in an is_up() guard.
+// network.is_up() internally; on the tick where the network drops
+// it transitions to NetworkDown and tears down TCP; on the tick
+// where the network comes back it resumes discovery. Callers do
+// NOT wrap poll() in an is_up() guard.
 //
 // Downstream consumers (ClockSyncClient, App mode logic) read
 // is_ready() to decide their own behavior.
@@ -60,13 +61,10 @@ enum class LinkState {
 // Construction wires in:
 //   - NetworkInterface : checked each poll() to decide whether to do
 //                        anything at all.
-//   - UdpTransport     : the discovery socket (binds ephemeral; sends
-//                        HELLO broadcasts to the controller's
-//                        well-known discovery port; recvs OFFER/REJECT
-//                        unicast back). See drafts/udp_transport.h.
+//   - DiscoveryClient  : polled while no link is up; supplies the
+//                        controller's IP and TCP port.
 //   - TcpTransport     : the command socket.
-//   - DeviceIdentity   : UID / boot_token, sent during discovery and
-//                        DEVICE_HELLO.
+//   - DeviceIdentity   : UID / boot_token, sent in REGISTER.
 //   - The five handlers: passed through to the internally-constructed
 //                        CommandParser.
 
@@ -74,7 +72,7 @@ class ControllerLink {
 public:
     ControllerLink(
         NetworkInterface& network,
-        UdpTransport&     discovery_udp,
+        DiscoveryClient&  discovery,
         TcpTransport&     tcp,
         const DeviceIdentity& identity,
         SessionHandler&   session,
@@ -95,7 +93,7 @@ public:
     // poll(). Same content either way.
     void poll();
 
-    // True iff the link is fully attached -- TCP up and DEVICE_HELLO
+    // True iff the link is fully attached: TCP up and REGISTER
     // written. The app keys mode transitions off this single bit.
     bool is_ready() const;
 
@@ -107,6 +105,6 @@ public:
 
 private:
     LinkState _state = LinkState::NetworkDown;
-    // Discovery state, current OFFER snapshot, parser, etc. -- private
-    // members. Not part of the public surface.
+    // Cached controller endpoint at connect time, parser, etc.;
+    // private members. Not part of the public surface.
 };

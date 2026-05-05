@@ -1,10 +1,13 @@
 # Controller Link
 
-This is the device side of the controller↔device wire. It owns
-discovery, the outbound TCP dial, the `DEVICE_HELLO` handshake, and the
-parser that runs above the connected socket. It replaces the v2
-monolith in `src/firmware/controller_connection.{h,cpp}` and the
-duplicated parser in `src/deprecated/network_sim.cpp`.
+This is the device side of the controller↔device wire. It owns the
+outbound TCP dial, the `REGISTER` handshake, and the parser that runs
+above the connected socket. Discovery is delegated to
+`DiscoveryClient` (a sibling, see `src/discovery.{h,cpp}`); the link
+reads its `controller_ip()` / `tcp_port()` to know where to dial.
+Together they replace the v2 monolith in
+`src/firmware/controller_connection.{h,cpp}` and the duplicated
+parser in `src/deprecated/network_sim.cpp`.
 
 ## Where it sits
 
@@ -54,8 +57,8 @@ Instead:
 
 - `ControllerLink::poll()` reads `network.is_up()` internally. On the
   tick where the network drops it transitions to `NetworkDown` and
-  tears down TCP and discovery. On the tick where the network comes
-  back it starts a fresh discovery cycle.
+  tears down TCP. On the tick where the network comes back it
+  resumes polling `DiscoveryClient` for a fresh OFFER.
 - The App bridges link → sync with one explicit line:
   `sync.set_controller(link.controller_ip_addr())`.
   `controller_ip_addr()` returns 0 when the link is not ready, so the
@@ -75,21 +78,20 @@ class, no conditional gating in the App.
 The device makes the TCP connection, not the other way around. This is
 the key direction-flip from v2.
 
-When the device boots and Wi-Fi is up, it broadcasts a small UDP HELLO
-packet on the local network announcing itself: "I'm device `<uid>`,
-looking for a controller." A controller listening on the discovery port
-sees the HELLO, decides whether it wants to take this device, and
-replies with a UDP OFFER directly back: "I'm at `<ip:tcp_port>`, here's
-a nonce, this offer is valid for `<ttl_ms>` milliseconds."
+When the device boots and Wi-Fi is up, `DiscoveryClient` broadcasts a
+small UDP DISCOVER packet on the local network announcing itself:
+"I'm device `<uid>`." A controller listening on the discovery port
+sees the DISCOVER, decides whether it wants to take this device, and
+replies with a UDP OFFER directly back: "I'm at `<ip:tcp_port>`."
 
-The device receives the OFFER, opens an outbound TCP connection to the
-controller, and immediately sends a `DEVICE_HELLO` message carrying its
-identity and the nonce it just received. The controller validates that
-— known UID, fresh nonce, compatible protocol version — and either
-starts sending commands (the connection is good) or silently closes
-(the device goes back to discovery).
+The device receives the OFFER, opens an outbound TCP connection to
+the controller, and immediately sends a `REGISTER` message carrying
+its identity. The controller validates it — known UID, compatible
+protocol version — and either starts sending commands (the
+connection is good) or silently closes (the device goes back to
+discovery).
 
-Once `DEVICE_HELLO` is on the wire, the link is **Ready** in the
+Once `REGISTER` is on the wire, the link is **Ready** in the
 everyday sense: controller sends commands, device executes and ACKs,
 until one side hangs up.
 
@@ -108,9 +110,9 @@ embedded networking example. Server-side device is the unusual choice
 that has to justify itself; client-side has zero overhead in operator
 intuition.
 
-The price is that the controller has to respond to HELLO with an OFFER
-instead of just listening passively, but that's a small protocol
-addition on the more capable side of the link.
+The price is that the controller has to respond to DISCOVER with an
+OFFER instead of just listening passively, but that's a small
+protocol addition on the more capable side of the link.
 
 ## Public surface
 
@@ -126,13 +128,14 @@ public:
 ```
 
 `poll()` is the single per-tick entry point. It advances whichever
-stage the link is in: drives discovery if Wi-Fi is up but no OFFER has
-landed, dials TCP after an OFFER, writes `DEVICE_HELLO` once connected,
-runs the parser once Ready. Safe to call when Wi-Fi is down (no-op).
+stage the link is in: drives `DiscoveryClient::poll()` if Wi-Fi is up
+but no OFFER has landed, dials TCP after an OFFER, writes `REGISTER`
+once connected, runs the parser once Ready. Safe to call when Wi-Fi
+is down (no-op).
 
-`is_ready()` is the one-bit summary the App keys mode transitions off.
-True iff the TCP socket is up and `DEVICE_HELLO` has been written. The
-App's "controlled vs background" branch is `if (link.is_ready())`.
+`is_ready()` is the one-bit summary the App keys mode transitions
+off. True iff the TCP socket is up and `REGISTER` has been written.
+The App's "controlled vs background" branch is `if (link.is_ready())`.
 
 `controller_ip_addr()` returns the controller's IPv4 address in network
 byte order, or 0 when `!is_ready()`. The App pipes this directly into
@@ -150,7 +153,7 @@ diagnostics need it; until then, exposing it would be a hook with no
 caller.
 
 There's also no `controller_endpoint()` returning a struct with
-ports/nonces. That information is the link's internal business.
+ports. That information is the link's internal business.
 
 ## Internal layers
 
@@ -198,35 +201,32 @@ ACK?" out of the bug catalog.
 ## Becoming Ready is its own ritual
 
 Connecting and identifying happen *before* the parser starts running.
-The sequence inside `poll()` when an OFFER lands is:
+The sequence inside `poll()` when `DiscoveryClient` has a non-zero
+`controller_ip()` is:
 
-1. The discovery side (private to this module) has stashed a fresh
-   `ControllerOffer` snapshot.
-2. `TcpTransport::connect(controller_ip, tcp_port)` is called. The
-   implementation has a hard cap on how long this can block (~500ms on
-   ESP via `WiFiClient::connect(ip, port, timeout_ms)`).
-3. On success, `send_device_hello(transport, identity, offer.nonce)`
-   writes a single framed `DEVICE_HELLO` message carrying the device's
-   UID, boot token, the OFFER nonce, and the protocol version.
-4. The link is now **Ready**. Subsequent `poll()` ticks drive
+1. `TcpTransport::connect(discovery.controller_ip(), discovery.tcp_port())`
+   is called. The implementation has a hard cap on how long this can
+   block (~500ms on ESP via `WiFiClient::connect(ip, port, timeout_ms)`).
+2. On success, `send_register(transport, identity)` writes a single
+   framed `REGISTER` message carrying the device's UID, boot token,
+   and protocol version.
+3. The link is now **Ready**. Subsequent `poll()` ticks drive
    `CommandParser::poll()` for the rest of the lifetime of this
    connection.
 
-If `DEVICE_HELLO` is rejected, the controller closes the socket. The
+If `REGISTER` is rejected, the controller closes the socket. The
 device notices via the next `read()` returning `< 0`, the parser
 reports `disconnected`, the link drops back to **Discovering**.
-There's deliberately no separate ACK for `DEVICE_HELLO` — "the
+There's deliberately no separate ACK for `REGISTER` — "the
 controller is still here a moment later" is the de-facto acceptance
 signal, and avoiding the ACK keeps the handshake to one round-trip.
 
-There's a small window between writing `DEVICE_HELLO` and the
-controller accepting (or rejecting) it during which `is_ready()` is
-true. Under the device-initiated sync flow (see `synced_clock.md`),
-that means a sync ping might briefly fire at a controller that's about
-to close. That's fine: sync packets carry UID and boot_token (same
-robustness the OFFER nonce gives the TCP handshake), and a controller
-that doesn't recognize them just discards. We are *not* reintroducing a
-`DEVICE_HELLO_ACK` to close that window.
+There's a small window between writing `REGISTER` and the controller
+accepting (or rejecting) it during which `is_ready()` is true. Under
+the device-initiated sync flow (see `synced_clock.md`), that means a
+sync ping might briefly fire at a controller that's about to close.
+That's fine: sync packets carry UID and boot_token, and a controller
+that doesn't recognize them just discards.
 
 ## ACKs and errors
 
@@ -265,22 +265,19 @@ without any out-of-band lookup:
   into the wire slot, and the slot is null-padded to 16 bytes. The
   `sim-` prefix is **launcher/config policy** — the device binary
   itself is shape-only and trusts what it is given. Controller-side
-  validation on `DEVICE_HELLO` is the second line of defence.
+  validation on `REGISTER` is the second line of defence.
 
 Parser rule on receive: read exactly 16 bytes, trim at the first `\0`,
 require any remaining bytes to also be `\0`, and require the trimmed
 content to be printable ASCII. Then compare normalized strings against
 the controller's configured device list.
 
-The `DEVICE_HELLO` payload carries four things:
+The `REGISTER` payload carries three things:
 
 - **uid[16]** — fixed-size, as above.
-- **boot_token** — a fresh 32-bit random value generated on every boot.
-  Lets the controller detect "device rebooted, drop stale state on my
-  end."
-- **offer_nonce** — the nonce the controller sent in OFFER. Lets the
-  controller reject TCP connections that aren't following a fresh
-  OFFER (stale-OFFER race after a controller restart, etc.).
+- **boot_token** — a fresh 32-bit random value generated on every
+  boot. Lets the controller detect "device rebooted, drop stale state
+  on my end."
 - **protocol_version** — the wire protocol generation (`3` for v3).
   The controller can refuse devices whose version it doesn't
   understand.
@@ -329,7 +326,7 @@ because the file does. The launcher contract is tracked in
 `drafts/TODO.md` § "Sim launcher: process-restart on reboot command".
 
 Everything else is shared: the parser, all five handlers, `WireReader`,
-`HandlerResult`, opcode constants, `send_device_hello`,
+`HandlerResult`, opcode constants, `send_register`, `DiscoveryClient`,
 `ClockSyncClient`. Sim runs the same sync code as firmware against a
 controller process on the same host; the measured offset is ~0 because
 the clocks happen to be the same machine, and that's the truth, not a
@@ -407,7 +404,7 @@ layers" above.
 
 | Opcode | Cmd                 | Direction       | Payload                                                            |
 |--------|---------------------|-----------------|--------------------------------------------------------------------|
-| 0x00   | `DeviceHello`       | device → ctrlr  | `char uid[16], u32 boot_token, u32 offer_nonce, u8 protocol_version` |
+| 0x00   | `Register`          | device → ctrlr  | `char uid[16], u32 boot_token, u8 protocol_version`                |
 | 0x01   | `SetProfile`        | ctrlr → device  | `u16 strip_length`                                                 |
 | 0x10   | `Load`              | ctrlr → device  | `u8[] blob`                                                        |
 | 0x11   | `Start`             | ctrlr → device  | `i64 program_start_us` (synced: anchor; unsynced: ignored)         |
@@ -437,7 +434,7 @@ lives entirely on UDP, see `drafts/synced_clock.md`.
 3 detached_background. `flags`: bit0 profile_present, bit1
 background_present.
 
-`DeviceHello` is sent device → controller as the first TCP message
+`Register` is sent device → controller as the first TCP message
 after connect; it never appears in the inbound dispatch. If the
 controller ever sends opcode 0x00 to the device, the parser ACKs
 `UnknownCommand` (but this is a controller bug — the device doesn't
@@ -448,29 +445,24 @@ Unknown high nibbles (anything not `0x0_..0x4_`), and stray inbound
 
 ## Appendix C: discovery packets (UDP, port 6040)
 
-These are owned by this module (the discovery side of the link), kept
-in the appendix because they're reference data rather than narrative.
+These belong to `DiscoveryClient` (`src/discovery.{h,cpp}`), kept in
+this appendix because they're reference data rather than narrative.
+Multi-byte fields are little-endian except IPv4, which is four octets
+in network order.
 
-**HELLO** (device → broadcast, every ~500 ms while looking for a
+**DISCOVER** (device → broadcast, every ~1.5 s while looking for a
 controller):
 
-| u16 magic | char uid[16] | u32 boot_token | u8 protocol_version |
+| u16 magic | u8 type=0x01 | char uid[16] |
 
-`magic` = `0x454C` ('EL'). Total: 23 bytes.
+`magic` = `0xD1CC`. Total: 19 bytes.
 
-**OFFER** (controller → device, unicast, in response to a HELLO it
-wants to claim):
+**OFFER** (controller → device, unicast, in response to a DISCOVER
+it wants to claim):
 
-| u16 magic | u8 type=0x02 | u32 controller_ipv4_be | u16 tcp_port | u32 nonce | u16 ttl_ms |
+| u16 magic | u8 type=0x02 | u32 controller_ipv4 | u16 tcp_port |
 
-Total: 15 bytes.
-
-**REJECT** (controller → device, unicast, for duplicate UID):
-
-| u16 magic | u8 type=0x01 | u8 reason |
-
-`reason` = 0x01 for duplicate UID. Device backs off HELLOs for 5 s on
-receipt.
+Total: 9 bytes.
 
 ## Appendix D: ACK status codes
 
@@ -491,7 +483,7 @@ rules:
 
 | Port | Protocol | Purpose                                                                  |
 |------|----------|--------------------------------------------------------------------------|
-| 6040 | UDP      | Discovery: HELLO broadcast, OFFER unicast, REJECT unicast                |
+| 6040 | UDP      | Discovery: DISCOVER broadcast, OFFER unicast                             |
 | 6041 | TCP      | Controller listens; devices dial in (controller-link)                    |
 | 6042 | UDP      | Sim → controller frame previews (sim-only, dev convenience)              |
 | 6043 | UDP      | Clock sync: device-initiated ping/pong (see drafts/synced_clock.md)      |

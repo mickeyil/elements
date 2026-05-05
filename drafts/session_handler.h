@@ -8,16 +8,16 @@ class Playback;
 
 class WireReader;
 
-// Handles category 0x0_ inbound commands FROM the controller after the
-// DEVICE_HELLO handshake has completed. After sync moved off TCP onto
+// Handles category 0x0_ inbound commands FROM the controller after
+// the REGISTER handshake has completed. After sync moved off TCP onto
 // its own UDP flow, this category is just one opcode:
-//   0x01 SetProfile -- u16 strip_length; applies to Playback's hardware
-//                      profile.
+//   0x01 SetProfile: u16 strip_length; applies to Playback's hardware
+//                    profile.
 //
-// DEVICE_HELLO (0x00) is NOT handled here -- it's a one-shot outbound
-// message sent by send_device_hello() during connect, before
+// REGISTER (0x00) is NOT handled here; it's a one-shot outbound
+// message sent by send_register() during connect, before
 // CommandParser starts. The dispatch case for inbound 0x00 is
-// AckStatus::UnknownCommand (controllers don't send DEVICE_HELLO).
+// AckStatus::UnknownCommand (controllers don't send REGISTER).
 //
 // 0x02 is reserved -- the old SyncLease lived there briefly during the
 // v3 draft and is now gone.

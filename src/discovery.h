@@ -12,7 +12,7 @@ constexpr uint32_t IPV4_BROADCAST = 0xFFFFFFFFu;
 // owner polls it while no TCP link is up; once an OFFER arrives,
 // controller_ip() and tcp_port() expose where to connect.
 //
-// Wire (multi-byte fields little-endian):
+// Wire (magic and port little-endian; ipv4 in network order):
 //   DISCOVER  device  -> broadcast  { magic, type=0x01, uid (16B) }
 //   OFFER     control -> device     { magic, type=0x02, ipv4 (4B), port (2B) }
 //
@@ -31,15 +31,14 @@ public:
 
     // Most recent controller IPv4 (network byte order); 0 until the
     // first OFFER arrives.
-    uint32_t controller_ip() const;
+    uint32_t controller_ip() const { return _controller_ip; }
 
     // Most recent controller TCP port; 0 until the first OFFER arrives.
-    uint16_t tcp_port() const;
+    uint16_t tcp_port() const { return _tcp_port; }
 
 private:
     void drain_responses_();
     void send_discover_();
-    int64_t now_us_() const;
 
     UdpTransport&         _udp;
     const DeviceIdentity& _identity;

@@ -8,13 +8,13 @@
 // Opcodes are grouped by high nibble (cmd >> 4); each group is owned
 // by one handler. See drafts/controller_link.md for the full spec.
 
-// Bumped on every breaking wire change. Sent in DEVICE_HELLO.
+// Bumped on every breaking wire change. Sent in REGISTER.
 constexpr uint8_t PROTOCOL_VERSION = 3;
 
 // ---- Session (0x0_) -------------------------------------------------------
 
 // First message the device sends after TCP connect.
-constexpr uint8_t CMD_DEVICE_HELLO = 0x00;
+constexpr uint8_t CMD_REGISTER = 0x00;
 
 constexpr uint8_t CMD_SET_PROFILE  = 0x01;
 
