@@ -9,7 +9,6 @@ TEST_CASE("sim device identity copies uid and creates boot token", "[device_iden
     const DeviceIdentity identity = make_sim_device_identity("sim-test");
     CHECK(std::strcmp(identity.uid, "sim-test") == 0);
     CHECK(identity.boot_token != 0);
-    CHECK(identity.protocol_version == PROTOCOL_VERSION);
 }
 
 TEST_CASE("sim device identity accepts a full wire-slot uid", "[device_identity]")

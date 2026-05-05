@@ -181,8 +181,7 @@ void exchange_round(ClockSyncClient& client, FakeUdpTransport& udp,
 DeviceIdentity make_identity(uint32_t boot_token = 0xDEADBEEF) {
     DeviceIdentity id;
     std::strncpy(id.uid, "sim-test-uid", UID_BUF_SIZE - 1);
-    id.boot_token       = boot_token;
-    id.protocol_version = PROTOCOL_VERSION;
+    id.boot_token = boot_token;
     return id;
 }
 

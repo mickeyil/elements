@@ -11,9 +11,6 @@
 // Bumped on every breaking wire change. Sent in DEVICE_HELLO.
 constexpr uint8_t PROTOCOL_VERSION = 3;
 
-// Fixed-size UID slot on the wire. ASCII, null-padded if shorter.
-constexpr size_t UID_SIZE = 16;
-
 // ---- Session (0x0_) -------------------------------------------------------
 
 // First message the device sends after TCP connect.
