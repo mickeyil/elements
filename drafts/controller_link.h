@@ -65,8 +65,8 @@ enum class LinkState {
 //                        well-known discovery port; recvs OFFER/REJECT
 //                        unicast back). See drafts/udp_transport.h.
 //   - TcpTransport     : the command socket.
-//   - DeviceIdentity   : UID / boot_token / protocol_version, sent in
-//                        HELLO and DEVICE_HELLO.
+//   - DeviceIdentity   : UID / boot_token, sent during discovery and
+//                        DEVICE_HELLO.
 //   - The five handlers: passed through to the internally-constructed
 //                        CommandParser.
 
