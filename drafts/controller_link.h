@@ -2,9 +2,8 @@
 
 #include <cstdint>
 
-#include "register.h"
-
 class NetworkInterface;
+struct DeviceIdentity;
 class TcpTransport;
 class DiscoveryClient;
 class CommandParser;
@@ -26,7 +25,9 @@ class SystemHandler;
 //                 running; controller may send commands. There is
 //                 deliberately no separate ACK for REGISTER;
 //                 controller rejection shows up as the next read
-//                 returning < 0, which drops back to Discovering.
+//                 returning < 0, OR as the liveness deadline firing
+//                 (no Ping within PING_TIMEOUT). Either drops back
+//                 to Discovering. See "Liveness" in the .md.
 enum class LinkState {
     NetworkDown,
     Discovering,
@@ -59,10 +60,14 @@ enum class LinkState {
 // is_ready() to decide their own behavior.
 //
 // Construction wires in:
-//   - NetworkInterface : checked each poll() to decide whether to do
-//                        anything at all.
+//   - NetworkInterface : tells the link whether the LAN is up. The
+//                        link does nothing while it's down, and tears
+//                        down on the transition down so it doesn't
+//                        resume from stale state when it comes back.
 //   - DiscoveryClient  : polled while no link is up; supplies the
-//                        controller's IP and TCP port.
+//                        controller's IP and TCP port. Injected (not
+//                        private) so sim can configure a unicast
+//                        dst_ip; UDP broadcast on loopback is unreliable.
 //   - TcpTransport     : the command socket.
 //   - DeviceIdentity   : UID / boot_token, sent in REGISTER.
 //   - The five handlers: passed through to the internally-constructed
@@ -91,10 +96,19 @@ public:
     // TODO: pin the reboot signal path. Either ControllerLink::poll()
     // returns a small result struct, or the App reads a getter after
     // poll(). Same content either way.
+    //
+    // TODO: pin the Ping signal path. StatusHandler handles the 0x41
+    // opcode (ACKs Ok) and needs to notify ControllerLink so it can
+    // reset _last_ping_us. Candidates: extend HandlerResult with a
+    // liveness-evidence flag that CommandParser bubbles up the same
+    // way it does the reboot flag; or give StatusHandler a callback
+    // / sink reference back to the link. Pick alongside the reboot
+    // signal-path decision.
     void poll();
 
-    // True iff the link is fully attached: TCP up and REGISTER
-    // written. The app keys mode transitions off this single bit.
+    // True iff the link is fully attached: TCP up, REGISTER written,
+    // and the liveness deadline (no Ping for > PING_TIMEOUT) hasn't
+    // expired. The app keys mode transitions off this single bit.
     bool is_ready() const;
 
     // Controller IPv4 address in network byte order (ready for
@@ -104,7 +118,18 @@ public:
     uint32_t controller_ip_addr() const;
 
 private:
+    // Identify the device to the controller via the first frame after
+    // TCP connect (UID, boot_token, protocol_version). Returns false
+    // on write error; the link then tears down and goes back to
+    // Discovering.
+    bool send_register_();
+
     LinkState _state = LinkState::NetworkDown;
+    // Liveness deadline: timestamp of the last evidence the controller
+    // is alive. Set to now_us() on entry to Ready; reset by the Ping
+    // path (see TODO on poll()). Check each tick:
+    //   now_us() - _last_ping_us > PING_TIMEOUT_US  ->  drop.
+    int64_t   _last_ping_us = 0;
     // Cached controller endpoint at connect time, parser, etc.;
     // private members. Not part of the public surface.
 };

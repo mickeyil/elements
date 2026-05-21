@@ -134,8 +134,9 @@ once connected, runs the parser once Ready. Safe to call when Wi-Fi
 is down (no-op).
 
 `is_ready()` is the one-bit summary the App keys mode transitions
-off. True iff the TCP socket is up and `REGISTER` has been written.
-The App's "controlled vs background" branch is `if (link.is_ready())`.
+off. True iff TCP is up, `REGISTER` has been written, *and* the
+liveness deadline hasn't expired (see "Liveness" below). The App's
+"controlled vs background" branch is `if (link.is_ready())`.
 
 `controller_ip_addr()` returns the controller's IPv4 address in network
 byte order, or 0 when `!is_ready()`. The App pipes this directly into
@@ -189,7 +190,7 @@ and most are pass-throughs to a domain owner:
   return.
 - **Storage** routes background-blob commands into `BackgroundStore`.
 - **Status** assembles the `QueryDeviceStatus` response from current
-  state.
+  state, and handles `Ping` (resets the liveness timer; ACKs `Ok`).
 - **System** signals reboot intent; the outer loop performs the actual
   reboot after the ACK is flushed.
 
@@ -226,7 +227,47 @@ accepting (or rejecting) it during which `is_ready()` is true. Under
 the device-initiated sync flow (see `synced_clock.md`), that means a
 sync ping might briefly fire at a controller that's about to close.
 That's fine: sync packets carry UID and boot_token, and a controller
-that doesn't recognize them just discards.
+that doesn't recognize them just discards. The window is bounded by
+`PING_TIMEOUT` (see below): a controller that silently rejected
+`REGISTER` never sends a `Ping`, so the liveness deadline fires and
+the link drops back to Discovering.
+
+## Liveness
+
+TCP alone doesn't tell the device "the controller crashed" in any
+useful timeframe. A hard-crashed or partitioned controller produces no
+FIN, no RST, just silence; the kernel only notices when something
+tries to write, and lwIP's keepalive defaults are too long to rely on.
+Since the v3 device mostly receives and only writes ACKs in response
+to commands, a crashed controller would otherwise leave the device
+sitting in `read()` indefinitely with `is_ready()` stuck true.
+
+The link closes this gap with an app-level heartbeat:
+
+- The controller sends `Ping` (`0x41`) periodically while a link is
+  open. The device's `StatusHandler` ACKs it with `Ok` and resets a
+  single `last_ping_us` timestamp on the link.
+- The link initializes `last_ping_us = now()` at the moment it
+  transitions to **Ready** (immediately after `REGISTER` is written),
+  not at zero. The same `now - last_ping_us > PING_TIMEOUT` check then
+  covers both the "no ping ever arrived" and "pings stopped arriving"
+  cases without a separate startup branch.
+- Each `poll()` tick, if `is_ready()` and the deadline has expired,
+  the link tears down (see "ACKs and errors") and returns to
+  Discovering.
+
+**Ping-only, not any-byte.** Normal commands do *not* reset the timer.
+A functioning controller is sending pings whether or not it's also
+sending commands; if it isn't sending pings, the device declaring
+dead is the correct signal, not a false positive. Confining the reset
+to one handler keeps liveness logic in one place.
+
+**Parameter discipline.** `PING_TIMEOUT` should be comfortably larger
+than the controller's ping interval; a `>= 2 x ping_interval` margin
+lets the link ride out a single dropped packet without dropping the
+connection. Concrete values (likely a 1-2 s ping interval with a
+3-5 s timeout) are operational tuning rather than design and are not
+pinned in this doc.
 
 ## ACKs and errors
 
@@ -242,9 +283,15 @@ happen: `Ok`, `Error`, `WrongState`, `ProfileMismatch`, `BadPayload`,
 
 A malformed *frame* (length zero, length over the cap, socket EOF)
 drops the connection — the sender is corrupt or the peer is gone. A
-well-formed frame with an unknown opcode just ACKs `UnknownCommand`
-and the connection continues; that's the normal protocol-evolution
-case (controller knows about a command this firmware doesn't).
+liveness-timeout (no `Ping` seen within `PING_TIMEOUT`) is the third
+drop trigger; the controller is assumed gone even though the socket
+hasn't formally closed yet. A well-formed frame with an unknown
+opcode just ACKs `UnknownCommand` and the connection continues;
+that's the normal protocol-evolution case (controller knows about a
+command this firmware doesn't).
+
+In all three drop cases the teardown is the same: close the socket,
+reset the parser buffer, reset `last_ping_us`, return to Discovering.
 
 ## Identity
 
@@ -372,6 +419,9 @@ link itself; they show up where flagged.
 - **Trimmed `SessionHandler` fate** — one opcode left after
   `SyncLease` moved off TCP. Cosmetic; could fold into another
   handler.
+- **`PING_TIMEOUT` and ping interval values** — concrete numbers
+  (likely 1-2 s interval, 3-5 s timeout) are operational tuning
+  rather than design; pin once the controller-side scheduler lands.
 
 ## Open items (engineering work, separate from decisions)
 
@@ -416,6 +466,7 @@ layers" above.
 | 0x21   | `ClearBackground`   | ctrlr → device  | (empty)                                                            |
 | 0x30   | `Reboot`            | ctrlr → device  | (empty)                                                            |
 | 0x40   | `QueryDeviceStatus` | ctrlr → device  | (empty); ACK payload below                                         |
+| 0x41   | `Ping`              | ctrlr → device  | (empty); device ACKs `Ok` and resets the liveness timer            |
 | 0x80   | `Ack`               | both directions | `u8 status` followed by optional payload                           |
 
 `uid[16]` is null-padded ASCII. See "Identity" above for the parser
