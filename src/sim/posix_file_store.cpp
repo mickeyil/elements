@@ -17,7 +17,12 @@ constexpr char STORAGE_ROOT_ENV[] = "ELEMENTS_SIM_STORAGE_ROOT";
 bool is_safe_device_uid_(const char* s)
 {
     if (s == nullptr || *s == '\0') return false;
-    if (std::strcmp(s, ".") == 0 || std::strcmp(s, "..") == 0) return false;
+    // First char must be alphanumeric; avoids "." and ".." path tokens.
+    if (!((*s >= 'A' && *s <= 'Z') ||
+          (*s >= 'a' && *s <= 'z') ||
+          (*s >= '0' && *s <= '9'))) {
+        return false;
+    }
 
     for (const char* p = s; *p != '\0'; ++p) {
         const char c = *p;

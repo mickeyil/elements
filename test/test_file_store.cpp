@@ -150,13 +150,15 @@ TEST_CASE("posix file store reserves leading-dot names for temp files", "[file_s
 TEST_CASE("posix file store faults on an unsafe sim uid", "[file_store]")
 {
     ScopedStorageRoot env(unique_root_());
-    PosixFileStore store("sim:1");
-
-    CHECK(store.state() == FileStoreState::Faulted);
 
     const uint8_t data[] = {1};
-    CHECK_FALSE(store.write("x.bin", data, sizeof(data)));
-    CHECK(store.read("x.bin", nullptr, 0) == -1);
+    for (const char* uid : {"sim:1", ".sim-1", "-sim-1", "_sim-1"}) {
+        PosixFileStore store(uid);
+
+        CHECK(store.state() == FileStoreState::Faulted);
+        CHECK_FALSE(store.write("x.bin", data, sizeof(data)));
+        CHECK(store.read("x.bin", nullptr, 0) == -1);
+    }
     CHECK_FALSE(std::filesystem::exists(env.root() / "simstorage"));
 }
 
