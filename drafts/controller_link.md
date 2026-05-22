@@ -161,9 +161,9 @@ ports. That information is the link's internal business.
 ```
 TcpTransport            platform TCP I/O (ESP / Posix)
     ↕ bytes
-CommandParser           framing + dispatch + ACK
+CommandParser           framing + ACK
     ↕ HandlerResult
-Session  Playback  Storage  Status  System    one per category
+CommandHandler          opcode switch + protocol semantics
 ```
 
 `TcpTransport` is just a connection. It connects, reads, writes,
@@ -174,30 +174,14 @@ interface.
 
 `CommandParser` sits above the transport and turns the byte stream into
 commands. It buffers incoming bytes, extracts complete length-prefixed
-messages, dispatches each on the high nibble of the opcode, encodes
-ACKs, and surfaces control signals (today: "reboot was requested") to
-the outer loop. Platform-agnostic — the same source compiles on ESP
-and host.
+messages, hands each to `CommandHandler`, encodes ACKs, and surfaces
+control signals (today: "reboot was requested") to the outer loop.
+Platform-agnostic — the same source compiles on ESP and host.
 
-The five **handlers** are where the protocol semantics live. Each owns
-exactly one opcode category (the 16 opcodes that share a high nibble),
-and most are pass-throughs to a domain owner:
-
-- **Session** applies the hardware profile (`SetProfile` is its only
-  opcode after sync left for UDP).
-- **Playback** routes the playback transport commands (load, start,
-  jump, pause, resume, stop) into `Playback` and ACKs based on its
-  return.
-- **Storage** routes background-blob commands into `BackgroundStore`.
-- **Status** assembles the `QueryDeviceStatus` response from current
-  state, and handles `Ping` (resets the liveness timer; ACKs `Ok`).
-- **System** signals reboot intent; the outer loop performs the actual
-  reboot after the ACK is flushed.
-
-Each handler returns a `HandlerResult { status, optional ACK payload,
-optional control signal }`. The parser sends the ACK; handlers don't
-touch the socket directly, which keeps "did this handler remember to
-ACK?" out of the bug catalog.
+`CommandHandler` returns a `HandlerResult { status, optional ACK
+payload, optional control signal }`. The parser sends the ACK; the
+handler doesn't touch the socket directly, which keeps "did this
+handler remember to ACK?" out of the bug catalog.
 
 ## Becoming Ready is its own ritual
 
@@ -245,7 +229,7 @@ sitting in `read()` indefinitely with `is_ready()` stuck true.
 The link closes this gap with an app-level heartbeat:
 
 - The controller sends `Ping` (`0x41`) periodically while a link is
-  open. The device's `StatusHandler` ACKs it with `Ok` and resets a
+  open. The device's `CommandHandler` ACKs it with `Ok` and resets a
   single `last_ping_us` timestamp on the link.
 - The link initializes `last_ping_us = now()` at the moment it
   transitions to **Ready** (immediately after `REGISTER` is written),
@@ -360,11 +344,11 @@ the device or the protocol.
 
 `src/deprecated/network_sim.cpp`'s monolith collapses to: socket setup,
 `PosixTcpTransport` and `PosixUdpTransport` from `src/sim/`, the same
-shared parser/handlers/`ClockSyncClient` that firmware uses, and the
+shared parser/handler/`ClockSyncClient` that firmware uses, and the
 sim-only RGB frame send loop. The duplicate parser/dispatch/framing is
 **deleted in the same change** — no half-migrated state.
 
-The system handler's reboot has two impls: `EspSystemPlatform` calls
+The reboot signal has two impls: `EspSystemPlatform` calls
 `ESP.restart()` after a short flush delay; `SimSystemPlatform` exits
 with the reboot sentinel code so the launcher re-execs the binary.
 RAM is wiped naturally, `boot_token` is regenerated through the
@@ -372,8 +356,8 @@ normal startup path, and file-backed background storage survives
 because the file does. The launcher contract is tracked in
 `drafts/TODO.md` § "Sim launcher: process-restart on reboot command".
 
-Everything else is shared: the parser, all five handlers, `WireReader`,
-`HandlerResult`, opcode constants, `send_register`, `DiscoveryClient`,
+Everything else is shared: the parser, `CommandHandler`, `WireReader`,
+`HandlerResult`, opcode constants, `send_identity`, `DiscoveryClient`,
 `ClockSyncClient`. Sim runs the same sync code as firmware against a
 controller process on the same host; the measured offset is ~0 because
 the clocks happen to be the same machine, and that's the truth, not a
@@ -416,9 +400,6 @@ link itself; they show up where flagged.
 - **Whether to add a `ConnectionLayer` wrapper** — defer until the App
   orchestration of `(network, link, sync)` proves duplicated between
   firmware and sim. Currently the App just ticks them in order.
-- **Trimmed `SessionHandler` fate** — one opcode left after
-  `SyncLease` moved off TCP. Cosmetic; could fold into another
-  handler.
 - **`PING_TIMEOUT` and ping interval values** — concrete numbers
   (likely 1-2 s interval, 3-5 s timeout) are operational tuning
   rather than design; pin once the controller-side scheduler lands.

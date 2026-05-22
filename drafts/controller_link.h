@@ -7,11 +7,7 @@ struct DeviceIdentity;
 class TcpTransport;
 class DiscoveryClient;
 class CommandParser;
-class SessionHandler;
-class PlaybackHandler;
-class StorageHandler;
-class StatusHandler;
-class SystemHandler;
+class CommandHandler;
 
 // Internal lifecycle stage. Used by poll() to decide what to do next;
 // not exposed on the public surface (no state() accessor yet).
@@ -70,7 +66,7 @@ enum class LinkState {
 //                        dst_ip; UDP broadcast on loopback is unreliable.
 //   - TcpTransport     : the command socket.
 //   - DeviceIdentity   : UID / boot_token, sent in REGISTER.
-//   - The five handlers: passed through to the internally-constructed
+//   - CommandHandler   : passed through to the internally-constructed
 //                        CommandParser.
 
 class ControllerLink {
@@ -80,11 +76,7 @@ public:
         DiscoveryClient&  discovery,
         TcpTransport&     tcp,
         const DeviceIdentity& identity,
-        SessionHandler&   session,
-        PlaybackHandler&  playback,
-        StorageHandler&   storage,
-        StatusHandler&    status,
-        SystemHandler&    system
+        CommandHandler&   handler
     );
 
     // Single per-tick entry point. Drives discovery / dial / handshake
@@ -97,11 +89,11 @@ public:
     // returns a small result struct, or the App reads a getter after
     // poll(). Same content either way.
     //
-    // TODO: pin the Ping signal path. StatusHandler handles the 0x41
+    // TODO: pin the Ping signal path. CommandHandler handles the 0x41
     // opcode (ACKs Ok) and needs to notify ControllerLink so it can
     // reset _last_ping_us. Candidates: extend HandlerResult with a
     // liveness-evidence flag that CommandParser bubbles up the same
-    // way it does the reboot flag; or give StatusHandler a callback
+    // way it does the reboot flag; or give CommandHandler a callback
     // / sink reference back to the link. Pick alongside the reboot
     // signal-path decision.
     void poll();
@@ -122,7 +114,7 @@ private:
     // TCP connect (UID, boot_token, protocol_version). Returns false
     // on write error; the link then tears down and goes back to
     // Discovering.
-    bool send_register_();
+    bool send_identity_();
 
     LinkState _state = LinkState::NetworkDown;
     // Liveness deadline: timestamp of the last evidence the controller

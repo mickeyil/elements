@@ -9,7 +9,7 @@
 //                         launcher-driven re-exec on sim reboot, the
 //                         same way ESP flash survives a chip restart.
 //
-// StorageHandler and StatusHandler depend on this interface, never on a
+// CommandHandler depends on this interface, never on a
 // platform-specific class. The current BackgroundStore in src/firmware/
 // becomes one impl of this.
 

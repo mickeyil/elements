@@ -1,7 +1,7 @@
 #pragma once
 
 // Pluggable system-level operations. Owned by the firmware app loop /
-// sim main, NOT by SystemHandler. The handler signals
+// sim main, NOT by CommandHandler. The handler signals
 // PollResult::reboot_requested; the outer loop calls reboot() after the
 // ACK has been flushed to the controller.
 //

@@ -38,10 +38,10 @@ inbound controller connection, runs a handler switch on v2 opcodes
   OFFER (read from `DiscoveryClient::controller_ip()` /
   `DiscoveryClient::tcp_port()`). No `WiFiServer` on the device.
 - First message is `REGISTER` (carries UID, `boot_token`,
-  `protocol_version`). See `drafts/register.h`.
+  `protocol_version`). Sent by `ControllerLink::send_identity_()`.
 - Above the connected socket, run `CommandParser` from
-  `drafts/command_parser.h` against the five handlers (Session,
-  Playback, Storage, Status, System).
+  `drafts/command_parser.h` against `CommandHandler`
+  (`drafts/command_handler.h`).
 - Drop the v2 sync-result handler; sync is now a sibling on UDP.
 
 Currently broken on the v2 firmware build for the same struct/header
@@ -205,14 +205,14 @@ already rejects `Program::requires_sync` at the entry point.
 
 **Today.** All three are `void` in `src/playback.{h,cpp}`. The v3
 controller-link design requires them to return a status so
-`PlaybackHandler` (`drafts/playback_handler.h`) can ACK truthfully —
+`CommandHandler` (`drafts/command_handler.h`) can ACK truthfully —
 `Unsynced`, `WrongState`, `BadPayload`, `Ok`. Today the handler has to
 infer the outcome from `state()` deltas, which can't distinguish a
 rejection-by-`is_synced()` from a no-op call from the wrong state.
 
 **Action.** Pick a status enum (likely shared with `AckStatus` or a
 narrower playback-side type), update the three signatures, and rewire
-`PlaybackHandler::handle_start_` / `handle_jump_` / `handle_resume_`
+`CommandHandler::handle_start_` / `handle_jump_` / `handle_resume_`
 to map the returns onto the wire ACKs.
 
 ---
@@ -229,7 +229,7 @@ re-execs it is the deferred work tracked here.
 
 **Action.**
 
-1. Sim binary: on `SystemHandler` reboot request, flush the ACK then
+1. Sim binary: on `CommandHandler` reboot request, flush the ACK then
    call `_exit(SIM_REBOOT_EXIT_CODE)` (e.g. 64). Normal exits (0) and
    crashes (other nonzero) stay as-is.
 2. Supervisor lives in `elemctl sim` (or a small sibling). It execs
@@ -244,7 +244,7 @@ re-execs it is the deferred work tracked here.
 6. Signal handling: `SIGTERM` is graceful exit, no restart. Abnormal
    death without the sentinel is also no restart.
 
-**Depends on.** `SystemHandler` being available so the reboot opcode
+**Depends on.** `CommandHandler` being available so the reboot opcode
 can be wired to `_exit(SIM_REBOOT_EXIT_CODE)`. The in-process-reboot
 detection in `ClockSyncClient` has already been removed; nothing on
 the device side currently observes a runtime `boot_token` change.
