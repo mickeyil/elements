@@ -93,9 +93,20 @@ int EspFileStore::read(const char* name, uint8_t* dst, size_t max_len)
     File file = LittleFS.open(path, FILE_READ);
     if (!file) return -1;
 
-    const int n = max_len == 0 ? 0 : file.read(dst, max_len);
+    size_t total = 0;
+    while (total < max_len) {
+        const int n = file.read(dst + total, max_len - total);
+        if (n > 0) {
+            total += static_cast<size_t>(n);
+            continue;
+        }
+        if (n == 0) break;
+        file.close();
+        return -1;
+    }
+
     file.close();
-    return n < 0 ? -1 : n;
+    return static_cast<int>(total);
 }
 
 bool EspFileStore::remove(const char* name)
