@@ -164,7 +164,7 @@ int PosixFileStore::read(const char* name, uint8_t* dst, size_t max_len)
         return -1;
     }
 
-    if (::close(fd) < 0) return -1;
+    ::close(fd);
     return static_cast<int>(total);
 }
 
