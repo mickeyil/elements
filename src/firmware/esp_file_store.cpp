@@ -12,10 +12,12 @@ bool make_path_(const char* name, bool temp, char* out, size_t out_size)
 {
     if (!is_file_store_name(name)) return false;
 
-    const int n = temp
-        ? std::snprintf(out, out_size, "/.%s", name)
-        : std::snprintf(out, out_size, "/%s", name);
-    return n > 0 && static_cast<size_t>(n) < out_size;
+    const char* prefix = temp ? "/." : "/";
+    const int n = std::snprintf(out, out_size, "%s%s", prefix, name);
+
+    if (n <= 0) return false;                              // encoding error
+    if (static_cast<size_t>(n) >= out_size) return false;  // truncated
+    return true;
 }
 
 }  // namespace
