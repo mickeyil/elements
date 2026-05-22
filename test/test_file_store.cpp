@@ -60,7 +60,7 @@ private:
 std::filesystem::path device_root_(const std::filesystem::path& root,
                                    const char* uid)
 {
-    return root / "simstorage" / uid;
+    return root / "simstorage" / uid / "filestore";
 }
 
 }  // namespace

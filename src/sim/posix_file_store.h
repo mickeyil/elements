@@ -4,8 +4,8 @@
 
 #include "file_store.h"
 
-// Host filesystem backing for FileStore. Each sim device gets a stable
-// directory under $ELEMENTS_SIM_STORAGE_ROOT/simstorage.
+// Host filesystem backing for FileStore. Each sim device gets its files
+// under $ELEMENTS_SIM_STORAGE_ROOT/simstorage/<uid>/filestore.
 
 class PosixFileStore : public FileStore {
 public:

@@ -82,7 +82,7 @@ PosixFileStore::PosixFileStore(const char* device_uid)
     if (base == nullptr || *base == '\0') {
         base = ".";
     }
-    _root = std::filesystem::path(base) / "simstorage" / device_uid;
+    _root = std::filesystem::path(base) / "simstorage" / device_uid / "filestore";
 }
 
 bool PosixFileStore::ensure_ready_()
