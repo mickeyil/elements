@@ -78,7 +78,7 @@ TEST_CASE("posix file store writes under the sim storage root", "[file_store]")
 
     const auto dir = device_root_(env.root(), "sim-1");
     CHECK(std::filesystem::is_regular_file(dir / "flashy_green.anim"));
-    CHECK_FALSE(std::filesystem::exists(dir / "flashy_green.anim.tmp"));
+    CHECK_FALSE(std::filesystem::exists(dir / ".flashy_green.anim"));
     CHECK(store.size("flashy_green.anim") == 4);
 
     uint8_t out[8] = {};
@@ -103,7 +103,7 @@ TEST_CASE("posix file store overwrites atomically through a visible temp name",
     CHECK(out[1] == 8);
 
     const auto dir = device_root_(env.root(), "sim-1");
-    CHECK_FALSE(std::filesystem::exists(dir / "playlist.txt.tmp"));
+    CHECK_FALSE(std::filesystem::exists(dir / ".playlist.txt"));
 }
 
 TEST_CASE("posix file store supports empty files and removal", "[file_store]")
@@ -134,6 +134,17 @@ TEST_CASE("posix file store enforces the flat filename limit", "[file_store]")
 
     CHECK_FALSE(store.write(too_long.c_str(), data, sizeof(data)));
     CHECK(store.size(too_long.c_str()) == -1);
+}
+
+TEST_CASE("posix file store reserves leading-dot names for temp files", "[file_store]")
+{
+    ScopedStorageRoot env(unique_root_());
+    PosixFileStore store("sim-1");
+
+    const uint8_t data[] = {1};
+    CHECK_FALSE(store.write(".flashy_green.anim", data, sizeof(data)));
+    CHECK(store.size(".flashy_green.anim") == -1);
+    CHECK_FALSE(store.remove(".flashy_green.anim"));
 }
 
 TEST_CASE("posix file store faults on an unsafe sim uid", "[file_store]")

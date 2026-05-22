@@ -5,13 +5,27 @@
 
 constexpr size_t FILE_STORE_MAX_NAME_SIZE = 48;
 constexpr size_t FILE_STORE_PATH_BUF_SIZE = 64;
-constexpr char FILE_STORE_TMP_SUFFIX[] = ".tmp";
 
+// Longest ESP temp path: "/" + "." + name + "\0".
 static_assert(
-    1 + FILE_STORE_MAX_NAME_SIZE + sizeof(FILE_STORE_TMP_SUFFIX)
-        <= FILE_STORE_PATH_BUF_SIZE,
+    1 + 1 + FILE_STORE_MAX_NAME_SIZE + 1 <= FILE_STORE_PATH_BUF_SIZE,
     "FileStore path buffer too small"
 );
+
+inline bool is_file_store_name(const char* name)
+{
+    if (name == nullptr || *name == '\0') return false;
+    // Leading dot is reserved for temp files: .<name>.
+    if (*name == '.') return false;
+
+    size_t len = 0;
+    for (const char* p = name; *p != '\0'; ++p) {
+        if (*p == '/' || *p == '\\') return false;
+        ++len;
+        if (len > FILE_STORE_MAX_NAME_SIZE) return false;
+    }
+    return true;
+}
 
 enum class FileStoreState : uint8_t {
     NotReady = 0,

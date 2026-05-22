@@ -5,30 +5,15 @@
 
 #include <climits>
 #include <cstdio>
-#include <cstring>
 
 namespace {
 
-bool is_flat_name_(const char* name)
-{
-    if (name == nullptr || *name == '\0') return false;
-    if (std::strcmp(name, ".") == 0 || std::strcmp(name, "..") == 0) return false;
-
-    size_t len = 0;
-    for (const char* p = name; *p != '\0'; ++p) {
-        if (*p == '/' || *p == '\\') return false;
-        ++len;
-        if (len > FILE_STORE_MAX_NAME_SIZE) return false;
-    }
-    return true;
-}
-
 bool make_path_(const char* name, bool temp, char* out, size_t out_size)
 {
-    if (!is_flat_name_(name)) return false;
+    if (!is_file_store_name(name)) return false;
 
     const int n = temp
-        ? std::snprintf(out, out_size, "/%s%s", name, FILE_STORE_TMP_SUFFIX)
+        ? std::snprintf(out, out_size, "/.%s", name)
         : std::snprintf(out, out_size, "/%s", name);
     return n > 0 && static_cast<size_t>(n) < out_size;
 }

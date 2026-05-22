@@ -32,20 +32,6 @@ bool is_safe_device_uid_(const char* s)
     return true;
 }
 
-bool is_flat_name_(const char* name)
-{
-    if (name == nullptr || *name == '\0') return false;
-    if (std::strcmp(name, ".") == 0 || std::strcmp(name, "..") == 0) return false;
-
-    size_t len = 0;
-    for (const char* p = name; *p != '\0'; ++p) {
-        if (*p == '/' || *p == '\\') return false;
-        ++len;
-        if (len > FILE_STORE_MAX_NAME_SIZE) return false;
-    }
-    return true;
-}
-
 bool write_all_(int fd, const uint8_t* src, size_t len)
 {
     size_t written = 0;
@@ -75,7 +61,7 @@ std::filesystem::path file_path_(const std::filesystem::path& root,
 std::filesystem::path temp_path_(const std::filesystem::path& root,
                                  const char* name)
 {
-    return root / (std::string(name) + FILE_STORE_TMP_SUFFIX);
+    return root / ("." + std::string(name));
 }
 
 }  // namespace
@@ -113,7 +99,7 @@ bool PosixFileStore::ensure_ready_()
 bool PosixFileStore::write(const char* name, const uint8_t* src, size_t len)
 {
     if (len > 0 && src == nullptr) return false;
-    if (!is_flat_name_(name)) return false;
+    if (!is_file_store_name(name)) return false;
     if (!ensure_ready_()) return false;
 
     const std::filesystem::path final = file_path_(_root, name);
@@ -145,7 +131,7 @@ bool PosixFileStore::write(const char* name, const uint8_t* src, size_t len)
 
 int PosixFileStore::size(const char* name)
 {
-    if (!is_flat_name_(name)) return -1;
+    if (!is_file_store_name(name)) return -1;
     if (!ensure_ready_()) return -1;
 
     std::error_code ec;
@@ -158,7 +144,7 @@ int PosixFileStore::read(const char* name, uint8_t* dst, size_t max_len)
 {
     if (max_len > 0 && dst == nullptr) return -1;
     if (max_len > static_cast<size_t>(INT_MAX)) return -1;
-    if (!is_flat_name_(name)) return -1;
+    if (!is_file_store_name(name)) return -1;
     if (!ensure_ready_()) return -1;
 
     const std::string path_s = file_path_(_root, name).string();
@@ -184,7 +170,7 @@ int PosixFileStore::read(const char* name, uint8_t* dst, size_t max_len)
 
 bool PosixFileStore::remove(const char* name)
 {
-    if (!is_flat_name_(name)) return false;
+    if (!is_file_store_name(name)) return false;
     if (!ensure_ready_()) return false;
 
     std::error_code ec;
