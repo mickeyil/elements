@@ -408,9 +408,10 @@ link itself; they show up where flagged.
 
 - `Playback::handle_start` / `handle_resume` / `handle_jump` need to
   return status. Tracked in `drafts/TODO.md` § Playback.
-- `BackgroundStore` needs a sim impl. Backing is a file at a stable
-  path; re-exec on reboot preserves it the same way ESP flash does.
-  Interface is defined in `drafts/background_store.h`.
+- `FileStore` needs a `PosixFileStore` sim impl. Backing is files at a
+  stable path; re-exec on reboot preserves them the same way ESP flash
+  does. Interfaces are in `drafts/file_store.h` and
+  `drafts/animation_store.h`.
 
 ---
 
