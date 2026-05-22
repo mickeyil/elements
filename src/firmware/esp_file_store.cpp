@@ -27,6 +27,7 @@ bool EspFileStore::ensure_ready_()
     if (_state == FileStoreState::Ready) return true;
     if (_state == FileStoreState::Faulted) return false;
 
+    // begin(true): format the partition if the mount fails.
     if (LittleFS.begin(true)) {
         _state = FileStoreState::Ready;
         return true;
