@@ -18,6 +18,7 @@ add_library(elements_core STATIC
     src/copy_ops.cpp
     src/gamma.cpp
     src/sim/host_platform_clock.cpp
+    src/sim/posix_file_store.cpp
     src/sim/posix_tcp_transport.cpp
     src/sim/posix_udp_transport.cpp
     src/pixel_buffer_pool.cpp
@@ -183,6 +184,13 @@ if(BUILD_TESTS)
     )
     target_include_directories(test_tcp_transport PRIVATE src)
     target_link_libraries(test_tcp_transport Catch2::Catch2WithMain)
+
+    add_executable(test_file_store
+        test/test_file_store.cpp
+        src/sim/posix_file_store.cpp
+    )
+    target_include_directories(test_file_store PRIVATE src)
+    target_link_libraries(test_file_store Catch2::Catch2WithMain)
 
     # test_synced_clock is also standalone during the v3 migration: it
     # links the test platform_clock fake (test/test_platform_clock.cpp)
@@ -350,6 +358,8 @@ if(BUILD_TESTS)
     add_test(NAME test_udp_transport COMMAND test_udp_transport
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_tcp_transport COMMAND test_tcp_transport
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    add_test(NAME test_file_store COMMAND test_file_store
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_compositor COMMAND test_compositor
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
