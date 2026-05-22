@@ -5,37 +5,14 @@
 
 #include <cerrno>
 #include <climits>
-#include <cstdlib>
-#include <cstring>
 #include <limits>
 #include <string>
 
+#include "sim/sim_storage.h"
+
 namespace {
 
-constexpr char STORAGE_ROOT_ENV[] = "ELEMENTS_SIM_STORAGE_ROOT";
-
-bool is_safe_device_uid_(const char* s)
-{
-    if (s == nullptr || *s == '\0') return false;
-    // First char must be alphanumeric; avoids "." and ".." path tokens.
-    if (!((*s >= 'A' && *s <= 'Z') ||
-          (*s >= 'a' && *s <= 'z') ||
-          (*s >= '0' && *s <= '9'))) {
-        return false;
-    }
-
-    for (const char* p = s; *p != '\0'; ++p) {
-        const char c = *p;
-        if ((c >= 'A' && c <= 'Z') ||
-            (c >= 'a' && c <= 'z') ||
-            (c >= '0' && c <= '9') ||
-            c == '-' || c == '_' || c == '.') {
-            continue;
-        }
-        return false;
-    }
-    return true;
-}
+constexpr char FILE_STORE_DIR[] = "filestore";
 
 bool write_all_(int fd, const uint8_t* src, size_t len)
 {
@@ -73,16 +50,9 @@ std::filesystem::path temp_path_(const std::filesystem::path& root,
 
 PosixFileStore::PosixFileStore(const char* device_uid)
 {
-    if (!is_safe_device_uid_(device_uid)) {
+    if (!resolve_sim_store_root(device_uid, FILE_STORE_DIR, _root)) {
         _state = FileStoreState::Faulted;
-        return;
     }
-
-    const char* base = std::getenv(STORAGE_ROOT_ENV);
-    if (base == nullptr || *base == '\0') {
-        base = ".";
-    }
-    _root = std::filesystem::path(base) / "simstorage" / device_uid / "filestore";
 }
 
 bool PosixFileStore::ensure_ready_()

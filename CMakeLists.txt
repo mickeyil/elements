@@ -4,6 +4,14 @@ project(elements CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(Git QUIET)
+include(FetchContent)
+
+FetchContent_Declare(
+    nlohmann_json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG v3.11.3
+)
+FetchContent_MakeAvailable(nlohmann_json)
 
 # ---------------------------------------------------------------------------
 # Library: elements core (desktop build, not ESP32)
@@ -17,10 +25,13 @@ add_library(elements_core STATIC
     src/colors.cpp
     src/copy_ops.cpp
     src/gamma.cpp
+    src/hardware_profile_store.cpp
+    src/sim/file_key_value_store.cpp
     src/sim/host_platform_clock.cpp
     src/sim/posix_file_store.cpp
     src/sim/posix_tcp_transport.cpp
     src/sim/posix_udp_transport.cpp
+    src/sim/sim_storage.cpp
     src/pixel_buffer_pool.cpp
     src/pixel_view.cpp
     src/pixel_views.cpp
@@ -36,6 +47,7 @@ add_library(elements_core STATIC
     src/discovery.cpp
 )
 target_include_directories(elements_core PUBLIC src)
+target_link_libraries(elements_core PUBLIC nlohmann_json::nlohmann_json)
 
 # ---------------------------------------------------------------------------
 # Tests (Catch2, fetched at configure time)
@@ -44,7 +56,6 @@ target_include_directories(elements_core PUBLIC src)
 option(BUILD_TESTS "Build tests" ON)
 
 if(BUILD_TESTS)
-    include(FetchContent)
     FetchContent_Declare(
         Catch2
         GIT_REPOSITORY https://github.com/catchorg/Catch2.git
@@ -188,9 +199,22 @@ if(BUILD_TESTS)
     add_executable(test_file_store
         test/test_file_store.cpp
         src/sim/posix_file_store.cpp
+        src/sim/sim_storage.cpp
     )
     target_include_directories(test_file_store PRIVATE src)
     target_link_libraries(test_file_store Catch2::Catch2WithMain)
+
+    add_executable(test_key_value_store
+        test/test_key_value_store.cpp
+        src/hardware_profile_store.cpp
+        src/sim/file_key_value_store.cpp
+        src/sim/sim_storage.cpp
+    )
+    target_include_directories(test_key_value_store PRIVATE src)
+    target_link_libraries(test_key_value_store
+        nlohmann_json::nlohmann_json
+        Catch2::Catch2WithMain
+    )
 
     # test_synced_clock is also standalone during the v3 migration: it
     # links the test platform_clock fake (test/test_platform_clock.cpp)
@@ -360,6 +384,8 @@ if(BUILD_TESTS)
     add_test(NAME test_tcp_transport COMMAND test_tcp_transport
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_file_store COMMAND test_file_store
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    add_test(NAME test_key_value_store COMMAND test_key_value_store
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_compositor COMMAND test_compositor
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
