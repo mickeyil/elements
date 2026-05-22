@@ -37,10 +37,11 @@ class WireReader;
 //   0x15 Stop                 Stop the live program.
 //   0x16 PlayLocalAnimation   Play the stored animation at a given
 //                             play-order position, looping.
-//   0x20 StoreAnimation       Add a blob to AnimationStore.
-//   0x21 EraseAnimation       Remove a stored animation by id.
+//   0x20 StoreAnimation       Store a blob under a name, overwriting
+//                             that name's blob if it already exists.
+//   0x21 EraseAnimation       Remove a stored animation by name.
 //   0x22 SetAnimationOrder    Replace the play order (a permutation of
-//                             the stored ids).
+//                             the stored names).
 //   0x30 Reboot               ACK, then the firmware loop / sim main
 //                             fires the actual reboot after the ACK is
 //                             flushed. No SystemPlatform reference
@@ -51,7 +52,7 @@ class WireReader;
 //   0x41 Ping                 ACK Ok; liveness evidence for
 //                             ControllerLink.
 //   0x42 QueryLocalAnimations The stored animations in play order, one
-//                             {crc32 id, strip_length} pair each.
+//                             {name, strip_length, crc32} record each.
 //
 // REGISTER (0x00) is NOT handled here: it is a one-shot OUTBOUND
 // message the link sends during connect. Inbound 0x00 -> UnknownCommand
@@ -62,8 +63,9 @@ class WireReader;
 // commands mutate them. The two query opcodes only read; that
 // read-only intent is convention here, not compiler-enforced.
 
-// QueryLocalAnimations wire entry: crc32 id (4) + strip_length (2).
-constexpr size_t QUERY_ANIMATION_ENTRY_SIZE = 6;
+// QueryLocalAnimations wire entry: name slot (ANIM_NAME_SIZE) +
+// strip_length (2) + crc32 (4).
+constexpr size_t QUERY_ANIMATION_ENTRY_SIZE = ANIM_NAME_SIZE + 2 + 4;
 
 // Scratch sized for the largest query reply, QueryLocalAnimations:
 // a u16 count followed by one entry per stored animation.
@@ -138,7 +140,7 @@ inline bool load_stored_animation_(AnimationStore& store,
     const AnimationEntry e = store.entry(index);
 
     std::vector<uint8_t> blob(e.blob_len);
-    if (!store.read_blob(e.id, blob.data(), blob.size())) {
+    if (!store.read_blob(e.name, blob.data(), blob.size())) {
         return false;
     }
 
