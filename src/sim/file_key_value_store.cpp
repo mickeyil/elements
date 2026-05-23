@@ -1,6 +1,11 @@
 #include "sim/file_key_value_store.h"
 
+#include <fcntl.h>
+#include <unistd.h>
+
+#include <cerrno>
 #include <fstream>
+#include <limits>
 #include <string>
 #include <utility>
 
@@ -18,6 +23,26 @@ constexpr char TYPE_F32[] = "f32";
 std::filesystem::path temp_path_(const std::filesystem::path& path)
 {
     return path.string() + ".tmp";
+}
+
+bool write_all_(int fd, const char* src, size_t len)
+{
+    size_t written = 0;
+    while (written < len) {
+        const size_t left = len - written;
+        const size_t chunk =
+            left > static_cast<size_t>(std::numeric_limits<ssize_t>::max())
+                ? static_cast<size_t>(std::numeric_limits<ssize_t>::max())
+                : left;
+        const ssize_t n = ::write(fd, src + written, chunk);
+        if (n > 0) {
+            written += static_cast<size_t>(n);
+            continue;
+        }
+        if (n < 0 && errno == EINTR) continue;
+        return false;
+    }
+    return true;
 }
 
 }  // namespace
@@ -76,12 +101,17 @@ bool FileKeyValueStore::ensure_ready_()
 bool FileKeyValueStore::commit_()
 {
     const std::filesystem::path tmp = temp_path_(_path);
+    const std::string text = _data.dump(2) + "\n";
 
-    std::ofstream out(tmp, std::ios::trunc);
-    if (!out) return false;
-    out << _data.dump(2) << '\n';
-    out.close();
-    if (!out) {
+    const std::string tmp_s = tmp.string();
+    const int fd = ::open(tmp_s.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    if (fd < 0) return false;
+
+    bool ok = write_all_(fd, text.data(), text.size());
+    if (ok && ::fsync(fd) < 0) ok = false;
+    if (::close(fd) < 0) ok = false;
+
+    if (!ok) {
         std::error_code ignored;
         std::filesystem::remove(tmp, ignored);
         return false;
