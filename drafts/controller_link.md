@@ -1,11 +1,12 @@
 # Controller Link
 
 The device side of the controller wire: the outbound TCP dial, the
-`REGISTER` handshake, and the `CommandParser` stack above the connected
-socket. The class and its surface live in `drafts/controller_link.h`;
-this doc carries the rationale and the wire reference the headers do
-not. It replaces the v2 monolith (`src/firmware/controller_connection.{h,cpp}`)
-and the duplicate parser in `src/deprecated/network_sim.cpp`.
+`REGISTER` handshake, and the `CommandProcessor` stack above the
+connected socket. The class and its surface live in
+`drafts/controller_link.h`; this doc carries the cross-component
+rationale and the wire reference the headers do not. It replaces the v2
+monolith (`src/deprecated/controller_connection.{h,cpp}`) and the
+duplicate parser in `src/deprecated/network_sim.cpp`.
 
 ## Where it sits
 
@@ -30,7 +31,7 @@ siblings keep that state cheap to express.
 module self-gates and handles prerequisite loss.** No
 `if (network.is_up())` guard wraps the link and sync calls. Each owns
 state that must be reset on prerequisite loss (the link's socket and
-parser buffer; the sync client's filter window and UDP socket).
+processor buffer; the sync client's filter window and UDP socket).
 Skipping `poll()` while the network is down would skip those resets
 and resume from stale state.
 
@@ -50,14 +51,14 @@ direction-flip from v2.
 controller that wants the device replies with a unicast `OFFER` ("I'm
 at `<ip:tcp_port>`"). The link reads `discovery.controller_ip()` /
 `tcp_port()`, opens an outbound TCP connection, and writes one
-`REGISTER` frame. The controller validates it and either starts
-sending commands or silently closes.
+`REGISTER` frame. The controller validates it and either starts sending
+commands or silently closes.
 
 Outbound TCP earns the wire break twice over. The device runs no
-listening socket: no attack surface, no duplicate-connection
-rejection, no "is the server bound after Wi-Fi reconnect" dance.
-And client-to-known-server is the conventional IoT shape, costing
-nothing in operator intuition. The price, that the controller answers
+listening socket: no attack surface, no duplicate-connection rejection,
+no "is the server bound after Wi-Fi reconnect" dance. And
+client-to-known-server is the conventional IoT shape, costing nothing
+in operator intuition. The price, that the controller answers
 `DISCOVER` with an `OFFER` rather than just listening, is small and on
 the capable side of the link.
 
@@ -74,22 +75,21 @@ harmless (unrecognized sync packets are discarded).
 TCP alone will not tell the device a controller crashed in any useful
 time. A hard-crashed or partitioned controller sends no FIN, no RST,
 just silence; the kernel notices only on a write, and lwIP's keepalive
-defaults are far too long. The v3 device mostly receives and writes
-ACKs only in response, so a crashed controller would otherwise leave
-it blocked in `read()` with `is_ready()` stuck true.
+defaults are far too long.
 
 An app-level heartbeat closes the gap: the controller sends `Ping` on
-an interval, the device tracks the last one, and a missed deadline
-(`PING_TIMEOUT`) is treated as the controller gone. The timer field
-and the deadline check are in `controller_link.h`; the `Ping` handler
-is in `command_handler.h`.
+an interval, the device tracks the most recent evidence of activity,
+and a missed deadline (`PING_TIMEOUT`) is treated as the controller
+gone. There is no Ping-specific code path: any frame the processor
+successfully handles bumps the link's `_last_activity_us`. `Ping` is
+just a no-op handler that returns Ok like any other; its only job is
+to guarantee the timestamp keeps refreshing during quiet stretches
+when the controller has no commands to send.
 
-Only `Ping` resets the timer, not arbitrary inbound traffic. A working
-controller pings regardless of whether it is also sending commands, so
-a controller sending commands but not pings is genuinely misbehaving
-and the device declaring it dead is the correct signal.
-`PING_TIMEOUT` is set `>= 2 x ping_interval` so a single dropped
-packet does not drop the connection.
+A controller that sends commands but never pings still keeps the link
+alive while it is talking, and is declared dead the moment it falls
+silent. `PING_TIMEOUT` is set `>= 2 x ping_interval` so a single
+dropped packet does not drop the connection.
 
 ## Every command ACKs
 
@@ -97,15 +97,26 @@ v2's fire-and-forget on `Start` / `Pause` / etc. is gone. The
 controller needs to know when a command was rejected (common case: a
 synced program refused because the clock is not leased), or it lands
 in a split-brain where it thinks the device is playing and the device
-thinks the controller is confused. The `AckStatus` set is the enum in
-`handler_result.h`.
+thinks the controller is confused. The `AckStatus` set is defined in
+`drafts/command_handler.h`; the wire values match
+`src/link_protocol.h`.
 
 A malformed frame (zero length, over `TCP_MSG_MAX`, socket EOF) and a
 liveness timeout both drop the connection; an unknown opcode on a
 well-formed frame just ACKs `UnknownCommand` and the link continues,
 the normal protocol-evolution case. Every drop runs the same teardown:
-close the socket, reset the parser buffer, reset the liveness timer,
+close the socket, reset the processor buffer, reset the liveness timer,
 return to discovery.
+
+## Reboot
+
+`CommandHandler::handle_reboot_` sets `AppContext::reboot_requested =
+true` and returns `Ok`. The App's outer loop reads the flag after
+`link.poll()` returns and calls `system.reboot()` once the ACK has been
+flushed. The two-step is deliberate: invoking `SystemPlatform::reboot()`
+from inside the handler would kill the process before the ACK reaches
+the wire. The link does not surface reboot itself; the cross-layer
+signal goes through the AppContext bundle.
 
 ## Identity
 
@@ -120,8 +131,7 @@ change that calculus; adding auth then is a v4 wire break, which this
 project's no-legacy stance allows. `protocol_version` in `REGISTER` is
 the escape hatch that keeps that v4 cheap: always sent, ignored now.
 
-Two identifiers live in the controller config and never reach the
-wire:
+Two identifiers live in the controller config and never reach the wire:
 
 - `strip_id`: the program-routing key. The DSL refers to outputs by
   `strip_id` ("main", "left"), mapped one-to-one to a configured
@@ -136,7 +146,7 @@ renamed for the UI without touching the device or the protocol.
 
 `src/deprecated/network_sim.cpp`'s monolith collapses to socket setup,
 the `Posix*Transport` classes from `src/sim/`, the same shared
-parser / handler / `ClockSyncClient` the firmware uses, and the
+processor / handler / `ClockSyncClient` the firmware uses, and the
 sim-only frame loop below. The duplicate parser/dispatch/framing is
 deleted in the same change; no half-migrated state. Sim runs the real
 sync code against a controller on the same host; the measured offset
@@ -150,23 +160,12 @@ header is `uid[16] + frame_index:u32 + t_program:f32 + rgb...`; the
 UID lets the controller demux multiple sims, since loopback rules out
 source-IP demux. This is its own protocol, not the controller link.
 
-## Open decisions
-
-- **Reboot signal path out of `poll()`**: result struct vs. a getter
-  read after each tick. Tracked as a TODO in `controller_link.h` and
-  `command_handler.h`.
-- **`ConnectionLayer` wrapper**: deferred until the App's
-  `(network, link, sync)` orchestration proves duplicated between
-  firmware and sim.
-- **`PING_TIMEOUT` and ping interval values**: operational tuning;
-  pin once the controller-side scheduler lands.
-
 ## Open items
 
 - `Playback::handle_start` / `handle_resume` / `handle_jump` must
   return status. Tracked in `drafts/TODO.md` § Playback.
-- `FileStore` needs a `PosixFileStore` sim impl (see
-  `drafts/file_store.h`).
+- `PING_TIMEOUT` and ping interval values: operational tuning; pin
+  once the controller-side scheduler lands.
 
 ---
 
@@ -183,8 +182,9 @@ little-endian. All floats must be finite.
 
 ## Appendix B: opcode payloads
 
-Opcode behavior is described in `command_handler.h`; this table is the
-wire payload only. Direction is `ctrl -> dev` unless noted.
+Opcode behavior and the full opcode map are in
+`drafts/command_handler.h`; the table below is the wire payload only.
+Direction is `ctrl -> dev` unless noted.
 
 | Opcode | Cmd                  | Payload                                              |
 |--------|----------------------|------------------------------------------------------|
@@ -213,13 +213,12 @@ sync moved to UDP). Unknown high nibbles and stray inbound `0x8_`
 replies ACK `UnknownCommand`.
 
 `QueryDeviceStatus` ACK payload: `u8 mode, u8 flags, u16 animation_count`.
-`mode`: 0 attached_controlled, 1 detached_grace_hold, 2 detached_blank,
-3 detached_background. `flags`: bit0 profile_present.
+Layout matches `DeviceStatus` in `drafts/device_status.h`.
 
 `QueryLocalAnimations` ACK payload: `u16 count`, then `count` records
 of `{ char name[32], u16 strip_length, u32 crc32 }`, in play order.
 
-## Appendix C: ports, and where the rest lives
+## Appendix C: ports
 
 Four contiguous ports (friendly for firewall rules):
 
@@ -235,5 +234,4 @@ from each OFFER, hardcoding nothing about the controller; the
 discovery and sync ports are compile-time well-known. The sim frame
 port exists only in sim CLI flags and the controller UI receiver.
 
-DISCOVER / OFFER packet layouts are in `src/discovery.{h,cpp}`. The
-`AckStatus` codes are the enum in `drafts/handler_result.h`.
+DISCOVER / OFFER packet layouts are in `src/discovery.{h,cpp}`.

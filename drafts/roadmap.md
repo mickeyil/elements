@@ -178,7 +178,7 @@ coverage. Hot-path methods (`operator[]`, `size`, `empty`, `byte_size`,
 `copy_to`, dtor, and free `apply_gamma` stay out of line. `copy_to` gained
 a `dst_pixels` argument so a max-sized hardware buffer ends up with a
 zeroed tail when the strip is shorter (the manual pattern in
-`src/firmware/esp_device.cpp`). Standalone test target `test_strip` links
+`src/deprecated/esp_device.cpp`). Standalone test target `test_strip` links
 `src/strip.cpp` + `src/gamma.cpp`. Coverage: default-empty,
 `resize`/`reset`/re-resize zeroing, write-through via `operator[]`,
 `bytes` aliases `pixels`, `clear` (including empty no-op), `apply_gamma`

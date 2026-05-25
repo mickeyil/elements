@@ -2,7 +2,6 @@
 
 #include <Arduino.h>
 
-#include "diagnostics.h"
 #include "link_protocol.h"
 
 #if __has_include("secrets.h")

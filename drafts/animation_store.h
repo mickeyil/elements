@@ -3,13 +3,13 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "file_store.h"
+#include "../src/file_store.h"
 
 // The device's library of background animations: the unsynced
 // animation blobs it plays when not under live controller control.
 // One concrete class; every platform difference lives in the FileStore
 // it is handed, so this logic is built once and shared by firmware and
-// sim, the same way CommandParser is shared above TcpTransport.
+// sim, the same way CommandProcessor is shared above TcpTransport.
 //
 // On-disk layout, all reached through the FileStore:
 //   <name>.anim    one file per animation blob, named by the animation.

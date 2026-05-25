@@ -5,68 +5,35 @@ Claude to act without spelunking.
 
 ---
 
-## Retire `src/firmware/discovery_service.{h,cpp}`
+## Write the v3 firmware entry point and app loop
 
-**Today.** The v2 discovery service binds the device-side UDP port
-6040 and answers controller-initiated sync requests on the same
-socket (`handle_sync_request_` in `src/firmware/discovery_service.cpp`).
-The HELLO format is the v2 4-byte broadcast (`magic | tcp_port |
-uid_len | uid[]`); the controller replies with a v2 OFFER that the
-v2 controller-connection accept loop pairs with an inbound TCP
-connection. Still wired in via `firmware_app.h` and `diagnostics.h`.
+**Today.** The v2 firmware files have been moved to `src/deprecated/`
+(`controller_connection`, `discovery_service`, `firmware_app`,
+`diagnostics`, `esp_device`, `main`). Nothing currently builds a
+firmware binary. `src/firmware/` holds only the platform-impl files
+that survive into v3 (`esp_tcp_transport`, `esp_udp_transport`,
+`esp_file_store`, `esp_platform_clock`, `esp_device_identity`,
+`nvs_key_value_store`, `wifi_manager`, `led0_sanity`).
 
-**Action.** Replaced by `src/discovery.{h,cpp}` (`DiscoveryClient`):
-device-initiated DISCOVER, controller-replied OFFER, sync moved to
-its own UDP port via `src/clock_sync_client.cpp`. Once the firmware
-owner is rewired to use the new `DiscoveryClient`, move
-`firmware/discovery_service.{h,cpp}` into `src/deprecated/` (along
-with the `DiscoverySnapshot` consumer in `firmware/diagnostics.{h,cpp}`).
+**Action.** Build the v3 firmware owner:
 
----
+- New `src/firmware/main.cpp`: construct the App with `EspNetworkInterface`
+  (around `wifi_manager`), `DiscoveryClient`, `EspTcpTransport`,
+  `EspUdpTransport`, `Playback`, `AnimationStore` over `EspFileStore`,
+  `NvsKeyValueStore`, `DeviceStatus`, `EspSystemPlatform`, and the
+  `AppContext` bundling them.
+- App loop runs the three-sibling polling contract:
+  `network.poll(); link.poll(); sync.set_controller(link.controller_ip_addr()); sync.poll();`
+  then playback / render. After `link.poll()` returns, check
+  `ctx.reboot_requested` and call `ctx.system.reboot()` once the ACK
+  has flushed.
+- `ControllerLink` owns the `CommandProcessor` and `CommandHandler`
+  internally; the App only sees the link's `is_ready()` /
+  `controller_ip_addr()` surface and the AppContext flags.
 
-## Rewrite `src/firmware/controller_connection.{h,cpp}` for v3
-
-**Today.** The 660-line v2 monolith binds a TCP server, accepts an
-inbound controller connection, runs a handler switch on v2 opcodes
-(`kCmdAttach = 0x06`, `kSyncResult = 0x03`, etc.), and tracks an
-`attached` flag.
-
-**Action.** Replace with the v3 device-initiated dial described in
-`drafts/controller_link.md`:
-
-- The device dials outbound TCP using the IP/port from the latest
-  OFFER (read from `DiscoveryClient::controller_ip()` /
-  `DiscoveryClient::tcp_port()`). No `WiFiServer` on the device.
-- First message is `REGISTER` (carries UID, `boot_token`,
-  `protocol_version`). Sent by `ControllerLink::send_identity_()`.
-- Above the connected socket, run `CommandParser` from
-  `drafts/command_parser.h` against `CommandHandler`
-  (`drafts/command_handler.h`).
-- Drop the v2 sync-result handler; sync is now a sibling on UDP.
-
-Currently broken on the v2 firmware build for the same struct/header
-movements as above.
-
----
-
-## Rewrite `src/firmware/firmware_app.{h,cpp}` to wire v3 siblings
-
-**Today.** `FirmwareApp::run_once` ticks `WifiManager`,
-`DiscoveryService`, and `ControllerConnection` and centralizes the
-attached/detached mode logic.
-
-**Action.** Replace with the three-sibling polling contract:
-
-- `network.poll()` (Wi-Fi up/down)
-- `link.poll()` (discovery + dial + parser)
-- `sync.set_controller(link.controller_ip_addr())` then `sync.poll()`
-
-Mode logic keys off `link.is_ready()`. Handlers (Session, Playback,
-Storage, Status, System) are constructed once at boot and reused
-across reconnects; `CommandParser` is owned by the link.
-
-Currently broken on the v2 firmware build for the same reasons as
-the two items above.
+Depends on: `EspNetworkInterface` and `EspSystemPlatform` impls (not
+yet written; drafts at `drafts/network_interface.h` and
+`drafts/system_platform.h`).
 
 ---
 
@@ -78,18 +45,15 @@ prevents UB on `NaN`/`±Inf` regardless of caller, but it can only silently
 return `Unchanged`.
 
 **The better place is closer to the wire.** JUMP's `t_program` enters as 4
-raw bytes that `memcpy` into a float at the wire-protocol parser:
+raw bytes that `WireReader::read_f32` produces at the handler:
 
-- `src/firmware/controller_connection.cpp::handle_jump_` — TCP path; can
-  log the bad payload (seq, gen, hex) and ACK the controller with a
-  meaningful error code instead of silently dropping the command.
-- `src/deprecated/sim_controller.cpp` — host-side caller that constructs `t_program`
-  before calling `handle_jump`; same UB exposure if a NaN ever leaks in,
-  but no wire to reject from.
+- `CommandHandler::handle_jump_` (`drafts/command_handler.h`) — TCP
+  path; can ACK `BadPayload` on `!std::isfinite(t_rel)` instead of
+  silently rejecting at the Playback layer.
 
-**Action.** Validate `std::isfinite(t_rel)` in the wire parser(s), log
-with full context, and ACK an error code (e.g., extend
-`link_protocol.h` if the existing `kAckError` bucket is too coarse).
+**Action.** Validate `std::isfinite(t_rel)` in the handler and ACK
+`BadPayload`. `AckStatus` already has the needed code; no
+`link_protocol.h` extension needed.
 
 **Open question for that PR.** Whether to keep the Playback check as a
 belt-and-suspenders invariant or drop it once the wire layer is honest.
@@ -99,36 +63,32 @@ trust their callers, and a lone finiteness check there is asymmetric.
 
 ---
 
-## Wire firmware load path through `Playback::handle_load`
+## Wire LOAD path through `Playback::handle_load`
 
-**Today.** `ControllerConnection::handle_load_` in
-`src/firmware/controller_connection.cpp` still uses the v2 load
-signature: `_device->handle_load(blob, blob_len, gen)` returning a
-plain bool, no `DecodeError` channel. `link_protocol.h` only defines
-`kAckOk`, `kAckError`, `kAckWrongState`.
+**Today.** The v3 `CommandHandler::handle_load_`
+(`drafts/command_handler.h`) is unwritten; the v2 `handle_load_` in
+`src/deprecated/controller_connection.cpp` used the v2 load signature
+(`_device->handle_load(blob, blob_len, gen)` returning a plain bool)
+with no `DecodeError` channel.
 
-**Action.**
+**Action.** When implementing `CommandHandler::handle_load_`, call
+`Playback::handle_load(blob, blob_len, &err)` and map:
 
-1. Add `kAckProfileMismatch = 3` to `src/link_protocol.h`.
-2. Rewire `handle_load_` onto `Playback::handle_load(blob, blob_len,
-   &err)`. Mapping:
-   - `DecodeError::Ok` → `kAckOk`
-   - `DecodeError::StripLengthMismatch` → `kAckProfileMismatch`
-   - everything else → `kAckError`
-3. Log `decode_error_name(err)` on every failed load so serial logs
-   identify the exact rejection reason without a debugger.
+- `DecodeError::Ok`                  → `AckStatus::Ok`
+- `DecodeError::StripLengthMismatch` → `AckStatus::ProfileMismatch`
+- everything else                    → `AckStatus::Error`
 
-This is part of the post-step-20 firmware owner rewire called out in
-`roadmap.md` Notes ("Old simulator callers are staged for deletion").
+Log `decode_error_name(err)` on every failed load so serial logs
+identify the rejection reason without a debugger.
 
 ---
 
 ## Rewire `strip_render` off legacy `PlaybackDevice`
 
-**Today.** `src/strip_render.cpp` (offline CLI renderer) routes through
-the legacy `PlaybackDevice` to render frames to stdout. Post step 20
-the v3 surface is `decode_program` + `Engine` + `Strip` directly — no
-clock, no `Playback`.
+**Today.** `src/deprecated/strip_render.cpp` (offline CLI renderer)
+routes through the legacy `PlaybackDevice` to render frames to stdout.
+Post step 20 the v3 surface is `decode_program` + `Engine` + `Strip`
+directly — no clock, no `Playback`.
 
 **Action.** Rewrite the CLI to: call `decode_program(blob, blob_len,
 strip_length, &err)`, reject `Program::requires_sync` (offline render
@@ -147,9 +107,10 @@ header or other drafts.
 
 ### Firmware and sim owner presentation loop
 
-**Today.** `src/firmware/esp_device.{h,cpp}` and `src/deprecated/esp_simulated.{h,cpp}`
-still derive from the legacy `PlaybackDevice`. There is no owner that
-drives `src/playback.{h,cpp}`; the post-step-20 owner rewire is unstarted.
+**Today.** `src/deprecated/esp_device.{h,cpp}` and
+`src/deprecated/esp_simulated.{h,cpp}` still derive from the legacy
+`PlaybackDevice`. There is no owner that drives `src/playback.{h,cpp}`;
+the post-step-20 owner rewire is unstarted.
 
 **Action.** Build a thin firmware owner around `Playback`. On every
 `Rendered` or `Ended` return from `render_next_frame()`:
@@ -210,8 +171,9 @@ controller-link design requires them to return a status so
 infer the outcome from `state()` deltas, which can't distinguish a
 rejection-by-`is_synced()` from a no-op call from the wrong state.
 
-**Action.** Pick a status enum (likely shared with `AckStatus` or a
-narrower playback-side type), update the three signatures, and rewire
+**Action.** Pick a status enum (likely a narrower playback-side type
+that the handler maps onto `AckStatus` in
+`drafts/command_handler.h`), update the three signatures, and rewire
 `CommandHandler::handle_start_` / `handle_jump_` / `handle_resume_`
 to map the returns onto the wire ACKs.
 
