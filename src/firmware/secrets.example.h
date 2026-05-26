@@ -2,9 +2,9 @@
 
 #include <cstddef>
 
-#include "wifi_manager.h"
+#include "wifi_cred_store.h"
 
-static constexpr DevWifiCredential DEV_WIFI_CREDENTIALS[] = {
+static constexpr WifiCredential DEV_WIFI_CREDENTIALS[] = {
     // {"example-ssid", "example-password"},
 };
 

@@ -26,6 +26,7 @@ add_library(elements_core STATIC
     src/copy_ops.cpp
     src/gamma.cpp
     src/hardware_profile_store.cpp
+    src/wifi_cred_store.cpp
     src/sim/file_key_value_store.cpp
     src/sim/host_platform_clock.cpp
     src/sim/posix_file_store.cpp
@@ -216,6 +217,18 @@ if(BUILD_TESTS)
         Catch2::Catch2WithMain
     )
 
+    add_executable(test_wifi_cred_store
+        test/test_wifi_cred_store.cpp
+        src/wifi_cred_store.cpp
+        src/sim/file_key_value_store.cpp
+        src/sim/sim_storage.cpp
+    )
+    target_include_directories(test_wifi_cred_store PRIVATE src)
+    target_link_libraries(test_wifi_cred_store
+        nlohmann_json::nlohmann_json
+        Catch2::Catch2WithMain
+    )
+
     # test_synced_clock is also standalone during the v3 migration: it
     # links the test platform_clock fake (test/test_platform_clock.cpp)
     # instead of any production platform_clock impl.
@@ -386,6 +399,8 @@ if(BUILD_TESTS)
     add_test(NAME test_file_store COMMAND test_file_store
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_key_value_store COMMAND test_key_value_store
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    add_test(NAME test_wifi_cred_store COMMAND test_wifi_cred_store
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_compositor COMMAND test_compositor
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})

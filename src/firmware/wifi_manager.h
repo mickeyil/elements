@@ -1,54 +1,56 @@
 #pragma once
 
-#include <Preferences.h>
-#include <WiFi.h>
-
+#include <cstddef>
 #include <cstdint>
 
+#include "network_interface.h"
 
-struct DevWifiCredential {
-    const char* ssid;
-    const char* password;
-};
+class WifiCredStore;
 
-enum class WifiTransition {
-    none,
-    connected,
-    disconnected,
-};
-
-struct WifiSnapshot {
-    bool ready = false;
-    bool preferences_ready = false;
-    String last_good_ssid;
-    IPAddress local_ip;
-    uint32_t connect_attempts = 0;
-    uint32_t connect_successes = 0;
-};
+// ESP-side Wi-Fi handler. Wraps Arduino WiFi association behind a
+// non-blocking poll() that the App calls each loop tick. All connect
+// attempts are launched and timed out without ever spinning in
+// delay(), so animation rendering is unaffected during association.
+//
+// State machine:
+//   begin()          one-time setup. Seeds WifiCredStore from
+//                    compiled DEV_WIFI_CREDENTIALS if the store is
+//                    empty, configures the radio, and kicks the first
+//                    association attempt (last_ssid if known, else
+//                    the first stored credential).
+//
+//   poll() per tick  reads WiFi.status() and advances the state
+//                    machine. Returns the transition observed this
+//                    tick (came_up / went_down / none). On success,
+//                    writes the SSID into the store as last_ssid.
+//                    On failure of one attempt (per-attempt timeout
+//                    elapsed), advances to the next credential. After
+//                    the full walk fails, waits WIFI_SCAN_RETRY_MS
+//                    before starting a fresh walk.
+//
+// Same-SSID reconnection is left to the supplicant
+// (WiFi.setAutoReconnect(true)). The credential walk is the recovery
+// for "moved to a different known network" only.
 
 class WifiManager {
 public:
+    explicit WifiManager(WifiCredStore& creds);
+
     void begin();
-    WifiTransition poll();
-    bool is_ready() const;
-    WifiSnapshot snapshot() const;
+    NetworkTransition poll();
+    bool is_up() const { return _is_up; }
 
 private:
-    bool connect_to_dev_wifi_();
-    bool attempt_credential_(
-        const char* ssid,
-        const char* password,
-        uint32_t timeout_ms,
-        const char* label
-    );
-    void load_last_good_ssid_();
-    void store_last_good_ssid_(const char* ssid);
+    void start_attempt_(const char* ssid, const char* password);
+    void advance_walk_();
+    bool load_attempt_at_walk_(char* ssid_out, char* pwd_out);
 
-    Preferences _preferences;
-    bool _ready = false;
-    bool _preferences_ready = false;
-    uint32_t _last_retry_ms = 0;
-    String _last_good_ssid;
-    uint32_t _connect_attempts = 0;
-    uint32_t _connect_successes = 0;
+    WifiCredStore& _creds;
+
+    bool     _is_up = false;
+    bool     _walking = false;
+    bool     _tried_last = false;
+    uint32_t _attempt_started_ms = 0;
+    uint32_t _last_scan_ended_ms = 0;
+    size_t   _walk_idx = 0;
 };

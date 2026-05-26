@@ -1,17 +1,29 @@
 #include "wifi_manager.h"
 
 #include <Arduino.h>
+#include <WiFi.h>
 
-#include "link_protocol.h"
+#include <cstring>
+
+#include "wifi_cred_store.h"
 
 #if __has_include("secrets.h")
 #include "secrets.h"
 #else
-static constexpr const DevWifiCredential* DEV_WIFI_CREDENTIALS = nullptr;
+static constexpr const WifiCredential* DEV_WIFI_CREDENTIALS = nullptr;
 static constexpr size_t DEV_WIFI_CREDENTIAL_COUNT = 0;
 #endif
 
 namespace {
+
+// Per-credential association timeout. Matches the wpa_supplicant's own
+// retry window so a real failure shows up before we move on.
+constexpr uint32_t WIFI_CONNECT_ATTEMPT_TIMEOUT_MS = 12'000;
+
+// After exhausting all stored credentials, wait this long before
+// starting a fresh walk. Keeps a stranded device from beating on the
+// radio.
+constexpr uint32_t WIFI_SCAN_RETRY_INTERVAL_MS = 30'000;
 
 void configure_wifi_runtime_()
 {
@@ -23,157 +35,152 @@ void configure_wifi_runtime_()
 
 }  // namespace
 
+WifiManager::WifiManager(WifiCredStore& creds) : _creds(creds) {}
+
 void WifiManager::begin()
 {
-    _preferences_ready = _preferences.begin(kNvsNamespace, false);
-    if (!_preferences_ready) {
-        log_line("[wifi] failed to open preferences namespace=%s", kNvsNamespace);
+    if (_creds.empty() && DEV_WIFI_CREDENTIAL_COUNT > 0) {
+        _creds.seed_from(DEV_WIFI_CREDENTIALS, DEV_WIFI_CREDENTIAL_COUNT);
     }
 
-    load_last_good_ssid_();
-    if (connect_to_dev_wifi_()) {
-        _ready = true;
-        _last_retry_ms = 0;
+    configure_wifi_runtime_();
+
+    _walking = true;
+    _tried_last = false;
+    _walk_idx = 0;
+
+    char ssid[WIFI_SSID_BUF_SIZE];
+    char password[WIFI_PASSWORD_BUF_SIZE];
+    if (load_attempt_at_walk_(ssid, password)) {
+        start_attempt_(ssid, password);
+    } else {
+        _walking = false;
+        _last_scan_ended_ms = millis();
     }
 }
 
-WifiTransition WifiManager::poll()
+NetworkTransition WifiManager::poll()
 {
-    if (WiFi.status() == WL_CONNECTED) {
-        if (!_ready) {
-            _ready = true;
-            _last_retry_ms = 0;
-            return WifiTransition::connected;
+    const bool connected = (WiFi.status() == WL_CONNECTED);
+
+    if (connected) {
+        if (_is_up) return NetworkTransition::none;
+
+        _is_up = true;
+        _walking = false;
+
+        const String current = WiFi.SSID();
+        if (current.length() > 0) {
+            _creds.set_last_ssid(current.c_str());
+            Serial.printf("[wifi] connected ssid=%s ip=%s\n",
+                          current.c_str(),
+                          WiFi.localIP().toString().c_str());
         }
-        return WifiTransition::none;
+        return NetworkTransition::came_up;
     }
 
-    if (_ready) {
-        log_line("[wifi] disconnected");
-        _ready = false;
-        return WifiTransition::disconnected;
+    // Not connected.
+    if (_is_up) {
+        _is_up = false;
+        Serial.println("[wifi] disconnected");
+        // The supplicant handles same-SSID reconnect; only start a
+        // credential walk if it can't recover within the timeout.
+        _attempt_started_ms = millis();
+        _walking = false;
+        _last_scan_ended_ms = 0;
+        return NetworkTransition::went_down;
     }
 
     const uint32_t now = millis();
-    if (_last_retry_ms != 0 && now - _last_retry_ms < kWifiRetryIntervalMs) {
-        return WifiTransition::none;
+
+    if (_walking) {
+        if (now - _attempt_started_ms < WIFI_CONNECT_ATTEMPT_TIMEOUT_MS) {
+            return NetworkTransition::none;
+        }
+        // Attempt timed out. Advance to the next credential.
+        advance_walk_();
+        char ssid[WIFI_SSID_BUF_SIZE];
+        char password[WIFI_PASSWORD_BUF_SIZE];
+        if (load_attempt_at_walk_(ssid, password)) {
+            start_attempt_(ssid, password);
+        } else {
+            _walking = false;
+            _last_scan_ended_ms = now;
+            Serial.println("[wifi] scan walk exhausted");
+        }
+        return NetworkTransition::none;
     }
 
-    _last_retry_ms = now;
-    if (connect_to_dev_wifi_()) {
-        _ready = true;
-        _last_retry_ms = 0;
-        return WifiTransition::connected;
-    }
-    return WifiTransition::none;
-}
-
-bool WifiManager::is_ready() const
-{
-    return _ready;
-}
-
-WifiSnapshot WifiManager::snapshot() const
-{
-    WifiSnapshot snapshot;
-    snapshot.ready = _ready;
-    snapshot.preferences_ready = _preferences_ready;
-    snapshot.last_good_ssid = _last_good_ssid;
-    snapshot.local_ip = _ready ? WiFi.localIP() : IPAddress();
-    snapshot.connect_attempts = _connect_attempts;
-    snapshot.connect_successes = _connect_successes;
-    return snapshot;
-}
-
-bool WifiManager::connect_to_dev_wifi_()
-{
-    configure_wifi_runtime_();
-
-    bool tried_preferred = false;
-    for (size_t i = 0; i < DEV_WIFI_CREDENTIAL_COUNT; ++i) {
-        const DevWifiCredential& cred = DEV_WIFI_CREDENTIALS[i];
-        const bool preferred = _last_good_ssid.length() > 0 && _last_good_ssid == cred.ssid;
-        if (!preferred) {
-            continue;
-        }
-
-        tried_preferred = true;
-        if (attempt_credential_(cred.ssid, cred.password, kWifiPreferredTimeoutMs, " (preferred)")) {
-            return true;
-        }
-        break;
-    }
-
-    for (size_t i = 0; i < DEV_WIFI_CREDENTIAL_COUNT; ++i) {
-        const DevWifiCredential& cred = DEV_WIFI_CREDENTIALS[i];
-        if (tried_preferred && _last_good_ssid.length() > 0 && _last_good_ssid == cred.ssid) {
-            continue;
-        }
-
-        if (attempt_credential_(cred.ssid, cred.password, kWifiConnectTimeoutMs, "")) {
-            return true;
+    // Idle. After the scan-retry interval, start a fresh walk.
+    if (now - _last_scan_ended_ms >= WIFI_SCAN_RETRY_INTERVAL_MS) {
+        _walking = true;
+        _tried_last = false;
+        _walk_idx = 0;
+        char ssid[WIFI_SSID_BUF_SIZE];
+        char password[WIFI_PASSWORD_BUF_SIZE];
+        if (load_attempt_at_walk_(ssid, password)) {
+            start_attempt_(ssid, password);
+        } else {
+            _walking = false;
+            _last_scan_ended_ms = now;
         }
     }
-
-    return false;
+    return NetworkTransition::none;
 }
 
-bool WifiManager::attempt_credential_(
-    const char* ssid,
-    const char* password,
-    uint32_t timeout_ms,
-    const char* label
-)
+void WifiManager::start_attempt_(const char* ssid, const char* password)
 {
-    _connect_attempts += 1;
-    log_line("[wifi] connecting to %s%s", ssid, label);
+    Serial.printf("[wifi] attempt ssid=%s\n", ssid);
     WiFi.disconnect(true, true);
-    delay(100);
     WiFi.begin(ssid, password);
+    _attempt_started_ms = millis();
+}
 
-    const uint32_t started = millis();
-    while (millis() - started < timeout_ms) {
-        if (WiFi.status() == WL_CONNECTED) {
-            _connect_successes += 1;
-            log_line("[wifi] connected to %s ip=%s", ssid, WiFi.localIP().toString().c_str());
-            store_last_good_ssid_(ssid);
+void WifiManager::advance_walk_()
+{
+    if (!_tried_last) {
+        // The last-known was the first attempt; from here, walk by
+        // index starting at 0 (the loader will skip the last_ssid).
+        _tried_last = true;
+        _walk_idx = 0;
+        return;
+    }
+    ++_walk_idx;
+}
+
+bool WifiManager::load_attempt_at_walk_(char* ssid_out, char* pwd_out)
+{
+    // First attempt of a walk: try last_ssid if known.
+    if (!_tried_last) {
+        char last[WIFI_SSID_BUF_SIZE];
+        if (_creds.last_ssid(last, sizeof(last)) &&
+            _creds.get(last, pwd_out, WIFI_PASSWORD_BUF_SIZE)) {
+            std::strncpy(ssid_out, last, WIFI_SSID_BUF_SIZE - 1);
+            ssid_out[WIFI_SSID_BUF_SIZE - 1] = '\0';
             return true;
         }
-        delay(250);
+        // No usable last_ssid; fall through to the indexed walk.
+        _tried_last = true;
+        _walk_idx = 0;
     }
 
-    log_line(
-        "[wifi] failed to connect to %s after %lums",
-        ssid,
-        static_cast<unsigned long>(millis() - started)
-    );
+    char last[WIFI_SSID_BUF_SIZE];
+    const bool have_last = _creds.last_ssid(last, sizeof(last));
+
+    while (_walk_idx < _creds.count()) {
+        if (!_creds.ssid_at(_walk_idx, ssid_out, WIFI_SSID_BUF_SIZE)) {
+            ++_walk_idx;
+            continue;
+        }
+        // Skip the last_ssid; we already tried it.
+        if (have_last && std::strcmp(ssid_out, last) == 0) {
+            ++_walk_idx;
+            continue;
+        }
+        if (_creds.get(ssid_out, pwd_out, WIFI_PASSWORD_BUF_SIZE)) {
+            return true;
+        }
+        ++_walk_idx;
+    }
     return false;
-}
-
-void WifiManager::load_last_good_ssid_()
-{
-    if (!_preferences_ready) {
-        return;
-    }
-
-    _last_good_ssid = _preferences.getString(kNvsLastGoodSsidKey, "");
-    if (_last_good_ssid.length() > 0) {
-        log_line("[wifi] cached preferred ssid=%s", _last_good_ssid.c_str());
-    }
-}
-
-void WifiManager::store_last_good_ssid_(const char* ssid)
-{
-    if (!_preferences_ready || ssid == nullptr || ssid[0] == '\0') {
-        return;
-    }
-    if (_last_good_ssid == ssid) {
-        return;
-    }
-    if (!_preferences.putString(kNvsLastGoodSsidKey, ssid)) {
-        log_line("[wifi] failed to cache preferred ssid=%s", ssid);
-        return;
-    }
-    _last_good_ssid = ssid;
-    log_line("[wifi] cached preferred ssid=%s", _last_good_ssid.c_str());
 }

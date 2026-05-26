@@ -4,6 +4,7 @@
 #include <unistd.h>
 
 #include <cerrno>
+#include <cstring>
 #include <fstream>
 #include <limits>
 #include <string>
@@ -19,6 +20,7 @@ constexpr char VALUE_KEY[] = "value";
 constexpr char TYPE_U8[] = "u8";
 constexpr char TYPE_U16[] = "u16";
 constexpr char TYPE_F32[] = "f32";
+constexpr char TYPE_STR[] = "str";
 
 std::filesystem::path temp_path_(const std::filesystem::path& path)
 {
@@ -231,4 +233,42 @@ bool FileKeyValueStore::put_u16(const char* key, uint16_t value)
 bool FileKeyValueStore::put_f32(const char* key, float value)
 {
     return put_number_(key, TYPE_F32, value);
+}
+
+bool FileKeyValueStore::put_str(const char* key, const char* value)
+{
+    if (value == nullptr) return false;
+    const size_t value_len = std::strlen(value);
+    if (value_len > KEY_VALUE_STORE_MAX_VALUE_SIZE) return false;
+    if (!is_key_value_store_name(key)) return false;
+    if (!ensure_ready_()) return false;
+
+    nlohmann::json old = _data;
+    _data[key] = {{TYPE_KEY, TYPE_STR}, {VALUE_KEY, std::string(value, value_len)}};
+    if (!commit_()) {
+        _data = std::move(old);
+        return false;
+    }
+    return true;
+}
+
+int FileKeyValueStore::get_str(const char* key, char* out, size_t out_cap)
+{
+    if (out == nullptr || out_cap == 0) return -1;
+    if (!is_key_value_store_name(key)) return -1;
+    if (!ensure_ready_()) return -1;
+
+    auto it = _data.find(key);
+    if (it == _data.end() || !it->is_object()) return -1;
+    const nlohmann::json& entry = *it;
+    if (!entry.contains(TYPE_KEY) || !entry[TYPE_KEY].is_string()) return -1;
+    if (entry[TYPE_KEY].get<std::string>() != TYPE_STR) return -1;
+    if (!entry.contains(VALUE_KEY) || !entry[VALUE_KEY].is_string()) return -1;
+
+    const std::string& value = entry[VALUE_KEY].get_ref<const std::string&>();
+    if (value.size() + 1 > out_cap) return -1;
+
+    std::memcpy(out, value.data(), value.size());
+    out[value.size()] = '\0';
+    return static_cast<int>(value.size());
 }

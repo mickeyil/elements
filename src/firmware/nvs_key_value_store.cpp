@@ -1,6 +1,7 @@
 #include "firmware/nvs_key_value_store.h"
 
 #include <cstdio>
+#include <cstring>
 
 NvsKeyValueStore::NvsKeyValueStore(const char* name_space)
 {
@@ -93,4 +94,28 @@ bool NvsKeyValueStore::put_f32(const char* key, float value)
     if (!ensure_ready_()) return false;
 
     return _preferences.putBytes(key, &value, sizeof(value)) == sizeof(value);
+}
+
+bool NvsKeyValueStore::put_str(const char* key, const char* value)
+{
+    if (value == nullptr) return false;
+    const size_t value_len = std::strlen(value);
+    if (value_len > KEY_VALUE_STORE_MAX_VALUE_SIZE) return false;
+    if (!is_key_value_store_name(key)) return false;
+    if (!ensure_ready_()) return false;
+
+    return _preferences.putString(key, value) > 0;
+}
+
+int NvsKeyValueStore::get_str(const char* key, char* out, size_t out_cap)
+{
+    if (out == nullptr || out_cap == 0) return -1;
+    if (!is_key_value_store_name(key)) return -1;
+    if (!ensure_ready_()) return -1;
+    if (_preferences.getType(key) != PT_STR) return -1;
+
+    const size_t result = _preferences.getString(key, out, out_cap);
+    if (result == 0) return -1;     // missing key or out_cap too small
+    out[out_cap - 1] = '\0';        // belt-and-suspenders
+    return static_cast<int>(std::strlen(out));
 }

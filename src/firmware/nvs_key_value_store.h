@@ -24,6 +24,9 @@ public:
     bool put_u16(const char* key, uint16_t value) override;
     bool put_f32(const char* key, float value) override;
 
+    bool put_str(const char* key, const char* value) override;
+    int  get_str(const char* key, char* out, size_t out_cap) override;
+
 private:
     bool ensure_ready_();
 
