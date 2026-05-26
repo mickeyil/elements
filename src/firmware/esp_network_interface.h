@@ -4,10 +4,8 @@
 
 class WifiManager;
 
-// NetworkInterface impl for ESP firmware: a thin shim around
-// WifiManager, which holds all the Wi-Fi state and the credential walk.
-// Lives separately so the shared App code sees only the abstract
-// NetworkInterface seam.
+// NetworkInterface adapter over WifiManager. Keeps the App's polling
+// surface platform-agnostic.
 
 class EspNetworkInterface : public NetworkInterface {
 public:

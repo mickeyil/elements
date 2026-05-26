@@ -7,36 +7,21 @@
 
 class WifiCredStore;
 
-// ESP-side Wi-Fi handler. Wraps Arduino WiFi association behind a
-// non-blocking poll() that the App calls each loop tick. All connect
-// attempts are launched and timed out without ever spinning in
-// delay(), so animation rendering is unaffected during association.
+// ESP-side Wi-Fi handler driven from NetworkInterface::poll(). Holds
+// the connect-attempt state machine and the credential walk so the
+// App loop never blocks on association.
 //
-// State machine:
-//   begin()          one-time setup. Seeds WifiCredStore from
-//                    compiled DEV_WIFI_CREDENTIALS if the store is
-//                    empty, configures the radio, and kicks the first
-//                    association attempt (last_ssid if known, else
-//                    the first stored credential).
-//
-//   poll() per tick  reads WiFi.status() and advances the state
-//                    machine. Returns the transition observed this
-//                    tick (came_up / went_down / none). On success,
-//                    writes the SSID into the store as last_ssid.
-//                    On failure of one attempt (per-attempt timeout
-//                    elapsed), advances to the next credential. After
-//                    the full walk fails, waits WIFI_SCAN_RETRY_MS
-//                    before starting a fresh walk.
-//
-// Same-SSID reconnection is left to the supplicant
-// (WiFi.setAutoReconnect(true)). The credential walk is the recovery
-// for "moved to a different known network" only.
+// Same-SSID reconnect is left to the supplicant (setAutoReconnect).
+// The credential walk recovers "moved to a different known SSID."
 
 class WifiManager {
 public:
     explicit WifiManager(WifiCredStore& creds);
 
+    // Seed the cred store from compiled DEV_WIFI_CREDENTIALS if empty,
+    // then kick the first attempt.
     void begin();
+
     NetworkTransition poll();
     bool is_up() const { return _is_up; }
 

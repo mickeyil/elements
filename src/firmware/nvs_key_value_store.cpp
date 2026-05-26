@@ -104,10 +104,8 @@ bool NvsKeyValueStore::put_str(const char* key, const char* value)
     if (!is_key_value_store_name(key)) return false;
     if (!ensure_ready_()) return false;
 
-    // putString returns strlen(value) on success and 0 on failure, so a
-    // successful empty-string write is indistinguishable from a failed
-    // write by the return value alone. Verify the empty case with
-    // isKey; the non-empty case checks the byte count.
+    // putString returns strlen(value) on success and 0 on failure;
+    // the empty-string success case needs isKey to disambiguate.
     const size_t written = _preferences.putString(key, value);
     if (value_len > 0) return written == value_len;
     return _preferences.isKey(key);
@@ -120,14 +118,10 @@ int NvsKeyValueStore::get_str(const char* key, char* out, size_t out_cap)
     if (!ensure_ready_()) return -1;
     if (_preferences.getType(key) != PT_STR) return -1;
 
-    // Read into a buffer sized to the API's own value cap; put_str
-    // enforces that limit, so anything stored through this class fits.
-    // The zero-init is load-bearing: getString returns 0 both for the
-    // empty-string success case and for an internal read error, and in
-    // either case it leaves tmp untouched. Treating tmp as "" in both
-    // cases gives a clean success for empty strings and a graceful
-    // degrade for the rare read error (which getType already ruled out
-    // for the missing-key case).
+    // put_str enforces the cap, so tmp always fits. Zero-init is
+    // load-bearing: getString returns 0 both for an empty string and
+    // for a silent read failure, and leaves tmp untouched either way;
+    // surfacing "" is correct for the first and graceful for the second.
     char tmp[KEY_VALUE_STORE_MAX_VALUE_SIZE + 1] = {};
     const size_t len = _preferences.getString(key, tmp, sizeof(tmp));
 

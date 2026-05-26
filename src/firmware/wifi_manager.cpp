@@ -16,8 +16,8 @@ static constexpr size_t DEV_WIFI_CREDENTIAL_COUNT = 0;
 
 namespace {
 
-// Per-credential association timeout. Matches the wpa_supplicant's own
-// retry window so a real failure shows up before we move on.
+// Matches the supplicant's own retry window; long enough to surface
+// a real association failure before moving on.
 constexpr uint32_t WIFI_CONNECT_ATTEMPT_TIMEOUT_MS = 12'000;
 
 // Long enough to let auto-reconnect recover the same SSID, and to
@@ -136,8 +136,8 @@ void WifiManager::start_attempt_(const char* ssid, const char* password)
 void WifiManager::advance_walk_()
 {
     if (!_tried_last) {
-        // The last-known was the first attempt; from here, walk by
-        // index starting at 0 (the loader will skip the last_ssid).
+        // Restart the indexed walk; the loader skips the slot
+        // matching last_ssid since we already tried it.
         _tried_last = true;
         _walk_idx = 0;
         return;
