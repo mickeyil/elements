@@ -1,46 +1,38 @@
 #pragma once
 
-// Reports a Wi-Fi / LAN association change observed during the most
-// recent poll(). `none` is the usual return; `came_up` and
-// `went_down` fire on the tick the change is first seen.
+// Network association change reported by the most recent poll().
+// `none` is the usual case; the others fire on the tick the change is
+// first observed.
 enum class NetworkTransition {
     none,
     came_up,
     went_down,
 };
 
-// "Am I on a usable LAN?" Two impls live elsewhere:
-//   - EspNetworkInterface  (wraps Arduino WiFi on firmware -- SSID,
-//                           reconnect policy, signal monitoring)
-//   - HostNetworkInterface (sim/host -- always reports up)
-//
-// Reconnect is INTERNAL to the impl. The ESP impl already runs
-// WiFi.setAutoReconnect(true) and keeps watching; the host impl has
-// nothing to reconnect. Callers do not get a public reconnect() --
-// micromanaging reconnect timing isn't theirs to do.
-//
-// poll() is the single per-tick entry point. The App calls it
-// unconditionally each loop, then calls link.poll() and sync.poll()
-// also unconditionally -- those modules self-gate on is_up() /
-// is_ready() internally. See drafts/controller_link.md § "The polling
-// contract" for the rationale (gating in the App on is_up() would
-// strand stale sync state when Wi-Fi drops).
+// Is the device on a usable LAN? Same shape on firmware (ESP-side
+// Wi-Fi) and host (always up). The App polls this each tick before
+// link.poll() / sync.poll(); both downstream modules self-gate on
+// is_up() rather than the App wrapping calls in a guard, so they can
+// reset stale state on Wi-Fi drops.
 //
 // Configuration (SSID, password, AP-mode fallback, host bind address)
-// lives in the impl's constructor and is not part of this interface.
+// lives in the implementation's constructor; reconnect policy is
+// internal to it.
+//
+// Implementations:
+//   - EspNetworkInterface  (firmware, around WifiManager)
+//   - HostNetworkInterface (sim/host, always up)
 
 class NetworkInterface {
 public:
     virtual ~NetworkInterface() = default;
 
-    // One-time setup. Called once at startup, before poll().
+    // One-time setup before the first poll().
     virtual void begin() = 0;
 
-    // Make whatever progress is available without blocking. Returns
-    // any transition observed since the last call.
+    // Make progress without blocking; returns any change since the last call.
     virtual NetworkTransition poll() = 0;
 
-    // True iff the device currently has a usable LAN association.
-    // Steady-state. Flips alongside the transition returned by poll().
+    // Is the device currently on a usable LAN?
     virtual bool is_up() const = 0;
 };
