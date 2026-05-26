@@ -63,10 +63,8 @@ constexpr uint8_t ACK_UNSYNCED         = 6;
 // Drives TCP_MSG_MAX. Relax only if a real animation hits the ceiling.
 constexpr size_t MAX_BLOB_BYTES = 16 * 1024;
 
-// Initial RX buffer; grows on demand up to TCP_MSG_MAX during a blob frame.
-constexpr size_t TCP_BUF_INITIAL = 4096;
-
 // Largest inbound TCP frame. The bound is StoreAnimation: 32-byte name
 // slot + blob + 5 bytes of frame header (length u32 + opcode u8). The
-// slack absorbs the header and any future small additions.
+// slack absorbs the header and any future small additions. Sizes the
+// CommandProcessor's fixed RX buffer.
 constexpr size_t TCP_MSG_MAX = MAX_BLOB_BYTES + 256;

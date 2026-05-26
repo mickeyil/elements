@@ -2,7 +2,8 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <vector>
+
+#include "../src/link_protocol.h"   // TCP_MSG_MAX
 
 class TcpTransport;
 class CommandHandler;
@@ -30,6 +31,14 @@ class CommandHandler;
 //   - unknown opcode                       : ACK UnknownCommand, link stays up.
 //   - ACK write fails                      : best-effort, no special path.
 //
+// Buffer storage. _rx is a fixed array sized to TCP_MSG_MAX (~16 KiB).
+// Allocated once with the processor and never resized; the heap never
+// sees an RX-buffer alloc/free across the program's life. This trades
+// idle RAM (the buffer is always there) for zero fragmentation in the
+// hot path where blobs and decoder allocations interleave. _rx_used is
+// the write cursor: bytes in [0, _rx_used) are valid; reads append at
+// the cursor; consume() memmoves any tail down and shrinks the cursor.
+//
 // reset_buffer() is called by ControllerLink after a connection drop
 // and again after a fresh connect, before the REGISTER write.
 
@@ -49,8 +58,8 @@ private:
     TcpTransport&   _transport;
     CommandHandler& _handler;
 
-    std::vector<uint8_t> _rx;
-    size_t               _rx_used = 0;
+    uint8_t _rx[TCP_MSG_MAX] = {};
+    size_t  _rx_used = 0;
 
     uint8_t _reply_payload[REPLY_PAYLOAD_MAX] = {};
 };
