@@ -48,10 +48,12 @@
 // the real flash budget.
 constexpr size_t MAX_STORED_ANIMATIONS = 16;
 
-// Largest single stored-animation blob. Well below the 256 KiB wire
-// cap: it bounds the transient std::vector a load allocates to stage
-// the blob for the decoder. Draft figure.
-constexpr size_t MAX_STORED_BLOB_BYTES = 64 * 1024;
+// Largest single stored-animation blob. Same as the wire cap
+// MAX_BLOB_BYTES (src/link_protocol.h): live LOAD and stored
+// StoreAnimation carry the same kind of artifact, so they share one
+// ceiling. Also bounds the transient std::vector a load allocates to
+// stage the blob for the decoder.
+constexpr size_t MAX_STORED_BLOB_BYTES = 16 * 1024;
 
 // Largest animation name, in characters. On the wire it is a fixed
 // ANIM_NAME_SIZE-byte ASCII slot, null-padded if shorter.
