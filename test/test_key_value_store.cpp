@@ -122,6 +122,32 @@ TEST_CASE("file key value store rejects missing keys and type mismatches",
     CHECK_FALSE(store.has_key("missing"));
 }
 
+TEST_CASE("file key value store round-trips strings including empty",
+          "[key_value_store]")
+{
+    ScopedStorageRoot env(unique_root_());
+    FileKeyValueStore store("sim-1", "profile");
+
+    REQUIRE(store.put_str("ssid", "HomeWifi"));
+    REQUIRE(store.put_str("open", ""));        // open networks store ""
+
+    char buf[64];
+    const int len_ssid = store.get_str("ssid", buf, sizeof(buf));
+    REQUIRE(len_ssid == 8);
+    CHECK(std::string(buf) == "HomeWifi");
+
+    const int len_open = store.get_str("open", buf, sizeof(buf));
+    REQUIRE(len_open == 0);
+    CHECK(buf[0] == '\0');
+
+    // Buffer too small for the value plus NUL.
+    char tiny[4];
+    CHECK(store.get_str("ssid", tiny, sizeof(tiny)) == -1);
+
+    // Missing key returns -1, not 0.
+    CHECK(store.get_str("missing", buf, sizeof(buf)) == -1);
+}
+
 TEST_CASE("file key value store removes keys", "[key_value_store]")
 {
     ScopedStorageRoot env(unique_root_());
