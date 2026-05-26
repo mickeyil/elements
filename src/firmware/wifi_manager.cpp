@@ -20,9 +20,8 @@ namespace {
 // retry window so a real failure shows up before we move on.
 constexpr uint32_t WIFI_CONNECT_ATTEMPT_TIMEOUT_MS = 12'000;
 
-// After exhausting all stored credentials, wait this long before
-// starting a fresh walk. Keeps a stranded device from beating on the
-// radio.
+// Long enough to let auto-reconnect recover the same SSID, and to
+// keep a stranded device from beating on the radio between scans.
 constexpr uint32_t WIFI_SCAN_RETRY_INTERVAL_MS = 30'000;
 
 void configure_wifi_runtime_()
@@ -83,11 +82,9 @@ NetworkTransition WifiManager::poll()
     if (_is_up) {
         _is_up = false;
         Serial.println("[wifi] disconnected");
-        // The supplicant handles same-SSID reconnect; only start a
-        // credential walk if it can't recover within the timeout.
-        _attempt_started_ms = millis();
+        // Arm the idle gate so auto-reconnect gets a window first.
         _walking = false;
-        _last_scan_ended_ms = 0;
+        _last_scan_ended_ms = millis();
         return NetworkTransition::went_down;
     }
 
