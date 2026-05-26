@@ -38,8 +38,8 @@ WifiManager::WifiManager(WifiCredStore& creds) : _creds(creds) {}
 
 void WifiManager::begin()
 {
-    if (_creds.empty() && DEV_WIFI_CREDENTIAL_COUNT > 0) {
-        _creds.seed_from(DEV_WIFI_CREDENTIALS, DEV_WIFI_CREDENTIAL_COUNT);
+    if (DEV_WIFI_CREDENTIAL_COUNT > 0) {
+        _creds.merge_from(DEV_WIFI_CREDENTIALS, DEV_WIFI_CREDENTIAL_COUNT);
     }
 
     configure_wifi_runtime_();

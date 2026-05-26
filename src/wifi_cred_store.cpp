@@ -117,11 +117,18 @@ bool WifiCredStore::set_last_ssid(const char* ssid)
     return _kv.put_str(LAST_SSID_KEY, ssid);
 }
 
-bool WifiCredStore::seed_from(const WifiCredential* arr, size_t n)
+bool WifiCredStore::merge_from(const WifiCredential* arr, size_t n)
 {
     if (arr == nullptr && n > 0) return false;
+    char current_pwd[WIFI_PASSWORD_BUF_SIZE];
     for (size_t i = 0; i < n; ++i) {
-        if (!put(arr[i].ssid, arr[i].password)) return false;
+        const char* ssid = arr[i].ssid;
+        const char* password = arr[i].password;
+        if (get(ssid, current_pwd, sizeof(current_pwd)) &&
+            std::strcmp(current_pwd, password) == 0) {
+            continue;
+        }
+        if (!put(ssid, password)) return false;
     }
     return true;
 }

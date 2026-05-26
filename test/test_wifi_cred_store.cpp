@@ -177,7 +177,7 @@ TEST_CASE("wifi cred store remembers last ssid", "[wifi_cred_store]")
     CHECK_FALSE(store.set_last_ssid(""));   // invalid
 }
 
-TEST_CASE("wifi cred store seeds from compiled array", "[wifi_cred_store]")
+TEST_CASE("wifi cred store merges from a compiled array", "[wifi_cred_store]")
 {
     ScopedStorageRoot env(unique_root_());
     FileKeyValueStore kv(SIM_UID, "wifi");
@@ -188,7 +188,7 @@ TEST_CASE("wifi cred store seeds from compiled array", "[wifi_cred_store]")
         {"NetTwo", "pwd2"},
         {"NetThree", "pwd3"},
     };
-    REQUIRE(store.seed_from(seeds, 3));
+    REQUIRE(store.merge_from(seeds, 3));
     CHECK(store.count() == 3);
     CHECK(store.contains("NetOne"));
     CHECK(store.contains("NetTwo"));
@@ -197,6 +197,62 @@ TEST_CASE("wifi cred store seeds from compiled array", "[wifi_cred_store]")
     char pwd[WIFI_PASSWORD_BUF_SIZE];
     REQUIRE(store.get("NetTwo", pwd, sizeof(pwd)));
     CHECK(std::string(pwd) == "pwd2");
+}
+
+TEST_CASE("merge_from reconciles a non-empty store", "[wifi_cred_store]")
+{
+    ScopedStorageRoot env(unique_root_());
+    FileKeyValueStore kv(SIM_UID, "wifi");
+    WifiCredStore store(kv);
+
+    // Existing state: one compiled match (old password) and one user-
+    // provisioned credential not in the compiled list.
+    REQUIRE(store.put("NetOne", "old-pwd"));
+    REQUIRE(store.put("UserNet", "user-pwd"));
+    CHECK(store.count() == 2);
+
+    const WifiCredential compiled[] = {
+        {"NetOne", "new-pwd"},   // password changed
+        {"NetTwo", "pwd2"},      // new SSID
+    };
+    REQUIRE(store.merge_from(compiled, 2));
+
+    char pwd[WIFI_PASSWORD_BUF_SIZE];
+
+    // Changed password updated.
+    REQUIRE(store.get("NetOne", pwd, sizeof(pwd)));
+    CHECK(std::string(pwd) == "new-pwd");
+
+    // New SSID added.
+    CHECK(store.contains("NetTwo"));
+    REQUIRE(store.get("NetTwo", pwd, sizeof(pwd)));
+    CHECK(std::string(pwd) == "pwd2");
+
+    // Unrelated user-provisioned credential untouched.
+    CHECK(store.contains("UserNet"));
+    REQUIRE(store.get("UserNet", pwd, sizeof(pwd)));
+    CHECK(std::string(pwd) == "user-pwd");
+
+    CHECK(store.count() == 3);
+}
+
+TEST_CASE("merge_from is a no-op when nothing changed", "[wifi_cred_store]")
+{
+    ScopedStorageRoot env(unique_root_());
+    FileKeyValueStore kv(SIM_UID, "wifi");
+    WifiCredStore store(kv);
+
+    const WifiCredential compiled[] = {
+        {"NetOne", "pwd1"},
+        {"NetTwo", "pwd2"},
+    };
+    REQUIRE(store.merge_from(compiled, 2));
+    REQUIRE(store.merge_from(compiled, 2));   // second merge: all identical
+
+    CHECK(store.count() == 2);
+    char pwd[WIFI_PASSWORD_BUF_SIZE];
+    REQUIRE(store.get("NetOne", pwd, sizeof(pwd)));
+    CHECK(std::string(pwd) == "pwd1");
 }
 
 TEST_CASE("wifi cred store persists across instances", "[wifi_cred_store]")

@@ -50,8 +50,11 @@ public:
     bool last_ssid(char* out, size_t cap) const;
     bool set_last_ssid(const char* ssid);
 
-    // Bulk-load via put(). Stops at the first failure.
-    bool seed_from(const WifiCredential* arr, size_t n);
+    // Reconcile against a compiled list. Adds new SSIDs, overwrites
+    // changed passwords, skips identical entries (no NVS write), and
+    // leaves credentials not in arr untouched. Compiled list wins on
+    // same-SSID password conflict. Stops at the first failure.
+    bool merge_from(const WifiCredential* arr, size_t n);
 
 private:
     bool find_index_(const char* ssid, size_t& out_idx) const;

@@ -18,7 +18,7 @@ class WifiManager {
 public:
     explicit WifiManager(WifiCredStore& creds);
 
-    // Seed the cred store from compiled DEV_WIFI_CREDENTIALS if empty,
+    // Reconcile the cred store against compiled DEV_WIFI_CREDENTIALS,
     // then kick the first attempt.
     void begin();
 
