@@ -87,6 +87,7 @@ NetworkTransition WifiManager::poll()
             }
         }
 
+        // Failed or timed-out scans still try saved credentials.
         build_attempts_(scan_count == WIFI_SCAN_RUNNING ? 0 : scan_count);
         WiFi.scanDelete();
         try_next_attempt_();
@@ -113,7 +114,6 @@ void WifiManager::start_sweep_()
 {
     _attempt_count = 0;
     _attempt_pos = 0;
-    WiFi.scanDelete();
 
     const int16_t scan_state = WiFi.scanNetworks(true);
     if (scan_state == WIFI_SCAN_RUNNING) {
@@ -168,7 +168,7 @@ void WifiManager::add_fallback_attempts_()
     }
 }
 
-bool WifiManager::add_attempt_(size_t cred_idx, int32_t rssi, int32_t channel,
+void WifiManager::add_attempt_(size_t cred_idx, int32_t rssi, int32_t channel,
                                const uint8_t* bssid)
 {
     size_t existing = 0;
@@ -181,10 +181,10 @@ bool WifiManager::add_attempt_(size_t cred_idx, int32_t rssi, int32_t channel,
             std::memcpy(_attempts[existing].bssid, bssid,
                         sizeof(_attempts[existing].bssid));
         }
-        return true;
+        return;
     }
 
-    if (_attempt_count >= MAX_STORED_WIFI_CREDS) return false;
+    if (_attempt_count >= MAX_STORED_WIFI_CREDS) return;
 
     Attempt& attempt = _attempts[_attempt_count++];
     attempt.cred_idx = cred_idx;
@@ -194,7 +194,6 @@ bool WifiManager::add_attempt_(size_t cred_idx, int32_t rssi, int32_t channel,
     if (bssid != nullptr) {
         std::memcpy(attempt.bssid, bssid, sizeof(attempt.bssid));
     }
-    return true;
 }
 
 bool WifiManager::find_attempt_(size_t cred_idx, size_t& out_idx) const
@@ -235,16 +234,15 @@ void WifiManager::sort_scanned_attempts_()
     }
 }
 
-bool WifiManager::try_next_attempt_()
+void WifiManager::try_next_attempt_()
 {
     while (_attempt_pos < _attempt_count) {
         if (start_attempt_(_attempts[_attempt_pos])) {
-            return true;
+            return;
         }
         ++_attempt_pos;
     }
     finish_sweep_();
-    return false;
 }
 
 bool WifiManager::start_attempt_(const Attempt& attempt)

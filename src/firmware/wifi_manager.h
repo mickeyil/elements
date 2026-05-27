@@ -50,14 +50,14 @@ private:
     // Add hidden or currently-unseen credentials after scanned ones.
     void add_fallback_attempts_();
 
-    bool add_attempt_(size_t cred_idx, int32_t rssi, int32_t channel,
+    void add_attempt_(size_t cred_idx, int32_t rssi, int32_t channel,
                       const uint8_t* bssid);
     bool find_attempt_(size_t cred_idx, size_t& out_idx) const;
     bool find_cred_(const char* ssid, size_t& out_idx) const;
     void sort_scanned_attempts_();
 
-    // Launch the current candidate. Returns false when the sweep is exhausted.
-    bool try_next_attempt_();
+    // Launch the next usable candidate, or finish the sweep.
+    void try_next_attempt_();
 
     // Launch one association attempt and arm its timeout.
     bool start_attempt_(const Attempt& attempt);
