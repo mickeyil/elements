@@ -4,17 +4,14 @@
 #include <cstdint>
 
 #include "network_interface.h"
-
-class WifiCredStore;
+#include "wifi_cred_store.h"
 
 // ESP-side Wi-Fi handler driven from NetworkInterface::poll(). Holds
-// the connect-attempt state machine and the credential sweep so the
-// App loop never blocks on association.
+// the scan and connect state machine so the App loop never blocks on
+// association.
 //
-// A sweep is one pass through the credentials, trying each in turn
-// until one connects or the list is exhausted. Same-SSID reconnect
-// is left to the supplicant (setAutoReconnect). The sweep recovers
-// "moved to a different known SSID."
+// A sweep scans visible APs, tries known SSIDs by signal strength,
+// then falls back to last_ssid and the remaining saved credentials.
 
 class WifiManager {
 public:
@@ -30,28 +27,51 @@ public:
     bool is_up() const { return _is_up; }
 
 private:
-    // Launch one association attempt and arm its timeout.
-    void start_attempt_(const char* ssid, const char* password);
+    enum class Phase : uint8_t {
+        Idle,
+        Scanning,
+        Connecting,
+    };
 
-    // Start a credential sweep: last_ssid first, then indexed creds.
+    struct Attempt {
+        size_t  cred_idx = 0;
+        int32_t rssi = 0;
+        int32_t channel = 0;
+        bool    has_bssid = false;
+        uint8_t bssid[6] = {};
+    };
+
+    // Start a sweep with an async scan.
     void start_sweep_();
+
+    // Convert scan results to connection candidates.
+    void build_attempts_(int16_t scan_count);
+
+    // Add hidden or currently-unseen credentials after scanned ones.
+    void add_fallback_attempts_();
+
+    bool add_attempt_(size_t cred_idx, int32_t rssi, int32_t channel,
+                      const uint8_t* bssid);
+    bool find_attempt_(size_t cred_idx, size_t& out_idx) const;
+    bool find_cred_(const char* ssid, size_t& out_idx) const;
+    void sort_scanned_attempts_();
 
     // Launch the current candidate. Returns false when the sweep is exhausted.
     bool try_next_attempt_();
 
-    // Move past the timed-out candidate.
-    void advance_attempt_();
+    // Launch one association attempt and arm its timeout.
+    bool start_attempt_(const Attempt& attempt);
 
-    // Load the current candidate into caller buffers. Skips last_ssid
-    // during the indexed part of a sweep.
-    bool load_current_attempt_(char* ssid_out, char* pwd_out);
+    void finish_sweep_();
 
     WifiCredStore& _creds;
 
     bool     _is_up = false;
-    bool     _sweeping = false;
-    bool     _tried_last = false;
-    uint32_t _attempt_started_ms = 0;   // meaningful only while _sweeping
+    Phase    _phase = Phase::Idle;
+    Attempt  _attempts[MAX_STORED_WIFI_CREDS] = {};
+    size_t   _attempt_count = 0;
+    size_t   _attempt_pos = 0;
+    uint32_t _scan_started_ms = 0;      // meaningful only while scanning
+    uint32_t _attempt_started_ms = 0;   // meaningful only while connecting
     uint32_t _last_sweep_ended_ms = 0;  // last failed sweep or disconnect
-    size_t   _attempt_idx = 0;
 };
