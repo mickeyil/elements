@@ -12,6 +12,7 @@ Repo-wide guidance for coding agents working in this repository.
 - Do not create custom C++ namespaces in this project.
 - Don't use `--` as punctuation in comments or docs. Prefer `;`, `:`, parentheses, or separate sentences.
 - Assume C++ classes are non-copyable and non-movable unless the class definition explicitly says otherwise. The codebase doesn't use `= delete` ceremony, so this rule is the only signal. When adding a class or reviewing a module, check that nothing copies or moves a resource owner; flag it if it does.
+- In C++ class and struct definitions, put the opening `{` on its own line, not on the same line as the class name.
 
 ## Pipeline
 

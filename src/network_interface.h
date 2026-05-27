@@ -1,13 +1,6 @@
 #pragma once
 
-// Network association change reported by the most recent poll().
-// `none` is the usual case; the others fire on the tick the change is
-// first observed.
-enum class NetworkTransition {
-    none,
-    came_up,
-    went_down,
-};
+#include "network_transition.h"
 
 // Is the device on a usable LAN? Same shape on firmware (ESP-side
 // Wi-Fi) and host (always up). The App polls this each tick before

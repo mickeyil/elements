@@ -3,37 +3,39 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "network_interface.h"
+#include "network_transition.h"
 #include "wifi_cred_store.h"
 
-// ESP-side Wi-Fi handler driven from NetworkInterface::poll(). Holds
-// the scan and connect state machine so the App loop never blocks on
-// association.
+// Wi-Fi connection state machine for ESP32. Non-blocking; advances
+// one step per poll() call through scan, rank, and connect phases.
 //
-// A sweep scans visible APs, tries known SSIDs by signal strength,
-// then falls back to last_ssid and the remaining saved credentials.
+// begin()   load credentials and start the first scan.
+// poll()    advance the state machine; returns connection transition: none / came_up / went_down.
+// is_up()   true while connected.
 
-class WifiManager {
+class WifiManager
+{
 public:
+    
     explicit WifiManager(WifiCredStore& creds);
 
-    // Reconcile the cred store against compiled DEV_WIFI_CREDENTIALS,
-    // then start the first sweep.
+    // Merge compiled credentials from secrets.h into the store and start the first scan.
     void begin();
 
-    // Advance the Wi-Fi state machine without blocking. Returns only
-    // the edge seen on this tick.
+    // Advance the Wi-Fi state machine one step. Non-blocking.
     NetworkTransition poll();
-    bool is_up() const { return _is_up; }
+    bool is_up() const { return _phase == ConnectionState::Connected; }
 
 private:
-    enum class Phase : uint8_t {
-        Idle,
+    
+    enum class ConnectionState : uint8_t {
+        NotConnected,
         Scanning,
         Connecting,
+        Connected,
     };
 
-    struct Attempt {
+    struct APCandidate {
         size_t  cred_idx = 0;
         int32_t rssi = 0;
         int32_t channel = 0;
@@ -41,37 +43,36 @@ private:
         uint8_t bssid[6] = {};
     };
 
-    // Start a sweep with an async scan.
-    void start_sweep_();
+    // Scan visible APs and try each known network in order.
+    void try_known_networks_();
 
-    // Convert scan results to connection candidates.
-    void build_attempts_(int16_t scan_count);
+    // Collect scan results and fallbacks into an ordered candidate list.
+    void collect_candidates_(int16_t scan_count);
 
     // Add hidden or currently-unseen credentials after scanned ones.
-    void add_fallback_attempts_();
+    void add_fallback_candidates_();
 
-    void add_attempt_(size_t cred_idx, int32_t rssi, int32_t channel,
+    void add_candidate_(size_t cred_idx, int32_t rssi, int32_t channel,
                       const uint8_t* bssid);
-    bool find_attempt_(size_t cred_idx, size_t& out_idx) const;
+    bool find_candidate_(size_t cred_idx, size_t& out_idx) const;
     bool find_cred_(const char* ssid, size_t& out_idx) const;
-    void sort_scanned_attempts_();
+    void sort_scanned_candidates_();
 
-    // Launch the next usable candidate, or finish the sweep.
-    void try_next_attempt_();
+    // Launch the next usable candidate, or end the search.
+    void try_next_candidate_();
 
-    // Launch one association attempt and arm its timeout.
-    bool start_attempt_(const Attempt& attempt);
+    // Launch one connection attempt and arm its timeout.
+    bool start_candidate_(const APCandidate& candidate);
 
-    void finish_sweep_();
+    void end_network_search_();
 
     WifiCredStore& _creds;
 
-    bool     _is_up = false;
-    Phase    _phase = Phase::Idle;
-    Attempt  _attempts[MAX_STORED_WIFI_CREDS] = {};
-    size_t   _attempt_count = 0;
-    size_t   _attempt_pos = 0;
+    ConnectionState _phase = ConnectionState::NotConnected;
+    APCandidate  _candidates[MAX_STORED_WIFI_CREDS] = {};
+    size_t   _candidate_count = 0;
+    size_t   _candidate_pos = 0;
     uint32_t _scan_started_ms = 0;      // meaningful only while scanning
-    uint32_t _attempt_started_ms = 0;   // meaningful only while connecting
-    uint32_t _last_sweep_ended_ms = 0;  // last failed sweep or disconnect
+    uint32_t _candidate_started_ms = 0;   // meaningful only while connecting
+    uint32_t _last_search_ended_ms = 0;  // last failed network search or disconnect
 };

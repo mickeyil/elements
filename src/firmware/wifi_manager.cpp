@@ -16,14 +16,14 @@ static constexpr size_t DEV_WIFI_CREDENTIAL_COUNT = 0;
 
 namespace {
 
-// Timeout for one Wi-Fi association attempt.
+// Timeout for one Wi-Fi association candidate.
 constexpr uint32_t WIFI_CONNECT_ATTEMPT_TIMEOUT_MS = 12'000;
 
 // Timeout for one async Wi-Fi scan.
 constexpr uint32_t WIFI_SCAN_TIMEOUT_MS = 5'000;
 
-// Delay before starting another credential sweep.
-constexpr uint32_t WIFI_SWEEP_RETRY_INTERVAL_MS = 30'000;
+// Delay before starting another network search.
+constexpr uint32_t WIFI_NETWORK_SEARCH_INTERVAL_MS = 30'000;
 
 void configure_wifi_runtime_()
 {
@@ -44,7 +44,7 @@ void WifiManager::begin()
     }
 
     configure_wifi_runtime_();
-    start_sweep_();
+    try_known_networks_();
 }
 
 NetworkTransition WifiManager::poll()
@@ -52,12 +52,11 @@ NetworkTransition WifiManager::poll()
     const bool connected = (WiFi.status() == WL_CONNECTED);
 
     if (connected) {
-        if (_is_up) return NetworkTransition::none;
+        if (_phase == ConnectionState::Connected) return NetworkTransition::none;
 
-        _is_up = true;
-        _phase = Phase::Idle;
-        _attempt_count = 0;
-        _attempt_pos = 0;
+        _phase = ConnectionState::Connected;
+        _candidate_count = 0;
+        _candidate_pos = 0;
 
         const String current = WiFi.SSID();
         if (current.length() > 0) {
@@ -67,19 +66,18 @@ NetworkTransition WifiManager::poll()
     }
 
     // Not connected.
-    if (_is_up) {
-        _is_up = false;
-        // Arm the idle gate so auto-reconnect gets a window first.
-        _phase = Phase::Idle;
-        _attempt_count = 0;
-        _attempt_pos = 0;
-        _last_sweep_ended_ms = millis();
+    if (_phase == ConnectionState::Connected) {
+        // Arm the retry gate so auto-reconnect gets a window first.
+        _phase = ConnectionState::NotConnected;
+        _candidate_count = 0;
+        _candidate_pos = 0;
+        _last_search_ended_ms = millis();
         return NetworkTransition::went_down;
     }
 
     const uint32_t now = millis();
 
-    if (_phase == Phase::Scanning) {
+    if (_phase == ConnectionState::Scanning) {
         const int16_t scan_count = WiFi.scanComplete();
         if (scan_count == WIFI_SCAN_RUNNING) {
             if (now - _scan_started_ms < WIFI_SCAN_TIMEOUT_MS) {
@@ -88,46 +86,46 @@ NetworkTransition WifiManager::poll()
         }
 
         // Failed or timed-out scans still try saved credentials.
-        build_attempts_(scan_count == WIFI_SCAN_RUNNING ? 0 : scan_count);
+        collect_candidates_(scan_count == WIFI_SCAN_RUNNING ? 0 : scan_count);
         WiFi.scanDelete();
-        try_next_attempt_();
+        try_next_candidate_();
         return NetworkTransition::none;
     }
 
-    if (_phase == Phase::Connecting) {
-        if (now - _attempt_started_ms < WIFI_CONNECT_ATTEMPT_TIMEOUT_MS) {
+    if (_phase == ConnectionState::Connecting) {
+        if (now - _candidate_started_ms < WIFI_CONNECT_ATTEMPT_TIMEOUT_MS) {
             return NetworkTransition::none;
         }
-        ++_attempt_pos;
-        try_next_attempt_();
+        ++_candidate_pos;
+        try_next_candidate_();
         return NetworkTransition::none;
     }
 
-    // Idle. After the retry interval, start a fresh sweep.
-    if (now - _last_sweep_ended_ms >= WIFI_SWEEP_RETRY_INTERVAL_MS) {
-        start_sweep_();
+    // Not connected. After the retry interval, start a fresh network search.
+    if (now - _last_search_ended_ms >= WIFI_NETWORK_SEARCH_INTERVAL_MS) {
+        try_known_networks_();
     }
     return NetworkTransition::none;
 }
 
-void WifiManager::start_sweep_()
+void WifiManager::try_known_networks_()
 {
-    _attempt_count = 0;
-    _attempt_pos = 0;
+    _candidate_count = 0;
+    _candidate_pos = 0;
 
     const int16_t scan_state = WiFi.scanNetworks(true);
     if (scan_state == WIFI_SCAN_RUNNING) {
-        _phase = Phase::Scanning;
+        _phase = ConnectionState::Scanning;
         _scan_started_ms = millis();
         return;
     }
 
-    build_attempts_(scan_state);
+    collect_candidates_(scan_state);
     WiFi.scanDelete();
-    try_next_attempt_();
+    try_next_candidate_();
 }
 
-void WifiManager::build_attempts_(int16_t scan_count)
+void WifiManager::collect_candidates_(int16_t scan_count)
 {
     if (scan_count > 0) {
         for (int16_t i = 0; i < scan_count; ++i) {
@@ -146,60 +144,60 @@ void WifiManager::build_attempts_(int16_t scan_count)
             if (ssid.length() == 0 || !find_cred_(ssid.c_str(), cred_idx)) {
                 continue;
             }
-            add_attempt_(cred_idx, rssi, channel, bssid);
+            add_candidate_(cred_idx, rssi, channel, bssid);
         }
-        sort_scanned_attempts_();
+        sort_scanned_candidates_();
     }
 
-    add_fallback_attempts_();
+    add_fallback_candidates_();
 }
 
-void WifiManager::add_fallback_attempts_()
+void WifiManager::add_fallback_candidates_()
 {
     char ssid[WIFI_SSID_BUF_SIZE];
     size_t cred_idx = 0;
     if (_creds.last_ssid(ssid, sizeof(ssid)) && find_cred_(ssid, cred_idx)) {
-        add_attempt_(cred_idx, 0, 0, nullptr);
+        add_candidate_(cred_idx, 0, 0, nullptr);
     }
 
     const size_t count = _creds.count();
     for (size_t i = 0; i < count; ++i) {
-        add_attempt_(i, 0, 0, nullptr);
+        add_candidate_(i, 0, 0, nullptr);
     }
 }
 
-void WifiManager::add_attempt_(size_t cred_idx, int32_t rssi, int32_t channel,
+void WifiManager::add_candidate_(size_t cred_idx, int32_t rssi, int32_t channel,
                                const uint8_t* bssid)
 {
     size_t existing = 0;
-    if (find_attempt_(cred_idx, existing)) {
-        if (bssid != nullptr && (!_attempts[existing].has_bssid ||
-                                 rssi > _attempts[existing].rssi)) {
-            _attempts[existing].rssi = rssi;
-            _attempts[existing].channel = channel;
-            _attempts[existing].has_bssid = true;
-            std::memcpy(_attempts[existing].bssid, bssid,
-                        sizeof(_attempts[existing].bssid));
+    if (find_candidate_(cred_idx, existing)) {
+        if (bssid != nullptr && (!_candidates[existing].has_bssid ||
+                                 rssi > _candidates[existing].rssi)) {
+            _candidates[existing].rssi = rssi;
+            _candidates[existing].channel = channel;
+            _candidates[existing].has_bssid = true;
+            std::memcpy(_candidates[existing].bssid, bssid,
+                        sizeof(_candidates[existing].bssid));
         }
         return;
     }
 
-    if (_attempt_count >= MAX_STORED_WIFI_CREDS) return;
+    if (_candidate_count >= MAX_STORED_WIFI_CREDS) return;
 
-    Attempt& attempt = _attempts[_attempt_count++];
-    attempt.cred_idx = cred_idx;
-    attempt.rssi = rssi;
-    attempt.channel = channel;
-    attempt.has_bssid = (bssid != nullptr);
+    APCandidate& candidate = _candidates[_candidate_count++];
+    candidate.cred_idx = cred_idx;
+    candidate.rssi = rssi;
+    candidate.channel = channel;
+    candidate.has_bssid = (bssid != nullptr);
     if (bssid != nullptr) {
-        std::memcpy(attempt.bssid, bssid, sizeof(attempt.bssid));
+        std::memcpy(candidate.bssid, bssid, sizeof(candidate.bssid));
     }
 }
 
-bool WifiManager::find_attempt_(size_t cred_idx, size_t& out_idx) const
+bool WifiManager::find_candidate_(size_t cred_idx, size_t& out_idx) const
 {
-    for (size_t i = 0; i < _attempt_count; ++i) {
-        if (_attempts[i].cred_idx == cred_idx) {
+    for (size_t i = 0; i < _candidate_count; ++i) {
+        if (_candidates[i].cred_idx == cred_idx) {
             out_idx = i;
             return true;
         }
@@ -221,54 +219,54 @@ bool WifiManager::find_cred_(const char* ssid, size_t& out_idx) const
     return false;
 }
 
-void WifiManager::sort_scanned_attempts_()
+void WifiManager::sort_scanned_candidates_()
 {
-    for (size_t i = 1; i < _attempt_count; ++i) {
-        Attempt current = _attempts[i];
+    for (size_t i = 1; i < _candidate_count; ++i) {
+        APCandidate current = _candidates[i];
         size_t j = i;
-        while (j > 0 && current.rssi > _attempts[j - 1].rssi) {
-            _attempts[j] = _attempts[j - 1];
+        while (j > 0 && current.rssi > _candidates[j - 1].rssi) {
+            _candidates[j] = _candidates[j - 1];
             --j;
         }
-        _attempts[j] = current;
+        _candidates[j] = current;
     }
 }
 
-void WifiManager::try_next_attempt_()
+void WifiManager::try_next_candidate_()
 {
-    while (_attempt_pos < _attempt_count) {
-        if (start_attempt_(_attempts[_attempt_pos])) {
+    while (_candidate_pos < _candidate_count) {
+        if (start_candidate_(_candidates[_candidate_pos])) {
             return;
         }
-        ++_attempt_pos;
+        ++_candidate_pos;
     }
-    finish_sweep_();
+    end_network_search_();
 }
 
-bool WifiManager::start_attempt_(const Attempt& attempt)
+bool WifiManager::start_candidate_(const APCandidate& candidate)
 {
     char ssid[WIFI_SSID_BUF_SIZE];
     char password[WIFI_PASSWORD_BUF_SIZE];
-    if (!_creds.ssid_at(attempt.cred_idx, ssid, sizeof(ssid)) ||
+    if (!_creds.ssid_at(candidate.cred_idx, ssid, sizeof(ssid)) ||
         !_creds.get(ssid, password, sizeof(password))) {
         return false;
     }
 
     WiFi.disconnect(true, true);
-    if (attempt.has_bssid) {
-        WiFi.begin(ssid, password, attempt.channel, attempt.bssid);
+    if (candidate.has_bssid) {
+        WiFi.begin(ssid, password, candidate.channel, candidate.bssid);
     } else {
         WiFi.begin(ssid, password);
     }
-    _attempt_started_ms = millis();
-    _phase = Phase::Connecting;
+    _candidate_started_ms = millis();
+    _phase = ConnectionState::Connecting;
     return true;
 }
 
-void WifiManager::finish_sweep_()
+void WifiManager::end_network_search_()
 {
-    _phase = Phase::Idle;
-    _attempt_count = 0;
-    _attempt_pos = 0;
-    _last_sweep_ended_ms = millis();
+    _phase = ConnectionState::NotConnected;
+    _candidate_count = 0;
+    _candidate_pos = 0;
+    _last_search_ended_ms = millis();
 }
