@@ -24,14 +24,26 @@ public:
     // then start the first sweep.
     void begin();
 
+    // Advance the Wi-Fi state machine without blocking. Returns only
+    // the edge seen on this tick.
     NetworkTransition poll();
     bool is_up() const { return _is_up; }
 
 private:
+    // Launch one association attempt and arm its timeout.
     void start_attempt_(const char* ssid, const char* password);
+
+    // Start a credential sweep: last_ssid first, then indexed creds.
     void start_sweep_();
+
+    // Launch the current candidate. Returns false when the sweep is exhausted.
     bool try_next_attempt_();
+
+    // Move past the timed-out candidate.
     void advance_attempt_();
+
+    // Load the current candidate into caller buffers. Skips last_ssid
+    // during the indexed part of a sweep.
     bool load_current_attempt_(char* ssid_out, char* pwd_out);
 
     WifiCredStore& _creds;
@@ -39,7 +51,7 @@ private:
     bool     _is_up = false;
     bool     _sweeping = false;
     bool     _tried_last = false;
-    uint32_t _attempt_started_ms = 0;
-    uint32_t _last_sweep_ended_ms = 0;
+    uint32_t _attempt_started_ms = 0;   // meaningful only while _sweeping
+    uint32_t _last_sweep_ended_ms = 0;  // last failed sweep or disconnect
     size_t   _attempt_idx = 0;
 };

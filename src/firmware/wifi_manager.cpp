@@ -16,12 +16,10 @@ static constexpr size_t DEV_WIFI_CREDENTIAL_COUNT = 0;
 
 namespace {
 
-// Matches the supplicant's own retry window; long enough to surface
-// a real association failure before moving on.
+// Timeout for one Wi-Fi association attempt.
 constexpr uint32_t WIFI_CONNECT_ATTEMPT_TIMEOUT_MS = 12'000;
 
-// Long enough to let auto-reconnect recover the same SSID, and to
-// keep a stranded device from beating on the radio between sweeps.
+// Delay before starting another credential sweep.
 constexpr uint32_t WIFI_SWEEP_RETRY_INTERVAL_MS = 30'000;
 
 void configure_wifi_runtime_()
