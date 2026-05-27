@@ -24,10 +24,10 @@ constexpr uint32_t WIFI_SWEEP_RETRY_INTERVAL_MS = 30'000;
 
 void configure_wifi_runtime_()
 {
-    WiFi.mode(WIFI_STA);
-    WiFi.persistent(false);
-    WiFi.setAutoReconnect(true);
-    WiFi.setSleep(false);
+    WiFi.mode(WIFI_STA);          // Station mode; this device joins an AP.
+    WiFi.persistent(false);       // Do not rewrite ESP SDK Wi-Fi flash config.
+    WiFi.setAutoReconnect(true);  // Let the supplicant recover the same SSID.
+    WiFi.setSleep(false);         // Keep latency predictable for control traffic.
 }
 
 }  // namespace
