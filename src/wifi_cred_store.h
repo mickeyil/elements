@@ -12,8 +12,8 @@ constexpr size_t WIFI_PASSWORD_BUF_SIZE = 64;
 constexpr size_t WIFI_SSID_MAX_LEN     = WIFI_SSID_BUF_SIZE - 1;
 constexpr size_t WIFI_PASSWORD_MAX_LEN = WIFI_PASSWORD_BUF_SIZE - 1;
 
-// 32 keeps "cred_31_ssid" inside the KV 15-char key budget.
-constexpr size_t MAX_STORED_WIFI_CREDS = 32;
+// Keep the saved Wi-Fi list small; search falls back to all entries.
+constexpr size_t MAX_STORED_WIFI_CREDS = 8;
 
 // (ssid, password) pair. Pointers are borrowed; put() copies the bytes.
 struct WifiCredential {

@@ -127,6 +127,28 @@ void WifiManager::try_known_networks_()
 
 void WifiManager::collect_candidates_(int16_t scan_count)
 {
+    size_t saved_idxs[MAX_STORED_WIFI_CREDS] = {};
+    char saved_ssids[MAX_STORED_WIFI_CREDS][WIFI_SSID_BUF_SIZE] = {};
+    size_t saved_count = 0;
+
+    const size_t stored_count = _creds.count();
+    for (size_t i = 0; i < stored_count && saved_count < MAX_STORED_WIFI_CREDS; ++i) {
+        if (_creds.ssid_at(i, saved_ssids[saved_count], WIFI_SSID_BUF_SIZE)) {
+            saved_idxs[saved_count] = i;
+            ++saved_count;
+        }
+    }
+
+    const auto find_saved = [&](const char* ssid, size_t& out_idx) {
+        for (size_t i = 0; i < saved_count; ++i) {
+            if (std::strcmp(saved_ssids[i], ssid) == 0) {
+                out_idx = i;
+                return true;
+            }
+        }
+        return false;
+    };
+
     if (scan_count > 0) {
         for (int16_t i = 0; i < scan_count; ++i) {
             String ssid;
@@ -140,29 +162,23 @@ void WifiManager::collect_candidates_(int16_t scan_count)
                 continue;
             }
 
-            size_t cred_idx = 0;
-            if (ssid.length() == 0 || !find_cred_(ssid.c_str(), cred_idx)) {
+            size_t saved_idx = 0;
+            if (ssid.length() == 0 || !find_saved(ssid.c_str(), saved_idx)) {
                 continue;
             }
-            add_candidate_(cred_idx, rssi, channel, bssid);
+            add_candidate_(saved_idxs[saved_idx], rssi, channel, bssid);
         }
         sort_scanned_candidates_();
     }
 
-    add_fallback_candidates_();
-}
-
-void WifiManager::add_fallback_candidates_()
-{
     char ssid[WIFI_SSID_BUF_SIZE];
-    size_t cred_idx = 0;
-    if (_creds.last_ssid(ssid, sizeof(ssid)) && find_cred_(ssid, cred_idx)) {
-        add_candidate_(cred_idx, 0, 0, nullptr);
+    size_t saved_idx = 0;
+    if (_creds.last_ssid(ssid, sizeof(ssid)) && find_saved(ssid, saved_idx)) {
+        add_candidate_(saved_idxs[saved_idx], 0, 0, nullptr);
     }
 
-    const size_t count = _creds.count();
-    for (size_t i = 0; i < count; ++i) {
-        add_candidate_(i, 0, 0, nullptr);
+    for (size_t i = 0; i < saved_count; ++i) {
+        add_candidate_(saved_idxs[i], 0, 0, nullptr);
     }
 }
 
@@ -198,20 +214,6 @@ bool WifiManager::find_candidate_(size_t cred_idx, size_t& out_idx) const
 {
     for (size_t i = 0; i < _candidate_count; ++i) {
         if (_candidates[i].cred_idx == cred_idx) {
-            out_idx = i;
-            return true;
-        }
-    }
-    return false;
-}
-
-bool WifiManager::find_cred_(const char* ssid, size_t& out_idx) const
-{
-    char stored[WIFI_SSID_BUF_SIZE];
-    const size_t count = _creds.count();
-    for (size_t i = 0; i < count; ++i) {
-        if (_creds.ssid_at(i, stored, sizeof(stored)) &&
-            std::strcmp(stored, ssid) == 0) {
             out_idx = i;
             return true;
         }

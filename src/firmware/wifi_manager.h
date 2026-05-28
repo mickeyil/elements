@@ -49,13 +49,9 @@ private:
     // Collect scan results and fallbacks into an ordered candidate list.
     void collect_candidates_(int16_t scan_count);
 
-    // Add hidden or currently-unseen credentials after scanned ones.
-    void add_fallback_candidates_();
-
     void add_candidate_(size_t cred_idx, int32_t rssi, int32_t channel,
                       const uint8_t* bssid);
     bool find_candidate_(size_t cred_idx, size_t& out_idx) const;
-    bool find_cred_(const char* ssid, size_t& out_idx) const;
     void sort_scanned_candidates_();
 
     // Launch the next usable candidate, or end the search.
