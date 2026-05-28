@@ -1,35 +1,28 @@
 #pragma once
 
-// Edge seen on the most recent poll() call. `none` is the common case;
-// the others fire exactly once on the tick the change is first observed.
+// Result of a poll() call: link came up, went down, or stayed the same.
 enum class NetworkTransition {
     unchanged,
     link_up,
     link_down,
 };
 
-// Is the device on a usable LAN? Same shape on firmware (ESP-side
-// Wi-Fi) and host (always up). The App polls this each tick before
-// link.poll() / sync.poll(); both downstream modules self-gate on
-// is_up() rather than the App wrapping calls in a guard, so they can
-// reset stale state on Wi-Fi drops.
-//
-// Configuration (SSID, password, AP-mode fallback, host bind address)
-// lives in the implementation's constructor; reconnect policy is
-// internal to it.
+// Platform-agnostic network connection handle. Implemented per platform;
+// the rest of the app uses only this interface.
 //
 // Implementations:
 //   - EspNetworkInterface  (firmware, around WifiManager)
 //   - HostNetworkInterface (sim/host, always up)
 
-class NetworkInterface {
+class NetworkInterface
+{
 public:
     virtual ~NetworkInterface() = default;
 
-    // One-time setup before the first poll().
+    // Initialize the network layer. Call once at startup before entering the poll loop. Non-blocking.
     virtual void begin() = 0;
 
-    // Make progress without blocking; returns any change since the last call.
+    // Advance the network state machine. Non-blocking; returns the transition seen this tick.
     virtual NetworkTransition poll() = 0;
 
     // Is the device currently on a usable LAN?
