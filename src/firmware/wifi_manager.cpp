@@ -33,6 +33,15 @@ void configure_wifi_runtime_()
     WiFi.setSleep(false);         // Keep latency predictable for control traffic.
 }
 
+size_t find_saved_index_(const char saved[][WIFI_SSID_BUF_SIZE],
+                         size_t count, const char* ssid)
+{
+    for (size_t i = 0; i < count; ++i) {
+        if (std::strcmp(saved[i], ssid) == 0) return i;
+    }
+    return count;
+}
+
 }  // namespace
 
 WifiManager::WifiManager(WifiCredStore& creds) : _creds(creds) {}
@@ -139,16 +148,6 @@ void WifiManager::collect_candidates_(int16_t scan_count)
         }
     }
 
-    const auto find_saved = [&](const char* ssid, size_t& out_idx) {
-        for (size_t i = 0; i < saved_count; ++i) {
-            if (std::strcmp(saved_ssids[i], ssid) == 0) {
-                out_idx = i;
-                return true;
-            }
-        }
-        return false;
-    };
-
     if (scan_count > 0) {
         for (int16_t i = 0; i < scan_count; ++i) {
             String ssid;
@@ -162,19 +161,20 @@ void WifiManager::collect_candidates_(int16_t scan_count)
                 continue;
             }
 
-            size_t saved_idx = 0;
-            if (ssid.length() == 0 || !find_saved(ssid.c_str(), saved_idx)) {
-                continue;
-            }
+            if (ssid.length() == 0) continue;
+            const size_t saved_idx = find_saved_index_(saved_ssids, saved_count, ssid.c_str());
+            if (saved_idx == saved_count) continue;
             add_candidate_(saved_idxs[saved_idx], rssi, channel, bssid);
         }
         sort_scanned_candidates_();
     }
 
     char ssid[WIFI_SSID_BUF_SIZE];
-    size_t saved_idx = 0;
-    if (_creds.last_ssid(ssid, sizeof(ssid)) && find_saved(ssid, saved_idx)) {
-        add_candidate_(saved_idxs[saved_idx], 0, 0, nullptr);
+    if (_creds.last_ssid(ssid, sizeof(ssid))) {
+        const size_t saved_idx = find_saved_index_(saved_ssids, saved_count, ssid);
+        if (saved_idx < saved_count) {
+            add_candidate_(saved_idxs[saved_idx], 0, 0, nullptr);
+        }
     }
 
     for (size_t i = 0; i < saved_count; ++i) {
