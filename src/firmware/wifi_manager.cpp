@@ -52,7 +52,7 @@ NetworkTransition WifiManager::poll()
     const bool connected = (WiFi.status() == WL_CONNECTED);
 
     if (connected) {
-        if (_phase == ConnectionState::Connected) return NetworkTransition::none;
+        if (_phase == ConnectionState::Connected) return NetworkTransition::unchanged;
 
         _phase = ConnectionState::Connected;
         _candidate_count = 0;
@@ -62,7 +62,7 @@ NetworkTransition WifiManager::poll()
         if (current.length() > 0) {
             _creds.set_last_ssid(current.c_str());
         }
-        return NetworkTransition::came_up;
+        return NetworkTransition::link_up;
     }
 
     // Not connected.
@@ -72,7 +72,7 @@ NetworkTransition WifiManager::poll()
         _candidate_count = 0;
         _candidate_pos = 0;
         _last_search_ended_ms = millis();
-        return NetworkTransition::went_down;
+        return NetworkTransition::link_down;
     }
 
     const uint32_t now = millis();
@@ -81,7 +81,7 @@ NetworkTransition WifiManager::poll()
         const int16_t scan_count = WiFi.scanComplete();
         if (scan_count == WIFI_SCAN_RUNNING) {
             if (now - _scan_started_ms < WIFI_SCAN_TIMEOUT_MS) {
-                return NetworkTransition::none;
+                return NetworkTransition::unchanged;
             }
         }
 
@@ -89,23 +89,23 @@ NetworkTransition WifiManager::poll()
         collect_candidates_(scan_count == WIFI_SCAN_RUNNING ? 0 : scan_count);
         WiFi.scanDelete();
         try_next_candidate_();
-        return NetworkTransition::none;
+        return NetworkTransition::unchanged;
     }
 
     if (_phase == ConnectionState::Connecting) {
         if (now - _candidate_started_ms < WIFI_CONNECT_ATTEMPT_TIMEOUT_MS) {
-            return NetworkTransition::none;
+            return NetworkTransition::unchanged;
         }
         ++_candidate_pos;
         try_next_candidate_();
-        return NetworkTransition::none;
+        return NetworkTransition::unchanged;
     }
 
     // Not connected. After the retry interval, start a fresh network search.
     if (now - _last_search_ended_ms >= WIFI_NETWORK_SEARCH_INTERVAL_MS) {
         try_known_networks_();
     }
-    return NetworkTransition::none;
+    return NetworkTransition::unchanged;
 }
 
 void WifiManager::try_known_networks_()

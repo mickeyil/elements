@@ -1,6 +1,12 @@
 #pragma once
 
-#include "network_transition.h"
+// Edge seen on the most recent poll() call. `none` is the common case;
+// the others fire exactly once on the tick the change is first observed.
+enum class NetworkTransition {
+    unchanged,
+    link_up,
+    link_down,
+};
 
 // Is the device on a usable LAN? Same shape on firmware (ESP-side
 // Wi-Fi) and host (always up). The App polls this each tick before

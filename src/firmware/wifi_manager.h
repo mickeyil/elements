@@ -3,14 +3,14 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "network_transition.h"
+#include "network_interface.h"
 #include "wifi_cred_store.h"
 
 // Wi-Fi connection state machine for ESP32. Non-blocking; advances
 // one step per poll() call through scan, rank, and connect phases.
 //
 // begin()   load credentials and start the first scan.
-// poll()    advance the state machine; returns connection transition: none / came_up / went_down.
+// poll()    advance the state machine; returns connection transition: unchanged / link_up / link_down.
 // is_up()   true while connected.
 
 class WifiManager
