@@ -128,6 +128,10 @@ if(BUILD_TESTS)
     target_include_directories(test_wire_writer PRIVATE src)
     target_link_libraries(test_wire_writer Catch2::Catch2WithMain)
 
+    add_executable(test_host_network_interface test/test_host_network_interface.cpp)
+    target_include_directories(test_host_network_interface PRIVATE src)
+    target_link_libraries(test_host_network_interface Catch2::Catch2WithMain)
+
     # test_pixel_buffer_pool builds twice from the same test source: once
     # with the host (per-buffer allocation) path, once with the pooled
     # (-DARDUINO, contiguous) path. The pooled build also exercises the
@@ -381,6 +385,8 @@ if(BUILD_TESTS)
     add_test(NAME test_wire_reader COMMAND test_wire_reader
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_wire_writer COMMAND test_wire_writer
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    add_test(NAME test_host_network_interface COMMAND test_host_network_interface
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_pixel_buffer_pool COMMAND test_pixel_buffer_pool
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})

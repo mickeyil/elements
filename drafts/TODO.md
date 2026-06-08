@@ -27,13 +27,14 @@ that survive into v3 (`esp_tcp_transport`, `esp_udp_transport`,
   then playback / render. After `link.poll()` returns, check
   `ctx.reboot_requested` and call `ctx.system.reboot()` once the ACK
   has flushed.
-- `ControllerLink` owns the `CommandProcessor` and `CommandHandler`
-  internally; the App only sees the link's `is_ready()` /
-  `controller_ip_addr()` surface and the AppContext flags.
+- `ControllerLink` owns the `CommandProcessor` internally and borrows the
+  `CommandHandler` (the handler needs `AppContext`, which the App owns); the
+  App only sees the link's `is_ready()` / `controller_ip_addr()` surface and
+  the AppContext flags.
 
-Depends on: `EspNetworkInterface` and `EspSystemPlatform` impls (not
-yet written; drafts at `drafts/network_interface.h` and
-`drafts/system_platform.h`).
+Depends on: `EspSystemPlatform` impl (not yet written; draft at
+`drafts/system_platform.h`). `EspNetworkInterface` already exists in
+`src/firmware/`; `HostNetworkInterface` is in `src/sim/`.
 
 ---
 
