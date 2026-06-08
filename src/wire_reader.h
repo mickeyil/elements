@@ -3,13 +3,15 @@
 #include <cstddef>
 #include <cstdint>
 
-// Bounded little-endian payload reader. Mechanics only -- typed reads, a
+// Bounded little-endian payload reader. Mechanics only: typed reads, a
 // remaining-byte query, and a require_empty() check. The "extra trailing
 // bytes are an error" policy lives in handlers, not here.
 //
 // Every read returns false on under-run and leaves the cursor untouched.
+// A null buffer behaves like an empty one: every read just fails.
 
-class WireReader {
+class WireReader
+{
 public:
     WireReader(const uint8_t* data, size_t len);
 
@@ -26,13 +28,12 @@ public:
     size_t remaining() const { return _len - _pos; }
     bool   done() const      { return _pos == _len; }
 
-    // Handler-level convenience: assert no trailing bytes. v3 handlers call
-    // this at the end of every command parse. Returns true if the payload
-    // was fully consumed.
+    // Handler-level convenience: did the parse consume the whole payload?
+    // v3 handlers call this at the end of every command to reject trailers.
     bool require_empty() const { return done(); }
 
 private:
-    const uint8_t* _data;
-    size_t _len;
-    size_t _pos;
+    const uint8_t* _data = nullptr;
+    size_t _len = 0;
+    size_t _pos = 0;
 };

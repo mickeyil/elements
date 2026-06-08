@@ -11,7 +11,8 @@
 // no-op and ok() stays false. Handlers fill the whole reply optimistically
 // and check once at the end.
 
-class WireWriter {
+class WireWriter
+{
 public:
     WireWriter(uint8_t* dst, size_t cap);
 
