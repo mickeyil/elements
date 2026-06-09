@@ -22,7 +22,8 @@ enum class DeviceMode : uint8_t {
     DetachedBackground  = 3,
 };
 
-struct DeviceStatus {
+struct DeviceStatus
+{
     DeviceMode mode  = DeviceMode::DetachedBlank;
     uint8_t    flags = 0;   // bit0 profile_present
 };

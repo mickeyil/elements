@@ -57,6 +57,16 @@ constexpr uint8_t ACK_BAD_PAYLOAD      = 4;
 constexpr uint8_t ACK_UNKNOWN_COMMAND  = 5;
 constexpr uint8_t ACK_UNSYNCED         = 6;
 
+// ---- Device status --------------------------------------------------------
+
+// Device mode byte in the QueryDeviceStatus ACK. Mirror of DeviceMode in
+// src/device_status.h; this is the wire constant so non-C++ tooling can read
+// it without a C++ header.
+constexpr uint8_t MODE_ATTACHED_CONTROLLED = 0;
+constexpr uint8_t MODE_DETACHED_GRACE_HOLD = 1;
+constexpr uint8_t MODE_DETACHED_BLANK      = 2;
+constexpr uint8_t MODE_DETACHED_BACKGROUND = 3;
+
 // ---- Sizes ----------------------------------------------------------------
 
 // Shared cap for any program blob, live (LOAD) or stored (StoreAnimation).
