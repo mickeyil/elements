@@ -5,22 +5,19 @@ Claude to act without spelunking.
 
 ---
 
-## Write the v3 firmware entry point
+## Run the v3 firmware on hardware
 
-**Today.** The shared App core exists (`src/app.{h,cpp}`, design in
-`drafts/app.md`, tests in `test/test_app.cpp`), and the sim side is
-complete: `SimFrameOutput`, `src/sim/main.cpp` (flags: `--device-uid`,
-`--controller-host` for unicast discovery, `--frame-port`), CMake
-target `sim_device`. No firmware binary builds yet.
+**Today.** Both v3 entry points exist. Sim: verified live end to end
+(discovery, register, reboot cycle through the supervisor). Firmware:
+`src/firmware/main.cpp` + `EspFrameOutput` build and link
+(`pio run -e esp32dev`, flash 66%, RAM 20%) but have not run on a
+chip. `LED_PIN` is 13 and FastLED is registered `WS2812B/GRB`,
+carried over from the led0 sanity sketch.
 
-**Action.** Implement `EspFrameOutput` (gamma LUT, channel order,
-zero-pad to `MAX_STRIP_PIXELS`, `FastLED.show()`, slack telemetry) and
-`src/firmware/main.cpp` (construct the Esp seam objects, `app.begin()`
-in `setup()`, `app.tick()` in `loop()`). Extend the `platformio.ini`
-`build_src_filter` to the shared sources the App pulls in (playback,
-command stack, link, sync, wire, blob_reader, app). Detached-mode
-policy, loss-of-sync handling, and playlist advance are open items
-inside the App; see `drafts/app.md`.
+**Action.** Flash a real ESP32, watch serial for the boot line, and
+walk the basic session against a controller: discover, register,
+SET_PROFILE (reboots), LOAD/START renders to the strip. First-run
+issues land here.
 
 ---
 
@@ -77,46 +74,27 @@ The items below were the load-bearing content of the now-removed
 decision against `src/playback.{h,cpp}` that is not derivable from the
 header or other drafts.
 
-### Firmware and sim owner presentation loop
+### Presentation loop leftovers
 
-**Today.** `src/deprecated/esp_device.{h,cpp}` and
-`src/deprecated/esp_simulated.{h,cpp}` still derive from the legacy
-`PlaybackDevice` (now deleted from `src/`, so they no longer compile).
-There is no owner that drives `src/playback.{h,cpp}`;
-the post-step-20 owner rewire is unstarted.
+The owner loop itself is done: the App paces frames against
+`target_fps()` and writes them through `FrameOutput`
+(`EspFrameOutput` does gamma, channel order, zero-pad,
+`FastLED.show()`; `SimFrameOutput` sends the preview packet). Two
+pieces of the original design remain unimplemented:
 
-**Action.** Build a thin firmware owner around `Playback`. On every
-`Rendered` or `Ended` return from `render_next_frame()`:
+1. **Slack telemetry.** Firmware should report
+   `slack_us = frame_deadline_us - fastled_show_return_us` as
+   composer-facing telemetry; cadence is not a LOAD admission gate.
+   Blocked on the telemetry path (likely extra `QueryDeviceStatus` ACK
+   fields); the deadline lives in the App's scheduler, so measuring
+   needs a small seam between App and output.
 
-1. apply the current gamma LUT to the strip
-2. memcpy RGB into `g_leds` in the configured channel order
-3. zero-pad trailing pixels when the strip is shorter than `MAX_STRIP_PIXELS`
-4. call `FastLED.show()`
-5. on `Ended`, run the end-of-program hook
-
-A default-constructed `GammaCorrection` is identity; only `RGB` and `BGR`
-channel orders are supported in the first pass. The owner times pacing
-inside the budget defined by `Playback::target_fps()`; the budget covers
-gamma + channel conversion + buffer copy + `FastLED.show()`, not just
-engine math.
-
-Cadence is **not** a LOAD admission gate. Firmware runs the program and
-reports `slack_us = frame_deadline_us - fastled_show_return_us` as
-composer-facing telemetry. Negative or near-zero slack is the signal that
-the program is asking too much of the hardware at its declared
-`target_fps`.
-
-The sim owner runs the same shape, queueing frames for the sim harness
-instead of calling `FastLED.show()`.
-
-One v2 behavior did not carry over and needs a home in the owner: when
-a LOAD failed mid-session, v2 `PlaybackDevice` presented a black frame
-so the strip never kept showing the dead program. v3
-`Playback::handle_load` clears its strip buffer on failure but returns
-no presentation result, and `CommandHandler::handle_load_` only ACKs
-the error, so the LEDs keep the last shown frame. The owner should
-present black (`render_black_frame()`) when a LOAD fails while
-something was on the strip.
+2. **Black frame on failed LOAD.** v2 presented black when a LOAD
+   failed mid-session so the strip never kept showing the dead
+   program. v3 `Playback::handle_load` clears its buffer on failure
+   but nothing presents it; the App should write black
+   (`render_black_frame()`) when a LOAD fails while something was on
+   the strip.
 
 ---
 
