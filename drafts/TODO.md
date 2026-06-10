@@ -21,20 +21,6 @@ issues land here.
 
 ---
 
-## Delete the deprecated v2 owners
-
-**Today.** `src/deprecated/` and `test/deprecated/` (legacy
-`ControllerDevice`, `SimDevice`, `ESPSimulated`, `network_sim`,
-`strip_render`, and their tests) are staged for deletion. They are not
-part of the normal build and exist only until the v3 firmware and sim
-owners above replace them.
-
-**Action.** Once the v3 entry points run, delete both directories and
-their leftover CMake targets in the same change; no half-migrated
-state.
-
----
-
 ## Log decode failures on LOAD
 
 **Today.** `CommandHandler::handle_load_` (`src/command_handler.cpp`)
@@ -49,21 +35,18 @@ the rejection reason without a debugger.
 
 ---
 
-## Rewire `strip_render` off legacy `PlaybackDevice`
+## Write the v3 `strip_render` offline CLI
 
-**Today.** `src/deprecated/strip_render.cpp` (offline CLI renderer)
-routes through the legacy `PlaybackDevice` to render frames to stdout.
-`PlaybackDevice` itself (`src/playback_device.{h,cpp}`) has been
-deleted, so the old CLI no longer compiles; the rewrite below is the
-only path.
-Post step 20 the v3 surface is `decode_program` + `Engine` + `Strip`
-directly — no clock, no `Playback`.
+**Today.** The v2 offline renderer (frames to stdout for golden tests
+and debugging) was deleted with the rest of `src/deprecated/`; no
+offline render path exists. The v3 surface for it is `decode_program`
++ `Engine` + `Strip` directly: no clock, no `Playback`.
 
-**Action.** Rewrite the CLI to: call `decode_program(blob, blob_len,
+**Action.** Write the CLI fresh: call `decode_program(blob, blob_len,
 strip_length, &err)`, reject `Program::requires_sync` (offline render
 has no remote clock), `Engine::create(program)`, then drive
 `Engine::render_frame(t_program, strip)` with explicit frame times
-stepped at `1 / fps`. Drop the `RenderDevice : PlaybackDevice` shim.
+stepped at `1 / fps`.
 
 ---
 
