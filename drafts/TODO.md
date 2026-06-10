@@ -39,23 +39,17 @@ Depends on: `EspSystemPlatform` impl (not yet written; interface at
 
 ---
 
-## Wire LOAD path through `Playback::handle_load`
+## Log decode failures on LOAD
 
-**Today.** The v3 `CommandHandler::handle_load_`
-(`drafts/command_handler.h`) is unwritten; the v2 `handle_load_` in
-`src/deprecated/controller_connection.cpp` used the v2 load signature
-(`_device->handle_load(blob, blob_len, gen)` returning a plain bool)
-with no `DecodeError` channel.
+**Today.** `CommandHandler::handle_load_` (`src/command_handler.cpp`)
+maps `DecodeError` onto the wire ACK (`StripLengthMismatch` →
+`ProfileMismatch`, everything else → `Error`) but logs nothing;
+`src/slogger.h` is host-only (`<mutex>`, `<fstream>`) and no shared
+logging seam exists yet.
 
-**Action.** When implementing `CommandHandler::handle_load_`, call
-`Playback::handle_load(blob, blob_len, &err)` and map:
-
-- `DecodeError::Ok`                  → `AckStatus::Ok`
-- `DecodeError::StripLengthMismatch` → `AckStatus::ProfileMismatch`
-- everything else                    → `AckStatus::Error`
-
-Log `decode_error_name(err)` on every failed load so serial logs
-identify the rejection reason without a debugger.
+**Action.** Once the firmware logging story lands, log
+`decode_error_name(err)` on every failed load so serial logs identify
+the rejection reason without a debugger.
 
 ---
 

@@ -98,7 +98,7 @@ controller needs to know when a command was rejected (common case: a
 synced program refused because the clock is not leased), or it lands
 in a split-brain where it thinks the device is playing and the device
 thinks the controller is confused. The `AckStatus` set is defined in
-`drafts/command_handler.h`; the wire values match
+`src/command_handler.h`; the wire values match
 `src/link_protocol.h`.
 
 A malformed frame (zero length, over `TCP_MSG_MAX`, socket EOF) and a
@@ -180,9 +180,9 @@ little-endian. All floats must be finite.
 
 ## Appendix B: opcode payloads
 
-Opcode behavior and the full opcode map are in
-`drafts/command_handler.h`; the table below is the wire payload only.
-Direction is `ctrl -> dev` unless noted.
+Opcode constants are in `src/link_protocol.h` and behavior lives with
+the handlers in `src/command_handler.cpp`; the table below is the wire
+payload only. Direction is `ctrl -> dev` unless noted.
 
 | Opcode | Cmd                  | Payload                                              |
 |--------|----------------------|------------------------------------------------------|
@@ -209,6 +209,12 @@ Direction is `ctrl -> dev` unless noted.
 and is never inbound-dispatched. `0x02` is reserved (was `SyncLease`;
 sync moved to UDP). Unknown high nibbles and stray inbound `0x8_`
 replies ACK `UnknownCommand`.
+
+`SetProfile` is a no-op when the length matches the active profile; on
+change it persists the profile and requests a reboot so the new
+geometry boots clean. `PlayLocalAnimation` loads and starts the stored
+animation; looping on Ended is App policy keyed off
+`AppContext::local_program_loaded`.
 
 `QueryDeviceStatus` ACK payload: `u8 mode, u8 flags, u16 animation_count`.
 Layout matches `DeviceStatus` in `drafts/device_status.h`.

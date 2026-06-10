@@ -385,6 +385,34 @@ boot rebuild from cached crcs (header-peek-only reads asserted), crc
 recompute fallback, bad playlist lines + orphan/synced/corrupt files
 skipped, failed-write resync, erase with failed file delete.
 
+### 23. `app_context.h` + `command_handler.{h,cpp}` — DONE
+
+Promoted from `drafts/` to `src/` and added to `elements_core`.
+`AppContext` is as drafted plus `local_program_loaded`: set by
+PlayLocalAnimation, cleared by a live LOAD; the App's render loop
+restarts on Ended while it is set, which is what makes local
+animations loop. `CommandHandler` drops the draft's `CommandReply`:
+every handler is `AckStatus handle_x_(WireReader&)` (the two queries
+also take the reply `WireWriter`), `handle()` returns the status, and
+the processor reads the reply length off `WireWriter::bytes_written()`.
+Every parse ends with `require_empty()`; trailing bytes ACK
+BadPayload. Mappings: `PlaybackResult` 1:1 onto WrongState/Unsynced
+with BadTime → BadPayload; `DecodeError::StripLengthMismatch` →
+ProfileMismatch, other decode failures → Error. SetProfile preserves
+the stored color order and gamma (the wire carries only strip length)
+and requests reboot only on change. Standalone `test_command_handler`
+target drives real `Playback` and `AnimationStore` over in-test fakes
+(`FakeFileStore`, `FakeKeyValueStore`, `FakeSystemPlatform`) and the
+fake platform clock. Coverage (20 cases, 93 assertions): unknown
+opcodes (inbound REGISTER, reserved 0x02, stray ACK), ping + trailing
+rejection, reboot flag without SystemPlatform call, load happy path /
+empty / garbage / strip mismatch, start-pause-resume-stop lifecycle
+with truthful WrongState ACKs, Unsynced start, jump NaN and
+behind-cursor → BadPayload, SetProfile no-op vs persist+reboot vs
+preserved order/gamma vs invalid lengths, store/erase/set_order
+including permutation rejections, PlayLocalAnimation looping flag +
+bad index + mismatch, both query reply layouts byte-for-byte.
+
 ## Notes
 
 - **Old simulator callers are staged for deletion.** Legacy

@@ -5,7 +5,7 @@
 
 // TCP controller-link protocol: opcodes, version, ACK status, sizes.
 // See drafts/controller_link.md for the wire spec and
-// drafts/command_handler.h for opcode behavior.
+// src/command_handler.cpp for opcode behavior.
 
 // Bumped on every breaking wire change. Sent in REGISTER.
 constexpr uint8_t PROTOCOL_VERSION = 3;
@@ -46,9 +46,8 @@ constexpr uint8_t CMD_QUERY_LOCAL_ANIMATIONS = 0x42;
 
 constexpr uint8_t CMD_ACK = 0x80;
 
-// ACK status byte. Mirror of AckStatus in drafts/command_handler.h --
-// the enum lives there because handlers produce it; this is the wire
-// constant so non-C++ tooling can read it without a C++ header.
+// ACK status byte. Mirror of AckStatus in src/command_handler.h, kept
+// as plain constants so non-C++ tooling can read them.
 constexpr uint8_t ACK_OK               = 0;
 constexpr uint8_t ACK_ERROR            = 1;
 constexpr uint8_t ACK_WRONG_STATE      = 2;
@@ -59,9 +58,9 @@ constexpr uint8_t ACK_UNSYNCED         = 6;
 
 // ---- Device status --------------------------------------------------------
 
-// Device mode byte in the QueryDeviceStatus ACK. Mirror of DeviceMode in
-// src/device_status.h; this is the wire constant so non-C++ tooling can read
-// it without a C++ header.
+// Device mode byte in the QueryDeviceStatus ACK. Mirror of DeviceMode
+// in src/device_status.h, kept as plain constants so non-C++ tooling
+// can read them.
 constexpr uint8_t MODE_ATTACHED_CONTROLLED = 0;
 constexpr uint8_t MODE_DETACHED_GRACE_HOLD = 1;
 constexpr uint8_t MODE_DETACHED_BLANK      = 2;
