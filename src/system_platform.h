@@ -4,8 +4,8 @@
 // sim main, reachable from CommandHandler through AppContext but never
 // called from the handler directly. The reboot handler sets
 // ctx.reboot_requested; the outer loop calls system.reboot() once the
-// ACK has been flushed to the controller. That ordering -- ACK first,
-// reboot after -- is why the side effect is deferred to the loop and
+// ACK has been flushed to the controller. That ordering (ACK first,
+// reboot after) is why the side effect is deferred to the loop and
 // not run from inside handle().
 //
 // Two impls:
@@ -17,7 +17,8 @@
 //                        survives because the file does. Sim launcher
 //                        contract in drafts/TODO.md.
 
-class SystemPlatform {
+class SystemPlatform
+{
 public:
     virtual ~SystemPlatform() = default;
 

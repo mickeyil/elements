@@ -33,6 +33,7 @@ add_library(elements_core STATIC
     src/sim/posix_tcp_transport.cpp
     src/sim/posix_udp_transport.cpp
     src/sim/sim_storage.cpp
+    src/sim/sim_system_platform.cpp
     src/pixel_buffer_pool.cpp
     src/pixel_view.cpp
     src/pixel_views.cpp
@@ -135,6 +136,12 @@ if(BUILD_TESTS)
     add_executable(test_device_status test/test_device_status.cpp)
     target_include_directories(test_device_status PRIVATE src)
     target_link_libraries(test_device_status Catch2::Catch2WithMain)
+
+    add_executable(test_sim_system_platform
+        test/test_sim_system_platform.cpp
+        src/sim/sim_system_platform.cpp)
+    target_include_directories(test_sim_system_platform PRIVATE src)
+    target_link_libraries(test_sim_system_platform Catch2::Catch2WithMain)
 
     # test_pixel_buffer_pool builds twice from the same test source: once
     # with the host (per-buffer allocation) path, once with the pooled
@@ -393,6 +400,8 @@ if(BUILD_TESTS)
     add_test(NAME test_host_network_interface COMMAND test_host_network_interface
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_device_status COMMAND test_device_status
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    add_test(NAME test_sim_system_platform COMMAND test_sim_system_platform
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_pixel_buffer_pool COMMAND test_pixel_buffer_pool
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})

@@ -32,9 +32,10 @@ that survive into v3 (`esp_tcp_transport`, `esp_udp_transport`,
   App only sees the link's `is_ready()` / `controller_ip_addr()` surface and
   the AppContext flags.
 
-Depends on: `EspSystemPlatform` impl (not yet written; draft at
-`drafts/system_platform.h`). `EspNetworkInterface` already exists in
-`src/firmware/`; `HostNetworkInterface` is in `src/sim/`.
+Depends on: `EspSystemPlatform` impl (not yet written; interface at
+`src/system_platform.h`, sim counterpart `SimSystemPlatform` in
+`src/sim/`). `EspNetworkInterface` already exists in `src/firmware/`;
+`HostNetworkInterface` is in `src/sim/`.
 
 ---
 
