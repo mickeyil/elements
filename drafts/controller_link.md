@@ -162,8 +162,6 @@ source-IP demux. This is its own protocol, not the controller link.
 
 ## Open items
 
-- `Playback::handle_start` / `handle_resume` / `handle_jump` must
-  return status. Tracked in `drafts/TODO.md` § Playback.
 - `PING_TIMEOUT` and ping interval values: operational tuning; pin
   once the controller-side scheduler lands.
 

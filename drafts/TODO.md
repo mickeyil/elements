@@ -39,32 +39,6 @@ Depends on: `EspSystemPlatform` impl (not yet written; interface at
 
 ---
 
-## Move JUMP `t_program` finiteness check to the wire layer
-
-**Today.** `Playback::handle_jump(float t_program)` rejects non-finite
-(`std::isfinite`) before the float→int cast in `src/playback.cpp`. This
-prevents UB on `NaN`/`±Inf` regardless of caller, but it can only silently
-return `Unchanged`.
-
-**The better place is closer to the wire.** JUMP's `t_program` enters as 4
-raw bytes that `WireReader::read_f32` produces at the handler:
-
-- `CommandHandler::handle_jump_` (`drafts/command_handler.h`) — TCP
-  path; can ACK `BadPayload` on `!std::isfinite(t_rel)` instead of
-  silently rejecting at the Playback layer.
-
-**Action.** Validate `std::isfinite(t_rel)` in the handler and ACK
-`BadPayload`. `AckStatus` already has the needed code; no
-`link_protocol.h` extension needed.
-
-**Open question for that PR.** Whether to keep the Playback check as a
-belt-and-suspenders invariant or drop it once the wire layer is honest.
-The argument for keeping: future owners (test tools, fuzzers) bypass the
-wire parser. The argument for dropping: Playback's other preconditions
-trust their callers, and a lone finiteness check there is asymmetric.
-
----
-
 ## Wire LOAD path through `Playback::handle_load`
 
 **Today.** The v3 `CommandHandler::handle_load_`
@@ -102,7 +76,7 @@ stepped at `1 / fps`. Drop the `RenderDevice : PlaybackDevice` shim.
 
 ## Playback
 
-The three items below were the load-bearing content of the now-removed
+The items below were the load-bearing content of the now-removed
 `drafts/playback.md`. Each one is a post-step-20 wiring or policy
 decision against `src/playback.{h,cpp}` that is not derivable from the
 header or other drafts.
@@ -161,23 +135,6 @@ already rejects `Program::requires_sync` at the entry point.
    offline content.
 3. Treat synced+offline as the invalid cell of the matrix, not a
    special-cased rule.
-
----
-
-### `handle_start` / `handle_resume` / `handle_jump` return status
-
-**Today.** All three are `void` in `src/playback.{h,cpp}`. The v3
-controller-link design requires them to return a status so
-`CommandHandler` (`drafts/command_handler.h`) can ACK truthfully —
-`Unsynced`, `WrongState`, `BadPayload`, `Ok`. Today the handler has to
-infer the outcome from `state()` deltas, which can't distinguish a
-rejection-by-`is_synced()` from a no-op call from the wrong state.
-
-**Action.** Pick a status enum (likely a narrower playback-side type
-that the handler maps onto `AckStatus` in
-`drafts/command_handler.h`), update the three signatures, and rewire
-`CommandHandler::handle_start_` / `handle_jump_` / `handle_resume_`
-to map the returns onto the wire ACKs.
 
 ---
 

@@ -32,6 +32,15 @@ enum class RenderFrameResult : uint8_t {
     Ended,
 };
 
+// Admission result of a playback command, so the command layer can ACK
+// the controller truthfully. Rejections leave playback state untouched.
+enum class PlaybackResult : uint8_t {
+    Ok,
+    WrongState,  // command not valid from the current DeviceState
+    Unsynced,    // synced program, but the clock lease is not active
+    BadTime,     // time argument non-finite, out of range, or behind the cursor
+};
+
 class Playback {
 public:
     explicit Playback(SyncedClock& clock);
@@ -61,13 +70,13 @@ public:
     // program_start_us is taken as the remote-clock anchor. For unsynced
     // programs, program_start_us is ignored and playback starts immediately
     // (anchor = now_local_us(), cursor = 0).
-    void handle_start(int64_t program_start_us);
+    PlaybackResult handle_start(int64_t program_start_us);
 
     // Re-anchor the program-time cursor to t_program. Valid from LOADED or
     // PAUSED. Target must be strictly ahead of the current cursor and
-    // strictly inside [0, duration). Resets the engine, sets cursor to the
-    // target, transitions to PAUSED. Does not render.
-    RenderFrameResult handle_jump(float t_program);
+    // strictly inside [0, duration), else BadTime. Resets the engine, sets
+    // cursor to the target, transitions to PAUSED. Does not render.
+    PlaybackResult handle_jump(float t_program);
 
     void handle_pause();
 
@@ -76,7 +85,7 @@ public:
     // taken as the remote-clock anchor. For unsynced programs,
     // program_start_us is ignored and playback resumes immediately from the
     // preserved cursor (anchor = now_local_us() - cursor).
-    void handle_resume(int64_t program_start_us);
+    PlaybackResult handle_resume(int64_t program_start_us);
 
     // Stop and return to LOADED. Engine reset, strip cleared.
     RenderFrameResult handle_stop();

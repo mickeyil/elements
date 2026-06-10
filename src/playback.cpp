@@ -95,13 +95,13 @@ bool Playback::handle_load(const uint8_t* blob, size_t blob_len,
     return true;
 }
 
-void Playback::handle_start(int64_t program_start_us)
+PlaybackResult Playback::handle_start(int64_t program_start_us)
 {
     if (_state != DeviceState::LOADED && _state != DeviceState::ENDED) {
-        return;
+        return PlaybackResult::WrongState;
     }
     if (_requires_sync && !_clock.is_synced()) {
-        return;
+        return PlaybackResult::Unsynced;
     }
     if (_state == DeviceState::ENDED && _engine) {
         _engine->reset();
@@ -111,36 +111,37 @@ void Playback::handle_start(int64_t program_start_us)
                                        : _clock.now_local_us();
     _t_program_cursor_us = 0;
     _state = DeviceState::PLAYING;
+    return PlaybackResult::Ok;
 }
 
-RenderFrameResult Playback::handle_jump(float t_program)
+PlaybackResult Playback::handle_jump(float t_program)
 {
     if (_engine == nullptr) {
-        return RenderFrameResult::Unchanged;
+        return PlaybackResult::WrongState;
     }
     if (_state != DeviceState::LOADED && _state != DeviceState::PAUSED) {
-        return RenderFrameResult::Unchanged;
+        return PlaybackResult::WrongState;
     }
     if (_requires_sync && !_clock.is_synced()) {
-        return RenderFrameResult::Unchanged;
+        return PlaybackResult::Unsynced;
     }
     // Reject non-finite before the float->int cast below (UB on NaN/Inf).
     if (!std::isfinite(t_program)) {
-        return RenderFrameResult::Unchanged;
+        return PlaybackResult::BadTime;
     }
     if (t_program < 0.0f || t_program >= _duration) {
-        return RenderFrameResult::Unchanged;
+        return PlaybackResult::BadTime;
     }
 
     const int64_t target_us = t_program_to_us(t_program);
     if (target_us <= _t_program_cursor_us) {
-        return RenderFrameResult::Unchanged;
+        return PlaybackResult::BadTime;
     }
 
     _engine->reset();
     _t_program_cursor_us = target_us;
     _state = DeviceState::PAUSED;
-    return RenderFrameResult::Unchanged;
+    return PlaybackResult::Ok;
 }
 
 void Playback::handle_pause()
@@ -152,19 +153,20 @@ void Playback::handle_pause()
     _state = DeviceState::PAUSED;
 }
 
-void Playback::handle_resume(int64_t program_start_us)
+PlaybackResult Playback::handle_resume(int64_t program_start_us)
 {
     if (_state != DeviceState::PAUSED) {
-        return;
+        return PlaybackResult::WrongState;
     }
     if (_requires_sync && !_clock.is_synced()) {
-        return;
+        return PlaybackResult::Unsynced;
     }
 
     _program_start_us = _requires_sync
         ? program_start_us
         : _clock.now_local_us() - _t_program_cursor_us;
     _state = DeviceState::PLAYING;
+    return PlaybackResult::Ok;
 }
 
 RenderFrameResult Playback::handle_stop()
