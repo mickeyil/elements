@@ -206,7 +206,7 @@ TEST_CASE("hardware profile stores through key value store", "[key_value_store]"
 {
     ScopedStorageRoot env(unique_root_());
 
-    const HardwareProfile expected(320, ColorOrder::BGR, 2.8f);
+    const HardwareProfile expected(240, ColorOrder::BGR, 2.8f);
     {
         FileKeyValueStore store("sim-1", HARDWARE_PROFILE_KV_NAMESPACE);
         REQUIRE(save_hardware_profile(store, expected));

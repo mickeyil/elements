@@ -40,7 +40,7 @@ bool resolve_sim_store_root(const char* device_uid,
 
     const char* base = std::getenv(STORAGE_ROOT_ENV);
     if (base == nullptr || *base == '\0') {
-        base = ".";
+        base = "local";
     }
     root = std::filesystem::path(base) / "simstorage" / device_uid / store_name;
     return true;

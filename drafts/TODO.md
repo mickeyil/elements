@@ -5,23 +5,22 @@ Claude to act without spelunking.
 
 ---
 
-## Write the v3 entry points (firmware main, sim main)
+## Write the v3 firmware entry point
 
 **Today.** The shared App core exists (`src/app.{h,cpp}`, design in
-`drafts/app.md`, tests in `test/test_app.cpp`): it owns the shared
-objects, runs the tick order (network, link, reboot-after-ACK, clock
-sync, mode placeholder, frame pacing), and presents frames through the
-`FrameOutput` seam (`src/frame_output.h`). Nothing constructs it yet;
-no firmware or sim binary builds.
+`drafts/app.md`, tests in `test/test_app.cpp`), and the sim side is
+complete: `SimFrameOutput`, `src/sim/main.cpp` (flags: `--device-uid`,
+`--controller-host` for unicast discovery, `--frame-port`), CMake
+target `sim_device`. No firmware binary builds yet.
 
-**Action.** Per platform: implement the `FrameOutput` (`EspFrameOutput`
-over gamma + channel order + FastLED; `SimFrameOutput` over the
-frame-preview UDP), construct the concrete seam objects, hand them to
-the App, and call `begin()` once and `tick()` forever. Firmware main
-also needs the `platformio.ini` `build_src_filter` extended to the
-shared sources the App pulls in (playback, command stack, link, sync,
-wire, app). Detached-mode policy, loss-of-sync handling, and playlist
-advance are open items inside the App; see `drafts/app.md`.
+**Action.** Implement `EspFrameOutput` (gamma LUT, channel order,
+zero-pad to `MAX_STRIP_PIXELS`, `FastLED.show()`, slack telemetry) and
+`src/firmware/main.cpp` (construct the Esp seam objects, `app.begin()`
+in `setup()`, `app.tick()` in `loop()`). Extend the `platformio.ini`
+`build_src_filter` to the shared sources the App pulls in (playback,
+command stack, link, sync, wire, blob_reader, app). Detached-mode
+policy, loss-of-sync handling, and playlist advance are open items
+inside the App; see `drafts/app.md`.
 
 ---
 

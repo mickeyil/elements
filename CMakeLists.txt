@@ -56,6 +56,21 @@ target_include_directories(elements_core PUBLIC src)
 target_link_libraries(elements_core PUBLIC nlohmann_json::nlohmann_json)
 
 # ---------------------------------------------------------------------------
+# Sim device binary (the v3 device running on the host)
+# ---------------------------------------------------------------------------
+
+add_executable(sim_device
+    src/sim/main.cpp
+    src/app.cpp
+    src/blob_reader.cpp
+    src/wire_reader.cpp
+    src/wire_writer.cpp
+    src/sim/sim_device_identity.cpp
+    src/sim/sim_frame_output.cpp
+)
+target_link_libraries(sim_device elements_core)
+
+# ---------------------------------------------------------------------------
 # Tests (Catch2, fetched at configure time)
 # ---------------------------------------------------------------------------
 
