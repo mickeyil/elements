@@ -218,5 +218,6 @@ policy exists for what synced playback does on lease loss.
   safe interval) is not yet pinned down; lives with controller/firmware
   policy, not with `SyncedClock`
 
-Sync lease acceptance, freshness, and large-correction policy stay on the
-controller side — see `drafts/synced_clock.md`.
+Sync measurement, filtering, and lease issuance are all device-side;
+see `drafts/synced_clock.md`. This item is only about what playback
+does when the lease lapses.
