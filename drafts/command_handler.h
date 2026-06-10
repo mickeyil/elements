@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "animation_store.h"
+#include "../src/animation_store.h"
 #include "app_context.h"
 
 class WireReader;

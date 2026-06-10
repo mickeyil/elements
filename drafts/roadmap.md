@@ -359,6 +359,32 @@ rules, round-trip with source-address population, multi-datagram
 drain, truncation, empty-datagram drop, and unbound-state behavior;
 70 assertions across 11 cases, clean under valgrind.
 
+### 22. `animation_store.{h,cpp}` — DONE
+
+Promoted from `drafts/animation_store.h` to `src/animation_store.{h,cpp}`
+and added to `elements_core` for build coverage. Two deviations from the
+draft: `MAX_STORED_BLOB_BYTES` is dropped in favor of the wire cap
+`MAX_BLOB_BYTES` (`src/link_protocol.h` already documents it as covering
+stored blobs), and `playlist.txt` lines carry an optional cached crc32
+(`<name> [<crc32 hex>]`) so boot never reads whole blobs on the normal
+path. The store keeps an in-memory index built at construction: one
+playlist read plus a 20-byte header peek per blob (`strip_length`,
+`requires_sync`); a line without a parsable crc falls back to
+recomputing it from the blob. Mutations write the blob first, then the
+playlist atomically; a failed playlist write resyncs the index from
+disk, and the crash window leaves either an ignored orphan `.anim` or a
+stale crc the controller detects and re-uploads. Standalone
+`test_animation_store` target uses an in-memory `FakeFileStore` with
+fault injection and read-byte accounting. Coverage (16 cases, 124
+assertions): entry metadata + on-disk files, append order, in-place
+overwrite, name-rejection table (traversal, charset, length), malformed
+blob table (short, magic, version, reserved flags, requires_sync,
+oversize), full-store reject vs overwrite-allowed, erase compaction,
+set_order permutation validation + persistence, read_blob round-trip,
+boot rebuild from cached crcs (header-peek-only reads asserted), crc
+recompute fallback, bad playlist lines + orphan/synced/corrupt files
+skipped, failed-write resync, erase with failed file delete.
+
 ## Notes
 
 - **Old simulator callers are staged for deletion.** Legacy

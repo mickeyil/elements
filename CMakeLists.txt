@@ -18,6 +18,7 @@ FetchContent_MakeAvailable(nlohmann_json)
 # ---------------------------------------------------------------------------
 
 add_library(elements_core STATIC
+    src/animation_store.cpp
     src/background_crc.cpp
     src/decoder.cpp
     src/engine.cpp
@@ -227,6 +228,15 @@ if(BUILD_TESTS)
     )
     target_include_directories(test_file_store PRIVATE src)
     target_link_libraries(test_file_store Catch2::Catch2WithMain)
+
+    add_executable(test_animation_store
+        test/test_animation_store.cpp
+        src/animation_store.cpp
+        src/background_crc.cpp
+        src/blob_reader.cpp
+    )
+    target_include_directories(test_animation_store PRIVATE src)
+    target_link_libraries(test_animation_store Catch2::Catch2WithMain)
 
     add_executable(test_key_value_store
         test/test_key_value_store.cpp
