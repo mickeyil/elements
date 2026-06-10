@@ -19,6 +19,18 @@ TEST_CASE("WireWriter emits little-endian scalars", "[wire_writer]") {
     CHECK(std::memcmp(buf, expected, sizeof(expected)) == 0);
 }
 
+TEST_CASE("WireWriter emits f32 as little-endian IEEE bits", "[wire_writer]") {
+    uint8_t buf[4] = {};
+    WireWriter w(buf, sizeof(buf));
+
+    REQUIRE(w.write_f32(1.0f));
+    CHECK(w.ok());
+    CHECK(w.bytes_written() == 4);
+
+    const uint8_t expected[] = {0x00, 0x00, 0x80, 0x3F};  // 1.0f
+    CHECK(std::memcmp(buf, expected, sizeof(expected)) == 0);
+}
+
 TEST_CASE("WireWriter copies byte slots", "[wire_writer]") {
     uint8_t buf[4] = {};
     WireWriter w(buf, sizeof(buf));

@@ -19,6 +19,7 @@ public:
     bool write_u8(uint8_t);
     bool write_u16(uint16_t);
     bool write_u32(uint32_t);
+    bool write_f32(float);
 
     // Copy n bytes verbatim. Used for fixed-size ASCII slots (name[32]).
     bool write_bytes(const uint8_t* src, size_t n);

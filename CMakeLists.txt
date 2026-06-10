@@ -503,6 +503,16 @@ if(BUILD_TESTS)
     target_include_directories(test_sim_device_identity PRIVATE src)
     target_link_libraries(test_sim_device_identity Catch2::Catch2WithMain)
 
+    add_executable(test_sim_frame_output
+        test/test_sim_frame_output.cpp
+        src/sim/sim_frame_output.cpp
+        src/strip.cpp
+        src/gamma.cpp
+        src/wire_writer.cpp
+    )
+    target_include_directories(test_sim_frame_output PRIVATE src src/sim)
+    target_link_libraries(test_sim_frame_output Catch2::Catch2WithMain)
+
     # Auto-generate test fixtures if missing
     find_program(PYTHON3 python3)
     if(PYTHON3)

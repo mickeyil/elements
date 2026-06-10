@@ -36,6 +36,13 @@ bool WireWriter::write_u32(uint32_t v)
     return true;
 }
 
+bool WireWriter::write_f32(float v)
+{
+    uint32_t bits = 0;
+    std::memcpy(&bits, &v, sizeof(bits));
+    return write_u32(bits);
+}
+
 bool WireWriter::write_bytes(const uint8_t* src, size_t n)
 {
     if (!_ok) return false;

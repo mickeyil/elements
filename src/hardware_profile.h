@@ -14,8 +14,10 @@
 // is_valid() distinguishes "configured" from "uninitialized".
 
 // Upper bound on supported strip lengths. Profiles outside
-// [1, MAX_STRIP_PIXELS] fail is_valid().
-static constexpr uint16_t MAX_STRIP_PIXELS = 1000;
+// [1, MAX_STRIP_PIXELS] fail is_valid(). Sized to the realistic
+// hardware ceiling; it also bounds the firmware LED buffer and keeps
+// a full sim preview frame inside one UDP packet.
+static constexpr uint16_t MAX_STRIP_PIXELS = 300;
 
 // Order of color channels written to the output.
 enum class ColorOrder : uint8_t {
