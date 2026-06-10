@@ -13,7 +13,8 @@ Claude to act without spelunking.
 firmware binary. `src/firmware/` holds only the platform-impl files
 that survive into v3 (`esp_tcp_transport`, `esp_udp_transport`,
 `esp_file_store`, `esp_platform_clock`, `esp_device_identity`,
-`nvs_key_value_store`, `wifi_manager`, `led0_sanity`).
+`nvs_key_value_store`, `wifi_manager`); the on-hardware LED smoke
+sketch lives in `src/firmware/tests/`.
 
 **Action.** Build the v3 firmware owner:
 
@@ -71,6 +72,9 @@ the rejection reason without a debugger.
 
 **Today.** `src/deprecated/strip_render.cpp` (offline CLI renderer)
 routes through the legacy `PlaybackDevice` to render frames to stdout.
+`PlaybackDevice` itself (`src/playback_device.{h,cpp}`) has been
+deleted, so the old CLI no longer compiles; the rewrite below is the
+only path.
 Post step 20 the v3 surface is `decode_program` + `Engine` + `Strip`
 directly — no clock, no `Playback`.
 
@@ -93,7 +97,8 @@ header or other drafts.
 
 **Today.** `src/deprecated/esp_device.{h,cpp}` and
 `src/deprecated/esp_simulated.{h,cpp}` still derive from the legacy
-`PlaybackDevice`. There is no owner that drives `src/playback.{h,cpp}`;
+`PlaybackDevice` (now deleted from `src/`, so they no longer compile).
+There is no owner that drives `src/playback.{h,cpp}`;
 the post-step-20 owner rewire is unstarted.
 
 **Action.** Build a thin firmware owner around `Playback`. On every
@@ -119,6 +124,15 @@ the program is asking too much of the hardware at its declared
 
 The sim owner runs the same shape, queueing frames for the sim harness
 instead of calling `FastLED.show()`.
+
+One v2 behavior did not carry over and needs a home in the owner: when
+a LOAD failed mid-session, v2 `PlaybackDevice` presented a black frame
+so the strip never kept showing the dead program. v3
+`Playback::handle_load` clears its strip buffer on failure but returns
+no presentation result, and `CommandHandler::handle_load_` only ACKs
+the error, so the LEDs keep the last shown frame. The owner should
+present black (`render_black_frame()`) when a LOAD fails while
+something was on the strip.
 
 ---
 
