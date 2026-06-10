@@ -5,20 +5,12 @@
 #include <new>
 
 #include "background_crc.h"
-#include "blob_reader.h"
 #include "decoder.h"
 #include "link_protocol.h"
 
 namespace {
 
 constexpr char PLAYLIST_FILE[] = "playlist.txt";
-
-// Blob prefix the store peeks at before accepting or indexing a blob:
-//   magic=4B | version=1B | flags=1B | fps=1B | layers=1B |
-//   strip_length=2B | buffers=2B | views=2B | copy_ops=2B | duration=4B
-// The decoder owns full validation; the store reads only through
-// strip_length and requires the rest to be present.
-constexpr size_t BLOB_HEADER_BYTES = 20;
 
 // Worst-case playlist text: per line, name + space + 8-hex crc + newline.
 constexpr size_t PLAYLIST_BUF_SIZE =
@@ -46,31 +38,6 @@ bool is_anim_name(const char* name)
 void anim_filename(const char* name, char (&out)[ANIM_NAME_BUF_SIZE])
 {
     std::snprintf(out, sizeof(out), "%s.anim", name);
-}
-
-bool peek_blob_header(const uint8_t* blob, size_t len,
-                      uint16_t& strip_length_out, bool& requires_sync_out)
-{
-    if (len < BLOB_HEADER_BYTES) return false;
-
-    BlobReader r(blob, len);
-    const uint8_t* magic = r.take(4);
-    if (magic == nullptr || std::memcmp(magic, BLOB_MAGIC, 4) != 0) return false;
-
-    uint8_t version = 0;
-    if (!r.read_u8(version) || version != BLOB_VERSION) return false;
-
-    uint8_t flags = 0;
-    if (!r.read_u8(flags)) return false;
-    if ((flags & ~uint8_t{0x01}) != 0) return false;
-
-    uint8_t skipped = 0;
-    if (!r.read_u8(skipped)) return false;  // target_fps
-    if (!r.read_u8(skipped)) return false;  // layer_count
-    if (!r.read_u16_le(strip_length_out)) return false;
-
-    requires_sync_out = (flags & 0x01) != 0;
-    return true;
 }
 
 // Advance past whitespace and return the next token, null-terminated in

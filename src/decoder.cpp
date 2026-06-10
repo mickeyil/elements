@@ -394,6 +394,21 @@ DecodeError parse_layers(BlobReader& r, const ParsedHeader& hdr, Program& prog)
 
 }  // namespace
 
+bool peek_blob_header(const uint8_t* blob, size_t len,
+                      uint16_t& strip_length_out, bool& requires_sync_out)
+{
+    BlobReader r(blob, len);
+    if (validate_prefix(r) != DecodeError::Ok) return false;
+
+    ParsedHeader hdr{};
+    if (parse_header(r, hdr) != DecodeError::Ok) return false;
+    if ((hdr.flags & ~uint8_t{0x01}) != 0) return false;
+
+    strip_length_out = hdr.strip_length;
+    requires_sync_out = (hdr.flags & 0x01) != 0;
+    return true;
+}
+
 Program* decode_program(
     const uint8_t* blob,
     size_t blob_len,

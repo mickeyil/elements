@@ -234,6 +234,18 @@ if(BUILD_TESTS)
         src/animation_store.cpp
         src/background_crc.cpp
         src/blob_reader.cpp
+        src/decoder.cpp
+        src/program.cpp
+        src/layer.cpp
+        src/pixel_buffer_pool.cpp
+        src/pixel_view.cpp
+        src/pixel_views.cpp
+        src/copy_ops.cpp
+        src/colors.cpp
+        src/animations/wave.cpp
+        src/animations/spark.cpp
+        src/animations/paint.cpp
+        src/animations/shift.cpp
     )
     target_include_directories(test_animation_store PRIVATE src)
     target_link_libraries(test_animation_store Catch2::Catch2WithMain)
