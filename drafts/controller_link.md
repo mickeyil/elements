@@ -3,7 +3,7 @@
 The device side of the controller wire: the outbound TCP dial, the
 `REGISTER` handshake, and the `CommandProcessor` stack above the
 connected socket. The class and its surface live in
-`drafts/controller_link.h`; this doc carries the cross-component
+`src/controller_link.{h,cpp}`; this doc carries the cross-component
 rationale and the wire reference the headers do not. It replaces the v2
 monolith (`src/deprecated/controller_connection.{h,cpp}`) and the
 duplicate parser in `src/deprecated/network_sim.cpp`.
@@ -88,8 +88,9 @@ when the controller has no commands to send.
 
 A controller that sends commands but never pings still keeps the link
 alive while it is talking, and is declared dead the moment it falls
-silent. `PING_TIMEOUT` is set `>= 2 x ping_interval` so a single
-dropped packet does not drop the connection.
+silent. The interval is the protocol-level `PING_INTERVAL_MS`
+(`src/link_protocol.h`); the device derives `PING_TIMEOUT_MS` as twice
+that, so a single dropped packet does not drop the connection.
 
 ## Every command ACKs
 
@@ -162,8 +163,9 @@ source-IP demux. This is its own protocol, not the controller link.
 
 ## Open items
 
-- `PING_TIMEOUT` and ping interval values: operational tuning; pin
-  once the controller-side scheduler lands.
+- `PING_INTERVAL_MS` (`src/link_protocol.h`) is a provisional 5 s;
+  revisit once the controller-side ping scheduler lands. The device
+  timeout derives from it automatically.
 
 ---
 

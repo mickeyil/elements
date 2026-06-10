@@ -21,6 +21,7 @@ add_library(elements_core STATIC
     src/animation_store.cpp
     src/command_handler.cpp
     src/command_processor.cpp
+    src/controller_link.cpp
     src/crc32.cpp
     src/decoder.cpp
     src/engine.cpp
@@ -421,6 +422,40 @@ if(BUILD_TESTS)
     )
     target_include_directories(test_command_processor PRIVATE src test)
     target_link_libraries(test_command_processor Catch2::Catch2WithMain)
+
+    add_executable(test_controller_link
+        test/test_controller_link.cpp
+        test/test_platform_clock.cpp
+        src/controller_link.cpp
+        src/discovery.cpp
+        src/command_processor.cpp
+        src/command_handler.cpp
+        src/animation_store.cpp
+        src/crc32.cpp
+        src/hardware_profile_store.cpp
+        src/wire_reader.cpp
+        src/wire_writer.cpp
+        src/playback.cpp
+        src/decoder.cpp
+        src/engine.cpp
+        src/compositor.cpp
+        src/strip.cpp
+        src/gamma.cpp
+        src/blob_reader.cpp
+        src/program.cpp
+        src/layer.cpp
+        src/pixel_buffer_pool.cpp
+        src/pixel_view.cpp
+        src/pixel_views.cpp
+        src/copy_ops.cpp
+        src/colors.cpp
+        src/animations/wave.cpp
+        src/animations/spark.cpp
+        src/animations/paint.cpp
+        src/animations/shift.cpp
+    )
+    target_include_directories(test_controller_link PRIVATE src test)
+    target_link_libraries(test_controller_link Catch2::Catch2WithMain)
 
     add_executable(test_crc32 test/test_crc32.cpp)
     target_link_libraries(test_crc32 elements_core Catch2::Catch2WithMain)

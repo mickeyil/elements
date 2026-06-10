@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "link_protocol.h"   // TCP_MSG_MAX
+#include "link_protocol.h"
 
 class TcpTransport;
 class CommandHandler;

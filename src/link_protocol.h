@@ -66,6 +66,12 @@ constexpr uint8_t MODE_DETACHED_GRACE_HOLD = 1;
 constexpr uint8_t MODE_DETACHED_BLANK      = 2;
 constexpr uint8_t MODE_DETACHED_BACKGROUND = 3;
 
+// ---- Timing ---------------------------------------------------------------
+
+// How often the controller sends Ping during quiet stretches. Devices
+// derive their liveness deadline from it.
+constexpr int64_t PING_INTERVAL_MS = 5'000;
+
 // ---- Sizes ----------------------------------------------------------------
 
 // Shared cap for any program blob, live (LOAD) or stored (StoreAnimation).

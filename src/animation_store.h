@@ -53,7 +53,7 @@
 // store; playback selection skips it. Removing it is the operator's
 // decision, issued through the controller.
 
-// Most animations the store will hold. Draft figure; revisit against
+// Most animations the store will hold. Provisional; revisit against
 // the real flash budget.
 constexpr size_t MAX_STORED_ANIMATIONS = 16;
 

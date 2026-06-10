@@ -436,6 +436,31 @@ opcode continues the stream, query reply inside the ACK message,
 12 KiB garbage LOAD consumed and stream continues, reset_buffer drops
 a partial message, failed ACK write then fault.
 
+### 25. `controller_link.{h,cpp}` — DONE
+
+Promoted from `drafts/` to `src/` and added to `elements_core`. The
+draft's four-state machine collapsed to two: network-down is a guard at
+the top of `poll()` and the connect plus REGISTER write complete inside
+one tick (`connect()` is synchronous), so `LinkState` is just
+`Discovering` / `Ready`. Failed connects are paced by
+`CONNECT_RETRY_INTERVAL_MS` (1 s; `connect()` can block 500 ms per
+attempt). Liveness as designed: `PollResult::Handled` bumps
+`_last_activity_us`, silence past `PING_TIMEOUT_MS` drops the link; the
+timeout is derived as `2 * PING_INTERVAL_MS`, with the interval pinned
+in `src/link_protocol.h` as a protocol-level value both sides share. Every
+failure (fault, read error, dead socket, network loss, REGISTER write
+failure) runs the one `drop_link_()` teardown: disconnect, reset the
+processor buffer, clear the controller ip, back to Discovering.
+Standalone `test_controller_link` target runs the real DiscoveryClient
+over a fake UDP transport (fed real OFFER packets) and the real
+handler/processor stack over a fake TCP transport. Coverage (10 cases,
+41 assertions): network-down no-op, no-OFFER idle, one-tick
+connect+REGISTER byte-exact attach, connect retry pacing, REGISTER write
+failure with later retry, ping-refreshed liveness then silence drop,
+processor fault teardown with cached-OFFER reattach and clean fresh
+stream, read-error teardown, network loss and return, dead socket
+noticed between ticks.
+
 ## Notes
 
 - **Old simulator callers are staged for deletion.** Legacy
