@@ -51,7 +51,7 @@ direction-flip from v2.
 controller that wants the device replies with a unicast `OFFER` ("I'm
 at `<ip:tcp_port>`"). The link reads `discovery.controller_ip()` /
 `tcp_port()`, opens an outbound TCP connection, and writes one
-`REGISTER` frame. The controller validates it and either starts sending
+`REGISTER` message. The controller validates it and either starts sending
 commands or silently closes.
 
 Outbound TCP earns the wire break twice over. The device runs no
@@ -80,7 +80,7 @@ defaults are far too long.
 An app-level heartbeat closes the gap: the controller sends `Ping` on
 an interval, the device tracks the most recent evidence of activity,
 and a missed deadline (`PING_TIMEOUT`) is treated as the controller
-gone. There is no Ping-specific code path: any frame the processor
+gone. There is no Ping-specific code path: any message the processor
 successfully handles bumps the link's `_last_activity_us`. `Ping` is
 just a no-op handler that returns Ok like any other; its only job is
 to guarantee the timestamp keeps refreshing during quiet stretches
@@ -101,9 +101,9 @@ thinks the controller is confused. The `AckStatus` set is defined in
 `src/command_handler.h`; the wire values match
 `src/link_protocol.h`.
 
-A malformed frame (zero length, over `TCP_MSG_MAX`, socket EOF) and a
+A malformed message (zero length, over `TCP_MSG_MAX`, socket EOF) and a
 liveness timeout both drop the connection; an unknown opcode on a
-well-formed frame just ACKs `UnknownCommand` and the link continues,
+well-formed message just ACKs `UnknownCommand` and the link continues,
 the normal protocol-evolution case. Every drop runs the same teardown:
 close the socket, reset the processor buffer, reset the liveness timer,
 return to discovery.
@@ -147,8 +147,8 @@ renamed for the UI without touching the device or the protocol.
 `src/deprecated/network_sim.cpp`'s monolith collapses to socket setup,
 the `Posix*Transport` classes from `src/sim/`, the same shared
 processor / handler / `ClockSyncClient` the firmware uses, and the
-sim-only frame loop below. The duplicate parser/dispatch/framing is
-deleted in the same change; no half-migrated state. Sim runs the real
+sim-only frame loop below. The duplicate message parsing and dispatch
+is deleted in the same change; no half-migrated state. Sim runs the real
 sync code against a controller on the same host; the measured offset
 is ~0 because it genuinely is the same clock, not a stub.
 
@@ -167,7 +167,7 @@ source-IP demux. This is its own protocol, not the controller link.
 
 ---
 
-## Appendix A: wire framing
+## Appendix A: wire message format
 
 Length-prefixed, both directions:
 
@@ -205,7 +205,7 @@ payload only. Direction is `ctrl -> dev` unless noted.
 | 0x80   | `Ack`                | `u8 status` + optional payload (both directions)     |
 
 `uid[16]` and `name[32]` are null-padded ASCII (`UID_SIZE`,
-`ANIM_NAME_SIZE`). `Register` is the first frame device to controller
+`ANIM_NAME_SIZE`). `Register` is the first message device to controller
 and is never inbound-dispatched. `0x02` is reserved (was `SyncLease`;
 sync moved to UDP). Unknown high nibbles and stray inbound `0x8_`
 replies ACK `UnknownCommand`.

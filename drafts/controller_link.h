@@ -19,7 +19,7 @@ class CommandHandler;
 //                 running; controller may send commands. There is
 //                 deliberately no separate ACK for REGISTER; controller
 //                 rejection shows up as the next read returning < 0,
-//                 or as the liveness deadline firing (no handled frame
+//                 or as the liveness deadline firing (no handled message
 //                 within PING_TIMEOUT). Either drops back to Discovering.
 enum class LinkState {
     NetworkDown,
@@ -41,9 +41,10 @@ enum class LinkState {
 // Lifetime: one instance for the life of the program. poll() is the
 // single per-tick entry point.
 //
-// Liveness. Any frame the processor successfully handles is evidence
-// the controller is alive; on processor.poll() == true the link bumps
-// _last_activity_us. is_ready() returns false once
+// Liveness. Any message the processor successfully handles is evidence
+// the controller is alive; on PollResult::Handled the link bumps
+// _last_activity_us (PollResult::Fault means drop the connection;
+// the link owns all teardown). is_ready() returns false once
 // (now - _last_activity_us) exceeds PING_TIMEOUT_US, and the link tears
 // the socket down on the next tick. The controller is expected to send
 // Ping on an interval so liveness keeps refreshing even when there are
@@ -92,7 +93,7 @@ public:
     void poll();
 
     // True iff the link is fully attached: TCP up, REGISTER written,
-    // and the liveness deadline (no handled frame for > PING_TIMEOUT)
+    // and the liveness deadline (no handled message for > PING_TIMEOUT)
     // hasn't expired. The App keys mode transitions off this single bit.
     bool is_ready() const;
 
@@ -103,7 +104,7 @@ public:
     uint32_t controller_ip_addr() const;
 
 private:
-    // Identify the device to the controller via the first frame after
+    // Identify the device to the controller via the first message after
     // TCP connect (UID, boot_token, protocol_version). Returns false on
     // write error; the link then tears down and goes back to Discovering.
     bool send_identity_();
@@ -111,7 +112,7 @@ private:
     LinkState _state = LinkState::NetworkDown;
 
     // Liveness deadline tracker. Set to now_us() on entry to Ready, and
-    // again each tick the processor reports a handled frame. Checked
+    // again each tick the processor reports a handled message. Checked
     // each poll(): (now_us() - _last_activity_us) > PING_TIMEOUT_US
     // means drop.
     int64_t _last_activity_us = 0;

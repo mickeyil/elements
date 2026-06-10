@@ -19,7 +19,7 @@ enum class AckStatus : uint8_t {
     Unsynced        = 6,  // synced program rejected: no active clock lease
 };
 
-// Executes inbound controller commands. CommandProcessor frames a
+// Executes inbound controller commands. CommandProcessor parses one
 // message off the TCP stream and calls handle(); the opcode switch
 // picks a handle_* method that parses the payload, calls the right
 // AppContext object (Playback, AnimationStore, ...), and returns the
@@ -44,7 +44,7 @@ class CommandHandler {
 public:
     explicit CommandHandler(AppContext& ctx);
 
-    // Dispatch one framed command. `reply` writes into the processor's
+    // Dispatch one command message. `reply` writes into the processor's
     // reply buffer; the reply length is reply.bytes_written() afterward.
     AckStatus handle(uint8_t opcode,
                      const uint8_t* payload, size_t payload_len,

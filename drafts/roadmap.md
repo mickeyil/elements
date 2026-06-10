@@ -413,6 +413,29 @@ preserved order/gamma vs invalid lengths, store/erase/set_order
 including permutation rejections, PlayLocalAnimation looping flag +
 bad index + mismatch, both query reply layouts byte-for-byte.
 
+### 24. `command_processor.{h,cpp}` — DONE
+
+Promoted from `drafts/` to `src/` and added to `elements_core`. Two
+draft revisions: `poll()` returns `PollResult { Idle, Handled, Fault }`
+instead of bool, so the owner learns about unrecoverable stream state
+(zero/oversized message length, read error) explicitly; the processor
+never disconnects the transport itself and ControllerLink stays the
+single owner of teardown. And the TCP unit is called a "message"
+throughout ("frame" is reserved for rendered frames). Parsing as
+drafted: fixed `TCP_MSG_MAX` RX buffer, one message per poll,
+memmove-consume, ACK assembled into one buffer and sent with a single
+all-or-fail write (best-effort; a failed write flips the transport
+disconnected and the next poll faults). A static_assert pins
+`REPLY_PAYLOAD_MAX` against the largest reply (QueryLocalAnimations at
+full store capacity). Standalone `test_command_processor` target
+drives the real handler stack over a `FakeTcpTransport` with chunked
+reads and write-failure injection. Coverage (11 cases, 30 assertions):
+idle, ping ACK byte-exact, chunked-arrival buffering, two messages
+one-per-poll, zero/oversized length faults, read-error fault, unknown
+opcode continues the stream, query reply inside the ACK message,
+12 KiB garbage LOAD consumed and stream continues, reset_buffer drops
+a partial message, failed ACK write then fault.
+
 ## Notes
 
 - **Old simulator callers are staged for deletion.** Legacy
