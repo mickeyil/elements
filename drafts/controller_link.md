@@ -1,138 +1,80 @@
 # Controller Link
 
-The device side of the controller wire: the outbound TCP dial, the
-`REGISTER` handshake, and the `CommandProcessor` stack above the
-connected socket. The class and its surface live in
-`src/controller_link.{h,cpp}`; this doc carries the cross-component
-rationale and the wire reference the headers do not. It replaces the v2
-monolith (`src/deprecated/controller_connection.{h,cpp}`) and the
-duplicate parser in `src/deprecated/network_sim.cpp`.
-
-## Where it sits
-
-Three sibling modules cover everything between device and controller.
-The App ticks them in dependency order each loop:
-`network.poll(); link.poll(); sync.poll();`.
-
-- `NetworkInterface`: is the LAN usable. Brings up Wi-Fi (sim: reports
-  up). Reconnect is internal; nothing above gets a `reconnect()` knob.
-- `ControllerLink`: is there an active command link. (this doc)
-- `ClockSyncClient`: is `SyncedClock` fresh. A separate UDP loop; see
-  `drafts/synced_clock.md`.
-
-The link does not own Wi-Fi. Bundling them was considered, but
-*network up, no controller, background playing* is a first-class app
-state that gets muddier if Wi-Fi can vanish inside the link. Separate
-siblings keep that state cheap to express.
-
-## The polling contract
-
-**The App polls modules unconditionally in dependency order; each
-module self-gates and handles prerequisite loss.** No
-`if (network.is_up())` guard wraps the link and sync calls. Each owns
-state that must be reset on prerequisite loss (the link's socket and
-processor buffer; the sync client's filter window and UDP socket).
-Skipping `poll()` while the network is down would skip those resets
-and resume from stale state.
-
-The App bridges link to sync with one line,
-`sync.set_controller(link.controller_ip_addr())`; the getter returns 0
-when the link is not ready, so the setter idles on link-down and
-re-targets on link-up with no conditional. Within one tick the cascade
-settles: `network.poll()` drops `is_up()`, `link.poll()` tears down,
-`set_controller(0)` passes the sentinel, `sync.poll()` idles.
+The TCP command wire between a device and the controller. The device
+side is implemented (`src/controller_link.{h,cpp}` and the
+`CommandProcessor` / `CommandHandler` stack above the socket); this
+doc carries what the controller-side (Python) implementation needs
+and cannot be read off that code: the controller's obligations, the
+wire reference, and the cross-side rationale.
 
 ## How a device joins
 
-**The device dials out; the controller never connects in.** The key
-direction-flip from v2.
+**The device dials out; the controller never connects in.** The
+device broadcasts a UDP `DISCOVER` ("I'm `<uid>`"); a controller that
+wants the device replies with a unicast `OFFER` ("I'm at
+`<ip:tcp_port>`"). The device opens a TCP connection to that address
+and writes one `REGISTER` message. The controller validates it and
+either starts sending commands or silently closes.
 
-`DiscoveryClient` broadcasts a UDP `DISCOVER` ("I'm `<uid>`"); a
-controller that wants the device replies with a unicast `OFFER` ("I'm
-at `<ip:tcp_port>`"). The link reads `discovery.controller_ip()` /
-`tcp_port()`, opens an outbound TCP connection, and writes one
-`REGISTER` message. The controller validates it and either starts sending
-commands or silently closes.
+Controller obligations:
 
-Outbound TCP earns the wire break twice over. The device runs no
-listening socket: no attack surface, no duplicate-connection rejection,
-no "is the server bound after Wi-Fi reconnect" dance. And
-client-to-known-server is the conventional IoT shape, costing nothing
-in operator intuition. The price, that the controller answers
-`DISCOVER` with an `OFFER` rather than just listening, is small and on
-the capable side of the link.
+- Answer every `DISCOVER` from a wanted device with a unicast
+  `OFFER`, for as long as it wants the device. A device treats an
+  OFFER older than two DISCOVER broadcast intervals (2 x 1.5 s) as a
+  controller that has gone away and stops connecting to it, so a
+  single OFFER is not enough; keep answering.
+- There is no ACK for `REGISTER`: continued controller presence is
+  acceptance, a silent close is rejection. Validating the UID and
+  `protocol_version` is the controller's job.
 
-There is no separate ACK for `REGISTER`: continued controller presence
-is acceptance, a silent close is rejection. This keeps the handshake
-to one round-trip. Rejection surfaces as the next `read()` returning
-`< 0`, or, if the controller goes silent without closing, as the
-liveness deadline. In the brief window before either fires `is_ready()`
-is true; a sync ping may reach a controller about to close, which is
-harmless (unrecognized sync packets are discarded).
+The direction flip (vs. a device-side listener) is deliberate: the
+device runs no listening socket, and client-to-known-server is the
+conventional IoT shape. The cost, answering `DISCOVER` with `OFFER`,
+sits on the capable side of the link.
 
 ## Liveness
 
-TCP alone will not tell the device a controller crashed in any useful
-time. A hard-crashed or partitioned controller sends no FIN, no RST,
-just silence; the kernel notices only on a write, and lwIP's keepalive
-defaults are far too long.
-
-An app-level heartbeat closes the gap: the controller sends `Ping` on
-an interval, the device tracks the most recent evidence of activity,
-and a missed deadline (`PING_TIMEOUT`) is treated as the controller
-gone. There is no Ping-specific code path: any message the processor
-successfully handles bumps the link's `_last_activity_us`. `Ping` is
-just a no-op handler that returns Ok like any other; its only job is
-to guarantee the timestamp keeps refreshing during quiet stretches
-when the controller has no commands to send.
-
-A controller that sends commands but never pings still keeps the link
-alive while it is talking, and is declared dead the moment it falls
-silent. The interval is the protocol-level `PING_INTERVAL_MS`
-(`src/link_protocol.h`); the device derives `PING_TIMEOUT_MS` as twice
-that, so a single dropped packet does not drop the connection.
+The controller must send `Ping` at `PING_INTERVAL_MS`
+(`src/link_protocol.h`) whenever it has no other commands to send. A
+device drops the link after twice that interval without a handled
+message and returns to discovery; TCP alone cannot detect a crashed
+controller in useful time. Any handled command counts as liveness, so
+a busy controller does not need to interleave pings.
 
 ## Every command ACKs
 
-v2's fire-and-forget on `Start` / `Pause` / etc. is gone. The
-controller needs to know when a command was rejected (common case: a
-synced program refused because the clock is not leased), or it lands
-in a split-brain where it thinks the device is playing and the device
-thinks the controller is confused. The `AckStatus` set is defined in
-`src/command_handler.h`; the wire values match
-`src/link_protocol.h`.
-
-A malformed message (zero length, over `TCP_MSG_MAX`, socket EOF) and a
-liveness timeout both drop the connection; an unknown opcode on a
-well-formed message just ACKs `UnknownCommand` and the link continues,
-the normal protocol-evolution case. Every drop runs the same teardown:
-close the socket, reset the processor buffer, reset the liveness timer,
-return to discovery.
+Every inbound command produces an `Ack` (0x80) carrying a status
+byte; the controller should treat any non-Ok status as the command
+not having happened (common case: a synced program refused with
+`Unsynced` because the clock is not leased). Status values are in
+`src/link_protocol.h`. A malformed message or a liveness timeout
+drops the connection; an unknown opcode on a well-formed message ACKs
+`UnknownCommand` and the link continues, the normal
+protocol-evolution case.
 
 ## Reboot
 
-`CommandHandler::handle_reboot_` sets `AppContext::reboot_requested =
-true` and returns `Ok`. The App's outer loop reads the flag after
-`link.poll()` returns and calls `system.reboot()` once the ACK has been
-flushed. The two-step is deliberate: invoking `SystemPlatform::reboot()`
-from inside the handler would kill the process before the ACK reaches
-the wire. The link does not surface reboot itself; the cross-layer
-signal goes through the AppContext bundle.
+After ACKing `Reboot` the device restarts: the controller sees the
+TCP connection drop, then a fresh `REGISTER` with a new `boot_token`.
+The changed `boot_token` is how the controller detects a fresh boot
+and drops state cached for the previous one.
 
 ## Identity
 
-The UID is the only device identifier; there is no numeric `device_id`
-in v3. The slot format and the `esp-` / `sim-` prefix conventions are
-in `src/device_identity.h`.
+The UID is the only device identifier; there is no numeric
+`device_id` in v3. The slot format and the `esp-` / `sim-` prefix
+conventions are in `src/device_identity.h`.
 
 No cryptographic auth (HMAC, TLS). For a LAN-scoped controller with a
 small fleet the threat model does not justify the cost: mbedTLS, key
 provisioning, rotation, debugging. A remote (VPS) controller would
 change that calculus; adding auth then is a v4 wire break, which this
-project's no-legacy stance allows. `protocol_version` in `REGISTER` is
-the escape hatch that keeps that v4 cheap: always sent, ignored now.
+project's no-legacy stance allows. `protocol_version` in `REGISTER`
+is the escape hatch that keeps that v4 cheap: always sent, ignored
+now.
 
-Two identifiers live in the controller config and never reach the wire:
+Two identifiers live in the controller config and never reach the
+wire:
 
 - `strip_id`: the program-routing key. The DSL refers to outputs by
   `strip_id` ("main", "left"), mapped one-to-one to a configured
@@ -140,18 +82,8 @@ Two identifiers live in the controller config and never reach the wire:
 - `label`: an optional UI display string; UIs fall back to the UID
   when it is absent.
 
-Controller-side, the wire stays at one identifier and a device can be
-renamed for the UI without touching the device or the protocol.
-
-## Sim parity
-
-`src/deprecated/network_sim.cpp`'s monolith collapses to socket setup,
-the `Posix*Transport` classes from `src/sim/`, the same shared
-processor / handler / `ClockSyncClient` the firmware uses, and the
-sim-only frame loop below. The duplicate message parsing and dispatch
-is deleted in the same change; no half-migrated state. Sim runs the real
-sync code against a controller on the same host; the measured offset
-is ~0 because it genuinely is the same clock, not a stub.
+The wire stays at one identifier and a device can be renamed for the
+UI without touching the device or the protocol.
 
 ## Sim frame UDP (sim only)
 
@@ -219,10 +151,13 @@ animation; looping on Ended is App policy keyed off
 `AppContext::local_program_loaded`.
 
 `QueryDeviceStatus` ACK payload: `u8 mode, u8 flags, u16 animation_count`.
-Layout matches `DeviceStatus` in `drafts/device_status.h`.
+Layout matches `DeviceStatus` in `src/device_status.h`.
 
 `QueryLocalAnimations` ACK payload: `u16 count`, then `count` records
 of `{ char name[32], u16 strip_length, u32 crc32 }`, in play order.
+The crc32 is IEEE (Python `zlib.crc32`), computed over the whole
+blob; the controller compares it against its own artifact to decide
+whether a stored animation is stale.
 
 ## Appendix C: ports
 

@@ -34,7 +34,6 @@ constexpr uint32_t CONTROLLER_IP_A     = 0x0100A8C0;  // 192.168.0.1, BE
 constexpr uint32_t CONTROLLER_IP_B     = 0x0200A8C0;  // 192.168.0.2, BE
 constexpr uint32_t WRONG_IP            = 0x6402A8C0;  // 192.168.2.100, BE
 constexpr uint16_t SYNC_PORT           = 6043;
-constexpr int64_t  LEASE_US            = 55'000'000LL;
 constexpr int64_t  BURST_INTERVAL_US   = 500 * 1000;
 constexpr int64_t  STEADY_INTERVAL_US  = 15'000'000LL;
 constexpr int64_t  BURST_DURATION_US   = 10'000'000LL;

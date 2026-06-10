@@ -30,8 +30,6 @@ void put_f32(std::vector<uint8_t>& b, float f) {
 }
 
 // Solid-red paint event covering [0, duration). Strip length = 1.
-//
-// Header layout matches docs/blob_format.md.
 std::vector<uint8_t> build_paint_blob(float duration, bool requires_sync,
                                       uint8_t target_fps = 50) {
     std::vector<uint8_t> b;

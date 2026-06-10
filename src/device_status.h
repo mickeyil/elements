@@ -11,9 +11,8 @@
 //                       Filled by the handler at reply time rather than
 //                       cached, since it changes on every Store / Erase.
 //
-// Wire encoding (LE): u8 mode, u8 flags, u16 animation_count. Layout is
-// part of the controller-link protocol; see drafts/controller_link.md
-// Appendix B.
+// Wire encoding (LE): u8 mode, u8 flags, u16 animation_count. The
+// layout is part of the controller-link protocol.
 
 enum class DeviceMode : uint8_t {
     AttachedControlled  = 0,

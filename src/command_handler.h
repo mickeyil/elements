@@ -24,8 +24,8 @@ enum class AckStatus : uint8_t {
 // picks a handle_* method that parses the payload, calls the right
 // AppContext object (Playback, AnimationStore, ...), and returns the
 // AckStatus for the reply. Handlers are translators only; the real
-// behavior lives in the AppContext objects. Opcode constants and
-// payload layouts: src/link_protocol.h and drafts/controller_link.md.
+// behavior lives in the AppContext objects. Opcode constants are in
+// src/link_protocol.h.
 //
 // A payload with unconsumed trailing bytes ACKs BadPayload. Reply
 // payloads (the two query commands) go through the caller's

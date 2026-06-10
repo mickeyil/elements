@@ -10,8 +10,7 @@
 
 namespace {
 
-// Filter and timing tuning. All knobs in one place; see
-// drafts/synced_clock.md for the rationale. Tuned for typical
+// Filter and timing tuning, all knobs in one place. Tuned for typical
 // Wi-Fi LAN (5-30 ms RTT, occasional spikes) against the LED-sync
 // ~10 ms perceptible threshold.
 
@@ -21,29 +20,28 @@ constexpr size_t  MIN_SAMPLES_TO_APPLY = BEST_K_BY_RTT;
 
 // RTTs above this are almost certainly Wi-Fi retransmits or
 // controller stalls, not signal.
-constexpr int64_t RTT_GATE_US        = 200'000;     // 200 ms
+constexpr int64_t RTT_GATE_MS        = 200;
 
 // Steady interval: one ping per 15 s renews the 55 s lease with
 // comfortable headroom for one missed renewal.
-constexpr int64_t STEADY_INTERVAL_US = 15'000'000;  // 15 s
+constexpr int64_t STEADY_INTERVAL_SEC = 15;
 
 // Burst interval: 500 ms between pings while the filter window
 // fills. Burst exits on the first applied lease or on the
 // deadline below.
-constexpr int64_t BURST_INTERVAL_US  = 500'000;     // 500 ms
-constexpr int64_t BURST_DURATION_US  = 10'000'000;  // 10 s
+constexpr int64_t BURST_INTERVAL_MS  = 500;
+constexpr int64_t BURST_DURATION_SEC = 10;
 
 // Lease handed to SyncedClock with each apply.
-constexpr int64_t LEASE_US           = 55'000'000;  // 55 s
+constexpr int64_t LEASE_SEC          = 55;
 
-// Sync UDP port. See drafts/controller_link.md appendix E.
+// Sync UDP port; the controller config holds the same value.
 constexpr uint16_t SYNC_PORT = 6043;
 
 // Packet type bytes.
 constexpr uint8_t PKT_PING = 0x01;
 constexpr uint8_t PKT_PONG = 0x02;
 
-// Wire layouts: see drafts/synced_clock.md appendix A.
 constexpr size_t PING_WIRE_SIZE = 33;
 constexpr size_t PONG_WIRE_SIZE = 33;
 
@@ -126,7 +124,7 @@ void ClockSyncClient::start_burst_()
 {
     const int64_t now    = now_us_();
     _in_burst            = true;
-    _burst_deadline_us   = now + BURST_DURATION_US;
+    _burst_deadline_us   = now + BURST_DURATION_SEC * 1'000'000;
     _next_ping_due_us    = now;  // fire next poll()
 }
 
@@ -184,7 +182,8 @@ void ClockSyncClient::send_ping_()
     _ping_t1_us       = t1;
     _ping_in_flight   = true;
 
-    const int64_t interval = _in_burst ? BURST_INTERVAL_US : STEADY_INTERVAL_US;
+    const int64_t interval = _in_burst ? BURST_INTERVAL_MS * 1000
+                                       : STEADY_INTERVAL_SEC * 1'000'000;
     _next_ping_due_us = t1 + interval;
 }
 
@@ -264,7 +263,7 @@ void ClockSyncClient::process_round_(int64_t t1, int64_t t2, int64_t t3, int64_t
     const int64_t rtt    = (t4 - t1) - (t3 - t2);
     const int64_t offset = ((t1 - t2) + (t4 - t3)) / 2;
 
-    if (rtt < 0 || rtt > RTT_GATE_US) return;
+    if (rtt < 0 || rtt > RTT_GATE_MS * 1000) return;
 
     if (_samples_count < WINDOW_N) {
         _samples[_samples_count] = SyncSample{offset, rtt};
@@ -302,7 +301,7 @@ void ClockSyncClient::apply_filter_()
     std::sort(offsets, offsets + k);
     const int64_t median_offset = offsets[k / 2];
 
-    _clock.apply_sync_offset(median_offset, LEASE_US);
+    _clock.apply_sync_offset(median_offset, LEASE_SEC * 1'000'000);
 
     // First applied lease exits the burst. Reschedule on the
     // steady interval, otherwise the previous send's burst-interval
@@ -310,7 +309,7 @@ void ClockSyncClient::apply_filter_()
     // steady kicks in.
     if (_in_burst) {
         _in_burst         = false;
-        _next_ping_due_us = now_us_() + STEADY_INTERVAL_US;
+        _next_ping_due_us = now_us_() + STEADY_INTERVAL_SEC * 1'000'000;
     }
 }
 

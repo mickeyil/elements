@@ -14,8 +14,7 @@
 //                        re-execs the binary. RAM is wiped naturally;
 //                        boot_token regenerates through the normal
 //                        startup path. File-backed local storage
-//                        survives because the file does. Sim launcher
-//                        contract in drafts/TODO.md.
+//                        survives because the file does.
 
 class SystemPlatform
 {

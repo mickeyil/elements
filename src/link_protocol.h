@@ -4,8 +4,7 @@
 #include <cstdint>
 
 // TCP controller-link protocol: opcodes, version, ACK status, sizes.
-// See drafts/controller_link.md for the wire spec and
-// src/command_handler.cpp for opcode behavior.
+// Opcode behavior lives with the handlers in src/command_handler.cpp.
 
 // Bumped on every breaking wire change. Sent in REGISTER.
 constexpr uint8_t PROTOCOL_VERSION = 3;
