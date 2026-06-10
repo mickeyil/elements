@@ -70,14 +70,16 @@ static_assert(ANIM_NAME_SIZE + sizeof(".anim") <= ANIM_NAME_BUF_SIZE,
 static_assert(ANIM_NAME_SIZE + sizeof(".anim") - 1 <= FILE_STORE_MAX_NAME_SIZE,
               "animation filename must be a valid FileStore name");
 
-struct AnimationEntry {
+struct AnimationEntry
+{
     char     name[ANIM_NAME_BUF_SIZE];  // null-terminated; the identity
     uint16_t strip_length;              // blob-header strip length
     uint32_t blob_len;
     uint32_t crc32;                     // content fingerprint
 };
 
-class AnimationStore {
+class AnimationStore
+{
 public:
     explicit AnimationStore(FileStore& files);
 

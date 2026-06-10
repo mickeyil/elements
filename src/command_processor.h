@@ -43,7 +43,8 @@ constexpr size_t REPLY_PAYLOAD_MAX = 1024;
 // processor, so the hot path where blobs and decoder allocations
 // interleave never touches the heap.
 
-class CommandProcessor {
+class CommandProcessor
+{
 public:
     CommandProcessor(TcpTransport& transport, CommandHandler& handler);
 

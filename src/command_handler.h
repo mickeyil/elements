@@ -40,7 +40,8 @@ enum class AckStatus : uint8_t {
 // Inbound REGISTER (0x00) is not handled; it is the link's one-shot
 // outbound hello and ACKs UnknownCommand like any other unknown opcode.
 
-class CommandHandler {
+class CommandHandler
+{
 public:
     explicit CommandHandler(AppContext& ctx);
 

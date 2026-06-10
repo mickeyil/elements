@@ -15,7 +15,8 @@ namespace {
 // In-memory FileStore. Pins AnimationStore to the FileStore contract
 // (no POSIX behavior leaks in) and allows fault injection plus
 // read-size accounting for the boot-cost tests.
-class FakeFileStore : public FileStore {
+class FakeFileStore : public FileStore
+{
 public:
     FileStoreState state() const override { return FileStoreState::Ready; }
 

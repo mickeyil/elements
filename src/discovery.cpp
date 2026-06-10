@@ -15,6 +15,10 @@ constexpr uint16_t DISCOVERY_PORT = 6040;
 // DISCOVER broadcast period.
 constexpr int64_t BROADCAST_INTERVAL_US = 1'500'000;  // 1.5 s
 
+// An OFFER older than this missed two broadcast cycles; treat the
+// controller as gone.
+constexpr int64_t OFFER_FRESH_WINDOW_US = 2 * BROADCAST_INTERVAL_US;
+
 // Magic prefix; filters unrelated UDP traffic on DISCOVERY_PORT.
 constexpr uint16_t MAGIC = 0xD1CC;
 
@@ -115,5 +119,12 @@ void DiscoveryClient::drain_responses_()
         // Most-recent-wins; just overwrite.
         _controller_ip = ip;
         _tcp_port      = port;
+        _last_offer_us = now_us();
     }
+}
+
+bool DiscoveryClient::has_fresh_offer() const
+{
+    return _last_offer_us != 0 &&
+           now_us() - _last_offer_us <= OFFER_FRESH_WINDOW_US;
 }

@@ -26,7 +26,8 @@ namespace {
 // Platform fakes (file storage, key-value storage, system)
 // ---------------------------------------------------------------------------
 
-class FakeFileStore : public FileStore {
+class FakeFileStore : public FileStore
+{
 public:
     FileStoreState state() const override { return FileStoreState::Ready; }
 
@@ -57,7 +58,8 @@ private:
     std::map<std::string, std::vector<uint8_t>> _files;
 };
 
-class FakeKeyValueStore : public KeyValueStore {
+class FakeKeyValueStore : public KeyValueStore
+{
 public:
     KeyValueStoreState state() const override { return KeyValueStoreState::Ready; }
 
@@ -111,7 +113,8 @@ private:
     std::map<std::string, std::string> _str;
 };
 
-class FakeSystemPlatform : public SystemPlatform {
+class FakeSystemPlatform : public SystemPlatform
+{
 public:
     void reboot() override { ++reboot_calls; }
     int reboot_calls = 0;
@@ -191,7 +194,8 @@ std::vector<uint8_t> build_paint_blob(uint16_t strip_length, float duration,
 // Harness: real Playback (strip length 1) and AnimationStore over fakes
 // ---------------------------------------------------------------------------
 
-struct Harness {
+struct Harness
+{
     SyncedClock clock;
     Playback playback{1, clock};
     FakeFileStore files;

@@ -444,7 +444,10 @@ the top of `poll()` and the connect plus REGISTER write complete inside
 one tick (`connect()` is synchronous), so `LinkState` is just
 `Discovering` / `Ready`. Failed connects are paced by
 `CONNECT_RETRY_INTERVAL_MS` (1 s; `connect()` can block 500 ms per
-attempt). Liveness as designed: `PollResult::Handled` bumps
+attempt), and the link only dials while `DiscoveryClient` reports a
+fresh OFFER (within two broadcast intervals): a controller that
+stopped announcing is treated as gone, so the blocking connect never
+chases a dead address and background rendering stays smooth. Liveness as designed: `PollResult::Handled` bumps
 `_last_activity_us`, silence past `PING_TIMEOUT_MS` drops the link; the
 timeout is derived as `2 * PING_INTERVAL_MS`, with the interval pinned
 in `src/link_protocol.h` as a protocol-level value both sides share. Every

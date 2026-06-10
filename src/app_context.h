@@ -14,7 +14,8 @@ struct DeviceStatus;
 // Constructed once at boot; the references point at objects the App
 // owns directly.
 
-struct AppContext {
+struct AppContext
+{
     Playback&       playback;
     AnimationStore& animations;
     KeyValueStore&  profile_kv;   // save/load_hardware_profile target

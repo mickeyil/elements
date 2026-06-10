@@ -65,6 +65,10 @@ void ControllerLink::poll()
 
 void ControllerLink::try_connect_()
 {
+    // Only connect to a controller that is still announcing itself;
+    // connect() to a dead address blocks for its full timeout.
+    if (!_discovery.has_fresh_offer()) return;
+
     const uint32_t ip = _discovery.controller_ip();
     const uint16_t port = _discovery.tcp_port();
     if (ip == 0 || port == 0) return;

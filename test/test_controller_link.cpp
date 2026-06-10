@@ -31,7 +31,8 @@ constexpr uint16_t CONTROLLER_PORT = 6041;
 // Fakes
 // ---------------------------------------------------------------------------
 
-class FakeNetworkInterface : public NetworkInterface {
+class FakeNetworkInterface : public NetworkInterface
+{
 public:
     void begin() override {}
     NetworkTransition poll() override { return NetworkTransition::unchanged; }
@@ -40,7 +41,8 @@ public:
 };
 
 // Delivers queued packets to DiscoveryClient; sends are dropped.
-class FakeUdpTransport : public UdpTransport {
+class FakeUdpTransport : public UdpTransport
+{
 public:
     bool bind(uint16_t) override { bound = true; return true; }
     void close() override { bound = false; }
@@ -63,7 +65,8 @@ public:
     std::vector<std::vector<uint8_t>> inbox;
 };
 
-class FakeTcpTransport : public TcpTransport {
+class FakeTcpTransport : public TcpTransport
+{
 public:
     bool connect(uint32_t ip, uint16_t port) override
     {
@@ -109,7 +112,8 @@ public:
     std::vector<uint8_t> sent;
 };
 
-class FakeFileStore : public FileStore {
+class FakeFileStore : public FileStore
+{
 public:
     FileStoreState state() const override { return FileStoreState::Ready; }
     bool write(const char* name, const uint8_t* src, size_t len) override
@@ -136,7 +140,8 @@ private:
     std::map<std::string, std::vector<uint8_t>> _files;
 };
 
-class FakeKeyValueStore : public KeyValueStore {
+class FakeKeyValueStore : public KeyValueStore
+{
 public:
     KeyValueStoreState state() const override { return KeyValueStoreState::Ready; }
     bool has_key(const char*) override { return false; }
@@ -151,7 +156,8 @@ public:
     int get_str(const char*, char*, size_t) override { return -1; }
 };
 
-class FakeSystemPlatform : public SystemPlatform {
+class FakeSystemPlatform : public SystemPlatform
+{
 public:
     void reboot() override {}
 };
@@ -190,7 +196,8 @@ std::vector<uint8_t> expected_register(const char* uid, uint32_t boot_token)
 // Harness
 // ---------------------------------------------------------------------------
 
-struct Harness {
+struct Harness
+{
     SyncedClock clock;
     Playback playback{1, clock};
     FakeFileStore files;
@@ -351,6 +358,28 @@ TEST_CASE("a processor fault tears down; the cached OFFER reattaches")
     h.link.poll();
     CHECK(h.link.is_ready());
     CHECK_FALSE(h.tcp.sent.empty());
+}
+
+TEST_CASE("the link stops connecting once the OFFER goes stale")
+{
+    Harness h;
+    h.tcp.accept_connect = false;
+    h.offer();
+    h.link.poll();
+    CHECK(h.tcp.connect_calls == 1);
+
+    // The controller stopped announcing; past the freshness window the
+    // cached address is left alone.
+    h.advance(4'000'000);
+    h.link.poll();
+    CHECK(h.tcp.connect_calls == 1);
+
+    // A new OFFER resumes connecting.
+    h.tcp.accept_connect = true;
+    h.offer();
+    h.link.poll();
+    CHECK(h.tcp.connect_calls == 2);
+    CHECK(h.link.is_ready());
 }
 
 TEST_CASE("a read error while attached tears down")

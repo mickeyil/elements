@@ -377,3 +377,29 @@ TEST_CASE("recv error closes the socket", "[discovery]") {
     CHECK(udp.close_count == closes_before + 1);
     CHECK_FALSE(udp.is_bound());
 }
+
+TEST_CASE("has_fresh_offer tracks OFFER recency", "[discovery]") {
+    set_test_now_us(1'000'000);
+
+    DeviceIdentity   id  = make_identity();
+    FakeUdpTransport udp;
+    DiscoveryClient  d(udp, id);
+
+    CHECK_FALSE(d.has_fresh_offer());
+
+    udp.inject(build_offer(CONTROLLER_IP_A, TCP_PORT_A));
+    d.poll();
+    CHECK(d.has_fresh_offer());
+
+    // Two broadcast intervals is the freshness window.
+    set_test_now_us(1'000'000 + 2 * BROADCAST_INTERVAL_US);
+    CHECK(d.has_fresh_offer());
+
+    set_test_now_us(1'000'000 + 2 * BROADCAST_INTERVAL_US + 1);
+    CHECK_FALSE(d.has_fresh_offer());
+
+    // A new OFFER makes the values fresh again.
+    udp.inject(build_offer(CONTROLLER_IP_A, TCP_PORT_A));
+    d.poll();
+    CHECK(d.has_fresh_offer());
+}

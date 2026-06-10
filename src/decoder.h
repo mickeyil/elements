@@ -19,7 +19,6 @@ static constexpr size_t BLOB_HEADER_BYTES = 20;
 // Cheap admission check without a full decode: is this a
 // current-version blob, and does it require a synced clock? False on
 // a truncated header, foreign magic/version, or reserved flag bits.
-// AnimationStore uses it to vet blobs it stores or indexes.
 bool peek_blob_header(const uint8_t* blob, size_t len,
                       uint16_t& strip_length_out, bool& requires_sync_out);
 

@@ -26,7 +26,8 @@ namespace {
 
 // In-memory byte pipe. `inbox` is what poll() will read (optionally in
 // chunks of max_read_chunk); `sent` collects ACK messages.
-class FakeTcpTransport : public TcpTransport {
+class FakeTcpTransport : public TcpTransport
+{
 public:
     bool connect(uint32_t, uint16_t) override { connected = true; return true; }
     void disconnect() override { connected = false; }
@@ -60,7 +61,8 @@ public:
     std::vector<uint8_t> sent;
 };
 
-class FakeFileStore : public FileStore {
+class FakeFileStore : public FileStore
+{
 public:
     FileStoreState state() const override { return FileStoreState::Ready; }
     bool write(const char* name, const uint8_t* src, size_t len) override
@@ -87,7 +89,8 @@ private:
     std::map<std::string, std::vector<uint8_t>> _files;
 };
 
-class FakeKeyValueStore : public KeyValueStore {
+class FakeKeyValueStore : public KeyValueStore
+{
 public:
     KeyValueStoreState state() const override { return KeyValueStoreState::Ready; }
     bool has_key(const char*) override { return false; }
@@ -102,7 +105,8 @@ public:
     int get_str(const char*, char*, size_t) override { return -1; }
 };
 
-class FakeSystemPlatform : public SystemPlatform {
+class FakeSystemPlatform : public SystemPlatform
+{
 public:
     void reboot() override {}
 };
@@ -141,7 +145,8 @@ std::vector<uint8_t> make_ack(uint8_t status,
 // Harness
 // ---------------------------------------------------------------------------
 
-struct Harness {
+struct Harness
+{
     SyncedClock clock;
     Playback playback{1, clock};
     FakeFileStore files;

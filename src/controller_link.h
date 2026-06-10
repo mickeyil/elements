@@ -4,10 +4,10 @@
 
 #include "command_processor.h"
 #include "link_protocol.h"
+#include "tcp_transport.h"
 
 class NetworkInterface;
 struct DeviceIdentity;
-class TcpTransport;
 class DiscoveryClient;
 class CommandHandler;
 
@@ -16,10 +16,10 @@ class CommandHandler;
 // drop the connection.
 constexpr int64_t PING_TIMEOUT_MS = 2 * PING_INTERVAL_MS;
 
-// Minimum wait between connect attempts. connect() can block up to
-// TcpTransport::TIMEOUT_MS per try, so retrying a dead OFFER every
-// tick would stall the app loop.
-constexpr int64_t CONNECT_RETRY_INTERVAL_MS = 1'000;
+// Minimum wait between connect attempts: twice the worst-case block,
+// so even a half-dead controller (answers discovery, ignores TCP)
+// cannot eat more than half the loop's time.
+constexpr int64_t CONNECT_RETRY_INTERVAL_MS = 2 * TcpTransport::TIMEOUT_MS;
 
 // ControllerLink's connectivity status: looking for a controller, or
 // attached to one.
@@ -33,7 +33,8 @@ enum class LinkState : uint8_t {
 // until the controller goes away, and starts over. The App polls it
 // every tick and reads is_ready() to know whether it is attached.
 
-class ControllerLink {
+class ControllerLink
+{
 public:
     ControllerLink(NetworkInterface& network,
                    DiscoveryClient&  discovery,
@@ -47,12 +48,11 @@ public:
     void poll();
 
     // Is the link fully attached: TCP up, REGISTER written, liveness
-    // deadline not expired. The App keys mode transitions off this bit.
+    // deadline not expired.
     bool is_ready() const { return _state == LinkState::Ready; }
 
     // Controller IPv4 address in network byte order; 0 unless
-    // is_ready(). ClockSyncClient reads this each tick to know where
-    // to ping.
+    // is_ready().
     uint32_t controller_ip_addr() const { return _controller_ip; }
 
 private:

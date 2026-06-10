@@ -16,10 +16,11 @@ constexpr uint32_t IPV4_BROADCAST = 0xFFFFFFFFu;
 //   DISCOVER  device  -> broadcast  { magic, type=0x01, uid (16B) }
 //   OFFER     control -> device     { magic, type=0x02, ipv4 (4B), port (2B) }
 //
-// Most-recent-OFFER-wins; stale values are not cleared. A TCP
-// connect against a stale ip/port fails, the owner retries, and the
-// next OFFER updates the values. Same poll / lazy-bind pattern as
-// ClockSyncClient.
+// Most-recent-OFFER-wins; stale values are not cleared. Owners gate
+// connect attempts on has_fresh_offer(): a controller that stopped
+// answering DISCOVER is likely gone, and a TCP connect to a dead
+// address blocks for its full timeout. Same poll / lazy-bind pattern
+// as ClockSyncClient.
 
 class DiscoveryClient {
 public:
@@ -36,6 +37,10 @@ public:
     // Most recent controller TCP port; 0 until the first OFFER arrives.
     uint16_t tcp_port() const { return _tcp_port; }
 
+    // Has an OFFER arrived within the last two broadcast intervals?
+    // False means the controller stopped answering DISCOVER.
+    bool has_fresh_offer() const;
+
 private:
     void drain_responses_();
     void send_discover_();
@@ -47,6 +52,7 @@ private:
     // Latest OFFER fields; 0 = not yet received.
     uint32_t _controller_ip = 0;
     uint16_t _tcp_port      = 0;
+    int64_t  _last_offer_us = 0;
 
     // Last DISCOVER send time; 0 fires immediately on next poll().
     int64_t _last_broadcast_us = 0;
