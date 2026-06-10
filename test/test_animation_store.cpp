@@ -6,7 +6,7 @@
 #include <vector>
 
 #include "animation_store.h"
-#include "background_crc.h"
+#include "crc32.h"
 #include "decoder.h"
 #include "link_protocol.h"
 

@@ -19,7 +19,7 @@ FetchContent_MakeAvailable(nlohmann_json)
 
 add_library(elements_core STATIC
     src/animation_store.cpp
-    src/background_crc.cpp
+    src/crc32.cpp
     src/decoder.cpp
     src/engine.cpp
     src/compositor.cpp
@@ -232,7 +232,7 @@ if(BUILD_TESTS)
     add_executable(test_animation_store
         test/test_animation_store.cpp
         src/animation_store.cpp
-        src/background_crc.cpp
+        src/crc32.cpp
         src/blob_reader.cpp
         src/decoder.cpp
         src/program.cpp
@@ -357,8 +357,8 @@ if(BUILD_TESTS)
     target_include_directories(test_playback PRIVATE src test)
     target_link_libraries(test_playback Catch2::Catch2WithMain)
 
-    add_executable(test_background_crc test/test_background_crc.cpp)
-    target_link_libraries(test_background_crc elements_core Catch2::Catch2WithMain)
+    add_executable(test_crc32 test/test_crc32.cpp)
+    target_link_libraries(test_crc32 elements_core Catch2::Catch2WithMain)
 
     add_executable(test_sim_device_identity
         test/test_sim_device_identity.cpp
@@ -463,7 +463,7 @@ if(BUILD_TESTS)
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_playback COMMAND test_playback
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
-    add_test(NAME test_background_crc COMMAND test_background_crc
+    add_test(NAME test_crc32 COMMAND test_crc32
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_sim_device_identity COMMAND test_sim_device_identity
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})

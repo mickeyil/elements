@@ -4,7 +4,7 @@
 #include <cstring>
 #include <new>
 
-#include "background_crc.h"
+#include "crc32.h"
 #include "decoder.h"
 #include "link_protocol.h"
 
