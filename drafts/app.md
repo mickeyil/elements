@@ -48,8 +48,11 @@ driver.
 ## The presentation seam
 
 Presentation is the one platform difference that is not yet behind an
-interface. `FrameOutput` closes it with a single method: present
-this strip, given the current hardware profile and the program time.
+interface. `FrameOutput` closes it with two methods: apply_profile(),
+the one-time setup where the implementation takes its gamma and
+channel order from the hardware profile, and write(), called once per
+rendered frame to turn the program-space RGB strip into platform
+output.
 
 The firmware implementation applies the profile's gamma LUT, copies
 RGB into the FastLED buffer in the profile's channel order, zero-pads
@@ -65,11 +68,13 @@ see `controller_link.md`) and keeps its own frame counter. It applies
 no gamma: gamma compensates the physical LEDs, and the controller UI
 renders on a screen that does its own.
 
-The profile is passed on every call because it can change at runtime
-through `SetHardwareProfile`; `t_program` rides along because the sim
-packet header needs it and the firmware ignores it. The cost of the
-seam is one virtual call per frame at playback rates, which is noise
-next to `FastLED.show()`.
+The profile is setup, not per-frame data: it is fixed for the process
+lifetime (`SetHardwareProfile` lands through a reboot), so the App
+applies it to the output once in `begin()`, right after applying it
+to `Playback`, and write() carries only what varies per frame: the
+pixels and `t_program`, which the sim packet header needs and the
+firmware ignores. The cost of the seam is one virtual call per frame
+at playback rates, which is noise next to `FastLED.show()`.
 
 ## begin()
 

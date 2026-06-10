@@ -5,37 +5,23 @@ Claude to act without spelunking.
 
 ---
 
-## Write the v3 firmware entry point and app loop
+## Write the v3 entry points (firmware main, sim main)
 
-**Today.** The v2 firmware files have been moved to `src/deprecated/`
-(`controller_connection`, `discovery_service`, `firmware_app`,
-`diagnostics`, `esp_device`, `main`). Nothing currently builds a
-firmware binary. `src/firmware/` holds only the platform-impl files
-that survive into v3 (`esp_tcp_transport`, `esp_udp_transport`,
-`esp_file_store`, `esp_platform_clock`, `esp_device_identity`,
-`nvs_key_value_store`, `wifi_manager`); the on-hardware LED smoke
-sketch lives in `src/firmware/tests/`.
+**Today.** The shared App core exists (`src/app.{h,cpp}`, design in
+`drafts/app.md`, tests in `test/test_app.cpp`): it owns the shared
+objects, runs the tick order (network, link, reboot-after-ACK, clock
+sync, mode placeholder, frame pacing), and presents frames through the
+`FrameOutput` seam (`src/frame_output.h`). Nothing constructs it yet;
+no firmware or sim binary builds.
 
-**Action.** Build the v3 firmware owner:
-
-- New `src/firmware/main.cpp`: construct the App with `EspNetworkInterface`
-  (around `wifi_manager`), `DiscoveryClient`, `EspTcpTransport`,
-  `EspUdpTransport`, `Playback`, `AnimationStore` over `EspFileStore`,
-  `NvsKeyValueStore`, `DeviceStatus`, `EspSystemPlatform`, and the
-  `AppContext` bundling them.
-- App loop runs the three-sibling polling contract:
-  `network.poll(); link.poll(); sync.set_controller(link.controller_ip_addr()); sync.poll();`
-  then playback / render. After `link.poll()` returns, check
-  `ctx.reboot_requested` and call `ctx.system.reboot()` once the ACK
-  has flushed.
-- `ControllerLink` owns the `CommandProcessor` internally and borrows the
-  `CommandHandler` (the handler needs `AppContext`, which the App owns); the
-  App only sees the link's `is_ready()` / `controller_ip_addr()` surface and
-  the AppContext flags.
-
-All platform impls exist: `EspSystemPlatform` and `EspNetworkInterface`
-are in `src/firmware/`, sim counterparts `SimSystemPlatform` and
-`HostNetworkInterface` in `src/sim/`.
+**Action.** Per platform: implement the `FrameOutput` (`EspFrameOutput`
+over gamma + channel order + FastLED; `SimFrameOutput` over the
+frame-preview UDP), construct the concrete seam objects, hand them to
+the App, and call `begin()` once and `tick()` forever. Firmware main
+also needs the `platformio.ini` `build_src_filter` extended to the
+shared sources the App pulls in (playback, command stack, link, sync,
+wire, app). Detached-mode policy, loss-of-sync handling, and playlist
+advance are open items inside the App; see `drafts/app.md`.
 
 ---
 

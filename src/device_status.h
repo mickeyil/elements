@@ -21,6 +21,9 @@ enum class DeviceMode : uint8_t {
     DetachedBackground  = 3,
 };
 
+// DeviceStatus.flags bit assignments.
+constexpr uint8_t STATUS_FLAG_PROFILE_PRESENT = 0x01;
+
 struct DeviceStatus
 {
     DeviceMode mode  = DeviceMode::DetachedBlank;
