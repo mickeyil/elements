@@ -49,7 +49,7 @@ Struct types pin meaning and units, so short names are fine:
 `src/deprecated/network_sim.cpp`, `src/deprecated/sim_controller.{h,cpp}`,
 `src/deprecated/controller_device.h`, and `playback_device.h` still carry the v2 names `t_rel` and `t0_us`
 (plus `DeviceFrame::t_rel` / `ProgramFrame::t_rel`). These get renamed
-during the post-step-20 owner rewire — see `roadmap.md` Notes.
+during the owner rewire tracked in `TODO.md` § Playback.
 
 ## Compiler-side exception
 

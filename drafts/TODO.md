@@ -39,6 +39,20 @@ Depends on: `EspSystemPlatform` impl (not yet written; interface at
 
 ---
 
+## Delete the deprecated v2 owners
+
+**Today.** `src/deprecated/` and `test/deprecated/` (legacy
+`ControllerDevice`, `SimDevice`, `ESPSimulated`, `network_sim`,
+`strip_render`, and their tests) are staged for deletion. They are not
+part of the normal build and exist only until the v3 firmware and sim
+owners above replace them.
+
+**Action.** Once the v3 entry points run, delete both directories and
+their leftover CMake targets in the same change; no half-migrated
+state.
+
+---
+
 ## Log decode failures on LOAD
 
 **Today.** `CommandHandler::handle_load_` (`src/command_handler.cpp`)

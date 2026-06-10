@@ -9,6 +9,7 @@ Repo-wide guidance for coding agents working in this repository.
 - When asked to commit, make a single commit unless the user explicitly asks to split the work.
 - Commit messages should be a one-line summary only, with no body and no `Co-Authored-By`.
 - C++ source files must contain only ASCII characters.
+- New or touched C++ constants use `SCREAMING_SNAKE_CASE`, not `kCamelCase`. Legacy `kCamelCase` constants are renamed when their module is otherwise touched, not in sweeps.
 - Do not create custom C++ namespaces in this project.
 - Don't use `--` as punctuation in comments or docs. Prefer `;`, `:`, parentheses, or separate sentences.
 - Assume C++ classes are non-copyable and non-movable unless the class definition explicitly says otherwise. The codebase doesn't use `= delete` ceremony, so this rule is the only signal. When adding a class or reviewing a module, check that nothing copies or moves a resource owner; flag it if it does.
