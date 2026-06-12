@@ -12,11 +12,12 @@ command behavior lives with the device handlers in
 
 ## The inversion
 
-The v2 controller dialed each configured device at a known address,
+The v2 controller connected out to each configured device at a known
+address,
 identified it by a numeric `device_id`, measured clock offsets itself
 and pushed corrections over TCP, and threaded a `gen` counter through
 LOAD/JUMP to correlate preview frames. v3 removes all four: the device
-dials the controller, the UID is the only identifier, sync is
+connects out to the controller, the UID is the only identifier, sync is
 device-initiated and device-computed, and no generation counter exists
 anywhere on the wire.
 
@@ -32,7 +33,7 @@ verdicts.
 
 ## How a device joins
 
-**The device dials out; the controller never connects in.** The
+**The device connects out; the controller only listens.** The
 device broadcasts a UDP `DISCOVER` ("I'm `<uid>`"); a controller that
 wants the device replies with a unicast `OFFER` ("I'm at
 `<ip:tcp_port>`"). The device opens a TCP connection to that address
@@ -139,7 +140,7 @@ and all demuxing by UID, never by address:
   Start/Resume, because that clock is the canonical session time.
 
 The hub exposes per-UID device sessions to the layer above. The v2
-shape, one `NetworkDevice` per configured device that dials out and
+shape, one `NetworkDevice` per configured device that connects out and
 blocks the tick for up to a second per command ACK, does not survive
 the direction flip and should not be recreated: command sends are
 non-blocking, ACKs arrive through the same poll loop as everything
@@ -287,7 +288,7 @@ Four contiguous ports (friendly for firewall rules):
 | Port | Proto | Purpose                                          |
 |------|-------|--------------------------------------------------|
 | 6040 | UDP   | discovery: DISCOVER broadcast, OFFER unicast     |
-| 6041 | TCP   | controller-link: controller listens, device dials |
+| 6041 | TCP   | controller-link: controller listens, device connects |
 | 6042 | UDP   | sim frame previews (sim only)                    |
 | 6043 | UDP   | clock sync ping/pong                             |
 
@@ -317,12 +318,12 @@ not; "delete" means the reason to exist is gone.
 | `controller_protocol.py` | keep    | client protocol, independent of the device wire            |
 | `controller_client.py`   | keep    | client of the above                                        |
 | `server.py`              | keep    | unix-socket server shell; event vocabulary updates only    |
-| `web.py`                 | update  | relay survives; snapshot/device vocabulary changes         |
+| `web.py`                 | update  | relay survives; full-state/device vocabulary changes       |
 | `tui.py`                 | update  | dialogs survive; same vocabulary changes                   |
 | `config.py` / `config_edit.py` | update | drop `device_id`/`host`/`tcp_port`, add the four ports and `label` |
 | `render.py`              | update  | formatting half keeps; new compiler surface and the rewritten `strip_render` CLI |
 | `controller.py`          | rewrite | session design keeps (see "Sessions"); `gen` and optimistic state go |
-| `service.py`             | rewrite | command vocabulary and load planning keep; connectivity machinery assumed dial-out |
+| `service.py`             | rewrite | command vocabulary and load planning keep; connectivity machinery assumed outbound connects |
 | `device_protocol.py`     | rewrite | every opcode and payload is v2; the v3 codecs live in `wire.py`, this file goes with its v2 callers |
 | `network_device.py`      | rewrite | becomes the link server; direction flip kills the rest     |
 | `discovery.py`           | rewrite | HELLO/REJECT became DISCOVER/OFFER with roles swapped      |

@@ -104,7 +104,8 @@ sides read the same kernel clock.
 
 ## Why this shape
 
-Device-initiated follows v3's connection model (the device dials; the
+Device-initiated follows v3's connection model (the device connects
+out; the
 controller does not know where to ping until the device has already
 found it). Device-computed keeps the math where the timestamps
 originate, halves the wire traffic per round, and makes lease issuance

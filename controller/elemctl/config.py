@@ -4,7 +4,7 @@ Reads a JSON config describing the controller and device topology.
 
 v3 shape: the controller section holds the four well-known ports
 (drafts/controller_v3.md appendix C); a device entry is just
-`{device_uid, strip_id, length, label?}`. Devices dial in and are
+`{device_uid, strip_id, length, label?}`. Devices connect in and are
 identified by UID alone, so the config stores no addresses and no
 numeric ids. The device type is implied by the UID prefix
 (src/device_identity.h).
