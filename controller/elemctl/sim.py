@@ -43,7 +43,7 @@ STORAGE_ROOT_ENV = 'ELEMENTS_SIM_STORAGE_ROOT'
 
 
 def validate_sim_uid(uid: str) -> str | None:
-    """Check uid against the wire policy (controller_link.md § Identity).
+    """Check uid against the wire policy (controller_v3.md § Identity).
 
     Returns an error message, or None when the uid is acceptable.
     """
