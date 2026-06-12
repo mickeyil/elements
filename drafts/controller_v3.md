@@ -323,7 +323,7 @@ not; "delete" means the reason to exist is gone.
 | `render.py`              | update  | formatting half keeps; new compiler surface and the rewritten `strip_render` CLI |
 | `controller.py`          | rewrite | session design keeps (see "Sessions"); `gen` and optimistic state go |
 | `service.py`             | rewrite | command vocabulary and load planning keep; connectivity machinery assumed dial-out |
-| `device_protocol.py`     | rewrite | every opcode and payload is v2                             |
+| `device_protocol.py`     | rewrite | every opcode and payload is v2; the v3 codecs live in `wire.py`, this file goes with its v2 callers |
 | `network_device.py`      | rewrite | becomes the link server; direction flip kills the rest     |
 | `discovery.py`           | rewrite | HELLO/REJECT became DISCOVER/OFFER with roles swapped      |
 | `udp_receiver.py`        | rewrite | trivial; new frame header, UID demux                       |

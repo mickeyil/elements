@@ -1,6 +1,13 @@
 """Static config loading for elemctl.
 
 Reads a JSON config describing the controller and device topology.
+
+v3 shape: the controller section holds the four well-known ports
+(drafts/controller_v3.md appendix C); a device entry is just
+`{device_uid, strip_id, length, label?}`. Devices dial in and are
+identified by UID alone, so the config stores no addresses and no
+numeric ids. The device type is implied by the UID prefix
+(src/device_identity.h).
 """
 
 from __future__ import annotations
@@ -8,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,14 +26,23 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 INSTANCE_DIR = REPO_ROOT / 'instance'
 DEFAULT_CONFIG_PATH = str(INSTANCE_DIR / 'config.json')
 DEFAULT_SOCKET_PATH = '/tmp/elemctl.sock'
-DEFAULT_FRAME_PORT = 9002
+
 DEFAULT_DISCOVERY_PORT = 6040
+DEFAULT_LINK_PORT = 6041
+DEFAULT_FRAME_PORT = 6042
+DEFAULT_SYNC_PORT = 6043
+
 # Must match MAX_STRIP_PIXELS in src/hardware_profile.h
 MAX_DEVICE_PIXELS = 300
+# Must match UID_SIZE in src/device_identity.h (wire slot).
+MAX_UID_BYTES = 16
+
 DEFAULT_ANIMATIONS_PATH = str(REPO_ROOT / 'animations')
 DEFAULT_LOGS_PATH = str(REPO_ROOT / 'logs')
 
-_VALID_DEVICE_TYPES = {"sim", "esp32"}
+_PORT_FIELDS = ('discovery_port', 'link_port', 'frame_port', 'sync_port')
+_ESP_UID_RE = re.compile(r'^esp-[0-9a-f]{12}$')
+_STRIP_ID_RE = re.compile(r'^[A-Za-z0-9_-]+$')
 
 
 def _is_int(val) -> bool:
@@ -37,12 +54,36 @@ class ConfigError(ValueError):
     """Raised for invalid or missing config."""
 
 
+def validate_device_uid(device_uid: str) -> str | None:
+    """Check a UID against the wire policy (controller_v3.md § Identity).
+
+    Returns an error message, or None when the uid is acceptable.
+    """
+    if not isinstance(device_uid, str) or not device_uid:
+        return 'device_uid must be a non-empty string'
+    if len(device_uid.encode('utf-8', errors='replace')) > MAX_UID_BYTES:
+        return f'device_uid longer than {MAX_UID_BYTES} bytes: {device_uid!r}'
+    if not all(0x20 <= ord(c) <= 0x7E for c in device_uid):
+        return f'device_uid must be printable ASCII: {device_uid!r}'
+    if device_uid.startswith('sim-'):
+        if len(device_uid) == len('sim-'):
+            return f'sim uid must continue after "sim-": {device_uid!r}'
+        return None
+    if device_uid.startswith('esp-'):
+        if not _ESP_UID_RE.fullmatch(device_uid):
+            return f'esp uid must be esp-<12 lowercase hex>: {device_uid!r}'
+        return None
+    return f'device_uid must start with "sim-" or "esp-": {device_uid!r}'
+
+
 def default_config_doc() -> dict:
     """Return the default first-run config document."""
     return {
         "controller": {
-            "frame_port": DEFAULT_FRAME_PORT,
             "discovery_port": DEFAULT_DISCOVERY_PORT,
+            "link_port": DEFAULT_LINK_PORT,
+            "frame_port": DEFAULT_FRAME_PORT,
+            "sync_port": DEFAULT_SYNC_PORT,
         },
         "devices": [],
     }
@@ -105,20 +146,24 @@ def resolve_config_path(path: str | None = None) -> str:
 
 @dataclass
 class DeviceConfig:
-    device_id: int      # u16, wire protocol ID
-    device_uid: str     # unique hardware identifier (used by discovery)
-    device_type: str    # "sim" or "esp32"
-    host: str           # IP address
-    tcp_port: int       # TCP listen port
-    strip_id: str       # logical name (matches DSL)
-    length: int         # pixel count
+    device_uid: str        # the only device identifier (wire UID)
+    strip_id: str          # logical name the DSL routes by
+    length: int            # pixel count
+    label: str | None = None  # optional UI display string
+
+    @property
+    def device_type(self) -> str:
+        """'sim' or 'esp32', implied by the UID prefix."""
+        return 'sim' if self.device_uid.startswith('sim-') else 'esp32'
 
 
 @dataclass
 class Config:
-    frame_port: int             # UDP port for frame receipt
+    discovery_port: int
+    link_port: int
+    frame_port: int
+    sync_port: int
     devices: list[DeviceConfig]
-    discovery_port: int | None = None  # UDP port for HELLO packets; None disables
     animations_dir: str | None = None  # override for animations directory
     logs_dir: str | None = None        # override for logs directory
 
@@ -152,15 +197,28 @@ def load_config_obj(raw: dict) -> Config:
     if not isinstance(ctrl, dict):
         raise ConfigError("'controller' must be an object")
 
-    frame_port = ctrl.get("frame_port")
-    if frame_port is None:
-        raise ConfigError("missing 'controller.frame_port'")
-    if not _is_int(frame_port):
-        raise ConfigError("'controller.frame_port' must be an integer")
-    if not (1 <= frame_port <= 65535):
-        raise ConfigError(
-            f"'controller.frame_port' must be 1-65535, got {frame_port}"
-        )
+    defaults = default_config_doc()["controller"]
+    ports: dict[str, int] = {}
+    for field in _PORT_FIELDS:
+        if field not in ctrl:
+            ports[field] = defaults[field]
+            continue
+        value = ctrl[field]
+        if not _is_int(value):
+            raise ConfigError(f"'controller.{field}' must be an integer")
+        if not (1 <= value <= 65535):
+            raise ConfigError(f"'controller.{field}' must be 1-65535, got {value}")
+        ports[field] = value
+
+    seen_ports: dict[int, str] = {}
+    for field in _PORT_FIELDS:
+        previous = seen_ports.get(ports[field])
+        if previous is not None:
+            raise ConfigError(
+                f"'controller.{field}' duplicates 'controller.{previous}': "
+                f"{ports[field]}"
+            )
+        seen_ports[ports[field]] = field
 
     animations_dir = ctrl.get("animations_dir")
     if animations_dir is not None:
@@ -172,18 +230,6 @@ def load_config_obj(raw: dict) -> Config:
         if not isinstance(logs_dir, str):
             raise ConfigError("'controller.logs_dir' must be a string")
 
-    if "discovery_port" not in ctrl:
-        discovery_port = DEFAULT_DISCOVERY_PORT
-    else:
-        discovery_port = ctrl["discovery_port"]
-        if discovery_port is not None:
-            if not _is_int(discovery_port):
-                raise ConfigError("'controller.discovery_port' must be an integer or null")
-            if not (1 <= discovery_port <= 65535):
-                raise ConfigError(
-                    f"'controller.discovery_port' must be 1-65535, got {discovery_port}"
-                )
-
     # --- devices section ---
     devices_raw = raw.get("devices")
     if devices_raw is None:
@@ -191,115 +237,65 @@ def load_config_obj(raw: dict) -> Config:
     if not isinstance(devices_raw, list):
         raise ConfigError("'devices' must be a list")
 
-    _DEVICE_FIELDS = {
-        "device_id": int,
-        "device_uid": str,
-        "device_type": str,
-        "host": str,
-        "tcp_port": int,
-        "strip_id": str,
-        "length": int,
-    }
-
     devices: list[DeviceConfig] = []
-    seen_ids: set[int] = set()
     seen_uids: set[str] = set()
     strip_lengths_by_id: dict[str, int] = {}
-    seen_endpoints: set[tuple[str, int]] = set()
 
     for i, d in enumerate(devices_raw):
         if not isinstance(d, dict):
             raise ConfigError(f"devices[{i}] must be an object")
 
-        for field, typ in _DEVICE_FIELDS.items():
-            val = d.get(field)
-            if val is None:
-                raise ConfigError(f"devices[{i}] missing '{field}'")
-            if typ is int:
-                if not _is_int(val):
-                    raise ConfigError(
-                        f"devices[{i}].{field} must be {typ.__name__}"
-                    )
-            elif not isinstance(val, typ):
-                raise ConfigError(
-                    f"devices[{i}].{field} must be {typ.__name__}"
-                )
+        device_uid = d.get("device_uid")
+        uid_error = validate_device_uid(device_uid)
+        if uid_error is not None:
+            raise ConfigError(f"devices[{i}]: {uid_error}")
 
-        if not (0 <= d["device_id"] <= 0xFFFF):
+        strip_id = d.get("strip_id")
+        if not isinstance(strip_id, str) or not strip_id:
+            raise ConfigError(f"devices[{i}].strip_id must be a non-empty string")
+        if not _STRIP_ID_RE.fullmatch(strip_id):
             raise ConfigError(
-                f"devices[{i}].device_id must be 0-65535, got {d['device_id']}"
+                f"devices[{i}].strip_id may only contain letters, numbers, "
+                f"_ and -, got {strip_id!r}"
             )
 
-        if d["device_uid"] == "":
+        length = d.get("length")
+        if not _is_int(length):
+            raise ConfigError(f"devices[{i}].length must be an integer")
+        if not (1 <= length <= MAX_DEVICE_PIXELS):
             raise ConfigError(
-                f"devices[{i}].device_uid must be non-empty"
+                f"devices[{i}].length must be 1-{MAX_DEVICE_PIXELS}, got {length}"
             )
 
-        # When discovery is enabled, host="" and tcp_port=0 are valid sentinels
-        # meaning "awaiting discovery". Otherwise require real values.
-        _awaiting = discovery_port is not None and d["host"] == "" and d["tcp_port"] == 0
-        if not _awaiting:
-            if d["host"] == "" and discovery_port is not None:
-                raise ConfigError(
-                    f"devices[{i}]: host and tcp_port must both be empty "
-                    f"or both set when discovery is enabled"
-                )
-            if not (1 <= d["tcp_port"] <= 65535):
-                raise ConfigError(
-                    f"devices[{i}].tcp_port must be 1-65535, got {d['tcp_port']}"
-                )
-            if d["host"] == "":
-                raise ConfigError(
-                    f"devices[{i}].host must be non-empty"
-                )
+        label = d.get("label")
+        if label is not None and (not isinstance(label, str) or not label):
+            raise ConfigError(f"devices[{i}].label must be a non-empty string")
 
-        if not (1 <= d["length"] <= MAX_DEVICE_PIXELS):
-            raise ConfigError(
-                f"devices[{i}].length must be 1-{MAX_DEVICE_PIXELS}, got {d['length']}"
-            )
+        if device_uid in seen_uids:
+            raise ConfigError(f"duplicate device_uid: {device_uid!r}")
+        seen_uids.add(device_uid)
 
-        if d["device_type"] not in _VALID_DEVICE_TYPES:
-            raise ConfigError(
-                f"devices[{i}].device_type must be one of {_VALID_DEVICE_TYPES}, "
-                f"got {d['device_type']!r}"
-            )
-
-        if d["device_id"] in seen_ids:
-            raise ConfigError(f"duplicate device_id: {d['device_id']}")
-        seen_ids.add(d["device_id"])
-
-        if d["device_uid"] in seen_uids:
-            raise ConfigError(f"duplicate device_uid: {d['device_uid']!r}")
-        seen_uids.add(d["device_uid"])
-
-        existing_length = strip_lengths_by_id.get(d["strip_id"])
+        existing_length = strip_lengths_by_id.get(strip_id)
         if existing_length is None:
-            strip_lengths_by_id[d["strip_id"]] = d["length"]
-        elif existing_length != d["length"]:
+            strip_lengths_by_id[strip_id] = length
+        elif existing_length != length:
             raise ConfigError(
-                f"duplicate strip_id with different length: {d['strip_id']!r}"
+                f"duplicate strip_id with different length: {strip_id!r}"
             )
-
-        endpoint = (d["host"], d["tcp_port"])
-        if not _awaiting:
-            if endpoint in seen_endpoints:
-                raise ConfigError(
-                    f"duplicate endpoint: {d['host']}:{d['tcp_port']}"
-                )
-            seen_endpoints.add(endpoint)
 
         devices.append(DeviceConfig(
-            device_id=d["device_id"],
-            device_uid=d["device_uid"],
-            device_type=d["device_type"],
-            host=d["host"],
-            tcp_port=d["tcp_port"],
-            strip_id=d["strip_id"],
-            length=d["length"],
+            device_uid=device_uid,
+            strip_id=strip_id,
+            length=length,
+            label=label,
         ))
 
     return Config(
-        frame_port=frame_port, devices=devices,
-        discovery_port=discovery_port, animations_dir=animations_dir,
+        discovery_port=ports["discovery_port"],
+        link_port=ports["link_port"],
+        frame_port=ports["frame_port"],
+        sync_port=ports["sync_port"],
+        devices=devices,
+        animations_dir=animations_dir,
         logs_dir=logs_dir,
     )

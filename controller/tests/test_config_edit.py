@@ -1,4 +1,4 @@
-"""Tests for editor-side config helpers."""
+"""Tests for editor-side config helpers (v3 schema)."""
 
 import json
 
@@ -7,16 +7,18 @@ import pytest
 from elemctl.config import (
     DEFAULT_DISCOVERY_PORT,
     DEFAULT_FRAME_PORT,
+    DEFAULT_LINK_PORT,
+    DEFAULT_SYNC_PORT,
     ConfigError,
     load_config,
     load_config_obj,
 )
 from elemctl.config_edit import (
     add_device,
+    edit_device,
     ensure_editor_shape,
     load_config_doc,
     make_device_entry,
-    next_device_id,
     remove_device,
     save_config_doc,
 )
@@ -26,11 +28,7 @@ def test_load_config_obj_validates_raw_dict():
     cfg = load_config_obj({
         "controller": {"frame_port": 9002},
         "devices": [{
-            "device_id": 1,
             "device_uid": "sim-1",
-            "device_type": "sim",
-            "host": "",
-            "tcp_port": 0,
             "strip_id": "main",
             "length": 60,
         }],
@@ -42,8 +40,10 @@ def test_load_config_obj_validates_raw_dict():
 def test_load_config_doc_missing_returns_skeleton(tmp_path):
     path = tmp_path / "missing.json"
     doc = load_config_doc(str(path))
-    assert doc["controller"]["frame_port"] == DEFAULT_FRAME_PORT
     assert doc["controller"]["discovery_port"] == DEFAULT_DISCOVERY_PORT
+    assert doc["controller"]["link_port"] == DEFAULT_LINK_PORT
+    assert doc["controller"]["frame_port"] == DEFAULT_FRAME_PORT
+    assert doc["controller"]["sync_port"] == DEFAULT_SYNC_PORT
     assert doc["devices"] == []
 
 
@@ -56,33 +56,58 @@ def test_ensure_editor_shape_preserves_unknown_fields():
     out = ensure_editor_shape(doc)
     assert out["notes"]["owner"] == "mickey"
     assert out["controller"]["logs_dir"] == "~/logs"
-
-
-def test_next_device_id_uses_lowest_gap():
-    doc = ensure_editor_shape({
-        "controller": {"frame_port": 9002},
-        "devices": [
-            {"device_id": 2},
-            {"device_id": 4},
-        ],
-    })
-    assert next_device_id(doc) == 1
+    assert out["controller"]["frame_port"] == 9100
+    assert out["controller"]["link_port"] == DEFAULT_LINK_PORT
 
 
 def test_make_add_remove_device_entry():
     doc = load_config_doc("/nonexistent/config.json")
     entry = make_device_entry(
         device_uid="sim-1",
-        device_type="sim",
         strip_id="main",
         length=60,
-        device_id=1,
     )
     add_device(doc, entry)
-    assert doc["devices"][0]["host"] == ""
-    assert doc["devices"][0]["tcp_port"] == 0
+    assert doc["devices"][0] == {
+        "device_uid": "sim-1",
+        "strip_id": "main",
+        "length": 60,
+    }
     remove_device(doc, "sim-1")
     assert doc["devices"] == []
+
+
+def test_make_device_entry_with_label():
+    entry = make_device_entry(
+        device_uid="esp-aabbccddeeff",
+        strip_id="porch",
+        length=30,
+        label="porch rail",
+    )
+    assert entry["label"] == "porch rail"
+
+
+def test_edit_device_updates_fields_and_label():
+    doc = load_config_doc("/nonexistent/config.json")
+    add_device(doc, make_device_entry(
+        device_uid="sim-1", strip_id="main", length=60, label="old"))
+
+    edit_device(
+        doc, "sim-1",
+        device_uid="sim-2", strip_id="left", length=30, label="new",
+    )
+    assert doc["devices"][0] == {
+        "device_uid": "sim-2",
+        "strip_id": "left",
+        "length": 30,
+        "label": "new",
+    }
+
+    edit_device(doc, "sim-2", device_uid="sim-2", strip_id="left", length=30)
+    assert "label" not in doc["devices"][0]
+
+    with pytest.raises(ConfigError, match="device not found"):
+        edit_device(doc, "sim-1", device_uid="sim-3", strip_id="x", length=1)
 
 
 def test_remove_missing_device_raises():
@@ -96,15 +121,10 @@ def test_save_config_doc_writes_valid_json_and_preserves_unknown_fields(tmp_path
     doc = {
         "controller": {
             "frame_port": 9002,
-            "discovery_port": 6040,
             "logs_dir": "~/logs",
         },
         "devices": [{
-            "device_id": 1,
             "device_uid": "sim-1",
-            "device_type": "sim",
-            "host": "",
-            "tcp_port": 0,
             "strip_id": "main",
             "length": 60,
             "label": "left sim",
@@ -119,6 +139,18 @@ def test_save_config_doc_writes_valid_json_and_preserves_unknown_fields(tmp_path
 
     cfg = load_config(str(path))
     assert cfg.devices[0].device_uid == "sim-1"
+    assert cfg.devices[0].label == "left sim"
+
+
+def test_save_config_doc_rejects_invalid_doc(tmp_path):
+    path = tmp_path / "config.json"
+    doc = {
+        "controller": {},
+        "devices": [{"device_uid": "bogus", "strip_id": "main", "length": 60}],
+    }
+    with pytest.raises(ConfigError):
+        save_config_doc(str(path), doc)
+    assert not path.exists()
 
 
 def test_save_config_doc_allows_empty_devices(tmp_path):
