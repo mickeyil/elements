@@ -204,10 +204,13 @@ works without it.
   a previous load; the v3 preview packet carries only `frame_index`,
   which resets on load. Likely sufficient: clear assembly buckets on
   `LOAD`/`JUMP` and tolerate one stale packet. Not yet decided.
-- **Sync visibility.** The controller no longer measures offsets, so
-  the UI clock columns lose their data source until
-  `QueryDeviceStatus` grows sync fields (`synced_clock.md` open
-  item). What the UIs show until then is undecided.
+- **Sync visibility (resolved).** The controller no longer measures
+  offsets, so the per-device clock columns read from the device's own
+  `QueryDeviceStatus` report (a synced flag plus offset, RTT, and
+  last-sync age) rather than a controller measurement; the controller
+  polls it on a steady cadence. The field plumbing (firmware +
+  `wire.py`) can land before the service rewrite wires the columns.
+  See `synced_clock.md`.
 - **`target_fps` / `requires_sync` transport** to the controller:
   `CompiledManifest` fields or blob-header parsing. The headroom rule
   needs `target_fps`. Tracked in `compiler.md`.

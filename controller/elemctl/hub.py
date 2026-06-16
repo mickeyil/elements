@@ -325,6 +325,7 @@ class LinkServer:
         self._links.clear()
 
     def _accept(self, now_us):
+        # loop until the queue is empty (non-blocking accept)
         while True:
             try:
                 conn, _addr = self._sock.accept()

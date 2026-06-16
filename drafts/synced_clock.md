@@ -114,8 +114,13 @@ per-device offset/RTT telemetry; see open items.
 
 ## Open items
 
-- **Sync status push** so the operator dashboard is not dark; probably
-  extra fields in the `QueryDeviceStatus` ACK, not a new opcode.
+- **Sync status reporting (resolved).** The device reports its own sync
+  health in the `QueryDeviceStatus` ACK: a synced flag plus offset, RTT,
+  and last-sync age as a duration, which is clock-agnostic. The device is
+  now the only party that computes the offset, and the controller cannot
+  recover it from the PINGs it answers (it never sees t4), so the device
+  report is the authoritative source. The controller polls on a steady
+  cadence, so the dashboard refreshes at human speed.
 - **Schedule jitter at scale.** Add a small random offset (±2 s) to
   steady-mode pings if a single LAN ever carries more than ~20
   devices, so rounds do not synchronize into contention spikes.
