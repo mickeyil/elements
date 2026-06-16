@@ -65,18 +65,19 @@ class HubPoll:
 
 
 def _advertised_ip_toward(src_ip):
-    """The local address a device at src_ip can reach us on.
+    """Pick which of our local IPs a device at src_ip should connect back to.
 
-    A connected UDP socket runs a route lookup without sending
-    anything; getsockname() then reports the interface the kernel
-    would use. Returns None when src_ip is unroutable.
+    On a machine with several network interfaces, the right answer depends
+    on where the device is. Connecting a UDP socket triggers the kernel's
+    route lookup without sending any packet; getsockname() then reveals the
+    local IP it picked. Returns None when there's no route to src_ip.
     """
     probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
-        probe.connect((src_ip, 1))
-        return probe.getsockname()[0]
+        probe.connect((src_ip, 1))     # route lookup only; UDP sends nothing
+        return probe.getsockname()[0]  # the source address the route chose
     except OSError:
-        return None
+        return None                    # no route to src_ip
     finally:
         probe.close()
 
