@@ -126,3 +126,5 @@ class CompiledManifest:
     duration: float
     strips: dict[str, CompiledStripArtifact]   # keyed by strip_id; unique
     safe_intervals: list[tuple[float, float]]
+    target_fps: int = 50          # program-level pacing hint, Hz; mirrored in every blob header
+    requires_sync: bool = False   # program-level; mirrored in every blob header
