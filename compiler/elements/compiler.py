@@ -10,9 +10,9 @@ Pipeline:
     6. Validation (late)  — timing checks
     7. Safe interval analysis — dependency-aware per-strip safe intervals
     8. Param resolution   — resolve animation params to binary-ready values
-    9. Blob emission      — serialize to the v3 binary format
+    9. Blob emission      — serialize to the binary blob format
 
-The byte layout lives in blob_v3 (docs/blob_format.md), enforced by
+The byte layout lives in blob.py (docs/blob_format.md), enforced by
 src/decoder.cpp. Structural caps mirror src/blob_limits.h via limits.py.
 """
 
@@ -29,7 +29,7 @@ from .types import (
     CHANNELS, DIRECTIONS,
     CompiledStripArtifact, CompiledManifest, MemoryEstimate,
 )
-from .blob_v3 import (
+from .blob import (
     BlobProgram, BlobLayer, BlobEvent, PixelViewSpec, CopyOpSpec,
     emit_blob, pack_params, PIXV_NONE,
 )

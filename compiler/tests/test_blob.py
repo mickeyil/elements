@@ -1,4 +1,4 @@
-"""Round-trip and byte-layout tests for the v3 blob emitter.
+"""Round-trip and byte-layout tests for the blob emitter.
 
 Verifies the serializer against docs/blob_format.md (offsets, flags,
 section order) and against its own decoder. Byte-for-byte agreement with
@@ -9,7 +9,7 @@ import struct
 
 import pytest
 
-from elements.blob_v3 import (
+from elements.blob import (
     BlobProgram, BlobLayer, BlobEvent, PixelViewSpec, CopyOpSpec,
     emit_blob, decode_blob, pack_params, decode_params,
     BLOB_MAGIC, BLOB_VERSION, PIXV_NONE,

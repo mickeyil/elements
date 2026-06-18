@@ -14,7 +14,7 @@ asserts these stay in sync.
 from __future__ import annotations
 
 from .types import MemoryEstimate
-from .blob_v3 import BlobProgram, ANIM_WAVE, ANIM_SHIFT, ANIM_SPARK, ANIM_PAINT
+from .blob import BlobProgram, ANIM_WAVE, ANIM_SHIFT, ANIM_SPARK, ANIM_PAINT
 
 # esp32 sizeof, verified against the xtensa toolchain.
 _HSVA_BYTES = 16          # hsva_t (4 floats); also the pool element size

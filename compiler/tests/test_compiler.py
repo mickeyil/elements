@@ -14,7 +14,7 @@ import pytest
 
 from elements.dsl import *
 from elements.dsl import _builder
-from elements.blob_v3 import (
+from elements.blob import (
     decode_blob, decode_params, PIXV_NONE,
     ANIM_WAVE, ANIM_SHIFT, ANIM_SPARK, ANIM_PAINT,
 )

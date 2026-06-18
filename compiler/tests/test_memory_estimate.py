@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from elements.dsl import *
-from elements.blob_v3 import decode_blob
+from elements.blob import decode_blob
 from elements.memory_estimate import estimate_memory, format_report
 from elements import memory_estimate as me
 

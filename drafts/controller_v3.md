@@ -344,7 +344,7 @@ not; "delete" means the reason to exist is gone.
 | `run.py`                 | delete? | one-shot runner; open item above                           |
 | compiler `dsl.py` / `types.py` | update | builder keeps; `target_fps` / `requires_sync` declarations land here |
 | compiler `compiler.py`   | rewrite | validation and time resolution keep; planning and analysis are v3 (`compiler.md`) |
-| compiler `blob.py`       | rewrite | v2 byte format; v3 is `docs/blob_format.md`                |
+| compiler `blob.py`       | updated | v3 byte format; source of truth is `docs/blob_format.md`   |
 
 Notes that did not fit the table:
 

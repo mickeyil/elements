@@ -536,7 +536,7 @@ if(BUILD_TESTS)
         set(FIXTURE_OUT_DIR ${CMAKE_BINARY_DIR}/test/fixtures)
         set(COMPILER_SOURCES
             ${CMAKE_SOURCE_DIR}/compiler/elements/compiler.py
-            ${CMAKE_SOURCE_DIR}/compiler/elements/blob_v3.py
+            ${CMAKE_SOURCE_DIR}/compiler/elements/blob.py
             ${CMAKE_SOURCE_DIR}/compiler/elements/types.py
             ${CMAKE_SOURCE_DIR}/compiler/elements/dsl.py
             ${CMAKE_SOURCE_DIR}/compiler/elements/limits.py
