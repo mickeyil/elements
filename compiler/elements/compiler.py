@@ -659,16 +659,18 @@ def compile_manifest(strips: list[StripDef], events: list[dict],
     # 2. Time resolution — global, strip-independent
     _resolve_times(events, beat, duration)
 
-    # 3–9. Per-strip pipeline; iterate input strips for canonical order
+    # 3–9. Per-strip pipeline; iterate input strips for canonical order.
+    # Strip names are unique (enforced in _validate_early), so keying the
+    # artifacts by strip_id never collides; insertion order stays canonical.
     by_strip = _partition_by_strip(events)
-    strip_artifacts = []
+    strip_artifacts = {}
     per_strip_intervals = []
     for s in strips:
         strip_events = by_strip.get(s.name, [])
         blob, intervals = _compile_strip(strip_events, duration)
-        strip_artifacts.append(CompiledStripArtifact(
+        strip_artifacts[s.name] = CompiledStripArtifact(
             strip_id=s.name, length=s.length, blob=blob,
-        ))
+        )
         per_strip_intervals.append(intervals)
 
     # Global safe interval intersection
@@ -690,4 +692,4 @@ def compile_program(strips: list[StripDef], events: list[dict],
                     beat: float, duration: float) -> dict[str, bytes]:
     """Full compile pipeline: returns one binary blob per strip."""
     manifest = compile_manifest(strips, events, beat, duration)
-    return {s.strip_id: s.blob for s in manifest.strips}
+    return {a.strip_id: a.blob for a in manifest.strips.values()}

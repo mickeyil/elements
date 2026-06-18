@@ -68,7 +68,7 @@ class Target:
     """The desired end state for one member. Replaced wholesale by the
     session verbs; a member reaches it command by command."""
     intent: Intent
-    program_token: tuple = None      # (session_id, slot_index); None when DETACHED
+    program_token: tuple = None      # (session_id, strip_id); None when DETACHED
     blob: bytes = None               # the compiled strip the device should load
     strip_length: int = 0
     anchor_us: int = 0               # program_start_us, for PLAYING
@@ -179,71 +179,69 @@ class Session:
         self.program_start_us = 0
         self.manifest = None
 
-    def load(self, manifest, target_groups=None):
-        """Commit a new desired session immediately: a fresh session_id, a
-        reset epoch, and every member retargeted to its compiled strip. This
-        is not transactional; a member that later fails its join becomes an
-        errored non-serving member rather than rolling back the session.
+    def load(self, manifest):
+        """Commit a new desired session: a fresh session_id, a reset epoch, and
+        every member retargeted to its compiled strip. The routing is checked
+        first, so an unroutable load (a strip no device serves, or one compiled
+        for more pixels than the device has) raises before any session state
+        changes and is therefore a no-op. Commitment is not transactional only
+        afterward: a member that later fails its join becomes an errored
+        non-serving member rather than rolling back.
 
-        target_groups, when given, is slot-aligned: target_groups[slot] lists
-        the uids serving that manifest slot. Omitted, the assignment is
-        derived by matching each device's strip_id to a slot, which is only
-        valid when no strip_id repeats in the manifest (composed manifests
-        do repeat them, so they must pass target_groups)."""
+        Routing is by strip_id: each device loads the manifest strip whose
+        strip_id matches its own, and several devices may share a strip_id and
+        all load that one strip (mirroring). A device whose strip_id is absent
+        from the manifest detaches. strip_id is unique per manifest (the
+        compiler enforces it), so the match is always unambiguous."""
+        self._check_all_strips_served(manifest)
+        self._check_geometry(manifest)
+
         self.manifest = manifest
         self.session_id += 1
         self.epoch = 0
         self.program_start_us = 0
         self.state = SessionState.LOADED
 
-        slot_for_uid = self._resolve_slots(manifest, target_groups)
         for uid, member in self._members.items():
-            slot_index = slot_for_uid.get(uid)
-            if slot_index is None:
+            artifact = manifest.strips.get(member.strip_id)
+            if artifact is None:
                 member.set_target(Target(intent=Intent.DETACHED))
                 continue
-            strip = manifest.strips[slot_index]
             member.set_target(Target(
                 intent=Intent.READY,
-                program_token=(self.session_id, slot_index),
-                blob=strip.blob,
-                strip_length=strip.length,
+                program_token=(self.session_id, member.strip_id),
+                blob=artifact.blob,
+                strip_length=artifact.length,
             ))
 
-    def _resolve_slots(self, manifest, target_groups):
-        """Map each member uid to the manifest slot it should load (or omit
-        it when it serves no slot). Raises on an unroutable assignment."""
-        if target_groups is not None:
-            return self._slots_from_groups(target_groups)
-        return self._slots_by_strip_id(manifest)
+    def _check_all_strips_served(self, manifest):
+        """Every manifest strip must be served by at least one device. A strip
+        whose strip_id no configured device carries is a routing mistake (a
+        typo'd strip_id or a device missing from the config), not a strip to
+        silently drop."""
+        served = {member.strip_id for member in self._members.values()}
+        for strip_id in manifest.strips:
+            if strip_id not in served:
+                raise ValueError(f'no configured device serves strip_id {strip_id!r}')
 
-    def _slots_from_groups(self, target_groups):
-        slot_for_uid = {}
-        for slot_index, uids in enumerate(target_groups):
-            for uid in uids:
-                if uid in slot_for_uid:
-                    raise ValueError(
-                        f'device {uid!r} assigned to two manifest slots '
-                        f'({slot_for_uid[uid]} and {slot_index})'
-                    )
-                slot_for_uid[uid] = slot_index
-        return slot_for_uid
+    def _check_geometry(self, manifest):
+        """Reject a strip compiled for more pixels than the device physically
+        has; a shorter strip is allowed, since the DSL permits an authored
+        length up to (not only equal to) the configured one.
 
-    def _slots_by_strip_id(self, manifest):
-        slots_by_strip = {}
-        for slot_index, strip in enumerate(manifest.strips):
-            slots_by_strip.setdefault(strip.strip_id, []).append(slot_index)
-        slot_for_uid = {}
-        for uid, member in self._members.items():
-            slots = slots_by_strip.get(member.strip_id, [])
-            if len(slots) > 1:
+        Round B note: this assumes SET_PROFILE will adopt the blob's own
+        length, so the device decoder's exact strip_length match still holds
+        for a shorter blob. If SET_PROFILE instead sends the configured length,
+        a shorter blob would fail on the device, and the rule here (and in the
+        DSL) must tighten to an exact match."""
+        for member in self._members.values():
+            artifact = manifest.strips.get(member.strip_id)
+            if artifact is not None and artifact.length > member.strip_length:
                 raise ValueError(
-                    f'strip_id {member.strip_id!r} appears in {len(slots)} '
-                    f'manifest slots; pass target_groups to route it'
+                    f'device {member.uid!r} ({member.strip_length} px) cannot '
+                    f'serve strip_id {member.strip_id!r} compiled for '
+                    f'{artifact.length} px'
                 )
-            if slots:
-                slot_for_uid[uid] = slots[0]
-        return slot_for_uid
 
     def tick(self):
         """One loop iteration: drain the hub, apply lifecycle events, and

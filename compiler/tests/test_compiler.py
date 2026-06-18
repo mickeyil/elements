@@ -717,7 +717,7 @@ class TestSafeIntervals:
         wa.schedule(sa.pixels("0-4"), at=0, duration=1)
         wc.schedule(sc.pixels("0-4"), at=0, duration=1)
         m = build_manifest(beat=1.0, duration=2.0)
-        assert [s.strip_id for s in m.strips] == ["si_ord_c", "si_ord_a", "si_ord_b"]
+        assert list(m.strips) == ["si_ord_c", "si_ord_a", "si_ord_b"]
 
     def test_manifest_includes_eventless_strips(self):
         """Eventless strips get a valid zero-layer blob."""
@@ -727,9 +727,8 @@ class TestSafeIntervals:
         w.schedule(sa.pixels("0-4"), at=0, duration=1)
         m = build_manifest(beat=1.0, duration=2.0)
         assert len(m.strips) == 2
-        assert m.strips[0].strip_id == "si_has"
-        assert m.strips[1].strip_id == "si_empty"
-        assert len(m.strips[1].blob) > 0  # valid blob, not empty
+        assert list(m.strips) == ["si_has", "si_empty"]
+        assert len(m.strips["si_empty"].blob) > 0  # valid blob, not empty
 
     def test_backwards_compatibility(self):
         """compile_program() and build() still return dict[str, bytes]."""

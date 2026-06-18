@@ -124,5 +124,5 @@ class CompiledStripArtifact:
 @dataclass
 class CompiledManifest:
     duration: float
-    strips: list[CompiledStripArtifact]
+    strips: dict[str, CompiledStripArtifact]   # keyed by strip_id; unique
     safe_intervals: list[tuple[float, float]]

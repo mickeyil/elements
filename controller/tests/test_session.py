@@ -53,8 +53,8 @@ DISTINCT_STRIPS = [
     DeviceConfig(device_uid='sim-b', strip_id='right', length=30),
 ]
 
-# Two devices sharing one strip_id (legal when lengths match), the case a
-# composed manifest repeats across slots; needs explicit target_groups.
+# Two devices sharing one strip_id (legal when lengths match): both load the
+# same compiled strip, the mirroring case (e.g. an esp and a sim side by side).
 SHARED_STRIP = [
     DeviceConfig(device_uid='sim-a', strip_id='wall', length=30),
     DeviceConfig(device_uid='sim-b', strip_id='wall', length=30),
@@ -68,13 +68,13 @@ def make_session(device_configs=DISTINCT_STRIPS):
 
 
 def make_manifest(*strips, duration=10.0):
-    """strips: (strip_id, length, blob) tuples."""
+    """strips: (strip_id, length, blob) tuples; strip_id is unique per manifest."""
     return CompiledManifest(
         duration=duration,
-        strips=[
-            CompiledStripArtifact(strip_id=sid, length=length, blob=blob)
+        strips={
+            sid: CompiledStripArtifact(strip_id=sid, length=length, blob=blob)
             for sid, length, blob in strips
-        ],
+        },
         safe_intervals=[(0.0, duration)],
     )
 
@@ -195,8 +195,8 @@ def test_load_sets_session_id_epoch_state_and_targets():
     assert left.intent is Intent.READY
     assert left.blob == b'L'
     assert left.strip_length == 30
-    assert left.program_token == (1, 0)
-    assert right.program_token == (1, 1)
+    assert left.program_token == (1, 'left')
+    assert right.program_token == (1, 'right')
 
 
 def test_load_detaches_member_with_no_matching_strip():
@@ -207,38 +207,50 @@ def test_load_detaches_member_with_no_matching_strip():
     assert session.member('sim-b').target.intent is Intent.DETACHED
 
 
-def test_load_target_groups_route_repeated_strip_id():
+def test_load_mirrors_shared_strip_id():
+    # Two devices configured with the same strip_id both load the one strip.
     session, _hub = make_session(SHARED_STRIP)
-    manifest = make_manifest(('wall', 30, b'A'), ('wall', 30, b'B'))
-    session.load(manifest, target_groups=[['sim-a'], ['sim-b']])
+    session.load(make_manifest(('wall', 30, b'W')))
 
-    assert session.member('sim-a').target.program_token == (1, 0)
-    assert session.member('sim-a').target.blob == b'A'
-    assert session.member('sim-b').target.program_token == (1, 1)
-    assert session.member('sim-b').target.blob == b'B'
+    a = session.member('sim-a').target
+    b = session.member('sim-b').target
+    assert a.intent is b.intent is Intent.READY
+    assert a.blob == b.blob == b'W'
+    assert a.program_token == b.program_token == (1, 'wall')
 
 
-def test_load_target_groups_detaches_ungrouped_member():
-    session, _hub = make_session(SHARED_STRIP)
-    manifest = make_manifest(('wall', 30, b'A'), ('wall', 30, b'B'))
-    session.load(manifest, target_groups=[['sim-a'], []])
-
+def test_load_allows_strip_shorter_than_device():
+    # A blob compiled for fewer pixels than the device has is legal; the DSL
+    # allows an authored length below the configured one, so only longer fails.
+    session, _hub = make_session()                       # sim-a 'left', 30 px
+    session.load(make_manifest(('left', 10, b'L'), ('right', 30, b'R')))
     assert session.member('sim-a').target.intent is Intent.READY
-    assert session.member('sim-b').target.intent is Intent.DETACHED
+    assert session.member('sim-a').target.strip_length == 10
 
 
-def test_load_target_groups_reject_a_uid_in_two_slots():
-    session, _hub = make_session(SHARED_STRIP)
-    manifest = make_manifest(('wall', 30, b'A'), ('wall', 30, b'B'))
+def test_load_rejects_strip_longer_than_device():
+    # 'left' compiled for 60 px, but sim-a is a 30 px device.
+    session, _hub = make_session()
     with pytest.raises(ValueError):
-        session.load(manifest, target_groups=[['sim-a'], ['sim-a']])
+        session.load(make_manifest(('left', 60, b'X')))
 
 
-def test_load_default_mapping_rejects_ambiguous_strip_id():
-    session, _hub = make_session(SHARED_STRIP)
-    manifest = make_manifest(('wall', 30, b'A'), ('wall', 30, b'B'))
+def test_load_rejects_unserved_manifest_strip():
+    # A manifest strip whose strip_id no configured device carries is an error,
+    # not a silent drop (a typo, or a device missing from the config).
+    session, _hub = make_session()                       # devices: left, right
     with pytest.raises(ValueError):
-        session.load(manifest)   # no target_groups: 'wall' maps to two slots
+        session.load(make_manifest(('left', 30, b'L'), ('ghost', 30, b'G')))
+
+
+def test_rejected_load_leaves_session_untouched():
+    session, _hub = make_session()
+    with pytest.raises(ValueError):
+        session.load(make_manifest(('left', 30, b'L'), ('ghost', 30, b'G')))
+    # Routing was rejected before any commit: nothing moved.
+    assert session.session_id == 0
+    assert session.state is SessionState.IDLE
+    assert session.member('sim-a').target.intent is Intent.DETACHED
 
 
 def test_load_is_non_transactional_and_reassigns_each_time():

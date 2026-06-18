@@ -377,7 +377,7 @@ class TestRenderStripBinary:
         prog = tmp_path / 'prog.py'
         prog.write_text(_SPARK_DSL)
         manifest = compile_dsl(prog, beat=0.5, duration=0.5)
-        art = manifest.strips[0]
+        art = next(iter(manifest.strips.values()))
         raw = run_strip_render(art.blob, art.length, 50)
         frames = parse_strip_output(raw, art.length)
         assert len(frames) >= 1
@@ -391,7 +391,7 @@ class TestRenderStripBinary:
         prog = tmp_path / 'prog.py'
         prog.write_text(_SPARK_DSL)
         manifest = compile_dsl(prog, beat=0.5, duration=0.5)
-        art = manifest.strips[0]
+        art = next(iter(manifest.strips.values()))
         raw = run_strip_render(art.blob, art.length, 50)
         frames = parse_strip_output(raw, art.length)
         projected = project_channels(frames, art.length, ['V'])
@@ -405,7 +405,7 @@ class TestRenderStripBinary:
         prog = tmp_path / 'prog.py'
         prog.write_text(_SPARK_DSL)
         manifest = compile_dsl(prog, beat=0.5, duration=0.5)
-        art = manifest.strips[0]
+        art = next(iter(manifest.strips.values()))
         raw = run_strip_render(art.blob, art.length, 60)
         frames = parse_strip_output(raw, art.length)
         assert len(frames) >= 1
