@@ -27,12 +27,13 @@ from .types import (
     SecMarker, AnimDef, PixelGroup, StripDef, COLORS,
     ANIM_TYPES, TIME_PARAMS, REQUIRED_PARAMS, STATEFUL_TYPES,
     CHANNELS, DIRECTIONS,
-    CompiledStripArtifact, CompiledManifest,
+    CompiledStripArtifact, CompiledManifest, MemoryEstimate,
 )
 from .blob_v3 import (
     BlobProgram, BlobLayer, BlobEvent, PixelViewSpec, CopyOpSpec,
     emit_blob, pack_params, PIXV_NONE,
 )
+from .memory_estimate import estimate_memory
 from . import limits
 
 # Bytes per HSVA pixel in the device pixel pool (matches sizeof(hsva_t)).
@@ -834,8 +835,8 @@ def _check_caps(strip_length: int, buffer_sizes: list[int],
 
 def _compile_strip(strip_events: list[dict], strip_length: int, duration: float,
                    target_fps: int, requires_sync: bool
-                   ) -> tuple[bytes, list[tuple[float, float]]]:
-    """Run the per-strip pipeline. Returns (blob, safe_intervals)."""
+                   ) -> tuple[bytes, list[tuple[float, float]], MemoryEstimate]:
+    """Run the per-strip pipeline. Returns (blob, safe_intervals, memory)."""
     layers = _infer_layers(strip_events)
     _resolve_sources(strip_events, layers)
     _validate_late(strip_events, duration)
@@ -865,7 +866,7 @@ def _compile_strip(strip_events: list[dict], strip_length: int, duration: float,
         copy_ops=copy_ops, layers=blob_layers,
     )
     safe_intervals = _find_safe_intervals(strip_events, duration)
-    return emit_blob(program), safe_intervals
+    return emit_blob(program), safe_intervals, estimate_memory(program)
 
 
 # ---------------------------------------------------------------------------
@@ -917,10 +918,10 @@ def compile_manifest(strips: list[StripDef], events: list[dict],
     per_strip_intervals = []
     for s in strips:
         strip_events = by_strip.get(s.name, [])
-        blob, intervals = _compile_strip(strip_events, s.length, duration,
-                                         target_fps, requires_sync)
+        blob, intervals, memory = _compile_strip(strip_events, s.length, duration,
+                                                 target_fps, requires_sync)
         strip_artifacts[s.name] = CompiledStripArtifact(
-            strip_id=s.name, length=s.length, blob=blob,
+            strip_id=s.name, length=s.length, blob=blob, memory=memory,
         )
         per_strip_intervals.append(intervals)
 
