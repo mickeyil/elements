@@ -130,6 +130,15 @@ def drive_to_loaded(session, hub, uid='sim-a', blob=b'M'):
     on_ack(ack_ok())                    # blob loaded; member parked at LOADED
 
 
+def drive_to_playing(session, hub, uid='sim-a'):
+    """Bring the device to LOADED, then play() and ACK the Start: PLAYING."""
+    drive_to_loaded(session, hub, uid=uid)
+    session.play()
+    tick(session)
+    _, on_ack = hub.last_send(uid)
+    on_ack(ack_ok())
+
+
 # ---------------------------------------------------------------------------
 # Starting state
 # ---------------------------------------------------------------------------
@@ -641,7 +650,7 @@ def test_play_while_playing_is_refused():
     session.play()
     tick(session)
     _, on_ack = hub.last_send('sim-a'); on_ack(ack_ok())   # actually PLAYING
-    with pytest.raises(ValueError, match='stopped first'):
+    with pytest.raises(ValueError, match='only valid from a loaded'):
         session.play()
 
 
@@ -743,6 +752,211 @@ def test_terminal_block_survives_play_stop_but_clears_on_load():
     # A fresh load is a new program: the block clears.
     session.load(make_manifest(('main', 30, b'M2')))
     assert session.member('sim-a').blocked is None
+
+
+def test_pause_sends_pause_and_resume_sends_resume():
+    session, hub = make_session(SINGLE)
+    drive_to_playing(session, hub)
+
+    session.pause()
+    assert session.state is SessionState.PAUSED
+    tick(session)
+    op, on_ack = hub.last_send('sim-a')
+    assert op == wire.CMD_PAUSE
+    on_ack(ack_ok())
+    assert session.member('sim-a').phase is DeviceState.PAUSED
+
+    session.resume()
+    assert session.state is SessionState.PLAYING
+    tick(session)
+    op, on_ack = hub.last_send('sim-a')
+    assert op == wire.CMD_RESUME
+    on_ack(ack_ok())
+    assert session.member('sim-a').phase is DeviceState.PLAYING
+
+
+def test_pause_requires_playing():
+    session, hub = make_session(SINGLE)
+    drive_to_loaded(session, hub)            # LOADED, not playing
+    with pytest.raises(ValueError, match='playing'):
+        session.pause()
+
+
+def test_resume_requires_paused():
+    session, hub = make_session(SINGLE)
+    drive_to_playing(session, hub)
+    with pytest.raises(ValueError, match='paused'):
+        session.resume()
+
+
+def test_pause_captures_cursor_and_resume_reanchors():
+    session, hub = make_session(SINGLE)
+    drive_to_playing(session, hub)
+    session._clock_us.now_us += 2_000_000   # 2s of playback
+    session.pause()
+    assert session.cursor_us == 2_000_000
+    tick(session)
+    _, on_ack = hub.last_send('sim-a'); on_ack(ack_ok())   # settle: PAUSED
+
+    session._clock_us.now_us += 5_000_000   # idle while paused
+    session.resume()
+    # program time continues from the cursor: now - anchor == cursor.
+    assert session._clock_us() - session.program_start_us == session.cursor_us
+
+
+def test_resume_refused_before_pause_settles():
+    session, hub = make_session(SINGLE)
+    drive_to_playing(session, hub)
+    session.pause()                          # no tick: no Pause sent, still PLAYING
+    with pytest.raises(ValueError, match='settle'):
+        session.resume()
+
+
+def test_resume_refused_while_pause_in_flight():
+    session, hub = make_session(SINGLE)
+    drive_to_playing(session, hub)
+    session.pause()
+    tick(session)
+    op, on_ack = hub.last_send('sim-a')
+    assert op == wire.CMD_PAUSE               # Pause in flight, unacked
+    with pytest.raises(ValueError, match='settle'):
+        session.resume()
+    on_ack(ack_ok())                          # now actually PAUSED
+    session.resume()
+    tick(session)
+    op, _ = hub.last_send('sim-a')
+    assert op == wire.CMD_RESUME
+
+
+def test_play_from_paused_is_refused():
+    session, hub = make_session(SINGLE)
+    drive_to_playing(session, hub)
+    session.pause()
+    with pytest.raises(ValueError, match='only valid from a loaded'):
+        session.play()
+
+
+def test_pause_refused_before_play_starts():
+    # play(); pause() before the Start is even sent would clear the cohort's
+    # start authorization and strand the device at LOADED.
+    session, hub = make_session(SINGLE)
+    drive_to_loaded(session, hub)
+    session.play()                            # cohort authorized, Start not sent
+    with pytest.raises(ValueError, match='settle'):
+        session.pause()
+
+
+def test_pause_refused_while_start_in_flight():
+    session, hub = make_session(SINGLE)
+    drive_to_loaded(session, hub)
+    session.play()
+    tick(session)
+    op, on_ack = hub.last_send('sim-a')
+    assert op == wire.CMD_START               # in flight, unacked
+    with pytest.raises(ValueError, match='settle'):
+        session.pause()
+    on_ack(ack_ok())                          # now actually PLAYING
+    session.pause()                           # ok
+    tick(session)
+    op, _ = hub.last_send('sim-a')
+    assert op == wire.CMD_PAUSE
+
+
+def test_pause_refused_before_resume_settles():
+    session, hub = make_session(SINGLE)
+    drive_to_playing(session, hub)
+    session.pause()
+    tick(session)
+    _, on_ack = hub.last_send('sim-a'); on_ack(ack_ok())   # settle: PAUSED
+    session.resume()                          # state PLAYING, Resume not sent yet
+    with pytest.raises(ValueError, match='settle'):
+        session.pause()
+
+
+def test_pause_refused_while_resume_in_flight():
+    session, hub = make_session(SINGLE)
+    drive_to_playing(session, hub)
+    session.pause()
+    tick(session)
+    _, on_ack = hub.last_send('sim-a'); on_ack(ack_ok())   # PAUSED
+    session.resume()
+    tick(session)
+    op, on_ack = hub.last_send('sim-a')
+    assert op == wire.CMD_RESUME              # Resume in flight, unacked
+    with pytest.raises(ValueError, match='settle'):
+        session.pause()
+    on_ack(ack_ok())                          # now actually PLAYING
+    session.pause()
+    tick(session)
+    op, _ = hub.last_send('sim-a')
+    assert op == wire.CMD_PAUSE
+
+
+def test_play_refused_from_paused_even_when_member_detached():
+    # A detached member used to let play() slip the unsettled guard from a
+    # PAUSED session and wipe the paused cursor; play() is now refused on state.
+    session, hub = make_session(SINGLE)
+    drive_to_playing(session, hub)
+    session._clock_us.now_us += 1_000_000
+    session.pause()
+    tick(session)
+    _, on_ack = hub.last_send('sim-a'); on_ack(ack_ok())   # PAUSED
+    cursor = session.cursor_us
+
+    hub.emit(DeviceDisconnected(uid='sim-a', reason='dropped'))
+    tick(session)
+    with pytest.raises(ValueError, match='only valid from a loaded'):
+        session.play()
+    assert session.cursor_us == cursor                     # paused cursor preserved
+
+
+def test_unsynced_start_does_not_block_pause():
+    # A device that keeps refusing Start (Unsynced) must not block pausing the
+    # rest of a running show; a surfaced refusal releases the pause guard.
+    session, hub = make_session(SINGLE)
+    drive_to_loaded(session, hub)
+    session.play()
+    tick(session)
+    op, on_ack = hub.last_send('sim-a')
+    assert op == wire.CMD_START
+    on_ack(ack(wire.ACK_UNSYNCED))      # start refused, retry pending, start_authorized still set
+    session.pause()                     # must not raise
+    assert session.state is SessionState.PAUSED
+
+
+def test_pause_refused_while_resume_unsynced():
+    # A refused Resume leaves the device physically PAUSED while the session is
+    # PLAYING; pause() must not capture a cursor from the re-anchored clock.
+    session, hub = make_session(SINGLE)
+    drive_to_playing(session, hub)
+    session.pause()
+    tick(session)
+    _, on_ack = hub.last_send('sim-a'); on_ack(ack_ok())   # PAUSED
+    session.resume()
+    tick(session)
+    op, on_ack = hub.last_send('sim-a')
+    assert op == wire.CMD_RESUME
+    on_ack(ack(wire.ACK_UNSYNCED))      # resume refused; device still PAUSED
+    with pytest.raises(ValueError, match='settle'):
+        session.pause()
+
+
+def test_pause_refused_while_start_retry_in_flight():
+    # After an Unsynced Start, a retry Start in flight must still block pause;
+    # otherwise a pause cursor is captured just before the retry could ACK Ok.
+    session, hub = make_session(SINGLE)
+    drive_to_loaded(session, hub)
+    session.play()
+    tick(session)
+    op, on_ack = hub.last_send('sim-a')
+    assert op == wire.CMD_START
+    on_ack(ack(wire.ACK_UNSYNCED))      # refused, backoff
+    for _ in range(_UNSYNCED_BACKOFF_TICKS + 1):
+        tick(session)
+    op, _ = hub.last_send('sim-a')
+    assert op == wire.CMD_START          # retry now in flight
+    with pytest.raises(ValueError, match='settle'):
+        session.pause()
 
 
 def test_reboot_between_set_profile_and_load():

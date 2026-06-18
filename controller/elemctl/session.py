@@ -209,6 +209,7 @@ class Session:
         self.session_id = 0          # 0 means no program loaded
         self.epoch = 0
         self.program_start_us = 0
+        self.cursor_us = 0           # paused program position, in microseconds
         self.manifest = None
 
     def load(self, manifest):
@@ -232,6 +233,7 @@ class Session:
         self.session_id += 1
         self.epoch = 0
         self.program_start_us = 0
+        self.cursor_us = 0
         self.state = SessionState.LOADED
 
         for uid, member in self._members.items():
@@ -283,14 +285,18 @@ class Session:
         the right desired intent for B2 rejoin), but only members already
         LOADED with the right program are authorized to issue the initial
         Start. Members still loading, or attaching later, park at LOADED until
-        B2 can rejoin them mid-program safely. Restarting an already-playing
-        session is B2; here it is refused so a re-stamped anchor can't drift
-        devices already playing against the old one."""
-        if self.state is SessionState.IDLE:
-            raise ValueError('play() requires a loaded program')
+        B2 can rejoin them mid-program safely.
+
+        Valid only from a loaded, stopped session: from PLAYING/PAUSED the
+        operator resumes or stops first, so a re-stamped anchor can never drift
+        devices that are already playing or lose a paused cursor. (Replay from
+        a naturally ENDED session is added with end-of-program modelling.)"""
+        if self.state is not SessionState.LOADED:
+            raise ValueError('play() is only valid from a loaded, stopped session')
         if self._has_unsettled_playback():
             raise ValueError('play() requires playback to be stopped first')
         self.program_start_us = self._clock_us()
+        self.cursor_us = 0
         self.state = SessionState.PLAYING
         for member in self._members.values():
             current = member.target
@@ -314,7 +320,32 @@ class Session:
         if self.state is SessionState.IDLE:
             raise ValueError('stop() requires a loaded program')
         self.state = SessionState.LOADED
+        self.cursor_us = 0
         self._retarget_routed(Intent.READY)
+
+    def pause(self):
+        """Freeze playback at the current program cursor. Resume keeps device
+        engine state intact (no rebuild), so pausing needs no safe interval."""
+        if self.state is not SessionState.PLAYING:
+            raise ValueError('pause() requires a playing session')
+        if self._has_pending_start_or_resume():
+            raise ValueError('pause() requires playback to settle first')
+        self.cursor_us = self._clock_us() - self.program_start_us
+        self.state = SessionState.PAUSED
+        self._retarget_routed(Intent.PAUSED, anchor_us=self.program_start_us,
+                              cursor_us=self.cursor_us)
+
+    def resume(self):
+        """Resume playback from the paused cursor by re-anchoring program time
+        so it continues where it stopped."""
+        if self.state is not SessionState.PAUSED:
+            raise ValueError('resume() requires a paused session')
+        if self._has_unsettled_pause():
+            raise ValueError('resume() requires pause to settle first')
+        self.program_start_us = self._clock_us() - self.cursor_us
+        self.state = SessionState.PLAYING
+        self._retarget_routed(Intent.PLAYING, anchor_us=self.program_start_us,
+                              cursor_us=self.cursor_us)
 
     def _has_unsettled_playback(self):
         """True when a routed device is playing (or about to) and not already
@@ -329,6 +360,48 @@ class Session:
                 return True
             if (member.phase in (DeviceState.PLAYING, DeviceState.PAUSED)
                     and member._inflight != 'stop'):
+                return True
+        return False
+
+    def _has_unsettled_pause(self):
+        """True when a routed member is still playing or transitioning toward
+        paused (a Pause or Start in flight). resume() must wait for pause to
+        settle, or it would re-anchor program time against a device that never
+        actually paused and is still running on the old anchor."""
+        for member in self._members.values():
+            if member.target.intent is Intent.DETACHED:
+                continue
+            if member._inflight in ('start', 'pause'):
+                return True
+            if member.phase is DeviceState.PLAYING:
+                return True
+        return False
+
+    def _has_pending_start_or_resume(self):
+        """True when a routed member is mid initial-start or mid-resume: the
+        play cohort has not started yet (start_authorized, which stays set
+        until the Start ACK), a Start/Resume is in flight, or it is paused
+        while the target wants PLAYING. pause() must wait for this to settle,
+        or it would clear a cohort's start authorization (stranding the device,
+        since B2a has no rejoin to recover it) or capture a cursor against an
+        anchor the device has not adopted. Parked late members (start_authorized
+        False, nothing in flight) are not caught, so pause() of the playing
+        devices is not blocked by them."""
+        for member in self._members.values():
+            if member.target.intent is Intent.DETACHED:
+                continue
+            if member._inflight in ('start', 'resume'):
+                return True   # in flight (first attempt or retry): wait for the ACK
+            if member.start_authorized:
+                # A surfaced *start* refusal (e.g. a device that cannot sync)
+                # releases the operator to pause the rest of the show; an
+                # in-flight retry is already caught above. A resume refusal does
+                # not release here (the device is still paused, caught below).
+                if member.last_refusal is not None and member.last_refusal[0] == 'start':
+                    continue
+                return True
+            if (member.phase is DeviceState.PAUSED
+                    and member.target.intent is Intent.PLAYING):
                 return True
         return False
 
@@ -445,16 +518,30 @@ class Session:
             return
 
         if target.intent is Intent.PLAYING:
-            # B1: only the authorized cohort starts, from program time 0. An
-            # unauthorized PLAYING member (a late joiner / reconnector) parks
-            # at LOADED until B2's JUMP + RESUME rejoin can place it safely.
+            # The authorized cohort starts from program time 0. An unauthorized
+            # PLAYING member at LOADED (a late joiner / reconnector) parks until
+            # B2b's JUMP + RESUME rejoin can place it safely.
             if member.phase is DeviceState.LOADED and member.start_authorized:
                 self._send(member, 'start', wire.encode_start(target.anchor_us),
                            lambda m: self._after_start(m),
                            still_relevant=lambda m: m.target.intent is Intent.PLAYING)
+            elif member.phase is DeviceState.PAUSED and self._reached(target.cursor_us):
+                # Resume only once live time has reached the cursor: unsynced
+                # devices ignore the anchor and resume immediately, so the
+                # controller must hold Resume until then (a no-op wait for an
+                # operator resume, which re-anchors to the cursor).
+                self._send(member, 'resume', wire.encode_resume(target.anchor_us),
+                           lambda m: self._after_resume(m),
+                           still_relevant=lambda m: m.target.intent is Intent.PLAYING)
             return
 
-        # Intent.PAUSED is handled in B2.
+        if target.intent is Intent.PAUSED:
+            if member.phase is DeviceState.PLAYING:
+                self._send(member, 'pause', wire.encode_pause(),
+                           lambda m: self._after_pause(m))
+            # phase PAUSED is satisfied; phase LOADED (a reloaded device) is
+            # rejoined to its cursor in B2b, where the cursor's safety is checked.
+            return
 
     def _send(self, member, command, encoded, apply_ok, still_relevant=None):
         """Dispatch one command and register its ACK handler. Only one command
@@ -531,3 +618,13 @@ class Session:
     def _after_start(self, member):
         member.phase = DeviceState.PLAYING
         member.start_authorized = False   # the initial Start is consumed
+
+    def _after_pause(self, member):
+        member.phase = DeviceState.PAUSED
+
+    def _after_resume(self, member):
+        member.phase = DeviceState.PLAYING
+
+    def _reached(self, cursor_us):
+        """True once live program time has reached cursor_us (microseconds)."""
+        return self._clock_us() - self.program_start_us >= cursor_us
