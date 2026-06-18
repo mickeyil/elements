@@ -7,11 +7,13 @@ Member per configured device, tracks which are attached, and carries the
 loaded program's identity (session_id, epoch) and the shared playback
 anchor. drafts/controller_v3.md ("Sessions") is the spec.
 
-Round A is the membership spine: the data model plus the connect /
-disconnect / reboot lifecycle and the load() identity contract. Driving
-devices with commands is the reconciler, added in later rounds; the
-fields it needs (targets, op tokens, phase) exist here already so it
-slots in without reshaping anything.
+Round A built the membership spine (the data model plus the connect /
+disconnect / reboot lifecycle and the load() identity contract). Round B1
+adds the reconciler: tick() drives each attached member one command at a
+time from its confirmed phase toward its target, and the play() / stop()
+verbs set those targets. Still to come in B2: pause / resume / seek and
+rejoining a device mid-program (JUMP + RESUME onto a safe interval), plus
+preview-frame assembly.
 """
 
 import logging
@@ -19,9 +21,15 @@ import logging
 from dataclasses import dataclass
 from enum import Enum, auto
 
+from . import wire
 from .hub import DeviceConnected, DeviceDisconnected
 
 log = logging.getLogger(__name__)
+
+# How many ticks to wait before retrying a command the device refused with
+# Unsynced; the device leases its clock over UDP on its own schedule, so we
+# back off rather than retry every tick.
+_UNSYNCED_BACKOFF_TICKS = 25
 
 
 class SessionState(Enum):
@@ -88,11 +96,20 @@ class MemberDetached:
     reason: str
 
 
+@dataclass(frozen=True)
+class MemberCommandFailed:
+    """A command was refused with a terminal status. The member stops being
+    driven until a new load, connect, or disconnect clears the block."""
+    uid: str
+    command: str
+    status: int
+
+
 class Member:
     """One configured device's relationship to the current session.
 
     Holds the device's last confirmed phase, the program it should load,
-    and the single in-flight operation. It never touches a socket; the
+    and the single command in flight. It never touches a socket; the
     session sends on its behalf through the hub.
     """
 
@@ -110,8 +127,12 @@ class Member:
 
         self._target = Target(intent=Intent.DETACHED)
         self._loaded_token = None    # program_token confirmed loaded on the device
-        self._op_seq = 0             # bumped to make any in-flight ACK stale
-        self._inflight_op = None
+        self._inflight = None        # name of the command awaiting an ACK, or None
+
+        self.last_refusal = None     # (command, status) of the latest non-Ok ACK; cleared on Ok
+        self.blocked = None          # (command, status) when a terminal failure halts driving
+        self.retry_at_tick = 0       # earliest tick to retry after an Unsynced refusal
+        self.start_authorized = False  # may issue the initial Start (the play() cohort)
 
     def on_connected(self, boot_token, rebooted):
         """A link came up for this device. The device dropped any program
@@ -121,7 +142,7 @@ class Member:
         self.boot_token = boot_token
         self.profile_state = ProfileState.UNKNOWN
         self._reset_runtime()
-        self._bump_op()
+        self._clear_blocked()   # a fresh device clears any prior terminal block
 
     def on_disconnected(self, reason):
         """The link dropped. The session and this member's target survive;
@@ -131,27 +152,37 @@ class Member:
             return False
         self.attached = False
         self._reset_runtime()
-        self._bump_op()
+        self._clear_blocked()
         return True
 
     def set_target(self, target):
-        """Replace the desired end state and invalidate any in-flight op."""
+        """Replace the desired end state. A command already in flight is left
+        to complete: its ACK reflects the real device transition, and the
+        reconciler then drives toward the new target. Only the transient
+        intent flags reset."""
         self._target = target
-        self._bump_op()
+        self.start_authorized = False
+        self.retry_at_tick = 0
+        self.last_refusal = None
 
     @property
     def target(self):
         return self._target
 
     def _reset_runtime(self):
+        # A new link: the device's runtime starts unknown and any command that
+        # was in flight on the old link is gone with it.
         self.serving = False
         self.phase = DeviceState.UNKNOWN
         self.cursor_us = 0
         self._loaded_token = None
+        self._inflight = None
+        self.start_authorized = False
+        self.retry_at_tick = 0
+        self.last_refusal = None
 
-    def _bump_op(self):
-        self._op_seq += 1
-        self._inflight_op = None
+    def _clear_blocked(self):
+        self.blocked = None
 
 
 class Session:
@@ -172,6 +203,7 @@ class Session:
         }
         self._wanted_uids = set(self._members)
         self._events = []
+        self._tick_count = 0
 
         self.state = SessionState.IDLE
         self.session_id = 0          # 0 means no program loaded
@@ -203,6 +235,7 @@ class Session:
         self.state = SessionState.LOADED
 
         for uid, member in self._members.items():
+            member._clear_blocked()   # a new program is a fresh chance to drive
             artifact = manifest.strips.get(member.strip_id)
             if artifact is None:
                 member.set_target(Target(intent=Intent.DETACHED))
@@ -243,12 +276,86 @@ class Session:
                     f'{artifact.length} px'
                 )
 
+    def play(self):
+        """Begin playback from a single shared anchor stamped now.
+
+        Every routed member is retargeted to PLAYING (so a late joiner carries
+        the right desired intent for B2 rejoin), but only members already
+        LOADED with the right program are authorized to issue the initial
+        Start. Members still loading, or attaching later, park at LOADED until
+        B2 can rejoin them mid-program safely. Restarting an already-playing
+        session is B2; here it is refused so a re-stamped anchor can't drift
+        devices already playing against the old one."""
+        if self.state is SessionState.IDLE:
+            raise ValueError('play() requires a loaded program')
+        if self._has_unsettled_playback():
+            raise ValueError('play() requires playback to be stopped first')
+        self.program_start_us = self._clock_us()
+        self.state = SessionState.PLAYING
+        for member in self._members.values():
+            current = member.target
+            if current.intent is Intent.DETACHED:
+                continue
+            # Authorize on the loaded program, not the instantaneous phase: a
+            # member mid-transition (e.g. a stop just sent) still has the right
+            # blob and should start once the reconciler resyncs it to LOADED.
+            ready = member._loaded_token == current.program_token
+            member.set_target(Target(
+                intent=Intent.PLAYING,
+                program_token=current.program_token,
+                blob=current.blob,
+                strip_length=current.strip_length,
+                anchor_us=self.program_start_us,
+            ))
+            member.start_authorized = ready   # set after set_target (which clears it)
+
+    def stop(self):
+        """Return every routed member to a parked LOADED state."""
+        if self.state is SessionState.IDLE:
+            raise ValueError('stop() requires a loaded program')
+        self.state = SessionState.LOADED
+        self._retarget_routed(Intent.READY)
+
+    def _has_unsettled_playback(self):
+        """True when a routed device is playing (or about to) and not already
+        being stopped. A fresh play() then would restamp the shared anchor
+        while that device keeps running on the old one. Restart-while-playing
+        is B2; until then play() is refused in this state. A stop already in
+        flight is settling, so it does not count."""
+        for member in self._members.values():
+            if member.target.intent is Intent.DETACHED:
+                continue
+            if member._inflight == 'start':
+                return True
+            if (member.phase in (DeviceState.PLAYING, DeviceState.PAUSED)
+                    and member._inflight != 'stop'):
+                return True
+        return False
+
+    def _retarget_routed(self, intent, anchor_us=0, cursor_us=0):
+        """Replace the intent on every non-detached member, carrying its
+        program identity and blob forward. Detached members keep DETACHED."""
+        for member in self._members.values():
+            current = member.target
+            if current.intent is Intent.DETACHED:
+                continue
+            member.set_target(Target(
+                intent=intent,
+                program_token=current.program_token,
+                blob=current.blob,
+                strip_length=current.strip_length,
+                anchor_us=anchor_us,
+                cursor_us=cursor_us,
+            ))
+
     def tick(self):
-        """One loop iteration: drain the hub, apply lifecycle events, and
-        return the session events that resulted."""
+        """One loop iteration: drain the hub, apply lifecycle events, drive
+        each member toward its target, and return the session events."""
+        self._tick_count += 1
         poll = self._hub.poll(self._wanted_uids)
         for event in poll.events:
             self._apply_event(event)
+        self._reconcile()
         # Preview frames are handled in a later round.
         return self._drain_events()
 
@@ -289,3 +396,138 @@ class Session:
         events = self._events
         self._events = []
         return events
+
+    # -----------------------------------------------------------------------
+    # Reconciler: move each attached member one command toward its target.
+    # -----------------------------------------------------------------------
+
+    def _reconcile(self):
+        for member in self._members.values():
+            if not member.attached:
+                continue
+            if member._inflight is not None or member.blocked is not None:
+                continue
+            if member.retry_at_tick > self._tick_count:
+                continue
+            self._reconcile_member(member)
+
+    def _reconcile_member(self, member):
+        """Issue at most one command to close the gap from the member's
+        confirmed phase to its target. Profile first on a fresh connection,
+        then the right blob, then the playback verb."""
+        target = member.target
+
+        # A member the manifest no longer routes to: blank a stale program from
+        # a previous session once, then leave it idle. No SET_PROFILE(0).
+        if target.intent is Intent.DETACHED:
+            if member.serving:
+                self._send(member, 'stop', wire.encode_stop(),
+                           lambda m: self._after_stop_detached(m))
+            return
+
+        if member.profile_state is ProfileState.UNKNOWN:
+            self._send(member, 'set_profile',
+                       wire.encode_set_profile(target.strip_length),
+                       lambda m: self._after_set_profile(m))
+            return
+
+        if member._loaded_token != target.program_token:
+            token = target.program_token
+            self._send(member, 'load', wire.encode_load(target.blob),
+                       lambda m: self._after_load(m, target),
+                       still_relevant=lambda m: m.target.program_token == token)
+            return
+
+        if target.intent is Intent.READY:
+            if member.phase in (DeviceState.PLAYING, DeviceState.PAUSED):
+                self._send(member, 'stop', wire.encode_stop(),
+                           lambda m: self._after_stop(m))
+            return
+
+        if target.intent is Intent.PLAYING:
+            # B1: only the authorized cohort starts, from program time 0. An
+            # unauthorized PLAYING member (a late joiner / reconnector) parks
+            # at LOADED until B2's JUMP + RESUME rejoin can place it safely.
+            if member.phase is DeviceState.LOADED and member.start_authorized:
+                self._send(member, 'start', wire.encode_start(target.anchor_us),
+                           lambda m: self._after_start(m),
+                           still_relevant=lambda m: m.target.intent is Intent.PLAYING)
+            return
+
+        # Intent.PAUSED is handled in B2.
+
+    def _send(self, member, command, encoded, apply_ok, still_relevant=None):
+        """Dispatch one command and register its ACK handler. Only one command
+        is in flight per member at a time.
+
+        An Ok ACK is always applied: it reports a transition the device really
+        made, and the reconciler resolves any retarget that landed meanwhile on
+        the next tick. A non-Ok ACK is acted on only when still_relevant(member)
+        holds, so a refusal from a command the current target no longer wants
+        (e.g. an old Load failing after the operator loaded a different program)
+        cannot block or delay the new target. Relevance is semantic per command
+        (the same blob, the same intent), not target-object identity, so an
+        intent-only retarget on the same program still surfaces its failure."""
+        member._inflight = command
+
+        def on_ack(ack):
+            member._inflight = None
+            if ack.status == wire.ACK_OK:
+                member.last_refusal = None
+                apply_ok(member)
+            elif still_relevant is None or still_relevant(member):
+                self._handle_nonok(member, command, ack.status)
+
+        self._hub.send(member.uid, encoded, on_ack)
+
+    def _handle_nonok(self, member, command, status):
+        member.last_refusal = (command, status)
+        if status == wire.ACK_UNSYNCED:
+            # Recoverable: the device will lease its clock and accept later.
+            member.retry_at_tick = self._tick_count + _UNSYNCED_BACKOFF_TICKS
+        elif status == wire.ACK_PROFILE_MISMATCH:
+            # The blob's geometry did not match the active profile; re-profile.
+            member.profile_state = ProfileState.UNKNOWN
+            self._invalidate_load(member)
+        elif status == wire.ACK_WRONG_STATE:
+            if command == 'load':
+                # LOAD WrongState means no hardware profile (command_handler.cpp).
+                member.profile_state = ProfileState.UNKNOWN
+            # Either way our phase model drifted; force a reload.
+            self._invalidate_load(member)
+        else:
+            # ACK_ERROR / ACK_BAD_PAYLOAD: terminal. Stop driving and surface it.
+            member.blocked = (command, status)
+            self._emit(MemberCommandFailed(uid=member.uid, command=command,
+                                           status=status))
+
+    def _invalidate_load(self, member):
+        """Force the ladder back to LOAD: drop the confirmed program and the
+        start authorization so a stale phase can't trigger an unsafe Start."""
+        member._loaded_token = None
+        member.phase = DeviceState.UNKNOWN
+        member.start_authorized = False
+
+    def _after_set_profile(self, member):
+        # SET_PROFILE Ok means "already matched" or "saved and rebooting",
+        # indistinguishable; a real reboot drops the link and resets us.
+        member.profile_state = ProfileState.ASSUMED_MATCH
+
+    def _after_load(self, member, target):
+        member.phase = DeviceState.LOADED
+        member._loaded_token = target.program_token
+        member.serving = True
+
+    def _after_stop(self, member):
+        # STOP ACKs Ok unconditionally; only treat it as LOADED when we knew a
+        # program was loaded, so an idle device is not mistaken for LOADED.
+        if member._loaded_token is not None:
+            member.phase = DeviceState.LOADED
+
+    def _after_stop_detached(self, member):
+        self._after_stop(member)   # the blank Stop also returns it to LOADED
+        member.serving = False
+
+    def _after_start(self, member):
+        member.phase = DeviceState.PLAYING
+        member.start_authorized = False   # the initial Start is consumed
