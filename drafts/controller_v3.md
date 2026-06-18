@@ -100,9 +100,10 @@ now.
 Two identifiers live in the controller config and never reach the
 wire:
 
-- `strip_id`: the program-routing key. The DSL refers to outputs by
-  `strip_id` ("main", "left"), mapped one-to-one to a configured
-  device.
+- `strip_id`: the program-routing key. The DSL names each output by
+  `strip_id` ("main", "left"), and the controller loads that output
+  onto every device configured with the same `strip_id`: usually one,
+  but several when an output is mirrored across devices.
 - `label`: an optional UI display string; UIs fall back to the UID
   when it is absent.
 
@@ -155,6 +156,13 @@ right and the mechanics wrong for v3. What carries over as intent:
   surviving device detach.
 - Transport attachment and active serving tracked separately (a key
   invariant); a device can be attached but not yet serving.
+- Program routing keys off `strip_id`: a device serves the manifest
+  strip whose `strip_id` matches its config, several devices sharing a
+  `strip_id` mirror one strip, and a device whose `strip_id` is absent
+  from the manifest detaches. A `strip_id` is unique within a manifest
+  (the compiler enforces it), so there is no positional slot index and
+  no per-device target override; the load identity is
+  `(session_id, strip_id)`.
 - Seek snaps to compiler-provided safe intervals; the controller
   leaves one frame period of headroom before an interval's end
   (`compiler.md`).
