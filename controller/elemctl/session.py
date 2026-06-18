@@ -157,18 +157,18 @@ class Member:
 class Session:
     """One program across all configured devices, surviving device detach.
 
-    Construct with the hub, the device topology, and the monotonic
+    Construct with the hub, the device configs, and the monotonic
     microsecond clock the hub's sync server uses (so the anchor this layer
     stamps matches the clock devices sync against). Call tick() once per
     loop; it drains the hub and returns session events.
     """
 
-    def __init__(self, hub, topology, clock_us):
+    def __init__(self, hub, device_configs, clock_us):
         self._hub = hub
         self._clock_us = clock_us
         self._members = {
             dc.device_uid: Member(dc.device_uid, dc.strip_id, dc.length)
-            for dc in topology
+            for dc in device_configs
         }
         self._wanted_uids = set(self._members)
         self._events = []

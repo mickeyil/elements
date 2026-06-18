@@ -48,22 +48,22 @@ class FakeHub:
         return HubPoll(events=events, frames=frames)
 
 
-TOPOLOGY = [
+DISTINCT_STRIPS = [
     DeviceConfig(device_uid='sim-a', strip_id='left', length=30),
     DeviceConfig(device_uid='sim-b', strip_id='right', length=30),
 ]
 
 # Two devices sharing one strip_id (legal when lengths match), the case a
 # composed manifest repeats across slots; needs explicit target_groups.
-WALL_TOPOLOGY = [
+SHARED_STRIP = [
     DeviceConfig(device_uid='sim-a', strip_id='wall', length=30),
     DeviceConfig(device_uid='sim-b', strip_id='wall', length=30),
 ]
 
 
-def make_session(topology=TOPOLOGY):
+def make_session(device_configs=DISTINCT_STRIPS):
     hub = FakeHub()
-    session = Session(hub, topology, FakeClock())
+    session = Session(hub, device_configs, FakeClock())
     return session, hub
 
 
@@ -208,7 +208,7 @@ def test_load_detaches_member_with_no_matching_strip():
 
 
 def test_load_target_groups_route_repeated_strip_id():
-    session, _hub = make_session(WALL_TOPOLOGY)
+    session, _hub = make_session(SHARED_STRIP)
     manifest = make_manifest(('wall', 30, b'A'), ('wall', 30, b'B'))
     session.load(manifest, target_groups=[['sim-a'], ['sim-b']])
 
@@ -219,7 +219,7 @@ def test_load_target_groups_route_repeated_strip_id():
 
 
 def test_load_target_groups_detaches_ungrouped_member():
-    session, _hub = make_session(WALL_TOPOLOGY)
+    session, _hub = make_session(SHARED_STRIP)
     manifest = make_manifest(('wall', 30, b'A'), ('wall', 30, b'B'))
     session.load(manifest, target_groups=[['sim-a'], []])
 
@@ -228,14 +228,14 @@ def test_load_target_groups_detaches_ungrouped_member():
 
 
 def test_load_target_groups_reject_a_uid_in_two_slots():
-    session, _hub = make_session(WALL_TOPOLOGY)
+    session, _hub = make_session(SHARED_STRIP)
     manifest = make_manifest(('wall', 30, b'A'), ('wall', 30, b'B'))
     with pytest.raises(ValueError):
         session.load(manifest, target_groups=[['sim-a'], ['sim-a']])
 
 
 def test_load_default_mapping_rejects_ambiguous_strip_id():
-    session, _hub = make_session(WALL_TOPOLOGY)
+    session, _hub = make_session(SHARED_STRIP)
     manifest = make_manifest(('wall', 30, b'A'), ('wall', 30, b'B'))
     with pytest.raises(ValueError):
         session.load(manifest)   # no target_groups: 'wall' maps to two slots
