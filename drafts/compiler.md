@@ -158,11 +158,16 @@ compile time, where the error is far easier to act on than a firmware
 rejection. Mirror the cap values in Python, with a unit test that
 parses `src/blob_limits.h` and asserts equality.
 
-On every successful compile, print a firmware memory estimate from the
-blob's own structures: pool bytes (buffer sizes x sizeof hsva), view
-metadata plus index arrays for non-identity views, copy-op records,
-layer events, and a per-animation-type instance estimate. Allocator
-overhead and fragmentation are deliberately ignored; the estimate
+Every compile attaches a firmware memory estimate to each compiled
+strip (`CompiledManifest`: `CompiledStripArtifact.memory`, plus
+`peak_memory_bytes` for the worst-case device), so the controller and
+web app can display it rather than only printing it. The estimate sums
+the device structures from the blob's own data: pool bytes (buffer
+sizes x sizeof hsva, plus the pool's index tables), view metadata plus
+index arrays for non-identity views, copy-op records, layer events, a
+per-animation-type instance estimate, and the fixed `Program` shell. It
+is steady-state esp32 RAM; decode-time temporaries, Engine playback
+state, allocator overhead, and fragmentation are ignored. The estimate
 guides optimization, not precise budgeting.
 
 ## Open items

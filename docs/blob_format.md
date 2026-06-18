@@ -138,12 +138,12 @@ Each event:
 | Constant               | Value   | Bounds                                   |
 |------------------------|---------|------------------------------------------|
 | `MAX_LAYER_COUNT`      | 32      | header `layer_count`                     |
-| `MAX_STRIP_PIXELS`     | 1000    | header `strip_length`, per-buffer `size` |
+| `MAX_STRIP_PIXELS`     | 300     | header `strip_length`, per-buffer `size` |
 | `MAX_BUFFER_COUNT`     | 256     | header `buffer_count`                    |
 | `MAX_PIXEL_VIEW_COUNT` | 512     | header `pixel_view_count`                |
 | `MAX_COPY_OP_COUNT`    | 512     | header `copy_op_count`                   |
 | `MAX_EVENTS_PER_LAYER` | 1024    | per-layer `event_count`                  |
-| `MAX_PARAMS_BYTES`     | 4096    | per-event `params_size`                  |
+| `MAX_EVENT_PARAMS_BYTES` | 8192  | per-event `params_size`                  |
 | `MAX_POOL_BYTES`       | 100 KiB | sum of `size * 16` over all pool buffers |
 
 These constants live in `src/blob_limits.h` and are mirrored by the

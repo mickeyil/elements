@@ -199,3 +199,12 @@ class TestParams:
         d = decode_params(ANIM_PAINT, raw)
         assert d["mode"] == 1 and d["pixel_count"] == 2
         assert d["pixels"][1]["h"] == 120.0 and d["pixels"][1]["a"] == 0.25
+
+    def test_paint_per_pixel_over_255_round_trip(self):
+        # The per-pixel count is a u16, so > 255 colors round-trip cleanly.
+        pixels = [(float(i % 360), 1.0, 1.0, 1.0) for i in range(300)]
+        raw = pack_params("paint", {"mode": 1, "pixels": pixels})
+        assert len(raw) == 3 + 300 * 16   # mode(1) + u16 count(2) + 300 hsva
+        d = decode_params(ANIM_PAINT, raw)
+        assert d["pixel_count"] == 300
+        assert d["pixels"][299]["h"] == float(299 % 360)

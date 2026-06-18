@@ -148,7 +148,7 @@ std::vector<uint8_t> paint_solid_params(float h, float s, float v, float a) {
 std::vector<uint8_t> paint_constant_params(const std::vector<hsva_t>& pixels) {
     std::vector<uint8_t> p;
     put_u8(p, 1);
-    put_u8(p, static_cast<uint8_t>(pixels.size()));
+    put_u16(p, static_cast<uint16_t>(pixels.size()));
     for (const auto& px : pixels) {
         put_f32(p, px.h); put_f32(p, px.s); put_f32(p, px.v); put_f32(p, px.a);
     }

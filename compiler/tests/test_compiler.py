@@ -479,14 +479,19 @@ class TestCaps:
         with pytest.raises(CompileError, match="at least 1"):
             build(beat=1.0, duration=2.0)
 
-    def test_per_pixel_paint_count_limit(self):
-        # The per-pixel paint count field is a u8; 256 colors is rejected
-        # (and would also exceed MAX_PARAMS_BYTES). See compiler.md.
-        s = strip("cap_paint", length=256)
-        p = paint(colors=[(0, 1.0, 1.0)] * 256)
-        p.schedule(s.pixels("0-255"), at=0, duration=1)
-        with pytest.raises(CompileError, match="at most 255 colors"):
-            build(beat=1.0, duration=2.0)
+    def test_per_pixel_paint_full_strip(self):
+        # A per-pixel paint covering a full MAX_STRIP_PIXELS strip compiles and
+        # decodes; the u16 count and raised MAX_EVENT_PARAMS_BYTES allow it.
+        from elements import limits
+        n = limits.MAX_STRIP_PIXELS
+        s = strip("cap_paint", length=n)
+        p = paint(colors=[(float(i % 360), 1.0, 1.0) for i in range(n)])
+        p.schedule(s.pixels(f"0-{n - 1}"), at=0, duration=1)
+        m = build_manifest(beat=1.0, duration=2.0)
+        program = decode_blob(m.strips["cap_paint"].blob)
+        params = decode_params(ANIM_PAINT, program.layers[0].events[0].params)
+        assert params["mode"] == 1
+        assert params["pixel_count"] == n
 
 
 # ---------------------------------------------------------------------------

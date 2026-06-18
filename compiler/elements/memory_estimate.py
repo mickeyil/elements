@@ -61,9 +61,10 @@ def estimate_memory(program: BlobProgram) -> MemoryEstimate:
     for layer in program.layers:
         for e in layer.events:
             anim_bytes += _ANIM_INSTANCE_BYTES.get(e.anim_type, 0)
-            if (e.anim_type == ANIM_PAINT and len(e.params) >= 2
+            if (e.anim_type == ANIM_PAINT and len(e.params) >= 3
                     and e.params[0] == _PAINT_CONSTANT_MODE):
-                anim_bytes += e.params[1] * _HSVA_BYTES
+                count = int.from_bytes(e.params[1:3], "little")  # u16
+                anim_bytes += count * _HSVA_BYTES
 
     overhead_bytes = _PROGRAM_BYTES
     total_bytes = (pool_bytes + view_bytes + copy_op_bytes + event_bytes

@@ -14,7 +14,7 @@ TEST_CASE("Blob limits expose v3 caps", "[blob_reader][blob_limits]") {
     CHECK(MAX_PIXEL_VIEW_COUNT == 512);
     CHECK(MAX_COPY_OP_COUNT == 512);
     CHECK(MAX_EVENTS_PER_LAYER == 1024);
-    CHECK(MAX_PARAMS_BYTES == 4096);
+    CHECK(MAX_EVENT_PARAMS_BYTES == 8192);
     CHECK(MAX_POOL_BYTES == 100 * 1024);
 }
 

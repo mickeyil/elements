@@ -130,7 +130,7 @@ def _pack_paint_params(p: dict) -> bytes:
             0, p["color_h"], p["color_s"], p["color_v"], p["color_a"],
         )
     pixels = p["pixels"]
-    buf = struct.pack("<BB", 1, len(pixels))
+    buf = struct.pack("<BH", 1, len(pixels))   # mode, u16 count
     for h, s, v, a in pixels:
         buf += struct.pack("<4f", h, s, v, a)
     return buf
@@ -329,10 +329,10 @@ def decode_params(anim_type: int, raw: bytes) -> dict:
         if mode == 0:
             h, s, v, a = struct.unpack_from("<4f", raw, 1)
             return {"mode": 0, "color_h": h, "color_s": s, "color_v": v, "color_a": a}
-        count = raw[1]
+        count = struct.unpack_from("<H", raw, 1)[0]
         pixels = []
         for i in range(count):
-            h, s, v, a = struct.unpack_from("<4f", raw, 2 + i * 16)
+            h, s, v, a = struct.unpack_from("<4f", raw, 3 + i * 16)
             pixels.append({"h": h, "s": s, "v": v, "a": a})
         return {"mode": 1, "pixel_count": count, "pixels": pixels}
     return {"raw": raw}

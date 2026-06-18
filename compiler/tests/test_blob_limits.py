@@ -43,7 +43,7 @@ def test_blob_limits_match_cpp():
         "MAX_PIXEL_VIEW_COUNT": limits.MAX_PIXEL_VIEW_COUNT,
         "MAX_COPY_OP_COUNT": limits.MAX_COPY_OP_COUNT,
         "MAX_EVENTS_PER_LAYER": limits.MAX_EVENTS_PER_LAYER,
-        "MAX_PARAMS_BYTES": limits.MAX_PARAMS_BYTES,
+        "MAX_EVENT_PARAMS_BYTES": limits.MAX_EVENT_PARAMS_BYTES,
         "MAX_POOL_BYTES": limits.MAX_POOL_BYTES,
     }
 

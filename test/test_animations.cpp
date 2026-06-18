@@ -69,7 +69,9 @@ std::vector<uint8_t> pack_paint_solid(float h, float s, float v, float a) {
 std::vector<uint8_t> pack_paint_per_pixel(const std::vector<hsva_t>& pixels) {
     std::vector<uint8_t> out;
     out.push_back(1);  // mode = per_pixel
-    out.push_back(static_cast<uint8_t>(pixels.size()));
+    // count is u16 little-endian
+    out.push_back(static_cast<uint8_t>(pixels.size() & 0xFF));
+    out.push_back(static_cast<uint8_t>((pixels.size() >> 8) & 0xFF));
     for (const auto& p : pixels) {
         append_f32(out, p.h);
         append_f32(out, p.s);
@@ -376,7 +378,18 @@ TEST_CASE("Paint: from_blob rejects NaN", "[anim][paint][from_blob]") {
 TEST_CASE("Paint: from_blob rejects constant mode with count 0", "[anim][paint][from_blob]") {
     // Mode 1 (constant) with count 0 would produce a Paint that holds nullptr
     // and dereferences it on render. The factory must reject upfront.
-    std::vector<uint8_t> bytes = { 1, 0 };
+    std::vector<uint8_t> bytes = { 1, 0, 0 };  // mode 1, u16 count = 0
+    DecodeError err = DecodeError::Ok;
+    CHECK(Paint::from_blob(bytes.data(), bytes.size(), &err) == nullptr);
+    CHECK(err == DecodeError::InvalidField);
+}
+
+TEST_CASE("Paint: from_blob rejects a count larger than the params payload",
+          "[anim][paint][from_blob]") {
+    // Mode 1 with a huge count but only one pixel of data must be rejected
+    // before allocating count hsva entries.
+    std::vector<uint8_t> bytes = { 1, 0xE8, 0x03 };  // mode 1, u16 count = 1000
+    append_f32(bytes, 0); append_f32(bytes, 1); append_f32(bytes, 1); append_f32(bytes, 1);
     DecodeError err = DecodeError::Ok;
     CHECK(Paint::from_blob(bytes.data(), bytes.size(), &err) == nullptr);
     CHECK(err == DecodeError::InvalidField);

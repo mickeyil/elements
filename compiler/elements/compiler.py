@@ -134,13 +134,6 @@ def _validate_early(events: list[dict], strips: list[StripDef]):
                         f"paint 'colors' length {len(colors)} != pixel group "
                         f"size {expected}"
                     )
-                # The per-pixel paint count is a u8 in the blob; larger
-                # per-pixel paints also blow MAX_PARAMS_BYTES. See compiler.md.
-                if len(colors) > 255:
-                    raise CompileError(
-                        f"per-pixel paint supports at most 255 colors, got "
-                        f"{len(colors)}"
-                    )
                 for ci, c in enumerate(colors):
                     if not isinstance(c, (list, tuple)) or len(c) not in (3, 4):
                         raise CompileError(
@@ -828,9 +821,10 @@ def _check_caps(strip_length: int, buffer_sizes: list[int],
             raise CompileError(f"layer {li} has {len(layer.events)} events, exceeds "
                                f"MAX_EVENTS_PER_LAYER {limits.MAX_EVENTS_PER_LAYER}")
         for e in layer.events:
-            if len(e.params) > limits.MAX_PARAMS_BYTES:
+            if len(e.params) > limits.MAX_EVENT_PARAMS_BYTES:
                 raise CompileError(f"{len(e.params)} param bytes exceed "
-                                   f"MAX_PARAMS_BYTES {limits.MAX_PARAMS_BYTES}")
+                                   f"MAX_EVENT_PARAMS_BYTES "
+                                   f"{limits.MAX_EVENT_PARAMS_BYTES}")
 
 
 def _compile_strip(strip_events: list[dict], strip_length: int, duration: float,

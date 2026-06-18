@@ -14,7 +14,7 @@ bool read_finite_f32(BlobReader& r, float& out) {
 Paint::Paint(float h, float s, float v, float a)
     : _mode(Mode::Solid), _solid(h, s, v, a), _constant(nullptr), _constant_count(0) {}
 
-Paint::Paint(hsva_t* constant, uint8_t count)
+Paint::Paint(hsva_t* constant, uint16_t count)
     : _mode(Mode::Constant), _solid(), _constant(constant), _constant_count(count) {}
 
 Paint::~Paint() { delete[] _constant; }
@@ -60,16 +60,22 @@ Animation* Paint::from_blob(const uint8_t* params, size_t params_size,
     }
 
     if (mode == 1) {
-        uint8_t count = 0;
-        if (!r.read_u8(count)) return nullptr;
+        uint16_t count = 0;
+        if (!r.read_u16_le(count)) return nullptr;
         if (count == 0) return nullptr;   // constant mode without a constant is malformed
+
+        // Reject before allocating: a malformed count must not force a large
+        // speculative allocation when the params block cannot hold it.
+        if (r.remaining() < static_cast<size_t>(count) * 4 * sizeof(float)) {
+            return nullptr;
+        }
 
         hsva_t* constant = new (std::nothrow) hsva_t[count];
         if (constant == nullptr) {
             *err_out = DecodeError::OutOfMemory;
             return nullptr;
         }
-        for (uint8_t i = 0; i < count; i++) {
+        for (uint16_t i = 0; i < count; i++) {
             if (!read_finite_f32(r, constant[i].h) ||
                 !read_finite_f32(r, constant[i].s) ||
                 !read_finite_f32(r, constant[i].v) ||

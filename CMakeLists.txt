@@ -563,11 +563,19 @@ if(BUILD_TESTS)
             DEPENDS ${CMAKE_SOURCE_DIR}/test/fixtures/generate_dual_shift.py ${COMPILER_SOURCES}
             COMMENT "Generating dual-strip test fixtures"
         )
+        add_custom_command(
+            OUTPUT ${FIXTURE_OUT_DIR}/test_full_paint.bin
+            COMMAND ${CMAKE_COMMAND} -E env PYTHONPATH=${CMAKE_SOURCE_DIR}/compiler
+                    ${PYTHON3} ${CMAKE_SOURCE_DIR}/test/fixtures/generate_full_paint.py ${FIXTURE_OUT_DIR}
+            DEPENDS ${CMAKE_SOURCE_DIR}/test/fixtures/generate_full_paint.py ${COMPILER_SOURCES}
+            COMMENT "Generating full-strip per-pixel paint fixture"
+        )
         add_custom_target(test_fixtures
             DEPENDS ${FIXTURE_OUT_DIR}/test_animation.bin
                     ${FIXTURE_OUT_DIR}/test_shift.bin
                     ${FIXTURE_OUT_DIR}/test_dual_shift_left.bin
                     ${FIXTURE_OUT_DIR}/test_dual_shift_right.bin
+                    ${FIXTURE_OUT_DIR}/test_full_paint.bin
         )
 
         # Cross-check that the Python v3 emitter's blobs decode and run in C++.

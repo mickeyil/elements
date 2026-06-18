@@ -292,7 +292,7 @@ DecodeError parse_event(BlobReader& r, const ParsedHeader& hdr,
     if (!std::isfinite(start) || start < 0.0f)               return DecodeError::InvalidField;
     if (!std::isfinite(duration) || duration <= 0.0f)        return DecodeError::InvalidField;
     if (start + duration > hdr.duration)                     return DecodeError::InvalidField;
-    if (params_size > MAX_PARAMS_BYTES)                      return DecodeError::OverCap;
+    if (params_size > MAX_EVENT_PARAMS_BYTES)                return DecodeError::OverCap;
 
     if (dst_pixv_idx == PIXV_NONE)                           return DecodeError::InvalidField;
     if (dst_pixv_idx >= hdr.pixel_view_count)                return DecodeError::InvalidField;
@@ -324,7 +324,7 @@ DecodeError parse_event(BlobReader& r, const ParsedHeader& hdr,
     // Per-anim post-checks (constraints from_blob can't see).
     if (type == AnimType::Paint) {
         Paint* paint = static_cast<Paint*>(anim);
-        const uint8_t k = paint->constant_array_size();
+        const uint16_t k = paint->constant_array_size();
         if (k != 0 && k != prog.pixel_views.at(dst_pixv_idx).size()) {
             delete anim;
             return DecodeError::InvalidField;

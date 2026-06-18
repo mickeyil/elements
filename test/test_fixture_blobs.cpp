@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include "../src/blob_limits.h"
 #include "../src/decoder.h"
 #include "../src/engine.h"
 #include "../src/program.h"
@@ -149,6 +150,30 @@ TEST_CASE("test_animation fixture decodes to the expected structure and renders"
         CAPTURE(t);
         CHECK(engine->render_frame(t, strip));
     }
+    delete engine;
+}
+
+TEST_CASE("test_full_paint fixture: per-pixel paint spans a full strip")
+{
+    // Proves a per-pixel paint with > 255 colors (u16 count) decodes and runs.
+    DecodeError err = DecodeError::Ok;
+    Program* prog = decode_fixture("test_full_paint.bin", MAX_STRIP_PIXELS, err);
+    REQUIRE(err == DecodeError::Ok);
+    REQUIRE(prog != nullptr);
+
+    CHECK(prog->layer_count == 1);
+    REQUIRE(prog->layers != nullptr);
+    CHECK(prog->layers[0].count() == 1);
+
+    Engine* engine = Engine::create(prog);
+    REQUIRE(engine != nullptr);
+    Strip strip;
+    REQUIRE(strip.resize(MAX_STRIP_PIXELS));
+    REQUIRE(engine->render_frame(0.0f, strip));
+    // Pixel 0 is hue 0, S=1, V=1 -> red.
+    CHECK(strip[0].r == 255);
+    CHECK(strip[0].g == 0);
+    CHECK(strip[0].b == 0);
     delete engine;
 }
 
