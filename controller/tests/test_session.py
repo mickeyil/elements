@@ -53,6 +53,13 @@ TOPOLOGY = [
     DeviceConfig(device_uid='sim-b', strip_id='right', length=30),
 ]
 
+# Two devices sharing one strip_id (legal when lengths match), the case a
+# composed manifest repeats across slots; needs explicit target_groups.
+WALL_TOPOLOGY = [
+    DeviceConfig(device_uid='sim-a', strip_id='wall', length=30),
+    DeviceConfig(device_uid='sim-b', strip_id='wall', length=30),
+]
+
 
 def make_session(topology=TOPOLOGY):
     hub = FakeHub()
@@ -73,7 +80,7 @@ def make_manifest(*strips, duration=10.0):
 
 
 def tick(session):
-    return session.tick(session._clock_us())
+    return session.tick()
 
 
 # ---------------------------------------------------------------------------
@@ -198,6 +205,40 @@ def test_load_detaches_member_with_no_matching_strip():
 
     assert session.member('sim-a').target.intent is Intent.READY
     assert session.member('sim-b').target.intent is Intent.DETACHED
+
+
+def test_load_target_groups_route_repeated_strip_id():
+    session, _hub = make_session(WALL_TOPOLOGY)
+    manifest = make_manifest(('wall', 30, b'A'), ('wall', 30, b'B'))
+    session.load(manifest, target_groups=[['sim-a'], ['sim-b']])
+
+    assert session.member('sim-a').target.program_token == (1, 0)
+    assert session.member('sim-a').target.blob == b'A'
+    assert session.member('sim-b').target.program_token == (1, 1)
+    assert session.member('sim-b').target.blob == b'B'
+
+
+def test_load_target_groups_detaches_ungrouped_member():
+    session, _hub = make_session(WALL_TOPOLOGY)
+    manifest = make_manifest(('wall', 30, b'A'), ('wall', 30, b'B'))
+    session.load(manifest, target_groups=[['sim-a'], []])
+
+    assert session.member('sim-a').target.intent is Intent.READY
+    assert session.member('sim-b').target.intent is Intent.DETACHED
+
+
+def test_load_target_groups_reject_a_uid_in_two_slots():
+    session, _hub = make_session(WALL_TOPOLOGY)
+    manifest = make_manifest(('wall', 30, b'A'), ('wall', 30, b'B'))
+    with pytest.raises(ValueError):
+        session.load(manifest, target_groups=[['sim-a'], ['sim-a']])
+
+
+def test_load_default_mapping_rejects_ambiguous_strip_id():
+    session, _hub = make_session(WALL_TOPOLOGY)
+    manifest = make_manifest(('wall', 30, b'A'), ('wall', 30, b'B'))
+    with pytest.raises(ValueError):
+        session.load(manifest)   # no target_groups: 'wall' maps to two slots
 
 
 def test_load_is_non_transactional_and_reassigns_each_time():

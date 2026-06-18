@@ -32,17 +32,17 @@ class SessionState(Enum):
     ENDED = auto()
 
 
-# What the controller believes the device's playback core is doing. It
-# mirrors the firmware DeviceState (src/playback.h); UNKNOWN is the extra
-# controller-side value for a device whose state has not been confirmed
-# since it connected.
-class MemberPhase(Enum):
-    UNKNOWN = auto()
+# The controller's mirror of the device's playback core. The first five
+# values match the firmware DeviceState (src/playback.h); UNKNOWN is the
+# controller-only addition, appended last, for a device whose state has
+# not been confirmed since it connected.
+class DeviceState(Enum):
     IDLE = auto()
     LOADED = auto()
     PLAYING = auto()
     PAUSED = auto()
     ENDED = auto()
+    UNKNOWN = auto()
 
 
 # What the session wants of a member, independent of where the device is.
@@ -67,9 +67,9 @@ class ProfileState(Enum):
 class Target:
     """The desired end state for one member. Replaced wholesale by the
     session verbs; a member reaches it command by command."""
-    intent: object                   # Intent
-    program_token: object = None     # (session_id, slot_index); None when DETACHED
-    blob: object = None              # the compiled strip the device should load
+    intent: Intent
+    program_token: tuple = None      # (session_id, slot_index); None when DETACHED
+    blob: bytes = None               # the compiled strip the device should load
     strip_length: int = 0
     anchor_us: int = 0               # program_start_us, for PLAYING
     cursor_us: int = 0               # paused position, for PAUSED
@@ -104,10 +104,9 @@ class Member:
         self.attached = False
         self.serving = False
         self.boot_token = 0
-        self.phase = MemberPhase.UNKNOWN
+        self.phase = DeviceState.UNKNOWN
         self.profile_state = ProfileState.UNKNOWN
         self.cursor_us = 0
-        self.error = None
 
         self._target = Target(intent=Intent.DETACHED)
         self._loaded_token = None    # program_token confirmed loaded on the device
@@ -131,7 +130,6 @@ class Member:
         if not self.attached:
             return False
         self.attached = False
-        self.error = reason
         self._reset_runtime()
         self._bump_op()
         return True
@@ -147,7 +145,7 @@ class Member:
 
     def _reset_runtime(self):
         self.serving = False
-        self.phase = MemberPhase.UNKNOWN
+        self.phase = DeviceState.UNKNOWN
         self.cursor_us = 0
         self._loaded_token = None
 
@@ -181,27 +179,30 @@ class Session:
         self.program_start_us = 0
         self.manifest = None
 
-    def load(self, manifest):
+    def load(self, manifest, target_groups=None):
         """Commit a new desired session immediately: a fresh session_id, a
         reset epoch, and every member retargeted to its compiled strip. This
         is not transactional; a member that later fails its join becomes an
-        errored non-serving member rather than rolling back the session."""
+        errored non-serving member rather than rolling back the session.
+
+        target_groups, when given, is slot-aligned: target_groups[slot] lists
+        the uids serving that manifest slot. Omitted, the assignment is
+        derived by matching each device's strip_id to a slot, which is only
+        valid when no strip_id repeats in the manifest (composed manifests
+        do repeat them, so they must pass target_groups)."""
         self.manifest = manifest
         self.session_id += 1
         self.epoch = 0
         self.program_start_us = 0
         self.state = SessionState.LOADED
 
-        slot_by_strip = {}
-        for slot_index, strip in enumerate(manifest.strips):
-            slot_by_strip.setdefault(strip.strip_id, (slot_index, strip))
-
-        for member in self._members.values():
-            assignment = slot_by_strip.get(member.strip_id)
-            if assignment is None:
+        slot_for_uid = self._resolve_slots(manifest, target_groups)
+        for uid, member in self._members.items():
+            slot_index = slot_for_uid.get(uid)
+            if slot_index is None:
                 member.set_target(Target(intent=Intent.DETACHED))
                 continue
-            slot_index, strip = assignment
+            strip = manifest.strips[slot_index]
             member.set_target(Target(
                 intent=Intent.READY,
                 program_token=(self.session_id, slot_index),
@@ -209,7 +210,42 @@ class Session:
                 strip_length=strip.length,
             ))
 
-    def tick(self, now_us):
+    def _resolve_slots(self, manifest, target_groups):
+        """Map each member uid to the manifest slot it should load (or omit
+        it when it serves no slot). Raises on an unroutable assignment."""
+        if target_groups is not None:
+            return self._slots_from_groups(target_groups)
+        return self._slots_by_strip_id(manifest)
+
+    def _slots_from_groups(self, target_groups):
+        slot_for_uid = {}
+        for slot_index, uids in enumerate(target_groups):
+            for uid in uids:
+                if uid in slot_for_uid:
+                    raise ValueError(
+                        f'device {uid!r} assigned to two manifest slots '
+                        f'({slot_for_uid[uid]} and {slot_index})'
+                    )
+                slot_for_uid[uid] = slot_index
+        return slot_for_uid
+
+    def _slots_by_strip_id(self, manifest):
+        slots_by_strip = {}
+        for slot_index, strip in enumerate(manifest.strips):
+            slots_by_strip.setdefault(strip.strip_id, []).append(slot_index)
+        slot_for_uid = {}
+        for uid, member in self._members.items():
+            slots = slots_by_strip.get(member.strip_id, [])
+            if len(slots) > 1:
+                raise ValueError(
+                    f'strip_id {member.strip_id!r} appears in {len(slots)} '
+                    f'manifest slots; pass target_groups to route it'
+                )
+            if slots:
+                slot_for_uid[uid] = slots[0]
+        return slot_for_uid
+
+    def tick(self):
         """One loop iteration: drain the hub, apply lifecycle events, and
         return the session events that resulted."""
         poll = self._hub.poll(self._wanted_uids)
