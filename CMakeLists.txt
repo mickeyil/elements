@@ -531,37 +531,72 @@ if(BUILD_TESTS)
     # Auto-generate test fixtures if missing
     find_program(PYTHON3 python3)
     if(PYTHON3)
+        # Fixtures are generated into the build tree (never the source tree) and
+        # regenerated whenever a generator or the compiler package changes.
+        set(FIXTURE_OUT_DIR ${CMAKE_BINARY_DIR}/test/fixtures)
+        set(COMPILER_SOURCES
+            ${CMAKE_SOURCE_DIR}/compiler/elements/compiler.py
+            ${CMAKE_SOURCE_DIR}/compiler/elements/blob_v3.py
+            ${CMAKE_SOURCE_DIR}/compiler/elements/types.py
+            ${CMAKE_SOURCE_DIR}/compiler/elements/dsl.py
+            ${CMAKE_SOURCE_DIR}/compiler/elements/limits.py
+        )
         add_custom_command(
-            OUTPUT ${CMAKE_SOURCE_DIR}/test/fixtures/test_animation.bin
-            COMMAND ${CMAKE_COMMAND} -E env
-                    PYTHONPATH=${CMAKE_SOURCE_DIR}/compiler
-                    ${PYTHON3} ${CMAKE_SOURCE_DIR}/test/fixtures/generate.py
-            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            OUTPUT ${FIXTURE_OUT_DIR}/test_animation.bin
+            COMMAND ${CMAKE_COMMAND} -E env PYTHONPATH=${CMAKE_SOURCE_DIR}/compiler
+                    ${PYTHON3} ${CMAKE_SOURCE_DIR}/test/fixtures/generate.py ${FIXTURE_OUT_DIR}
+            DEPENDS ${CMAKE_SOURCE_DIR}/test/fixtures/generate.py ${COMPILER_SOURCES}
             COMMENT "Generating test fixture test_animation.bin"
         )
         add_custom_command(
-            OUTPUT ${CMAKE_SOURCE_DIR}/test/fixtures/test_shift.bin
-            COMMAND ${CMAKE_COMMAND} -E env
-                    PYTHONPATH=${CMAKE_SOURCE_DIR}/compiler
-                    ${PYTHON3} ${CMAKE_SOURCE_DIR}/test/fixtures/generate_shift.py
-            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            OUTPUT ${FIXTURE_OUT_DIR}/test_shift.bin
+            COMMAND ${CMAKE_COMMAND} -E env PYTHONPATH=${CMAKE_SOURCE_DIR}/compiler
+                    ${PYTHON3} ${CMAKE_SOURCE_DIR}/test/fixtures/generate_shift.py ${FIXTURE_OUT_DIR}
+            DEPENDS ${CMAKE_SOURCE_DIR}/test/fixtures/generate_shift.py ${COMPILER_SOURCES}
             COMMENT "Generating test fixture test_shift.bin"
         )
         add_custom_command(
-            OUTPUT ${CMAKE_SOURCE_DIR}/test/fixtures/test_dual_shift_left.bin
-                   ${CMAKE_SOURCE_DIR}/test/fixtures/test_dual_shift_right.bin
-            COMMAND ${CMAKE_COMMAND} -E env
-                    PYTHONPATH=${CMAKE_SOURCE_DIR}/compiler
-                    ${PYTHON3} ${CMAKE_SOURCE_DIR}/test/fixtures/generate_dual_shift.py
-            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            OUTPUT ${FIXTURE_OUT_DIR}/test_dual_shift_left.bin
+                   ${FIXTURE_OUT_DIR}/test_dual_shift_right.bin
+            COMMAND ${CMAKE_COMMAND} -E env PYTHONPATH=${CMAKE_SOURCE_DIR}/compiler
+                    ${PYTHON3} ${CMAKE_SOURCE_DIR}/test/fixtures/generate_dual_shift.py ${FIXTURE_OUT_DIR}
+            DEPENDS ${CMAKE_SOURCE_DIR}/test/fixtures/generate_dual_shift.py ${COMPILER_SOURCES}
             COMMENT "Generating dual-strip test fixtures"
         )
         add_custom_target(test_fixtures
-            DEPENDS ${CMAKE_SOURCE_DIR}/test/fixtures/test_animation.bin
-                    ${CMAKE_SOURCE_DIR}/test/fixtures/test_shift.bin
-                    ${CMAKE_SOURCE_DIR}/test/fixtures/test_dual_shift_left.bin
-                    ${CMAKE_SOURCE_DIR}/test/fixtures/test_dual_shift_right.bin
+            DEPENDS ${FIXTURE_OUT_DIR}/test_animation.bin
+                    ${FIXTURE_OUT_DIR}/test_shift.bin
+                    ${FIXTURE_OUT_DIR}/test_dual_shift_left.bin
+                    ${FIXTURE_OUT_DIR}/test_dual_shift_right.bin
         )
+
+        # Cross-check that the Python v3 emitter's blobs decode and run in C++.
+        add_executable(test_fixture_blobs
+            test/test_fixture_blobs.cpp
+            src/decoder.cpp
+            src/blob_reader.cpp
+            src/program.cpp
+            src/layer.cpp
+            src/pixel_buffer_pool.cpp
+            src/pixel_view.cpp
+            src/pixel_views.cpp
+            src/copy_ops.cpp
+            src/colors.cpp
+            src/animations/wave.cpp
+            src/animations/spark.cpp
+            src/animations/paint.cpp
+            src/animations/shift.cpp
+            src/engine.cpp
+            src/compositor.cpp
+            src/strip.cpp
+        )
+        target_include_directories(test_fixture_blobs PRIVATE src)
+        target_compile_definitions(test_fixture_blobs PRIVATE
+            FIXTURE_DIR="${FIXTURE_OUT_DIR}")
+        target_link_libraries(test_fixture_blobs Catch2::Catch2WithMain)
+        add_dependencies(test_fixture_blobs test_fixtures)
+
+        add_test(NAME test_fixture_blobs COMMAND test_fixture_blobs)
     endif()
 
     add_test(NAME test_decoder COMMAND test_decoder
