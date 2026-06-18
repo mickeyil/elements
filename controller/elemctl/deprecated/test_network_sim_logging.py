@@ -10,7 +10,7 @@ import time
 
 import pytest
 
-from elemctl.device_protocol import ACK_OK, encode_attach, encode_set_profile, parse_ack
+from elemctl.deprecated.device_protocol import ACK_OK, encode_attach, encode_set_profile, parse_ack
 
 from .sim_helpers import NETWORK_SIM_BIN, find_free_udp_port
 

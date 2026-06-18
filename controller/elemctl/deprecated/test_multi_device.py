@@ -19,11 +19,11 @@ sys.path.insert(0, str(_repo / 'compiler'))
 
 from elements.dsl import strip, spark, build_manifest, sec, _builder
 
-from elemctl.controller import (
+from elemctl.deprecated.controller import (
     Controller, ControllerEvent, ControllerState, ProgramFrame, StripConfig,
 )
-from elemctl.network_device import NetworkDevice
-from elemctl.udp_receiver import UdpFrameReceiver
+from elemctl.deprecated.network_device import NetworkDevice
+from elemctl.deprecated.udp_receiver import UdpFrameReceiver
 
 from .sim_helpers import find_free_udp_port, start_sim, stop_sim
 

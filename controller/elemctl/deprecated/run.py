@@ -11,12 +11,12 @@ import threading
 import time
 from pathlib import Path
 
-from .config import (
+from elemctl.config import (
     DEFAULT_CONFIG_PATH, Config, ConfigError, load_config, resolve_config_path,
 )
 from .controller import Controller, ControllerState, StripConfig
 from .network_device import NetworkDevice
-from .slogger import configure_logger
+from elemctl.slogger import configure_logger
 from .udp_receiver import UdpFrameReceiver
 
 log = logging.getLogger(__name__)

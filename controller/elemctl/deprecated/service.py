@@ -17,7 +17,7 @@ import zlib
 
 from elements.types import CompiledManifest, CompiledStripArtifact
 
-from .config import (
+from elemctl.config import (
     DEFAULT_ANIMATIONS_PATH,
     DEFAULT_DISCOVERY_PORT,
     Config,
@@ -28,7 +28,7 @@ from .config import (
     resolve_runtime_path,
 )
 from .clock_sync import ClockSyncManager
-from .config_edit import (
+from elemctl.config_edit import (
     add_device as add_device_doc,
     edit_device as edit_device_doc,
     load_config_doc,
@@ -45,10 +45,10 @@ from .controller import (
     StripConfig,
 )
 from .discovery import DISCOVERY_REASON_DUPLICATE_UID, DiscoveryReceiver
-from .library import ArtifactCache, ProgramEntry, ProgramLibrary
+from elemctl.library import ArtifactCache, ProgramEntry, ProgramLibrary
 from .network_device import NetworkDevice
 from .udp_receiver import UdpFrameReceiver
-from .controller_protocol import PROTOCOL_VERSION, encode_frame, encode_json
+from elemctl.controller_protocol import PROTOCOL_VERSION, encode_frame, encode_json
 
 log = logging.getLogger(__name__)
 

@@ -8,11 +8,11 @@ import zlib
 
 import pytest
 
-import elemctl.network_device as network_device_module
-from elemctl.device import DeviceFrame, DeviceState
-from elemctl.network_device import NetworkDevice
-from elemctl.udp_receiver import UdpFrameReceiver
-from elemctl.device_protocol import (
+import elemctl.deprecated.network_device as network_device_module
+from elemctl.deprecated.device import DeviceFrame, DeviceState
+from elemctl.deprecated.network_device import NetworkDevice
+from elemctl.deprecated.udp_receiver import UdpFrameReceiver
+from elemctl.deprecated.device_protocol import (
     ACK_ERROR,
     ACK_OK,
     ACK_WRONG_STATE,
@@ -428,7 +428,7 @@ class TestConnection:
     def test_ensure_connected_uses_probe_and_handshake_timeouts(self, receiver, monkeypatch):
         fake_sock = _TimeoutRecordingSocket(ack_count=2)
         monkeypatch.setattr(
-            'elemctl.network_device.socket.socket',
+            'elemctl.deprecated.network_device.socket.socket',
             lambda *args, **kwargs: fake_sock,
         )
 
@@ -584,7 +584,7 @@ class TestLoad:
     def test_load_uses_command_connect_and_ack_timeouts(self, receiver, monkeypatch):
         fake_sock = _TimeoutRecordingSocket(ack_count=3)
         monkeypatch.setattr(
-            'elemctl.network_device.socket.socket',
+            'elemctl.deprecated.network_device.socket.socket',
             lambda *args, **kwargs: fake_sock,
         )
 
@@ -1189,7 +1189,7 @@ class TestErrors:
         dev.start(_sec(1.0))
         endpoint.read_command()
 
-        monkeypatch.setattr('elemctl.network_device.time.monotonic_ns', lambda: _sec(2.5))
+        monkeypatch.setattr('elemctl.deprecated.network_device.time.monotonic_ns', lambda: _sec(2.5))
 
         dev.disconnect_transport()
 
@@ -1391,7 +1391,7 @@ class TestUpdateAddress:
         dev.start(_sec(1.0))
         endpoint.read_command()
 
-        monkeypatch.setattr('elemctl.network_device.time.monotonic_ns', lambda: _sec(2.25))
+        monkeypatch.setattr('elemctl.deprecated.network_device.time.monotonic_ns', lambda: _sec(2.25))
 
         dev.update_address('192.168.1.1', 5555)
         assert not dev._connected

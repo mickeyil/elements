@@ -2,14 +2,14 @@ import pytest
 
 from elements.types import CompiledManifest, CompiledStripArtifact
 
-from elemctl.controller import (
+from elemctl.deprecated.controller import (
     Controller,
     ControllerEvent,
     ControllerState,
     ProgramFrame,
     StripConfig,
 )
-from elemctl.device import DeviceFrame, DeviceState
+from elemctl.deprecated.device import DeviceFrame, DeviceState
 
 
 # ---------------------------------------------------------------------------

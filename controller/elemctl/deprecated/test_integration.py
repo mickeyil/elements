@@ -16,9 +16,9 @@ pytestmark = pytest.mark.runtime_integration
 _repo = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_repo / 'compiler'))
 
-from elemctl.device import DeviceFrame, DeviceState
-from elemctl.network_device import NetworkDevice
-from elemctl.udp_receiver import UdpFrameReceiver
+from elemctl.deprecated.device import DeviceFrame, DeviceState
+from elemctl.deprecated.network_device import NetworkDevice
+from elemctl.deprecated.udp_receiver import UdpFrameReceiver
 
 from .sim_helpers import find_free_udp_port, start_sim, stop_sim
 

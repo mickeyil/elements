@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from elemctl.discovery import (
+from elemctl.deprecated.discovery import (
     DISCOVERY_MAGIC,
     DISCOVERY_REASON_DUPLICATE_UID,
     DISCOVERY_TYPE_REJECT,

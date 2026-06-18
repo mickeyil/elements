@@ -18,13 +18,13 @@ import struct
 import sys
 import time
 
-from .config import (
+from elemctl.config import (
     DEFAULT_CONFIG_PATH, DEFAULT_LOGS_PATH, DEFAULT_SOCKET_PATH, ConfigError,
     load_config, resolve_config_path, resolve_runtime_path,
 )
 from .service import ControllerService
-from .slogger import configure_logger
-from .controller_protocol import (
+from elemctl.slogger import configure_logger
+from elemctl.controller_protocol import (
     KIND_JSON,
     PROTOCOL_VERSION,
     ROLE_OBSERVER,
@@ -33,7 +33,7 @@ from .controller_protocol import (
     encode_json,
     parse_json_payload,
 )
-from .version import get_runtime_version
+from elemctl.version import get_runtime_version
 
 log = logging.getLogger(__name__)
 
