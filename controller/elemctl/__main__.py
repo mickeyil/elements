@@ -1,13 +1,9 @@
-"""Placeholder entry point during the v3 rewrite.
+"""`python -m elemctl` runs the controller server.
 
-The v2 one-shot runner moved to elemctl.deprecated.run; the v3 entry
-point is not wired yet. Point this at the v3 server once it exists.
+The launcher script dispatches subcommands (tui, sim, web, ...) directly to
+their modules; the bare module entry point is the server.
 """
 
-import sys
+from .server import main
 
-print(
-    "elemctl: no v3 entry point yet (v2 runner is in elemctl/deprecated/).",
-    file=sys.stderr,
-)
-sys.exit(1)
+main()

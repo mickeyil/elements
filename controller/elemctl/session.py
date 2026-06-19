@@ -11,11 +11,11 @@ Round A built the membership spine (the data model plus the connect /
 disconnect / reboot lifecycle and the load() identity contract). Round B1
 adds the reconciler: tick() drives each attached member one command at a
 time from its confirmed phase toward its target, and the play() / stop()
-verbs set those targets. Pause, resume, and end-of-program completion
-have since landed. Preview-frame assembly is still planned. Operator seek
-and live rejoin of a late or reconnecting device (a JUMP onto a
-compiler-marked safe interval) are deferred; drafts/jump.md records that
-design.
+verbs set those targets. Pause, resume, end-of-program completion, and
+preview-frame assembly (per-strip frames bucketed into whole-program frames)
+have since landed. Operator seek and live rejoin of a late or reconnecting
+device (a JUMP onto a compiler-marked safe interval) are deferred;
+drafts/jump.md records that design.
 """
 
 import logging
@@ -25,6 +25,7 @@ from enum import Enum, auto
 
 from . import wire
 from .hub import DeviceConnected, DeviceDisconnected
+from .preview import PreviewAssembler
 
 log = logging.getLogger(__name__)
 
@@ -207,6 +208,8 @@ class Session:
         }
         self._wanted_uids = set(self._members)
         self._events = []
+        self._preview = PreviewAssembler()
+        self._preview_enabled = False
         self._tick_count = 0
 
         self.state = SessionState.IDLE
@@ -239,6 +242,10 @@ class Session:
         self.program_start_us = 0
         self.cursor_us = 0
         self.state = SessionState.LOADED
+        # Reset preview assembly to the new program's strips and pacing.
+        self._preview.set_program(
+            [(sid, art.length) for sid, art in manifest.strips.items()],
+            manifest.target_fps)
 
         for uid, member in self._members.items():
             member._clear_blocked()   # a new program is a fresh chance to drive
@@ -304,6 +311,8 @@ class Session:
         self.program_start_us = self._clock_us()
         self.cursor_us = 0
         self.state = SessionState.PLAYING
+        # A fresh run renumbers frames from 0; resume() does not (it continues).
+        self._preview.reset_run()
         for member in self._members.values():
             current = member.target
             if current.intent is Intent.DETACHED:
@@ -437,8 +446,40 @@ class Session:
             self._apply_event(event)
         self._check_end()
         self._reconcile()
-        # Preview frames are handled in a later round.
+        if self._preview_enabled and self.state is SessionState.PLAYING:
+            live_us = self._clock_us() - self.program_start_us
+            slack_us = _US_PER_S // max(1, self.manifest.target_fps)
+            for frame in poll.frames:
+                member = self._members.get(frame.uid)
+                # A packet whose program time runs past live by more than a frame
+                # is a straggler from a previous run (UID, phase, and token can
+                # still match across a replay); drop it.
+                if (member is not None and self._preview_active(member)
+                        and frame.t_program * _US_PER_S <= live_us + slack_us):
+                    self._preview.add(member.strip_id, frame.t_program, frame.rgb)
         return self._drain_events()
+
+    def set_preview_enabled(self, enabled):
+        """Turn preview-frame assembly on or off. Either edge starts a clean
+        run, so a fresh subscriber never receives a frame assembled before it
+        asked, and no partials linger while no one is watching."""
+        self._preview_enabled = enabled
+        self._preview.reset_run()
+
+    def _preview_active(self, member):
+        """True when a member's preview frames belong to the current run: the
+        session is playing, the device is confirmed playing, and what it has
+        loaded is the program the session wants. This rejects frames from a
+        superseded program (a load while playing), a device not yet started or
+        already stopped, and a paused or ended run."""
+        return (self.state is SessionState.PLAYING
+                and member.target.intent is Intent.PLAYING
+                and member.phase is DeviceState.PLAYING
+                and member._loaded_token == member.target.program_token)
+
+    def drain_preview_frames(self):
+        """Whole-program preview frames assembled since the last call."""
+        return self._preview.drain()
 
     def member(self, uid):
         return self._members.get(uid)

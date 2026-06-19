@@ -174,9 +174,10 @@ What changes: sessions and frame demux key off UID; the ACK status is
 the source of truth for whether a command happened (`Unsynced`,
 `ProfileMismatch` and friends surface to the operator instead of
 being assumed away by optimistic state mirroring); there is no `gen`
-filter on preview frames (open item below); and the per-device
-bookkeeping that v2 scattered across eight parallel dicts keyed by
-`device_id` collapses into one session record per UID.
+filter on preview frames (the controller keys them by program time, see
+the correlation item below); and the per-device bookkeeping that v2
+scattered across eight parallel dicts keyed by `device_id` collapses into
+one session record per UID.
 
 ## Build order
 
@@ -205,10 +206,28 @@ works without it.
 - **`PING_INTERVAL_MS`** (`src/link_protocol.h`) is a provisional 5 s;
   revisit once the controller-side ping scheduler lands. The device
   timeout derives from it automatically.
-- **Preview-frame correlation.** v2 used `gen` to discard frames from
-  a previous load; the v3 preview packet carries only `frame_index`,
-  which resets on load. Likely sufficient: clear assembly buckets on
-  `LOAD`/`JUMP` and tolerate one stale packet. Not yet decided.
+- **Preview-frame correlation (resolved for the MVP).** Whole-program
+  assembly needs a frame key shared across a program's strips. The sim's
+  `frame_index` (`src/sim/sim_frame_output.cpp`) is process-lifetime state,
+  never reset on load, so it cannot align strips across devices; it is left
+  as a per-device sequence/drop detector. Instead the controller derives the
+  key from the preview's `t_program` and the program's constant `target_fps`:
+  `floor(t_program * target_fps)`. Two synced devices land the same frame in
+  the same bucket without any device-side change. The session owns the
+  assembler (`preview.py`), resets it on load and on play, and emits a frame
+  once every strip reports an index. This is a preview approximation, not
+  proof of physical sync: render jitter at a bucket boundary, a stalled
+  device, or an unsynced program can drop or misplace a frame. If a sharper
+  key is wanted later, give the device a run-scoped `frame_index` (reset on
+  start) and bucket on that instead.
+
+  Preview is an opt-in stream, not a default broadcast. A client sends
+  `subscribe_frames` / `unsubscribe_frames` (server-scoped commands, allowed
+  from any role, since wanting frames is independent of controlling); there is
+  a single subscriber, last register wins. Assembly is gated off until someone
+  subscribes, so the controller does no preview work while nobody watches, and
+  `KIND_FRAME` is sent only to the subscriber. The web relay subscribes while a
+  browser is connected and unsubscribes when the last one leaves.
 - **Sync visibility (resolved).** The controller no longer measures
   offsets, so the per-device clock columns read from the device's own
   `QueryDeviceStatus` report (a synced flag plus offset, RTT, and

@@ -243,6 +243,10 @@ class WebUiServer:
         self._snapshot['layouts'] = self._layouts
         self._ws_clients: set[_WsClient] = set()
         self._ws_tasks: set[asyncio.Task] = set()
+        # Set while any browser is connected; the reader thread keeps the
+        # controller's frame subscription in step with it, so frames stream
+        # only when someone is watching.
+        self._want_frames = threading.Event()
 
     async def run(self) -> None:
         self._loop = asyncio.get_running_loop()
@@ -310,6 +314,7 @@ class WebUiServer:
     def _controller_reader_loop(self) -> None:
         client: ControllerClient | None = None
         last_connected = False
+        subscribed = False
 
         while not self._stop.is_set():
             if client is None:
@@ -327,6 +332,7 @@ class WebUiServer:
                     self._stop.wait(1.0)
                     continue
 
+                subscribed = False   # fresh connection: re-apply any subscription
                 if not last_connected:
                     log.info('controller connected: %s', self._socket_path)
                     last_connected = True
@@ -342,6 +348,7 @@ class WebUiServer:
                         self._enqueue_status(False)
                     continue
 
+            subscribed = self._sync_subscription(client, subscribed)
             try:
                 readable, _, _ = select.select([client.fileno()], [], [], 0.5)
             except (OSError, ValueError):
@@ -365,6 +372,20 @@ class WebUiServer:
         if client is not None:
             client.close()
 
+    def _sync_subscription(self, client: ControllerClient, subscribed: bool) -> bool:
+        """Bring the controller's frame subscription in line with whether any
+        browser is connected. Runs in the reader thread, which owns the client;
+        a send failure leaves the reconnect path to retry."""
+        desired = self._want_frames.is_set()
+        if desired == subscribed:
+            return subscribed
+        cmd = 'subscribe_frames' if desired else 'unsubscribe_frames'
+        try:
+            client.send_cmd({'id': client.next_id(), 'cmd': cmd})
+        except OSError:
+            return subscribed
+        return desired
+
     def _enqueue_status(self, connected: bool) -> None:
         if self._loop is None or self._queue is None:
             return
@@ -381,6 +402,10 @@ class WebUiServer:
                 try:
                     msg = parse_json_payload(payload)
                 except (json.JSONDecodeError, UnicodeDecodeError):
+                    continue
+                # Replies answer this relay's own subscribe/unsubscribe; they
+                # are internal control traffic, not browser-facing events.
+                if msg.get('type') == 'reply':
                     continue
                 self._loop.call_soon_threadsafe(self._queue.put_nowait, ('json', msg))
             elif kind == KIND_FRAME:
@@ -841,6 +866,8 @@ class WebUiServer:
         peer = str(writer.get_extra_info('peername') or 'browser')
         client = _WsClient(writer=writer, peer=peer)
         self._ws_clients.add(client)
+        if len(self._ws_clients) == 1:
+            self._want_frames.set()      # first viewer: ask the controller for frames
         task = asyncio.current_task()
         if task is not None:
             self._ws_tasks.add(task)
@@ -857,6 +884,8 @@ class WebUiServer:
             if task is not None:
                 self._ws_tasks.discard(task)
             self._ws_clients.discard(client)
+            if not self._ws_clients:
+                self._want_frames.clear()    # last viewer gone: stop frames
             await self._close_ws_writer(writer)
 
     async def _serve_asset(self, path: str, writer: asyncio.StreamWriter) -> None:

@@ -14,7 +14,7 @@ from elements.types import CompiledManifest, CompiledStripArtifact
 from elemctl import wire
 from elemctl.config import DeviceConfig
 from elemctl.hub import DeviceConnected, DeviceDisconnected, HubPoll
-from elemctl.wire import AckMsg
+from elemctl.wire import AckMsg, FramePreview
 from elemctl.session import (
     DeviceState,
     Intent,
@@ -1236,6 +1236,62 @@ def test_replay_from_ended_requires_stopping_a_paused_leftover():
     tick(session)
     op, _ = hub.last_send('sim-a')
     assert op == wire.CMD_START              # replays from 0, not Resume
+
+
+def _frame(uid='sim-a', t_program=0.02, pixels=30):
+    return FramePreview(uid=uid, frame_index=1, t_program=t_program,
+                        rgb=b'\x00' * (pixels * 3))
+
+
+def test_preview_frame_assembled_while_playing():
+    session, hub = make_session(SINGLE)
+    drive_to_playing(session, hub)
+    session.set_preview_enabled(True)
+    session._clock_us.now_us += 1_000_000      # live runs ahead of the frame
+    hub.frames = [_frame()]                     # t_program 0.02, well behind live
+    tick(session)
+    frames = session.drain_preview_frames()
+    assert len(frames) == 1
+    assert frames[0].frame_index == 1            # floor(0.02 * 50)
+    assert frames[0].strips == [b'\x00' * 90]
+
+
+def test_preview_frames_dropped_when_disabled():
+    session, hub = make_session(SINGLE)
+    drive_to_playing(session, hub)               # playing, but no subscriber
+    hub.frames = [_frame()]
+    tick(session)
+    assert session.drain_preview_frames() == []
+
+
+def test_preview_frame_dropped_when_ahead_of_live():
+    # live is ~0 just after play; a packet carrying a much larger program time
+    # is a straggler from a previous run and must be dropped.
+    session, hub = make_session(SINGLE)
+    drive_to_playing(session, hub)
+    session.set_preview_enabled(True)
+    hub.frames = [_frame(t_program=5.0)]
+    tick(session)
+    assert session.drain_preview_frames() == []
+
+
+def test_preview_frame_dropped_when_not_playing():
+    session, hub = make_session(SINGLE)
+    drive_to_loaded(session, hub)                # LOADED, not playing
+    session.set_preview_enabled(True)
+    hub.frames = [_frame()]
+    tick(session)
+    assert session.drain_preview_frames() == []
+
+
+def test_preview_frame_dropped_on_wrong_length():
+    session, hub = make_session(SINGLE)
+    drive_to_playing(session, hub)
+    session.set_preview_enabled(True)
+    session._clock_us.now_us += 1_000_000
+    hub.frames = [_frame(pixels=10)]             # 30 bytes, strip wants 90
+    tick(session)
+    assert session.drain_preview_frames() == []
 
 
 def test_mixed_ended_and_paused_leftover_replays_whole_cohort():
