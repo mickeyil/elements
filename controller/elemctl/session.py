@@ -31,6 +31,8 @@ log = logging.getLogger(__name__)
 # back off rather than retry every tick.
 _UNSYNCED_BACKOFF_TICKS = 25
 
+_US_PER_S = 1_000_000
+
 
 class SessionState(Enum):
     IDLE = auto()
@@ -287,12 +289,14 @@ class Session:
         Start. Members still loading, or attaching later, park at LOADED until
         B2 can rejoin them mid-program safely.
 
-        Valid only from a loaded, stopped session: from PLAYING/PAUSED the
-        operator resumes or stops first, so a re-stamped anchor can never drift
-        devices that are already playing or lose a paused cursor. (Replay from
-        a naturally ENDED session is added with end-of-program modelling.)"""
-        if self.state is not SessionState.LOADED:
-            raise ValueError('play() is only valid from a loaded, stopped session')
+        Valid from a loaded, stopped session or a naturally ENDED one (replay
+        from 0). From PLAYING/PAUSED the operator resumes or stops first, so a
+        re-stamped anchor can never drift devices that are already playing or
+        lose a paused cursor. Replay still needs playback settled: a member
+        left paused (e.g. a Resume the device refused) is stopped first, so
+        replay always restarts from 0 rather than resuming a stale cursor."""
+        if self.state not in (SessionState.LOADED, SessionState.ENDED):
+            raise ValueError('play() is only valid from a loaded or ended session')
         if self._has_unsettled_playback():
             raise ValueError('play() requires playback to be stopped first')
         self.program_start_us = self._clock_us()
@@ -428,6 +432,7 @@ class Session:
         poll = self._hub.poll(self._wanted_uids)
         for event in poll.events:
             self._apply_event(event)
+        self._check_end()
         self._reconcile()
         # Preview frames are handled in a later round.
         return self._drain_events()
@@ -518,10 +523,21 @@ class Session:
             return
 
         if target.intent is Intent.PLAYING:
+            # Don't drive playback unless the session is actually playing. After
+            # a natural end the targets stay PLAYING, but a member that still
+            # carries start authorization (e.g. a Start refused Unsynced, never
+            # cleared) would otherwise be Started into an ended session. play()
+            # re-arms the session before any replay; profile and load above
+            # still run, so a device attaching while ended can prepare.
+            if self.state is not SessionState.PLAYING:
+                return
             # The authorized cohort starts from program time 0. An unauthorized
             # PLAYING member at LOADED (a late joiner / reconnector) parks until
-            # B2b's JUMP + RESUME rejoin can place it safely.
-            if member.phase is DeviceState.LOADED and member.start_authorized:
+            # B2b's JUMP + RESUME rejoin can place it safely. ENDED is allowed
+            # so replay Starts without a reload (the device permits Start from
+            # ENDED and resets its engine).
+            if (member.phase in (DeviceState.LOADED, DeviceState.ENDED)
+                    and member.start_authorized):
                 self._send(member, 'start', wire.encode_start(target.anchor_us),
                            lambda m: self._after_start(m),
                            still_relevant=lambda m: m.target.intent is Intent.PLAYING)
@@ -616,15 +632,51 @@ class Session:
         member.serving = False
 
     def _after_start(self, member):
-        member.phase = DeviceState.PLAYING
         member.start_authorized = False   # the initial Start is consumed
+        member.phase = self._playing_phase()
 
     def _after_pause(self, member):
         member.phase = DeviceState.PAUSED
 
     def _after_resume(self, member):
-        member.phase = DeviceState.PLAYING
+        member.phase = self._playing_phase()
+
+    def _playing_phase(self):
+        """The phase a Start or Resume Ok records. Normally PLAYING; but a
+        Start/Resume that lands after the session already ended has an anchor
+        past the duration, so the device ends on its next render. Mirror that
+        rather than recording a PLAYING that never really happened."""
+        return (DeviceState.ENDED if self.state is SessionState.ENDED
+                else DeviceState.PLAYING)
 
     def _reached(self, cursor_us):
         """True once live program time has reached cursor_us (microseconds)."""
         return self._clock_us() - self.program_start_us >= cursor_us
+
+    def _duration_us(self):
+        return int(self.manifest.duration * _US_PER_S)
+
+    def _check_end(self):
+        """Natural end of program. The device transitions PLAYING -> ENDED when
+        its render passes the program duration (src/playback.cpp); there is no
+        end event or query, so the controller ends the session by the same
+        clock the devices follow: once live program time reaches the duration,
+        the session and every playing member are ENDED.
+
+        Only runs while PLAYING, the one state with a live anchor (when paused
+        or stopped, now - program_start_us keeps growing against a stale anchor
+        with playback frozen). A member still at LOADED never started and is
+        left untouched. For unsynced programs the device anchors on its own
+        receive time, so this can read ENDED a delivery delay early; that is the
+        accepted clock approximation, and the PLAYING-rung guard keeps it from
+        issuing any stray command."""
+        if self.state is not SessionState.PLAYING:
+            return
+        if self._clock_us() - self.program_start_us < self._duration_us():
+            return
+        self.state = SessionState.ENDED
+        for member in self._members.values():
+            if member.target.intent is Intent.DETACHED:
+                continue
+            if member.phase is DeviceState.PLAYING:
+                member.phase = DeviceState.ENDED

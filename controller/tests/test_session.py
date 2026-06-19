@@ -979,3 +979,312 @@ def test_reboot_between_set_profile_and_load():
     tick(session)
     op, _ = hub.last_send('sim-a')
     assert op == wire.CMD_LOAD
+
+
+# ---------------------------------------------------------------------------
+# End of program (B2-end): the controller ends the session by the clock the
+# devices follow, since there is no end event or query.
+# ---------------------------------------------------------------------------
+
+def test_program_ends_by_clock():
+    session, hub = make_session(SINGLE)
+    drive_to_playing(session, hub)
+    session._clock_us.now_us += 10_000_000   # past the 10s duration
+    tick(session)
+    assert session.state is SessionState.ENDED
+    assert session.member('sim-a').phase is DeviceState.ENDED
+
+
+def test_ended_member_parks_with_no_replay():
+    session, hub = make_session(SINGLE)
+    drive_to_playing(session, hub)
+    session._clock_us.now_us += 10_000_000
+    tick(session)
+    assert session.state is SessionState.ENDED
+
+    n = len(hub.sent)
+    for _ in range(3):
+        tick(session)
+    assert len(hub.sent) == n                # no auto-replay
+    assert session.member('sim-a').phase is DeviceState.ENDED
+
+
+def test_pause_refused_from_ended():
+    session, hub = make_session(SINGLE)
+    drive_to_playing(session, hub)
+    session._clock_us.now_us += 10_000_000
+    tick(session)
+    assert session.state is SessionState.ENDED
+    # The bug this round fixes: from ENDED the device ignores Pause but ACKs Ok,
+    # which used to record a false PAUSED. The state guard refuses it outright.
+    with pytest.raises(ValueError, match='playing'):
+        session.pause()
+
+
+def test_resume_refused_from_ended():
+    session, hub = make_session(SINGLE)
+    drive_to_playing(session, hub)
+    session._clock_us.now_us += 10_000_000
+    tick(session)
+    with pytest.raises(ValueError, match='paused'):
+        session.resume()
+
+
+def test_play_replays_from_ended_without_reload():
+    session, hub = make_session(SINGLE)
+    drive_to_playing(session, hub)
+    session._clock_us.now_us += 10_000_000
+    tick(session)
+    assert session.state is SessionState.ENDED
+    assert session.member('sim-a').phase is DeviceState.ENDED
+
+    session.play()
+    assert session.state is SessionState.PLAYING
+    tick(session)
+    op, on_ack = hub.last_send('sim-a')
+    assert op == wire.CMD_START              # Start from ENDED, no reload
+    on_ack(ack_ok())
+    assert session.member('sim-a').phase is DeviceState.PLAYING
+    assert session.program_start_us == session._clock_us()   # anchor re-stamped
+
+
+def test_late_joiner_not_marked_ended():
+    session, hub = make_session(TWO_STRIPS)
+    session.load(make_manifest(('main', 30, b'M'), ('side', 30, b'S')))
+
+    # sim-a plays; sim-b attaches late, loads, but B1 parks it at LOADED.
+    hub.emit(DeviceConnected(uid='sim-a', boot_token=1, rebooted=False))
+    tick(session)
+    _, on_ack = hub.last_send('sim-a'); on_ack(ack_ok())
+    tick(session)
+    _, on_ack = hub.last_send('sim-a'); on_ack(ack_ok())   # sim-a LOADED
+
+    session.play()
+    tick(session)
+    _, on_ack = hub.last_send('sim-a'); on_ack(ack_ok())   # sim-a PLAYING
+
+    hub.emit(DeviceConnected(uid='sim-b', boot_token=1, rebooted=False))
+    tick(session)
+    _, on_ack = hub.last_send('sim-b'); on_ack(ack_ok())   # profile
+    tick(session)
+    _, on_ack = hub.last_send('sim-b'); on_ack(ack_ok())   # sim-b LOADED, parked
+
+    session._clock_us.now_us += 10_000_000
+    tick(session)
+    assert session.state is SessionState.ENDED
+    assert session.member('sim-a').phase is DeviceState.ENDED    # was playing
+    assert session.member('sim-b').phase is DeviceState.LOADED   # never started
+
+
+def test_stop_from_ended_parks_ready_without_stop():
+    session, hub = make_session(SINGLE)
+    drive_to_playing(session, hub)
+    session._clock_us.now_us += 10_000_000
+    tick(session)
+    assert session.state is SessionState.ENDED
+
+    session.stop()
+    assert session.state is SessionState.LOADED
+    assert session.member('sim-a').target.intent is Intent.READY
+
+    # ENDED already shows black, so READY needs no Stop; the phase honestly
+    # stays ENDED (we sent nothing).
+    n = len(hub.sent)
+    tick(session)
+    assert len(hub.sent) == n
+    assert session.member('sim-a').phase is DeviceState.ENDED
+
+
+def test_end_not_detected_while_paused():
+    # Paused, the anchor is stale and now - program_start_us grows past the
+    # duration with playback frozen; end detection must not fire.
+    session, hub = make_session(SINGLE)
+    drive_to_playing(session, hub)
+    session._clock_us.now_us += 1_000_000
+    session.pause()
+    tick(session)
+    _, on_ack = hub.last_send('sim-a'); on_ack(ack_ok())   # PAUSED
+
+    session._clock_us.now_us += 20_000_000   # far past the duration, but paused
+    tick(session)
+    assert session.state is SessionState.PAUSED
+    assert session.member('sim-a').phase is DeviceState.PAUSED
+
+
+def test_start_acked_after_end_records_ended():
+    # A Start still in flight when the clock crosses duration: the session ends
+    # with the member still at LOADED, and the late Ok records ENDED (the device
+    # started at an anchor past duration and ends on its next render).
+    session, hub = make_session(SINGLE)
+    drive_to_loaded(session, hub)
+    session.play()
+    tick(session)
+    op, start_ack = hub.last_send('sim-a')
+    assert op == wire.CMD_START              # in flight, unacked
+
+    session._clock_us.now_us += 10_000_000
+    tick(session)
+    assert session.state is SessionState.ENDED
+    assert session.member('sim-a').phase is DeviceState.LOADED   # Start unacked
+
+    start_ack(ack_ok())
+    assert session.member('sim-a').phase is DeviceState.ENDED
+    assert session.member('sim-a').start_authorized is False
+
+
+def test_resume_acked_after_end_records_ended():
+    session, hub = make_session(SINGLE)
+    drive_to_playing(session, hub)
+    session._clock_us.now_us += 1_000_000
+    session.pause()
+    tick(session)
+    _, on_ack = hub.last_send('sim-a'); on_ack(ack_ok())   # PAUSED at 1s cursor
+
+    session.resume()
+    tick(session)
+    op, resume_ack = hub.last_send('sim-a')
+    assert op == wire.CMD_RESUME             # in flight, unacked
+
+    session._clock_us.now_us += 10_000_000
+    tick(session)
+    assert session.state is SessionState.ENDED
+    assert session.member('sim-a').phase is DeviceState.PAUSED   # Resume unacked
+
+    resume_ack(ack_ok())
+    assert session.member('sim-a').phase is DeviceState.ENDED
+
+
+def test_unsynced_start_then_end_does_not_retry_start():
+    # A Start refused Unsynced keeps start_authorized set; once the session
+    # ends, the PLAYING-rung guard must stop the backoff retry from firing.
+    session, hub = make_session(SINGLE)
+    drive_to_loaded(session, hub)
+    session.play()
+    tick(session)
+    op, on_ack = hub.last_send('sim-a')
+    assert op == wire.CMD_START
+    on_ack(ack(wire.ACK_UNSYNCED))           # refused; authorized + backoff
+
+    session._clock_us.now_us += 10_000_000
+    tick(session)
+    assert session.state is SessionState.ENDED
+
+    n_start = sum(1 for _u, e, _a in hub.sent if e[4] == wire.CMD_START)
+    for _ in range(_UNSYNCED_BACKOFF_TICKS + 2):
+        tick(session)
+    after = sum(1 for _u, e, _a in hub.sent if e[4] == wire.CMD_START)
+    assert after == n_start                  # no retry into an ended session
+
+
+def test_unsynced_resume_then_end_does_not_retry_resume():
+    session, hub = make_session(SINGLE)
+    drive_to_playing(session, hub)
+    session._clock_us.now_us += 1_000_000
+    session.pause()
+    tick(session)
+    _, on_ack = hub.last_send('sim-a'); on_ack(ack_ok())   # PAUSED
+    session.resume()
+    tick(session)
+    op, on_ack = hub.last_send('sim-a')
+    assert op == wire.CMD_RESUME
+    on_ack(ack(wire.ACK_UNSYNCED))           # refused; device stays PAUSED
+
+    session._clock_us.now_us += 10_000_000
+    tick(session)
+    assert session.state is SessionState.ENDED
+    assert session.member('sim-a').phase is DeviceState.PAUSED
+
+    n_resume = sum(1 for _u, e, _a in hub.sent if e[4] == wire.CMD_RESUME)
+    for _ in range(_UNSYNCED_BACKOFF_TICKS + 2):
+        tick(session)
+    after = sum(1 for _u, e, _a in hub.sent if e[4] == wire.CMD_RESUME)
+    assert after == n_resume
+
+
+def test_replay_from_ended_requires_stopping_a_paused_leftover():
+    # A device left PAUSED by a refused Resume keeps replay from firing
+    # directly: play() would otherwise resume it from its stale cursor instead
+    # of restarting at 0, so it is refused until stopped. stop() normalizes it
+    # to LOADED, then play() replays from 0 (Start, not Resume). The full
+    # drive-through-Stop on replay belongs with B2b's rejoin normalization.
+    session, hub = make_session(SINGLE)
+    drive_to_playing(session, hub)
+    session._clock_us.now_us += 1_000_000
+    session.pause()
+    tick(session)
+    _, on_ack = hub.last_send('sim-a'); on_ack(ack_ok())   # PAUSED
+    session.resume()
+    tick(session)
+    op, on_ack = hub.last_send('sim-a')
+    assert op == wire.CMD_RESUME
+    on_ack(ack(wire.ACK_UNSYNCED))           # refused; device stays PAUSED
+
+    session._clock_us.now_us += 10_000_000
+    tick(session)
+    assert session.state is SessionState.ENDED
+    assert session.member('sim-a').phase is DeviceState.PAUSED
+
+    with pytest.raises(ValueError, match='stopped first'):
+        session.play()
+
+    session.stop()
+    tick(session)
+    op, on_ack = hub.last_send('sim-a')
+    assert op == wire.CMD_STOP
+    on_ack(ack_ok())                         # PAUSED -> LOADED
+    session.play()
+    tick(session)
+    op, _ = hub.last_send('sim-a')
+    assert op == wire.CMD_START              # replays from 0, not Resume
+
+
+def test_mixed_ended_and_paused_leftover_replays_whole_cohort():
+    # An ended session with a mix of ENDED members and one PAUSED leftover (a
+    # refused Resume): stop() then play() must replay every member. play()
+    # authorizes by loaded token, not phase, so the normalized LOADED member is
+    # not mistaken for an unauthorized late joiner.
+    session, hub = make_session(SHARED_STRIP)   # sim-a, sim-b both serve 'wall'
+    session.load(make_manifest(('wall', 30, b'W')))
+    hub.emit(DeviceConnected(uid='sim-a', boot_token=1, rebooted=False),
+             DeviceConnected(uid='sim-b', boot_token=1, rebooted=False))
+    tick(session)
+    for uid in ('sim-a', 'sim-b'):
+        _, on_ack = hub.last_send(uid); on_ack(ack_ok())   # profiles
+    tick(session)
+    for uid in ('sim-a', 'sim-b'):
+        _, on_ack = hub.last_send(uid); on_ack(ack_ok())   # both LOADED
+
+    session.play()
+    tick(session)
+    for uid in ('sim-a', 'sim-b'):
+        _, on_ack = hub.last_send(uid); on_ack(ack_ok())   # both PLAYING
+
+    session._clock_us.now_us += 1_000_000
+    session.pause()
+    tick(session)
+    for uid in ('sim-a', 'sim-b'):
+        _, on_ack = hub.last_send(uid); on_ack(ack_ok())   # both PAUSED
+
+    session.resume()
+    tick(session)
+    _, a_ack = hub.last_send('sim-a'); a_ack(ack_ok())             # sim-a PLAYING
+    _, b_ack = hub.last_send('sim-b'); b_ack(ack(wire.ACK_UNSYNCED))  # sim-b stays PAUSED
+
+    session._clock_us.now_us += 10_000_000
+    tick(session)
+    assert session.state is SessionState.ENDED
+    assert session.member('sim-a').phase is DeviceState.ENDED
+    assert session.member('sim-b').phase is DeviceState.PAUSED
+
+    session.stop()
+    tick(session)
+    op, b_ack = hub.last_send('sim-b')
+    assert op == wire.CMD_STOP                # only the paused leftover needs it
+    b_ack(ack_ok())                           # sim-b PAUSED -> LOADED
+
+    session.play()
+    tick(session)
+    a_op = next(e[4] for u, e, _ in reversed(hub.sent) if u == 'sim-a')
+    b_op = next(e[4] for u, e, _ in reversed(hub.sent) if u == 'sim-b')
+    assert a_op == wire.CMD_START             # ENDED member replays from 0
+    assert b_op == wire.CMD_START             # normalized LOADED member too
