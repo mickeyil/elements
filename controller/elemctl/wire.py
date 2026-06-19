@@ -231,6 +231,8 @@ def encode_start(program_start_us):
     return encode_message(CMD_START, _I64.pack(program_start_us))
 
 
+# JUMP repositions playback onto a compiler-marked safe interval. Retained for
+# future seek and live rejoin; the v3 session does not issue it (drafts/jump.md).
 def encode_jump(t_program):
     return encode_message(CMD_JUMP, _F32.pack(_require_finite(t_program, 't_program')))
 

@@ -163,13 +163,10 @@ right and the mechanics wrong for v3. What carries over as intent:
   (the compiler enforces it), so there is no positional slot index and
   no per-device target override; the load identity is
   `(session_id, strip_id)`.
-- Seek snaps to compiler-provided safe intervals; the controller
-  leaves one frame period of headroom before an interval's end
-  (`compiler.md`).
-- Rejoin of a returning device: `LOAD`, `JUMP(safe_point)`, then
-  `RESUME(program_start_us)` for a playing session; the same without
-  the final `RESUME` for a paused one. If no safe interval remains in
-  the current segment, the device cannot be safely rejoined yet.
+- Live rejoin of a returning device and operator seek both ride on
+  `JUMP` onto a compiler-marked safe interval. They are deferred from
+  the first working controller; `drafts/jump.md` carries that design
+  and the safe-interval contract.
 - Multi-strip preview assembly: per-strip frames bucketed by frame
   index into whole program frames for observers.
 

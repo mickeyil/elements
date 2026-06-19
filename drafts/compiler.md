@@ -57,15 +57,10 @@ Rules:
   state intact (no reset), so resuming where paused is always correct.
   Real retiming goes through `JUMP`, which is gated.
 
-To rejoin a device, the controller sends:
-
-- Playing session: `LOAD`, `JUMP(safe_point)`,
-  `RESUME(program_start_us)`; the device waits until the clock reaches
-  the cursor.
-- Paused session: the same without the final `RESUME`; the device
-  waits at the safe point.
-- If no safe interval remains in the current segment, that device
-  cannot be safely rejoined.
+How the controller turns these intervals into rejoin and seek
+commands is deferred and documented in `drafts/jump.md`; the compiler
+emits the intervals regardless of when the controller starts
+consuming them.
 
 Programs with long chains of events reading other events get shorter
 safe intervals; that is the intended trade-off. Offline render walks
