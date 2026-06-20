@@ -111,13 +111,18 @@ def _make_disconnected_snapshot(snapshot: dict | None) -> dict:
         out['programs'] = []
     devices = out.get('devices')
     if isinstance(devices, list):
+        # Discovery is the controller's to report; with it gone, keep only the
+        # configured devices and show them offline with no live runtime detail.
+        configured = []
         for dev in devices:
-            if isinstance(dev, dict):
-                dev['connected'] = False
-        out['online_count'] = sum(
-            1 for dev in devices if isinstance(dev, dict) and dev.get('connected')
-        )
-        out['expected_count'] = len(devices)
+            if isinstance(dev, dict) and dev.get('configured'):
+                dev['status'] = 'offline'
+                dev['attached'] = False
+                dev['serving'] = False
+                configured.append(dev)
+        out['devices'] = configured
+        out['online_count'] = 0
+        out['expected_count'] = len(configured)
     else:
         out['devices'] = []
         out['online_count'] = 0
@@ -243,6 +248,10 @@ class WebUiServer:
         self._snapshot['layouts'] = self._layouts
         self._ws_clients: set[_WsClient] = set()
         self._ws_tasks: set[asyncio.Task] = set()
+        # Set while any browser is connected; the reader thread keeps the
+        # controller's frame subscription in step with it, so frames stream
+        # only when someone is watching.
+        self._want_frames = threading.Event()
 
     async def run(self) -> None:
         self._loop = asyncio.get_running_loop()
@@ -310,6 +319,7 @@ class WebUiServer:
     def _controller_reader_loop(self) -> None:
         client: ControllerClient | None = None
         last_connected = False
+        subscribed = False
 
         while not self._stop.is_set():
             if client is None:
@@ -327,6 +337,7 @@ class WebUiServer:
                     self._stop.wait(1.0)
                     continue
 
+                subscribed = False   # fresh connection: re-apply any subscription
                 if not last_connected:
                     log.info('controller connected: %s', self._socket_path)
                     last_connected = True
@@ -342,6 +353,7 @@ class WebUiServer:
                         self._enqueue_status(False)
                     continue
 
+            subscribed = self._sync_subscription(client, subscribed)
             try:
                 readable, _, _ = select.select([client.fileno()], [], [], 0.5)
             except (OSError, ValueError):
@@ -365,6 +377,20 @@ class WebUiServer:
         if client is not None:
             client.close()
 
+    def _sync_subscription(self, client: ControllerClient, subscribed: bool) -> bool:
+        """Bring the controller's frame subscription in line with whether any
+        browser is connected. Runs in the reader thread, which owns the client;
+        a send failure leaves the reconnect path to retry."""
+        desired = self._want_frames.is_set()
+        if desired == subscribed:
+            return subscribed
+        cmd = 'subscribe_frames' if desired else 'unsubscribe_frames'
+        try:
+            client.send_cmd({'id': client.next_id(), 'cmd': cmd})
+        except OSError:
+            return subscribed
+        return desired
+
     def _enqueue_status(self, connected: bool) -> None:
         if self._loop is None or self._queue is None:
             return
@@ -381,6 +407,10 @@ class WebUiServer:
                 try:
                     msg = parse_json_payload(payload)
                 except (json.JSONDecodeError, UnicodeDecodeError):
+                    continue
+                # Replies answer this relay's own subscribe/unsubscribe; they
+                # are internal control traffic, not browser-facing events.
+                if msg.get('type') == 'reply':
                     continue
                 self._loop.call_soon_threadsafe(self._queue.put_nowait, ('json', msg))
             elif kind == KIND_FRAME:
@@ -407,7 +437,9 @@ class WebUiServer:
                 msg = payload
                 assert isinstance(msg, dict)
                 self._apply_json_message(msg)
-                if msg.get('type') == 'event' and msg.get('event') == 'snapshot':
+                # state/catalog fold into the snapshot; rebroadcast the merged
+                # snapshot so the browser only ever sees one shape.
+                if msg.get('type') in ('state', 'catalog'):
                     await self._broadcast_json(self._snapshot)
                 else:
                     await self._broadcast_json(msg)
@@ -420,85 +452,34 @@ class WebUiServer:
                 await self._broadcast_binary(frame)
 
     def _apply_json_message(self, msg: dict) -> None:
-        if msg.get('type') != 'event':
-            return
+        """Fold a v3 controller message into the browser snapshot. The service
+        sends full state and catalog messages (not incremental v2 events), so
+        each one replaces its slice wholesale."""
+        msg_type = msg.get('type')
 
-        event = msg.get('event')
-        if event == 'snapshot':
-            self._snapshot = copy.deepcopy(msg)
-            self._snapshot['server_version'] = self._server_version
-            self._snapshot['layouts'] = self._layouts
-            return
-
-        if event == 'session_start':
-            self._snapshot['session'] = {
-                'session_id': msg.get('session_id'),
-                'epoch': msg.get('epoch'),
-                'playback_state': 'loaded',
-                'duration': msg.get('duration'),
-                'current_t_rel': 0.0,
-                'observer_suspended': msg.get('observer_suspended'),
-                'safe_intervals': msg.get('safe_intervals', []),
-                'strips': msg.get('strips', []),
+        if msg_type == 'state':
+            devices = msg.get('devices') or []
+            self._snapshot['devices'] = devices
+            self._snapshot['session'] = msg.get('session')
+            self._snapshot['online_count'] = sum(
+                1 for d in devices
+                if isinstance(d, dict) and d.get('status') == 'online'
+            )
+            self._snapshot['expected_count'] = sum(
+                1 for d in devices if isinstance(d, dict) and d.get('configured')
+            )
+            # Keep the sim-device map current so the layout APIs follow dynamic
+            # add/edit/remove rather than the startup config.
+            self._sim_devices = {
+                d['uid']: d['length'] for d in devices
+                if isinstance(d, dict) and d.get('configured')
+                and str(d.get('uid', '')).startswith('sim-')
             }
             return
 
-        if event == 'state':
-            session = self._snapshot.get('session')
-            if isinstance(session, dict):
-                session['playback_state'] = msg.get('state')
-                if 'epoch' in msg:
-                    session['epoch'] = msg.get('epoch')
-                if 'observer_suspended' in msg:
-                    session['observer_suspended'] = msg.get('observer_suspended')
-            return
-
-        if event == 'loop':
-            session = self._snapshot.get('session')
-            if isinstance(session, dict):
-                session['epoch'] = msg.get('epoch')
-                session['current_t_rel'] = 0.0
-                if 'observer_suspended' in msg:
-                    session['observer_suspended'] = msg.get('observer_suspended')
-            return
-
-        if event == 'device_status':
-            devices = self._snapshot.get('devices')
-            if isinstance(devices, list):
-                for dev in devices:
-                    if (
-                        isinstance(dev, dict)
-                        and dev.get('device_id') == msg.get('device_id')
-                    ):
-                        if 'connected' in msg:
-                            dev['connected'] = bool(msg.get('connected'))
-                        if 'last_seen' in msg:
-                            dev['last_seen'] = msg.get('last_seen')
-                        for key in (
-                            'session_role',
-                            'reported',
-                            'reported_at',
-                        ):
-                            if key in msg:
-                                dev[key] = copy.deepcopy(msg.get(key))
-                        for key in (
-                            'clock_state',
-                            'clock_offset_ms',
-                            'clock_rtt_ms',
-                            'clock_last_sync_age_s',
-                        ):
-                            if key in msg:
-                                dev[key] = msg.get(key)
-                        break
-                self._snapshot['online_count'] = sum(
-                    1 for dev in devices if isinstance(dev, dict) and dev.get('connected')
-                )
-            return
-
-        if event == 'programs_updated':
+        if msg_type == 'catalog':
             programs = msg.get('programs')
-            if isinstance(programs, list):
-                self._snapshot['programs'] = copy.deepcopy(programs)
+            self._snapshot['programs'] = programs if isinstance(programs, list) else []
 
     def _apply_frame(self, payload: bytes) -> None:
         session = self._snapshot.get('session')
@@ -717,13 +698,11 @@ class WebUiServer:
         if not isinstance(payload, dict):
             return 400, {'error': 'request body must be a JSON object'}
 
-        device_type = payload.get('device_type')
+        # v3 infers the device type from the uid prefix; no device_type field.
         device_uid = payload.get('device_uid')
         strip_id = payload.get('strip_id')
         length = payload.get('length')
 
-        if device_type not in {'sim', 'esp32'}:
-            return 400, {'error': "device_type must be 'sim' or 'esp32'"}
         if not isinstance(device_uid, str) or not device_uid:
             return 400, {'error': 'device_uid must be a non-empty string'}
         if not isinstance(strip_id, str) or not strip_id:
@@ -734,7 +713,6 @@ class WebUiServer:
         try:
             reply = self._send_controller_cmd({
                 'cmd': 'add_device',
-                'device_type': device_type,
                 'device_uid': device_uid,
                 'strip_id': strip_id,
                 'length': length,
@@ -841,6 +819,8 @@ class WebUiServer:
         peer = str(writer.get_extra_info('peername') or 'browser')
         client = _WsClient(writer=writer, peer=peer)
         self._ws_clients.add(client)
+        if len(self._ws_clients) == 1:
+            self._want_frames.set()      # first viewer: ask the controller for frames
         task = asyncio.current_task()
         if task is not None:
             self._ws_tasks.add(task)
@@ -857,6 +837,8 @@ class WebUiServer:
             if task is not None:
                 self._ws_tasks.discard(task)
             self._ws_clients.discard(client)
+            if not self._ws_clients:
+                self._want_frames.clear()    # last viewer gone: stop frames
             await self._close_ws_writer(writer)
 
     async def _serve_asset(self, path: str, writer: asyncio.StreamWriter) -> None:

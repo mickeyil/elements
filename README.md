@@ -49,50 +49,14 @@ Or run individually:
 
 ## Local Smoke Test
 
-Build the simulator:
+The old `network_sim` smoke path is deprecated and staged under
+`src/deprecated/`. The v3 sim launcher is in implementation, so the
+local multi-process smoke path is temporarily unavailable.
 
-```bash
-cmake -B build
-cmake --build build --target network_sim
-```
+## Runtime Notes
 
-Then use four terminals:
-
-```bash
-./elemctl server --config examples/single-sim.json
-```
-
-```bash
-./elemctl sim sim-1 --config examples/single-sim.json
-```
-
-```bash
-./elemctl tui
-```
-
-```bash
-./elemctl web
-```
-
-In the TUI:
-
-```text
-/rescan
-/load #1
-/play
-```
-
-Expected result:
-- the `server` terminal logs a discovery line for `sim-1`
-- the TUI shows the device come online
-- `/rescan` lists `demo_main`
-- `/load` and `/play` succeed without manual port/length flags
-- `http://127.0.0.1:8080/` shows the running animation in the browser
-
-Notes:
 - `tui` connects as the single writer client
 - `web` starts the web UI server and connects to the controller as an observer client
-
 - discovery defaults to UDP port `6040` when `controller.discovery_port` is omitted
 - set `"discovery_port": null` in the config to disable discovery explicitly
 - `elemctl` creates and maintains its managed environment at `local/venv`
@@ -105,7 +69,10 @@ Notes:
 ```
 src/              C++ engine core (decoder, engine, compositor, animations)
 src/firmware/     ESP32 firmware (WiFi, TCP, discovery, LED output)
+src/sim/          active host/sim platform implementations
+src/deprecated/   old simulator stack staged for deletion after v3
 test/             Catch2 tests
+test/deprecated/  tests for old simulator stack, staged with deprecated code
 compiler/         Python compiler (DSL → binary blob)
 controller/       Python controller service, TUI, web UI server
 controller/web_ui/ Vue 3 browser interface source + built assets

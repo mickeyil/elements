@@ -30,9 +30,8 @@ def ensure_editor_shape(doc: dict) -> dict:
         doc["controller"] = ctrl
     if not isinstance(ctrl, dict):
         raise ConfigError("'controller' must be an object")
-    ctrl.setdefault("frame_port", defaults["controller"]["frame_port"])
-    if "discovery_port" not in ctrl:
-        ctrl["discovery_port"] = defaults["controller"]["discovery_port"]
+    for field, value in defaults["controller"].items():
+        ctrl.setdefault(field, value)
 
     devices = doc.get("devices")
     if devices is None:
@@ -55,38 +54,22 @@ def load_config_doc(path: str) -> dict:
     return ensure_editor_shape(raw)
 
 
-def next_device_id(doc: dict) -> int:
-    """Return the lowest unused positive device_id."""
-    devices = ensure_editor_shape(doc)["devices"]
-    used = {
-        d.get("device_id")
-        for d in devices
-        if isinstance(d, dict) and isinstance(d.get("device_id"), int)
-    }
-    candidate = 1
-    while candidate in used:
-        candidate += 1
-    return candidate
-
-
 def make_device_entry(
     *,
     device_uid: str,
-    device_type: str,
     strip_id: str,
     length: int,
-    device_id: int,
+    label: str | None = None,
 ) -> dict:
-    """Build a discovery-mode device entry for the config doc."""
-    return {
-        "device_id": device_id,
+    """Build a device entry for the config doc."""
+    entry = {
         "device_uid": device_uid,
-        "device_type": device_type,
-        "host": "",
-        "tcp_port": 0,
         "strip_id": strip_id,
         "length": length,
     }
+    if label is not None:
+        entry["label"] = label
+    return entry
 
 
 def add_device(doc: dict, entry: dict) -> None:
@@ -111,6 +94,7 @@ def edit_device(
     device_uid: str,
     strip_id: str,
     length: int,
+    label: str | None = None,
 ) -> None:
     """Edit a device in place. Raises ConfigError if target is missing."""
     devices = ensure_editor_shape(doc)["devices"]
@@ -119,6 +103,10 @@ def edit_device(
             device["device_uid"] = device_uid
             device["strip_id"] = strip_id
             device["length"] = length
+            if label is None:
+                device.pop("label", None)
+            else:
+                device["label"] = label
             return
     raise ConfigError(f"device not found: {target_device_uid}")
 

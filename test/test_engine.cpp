@@ -1,323 +1,579 @@
 #include <catch2/catch_test_macros.hpp>
-#include <catch2/catch_approx.hpp>
+
+#include <cstdint>
+
+#include "../src/animation.h"
+#include "../src/colors.h"
+#include "../src/copy_ops.h"
 #include "../src/engine.h"
-#include "../src/decoder.h"
+#include "../src/layer.h"
+#include "../src/pixel_buffer_pool.h"
+#include "../src/pixel_views.h"
+#include "../src/program.h"
+#include "../src/runtime_constants.h"
+#include "../src/strip.h"
 
-#include <cstdio>
-#include <cstdlib>
-#include <cmath>
-#include <vector>
+namespace {
 
-// ---------------------------------------------------------------------------
-// Load test blob from file
-// ---------------------------------------------------------------------------
-
-static std::vector<uint8_t> load_blob(const char* path) {
-    FILE* f = fopen(path, "rb");
-    if (!f) {
-        FAIL("Could not open " << path);
-        return {};
+// Animation that records every initialize/render call so tests can verify
+// activation timing, frame counts, and t_animation values. Optionally writes
+// `_render_value` to every pixel of dst on render() so the strip output can
+// be observed end-to-end.
+class FakeAnim : public Animation {
+public:
+    void initialize(const PixelView* src, PixelView* work) override {
+        _init_count++;
+        _last_src = src;
+        _last_work = work;
     }
-    fseek(f, 0, SEEK_END);
-    long sz = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    std::vector<uint8_t> data(sz);
-    fread(data.data(), 1, sz, f);
-    fclose(f);
-    return data;
-}
-
-// ---------------------------------------------------------------------------
-// Helper: create a minimal strip buffer for testing
-// ---------------------------------------------------------------------------
-
-static const uint16_t STRIP_LEN = 10;
-
-struct TestStrip {
-    uint8_t rgb[STRIP_LEN * 3];
-    Strip strip;
-
-    TestStrip() : strip(rgb, STRIP_LEN) {
-        memset(rgb, 0, sizeof(rgb));
+    void render(PixelView& dst, float t_animation) override {
+        _render_count++;
+        _last_t = t_animation;
+        _last_dst = &dst;
+        for (uint16_t i = 0; i < dst.size(); i++) {
+            dst[i] = _render_value;
+        }
     }
+
+    int init_count() const { return _init_count; }
+    int render_count() const { return _render_count; }
+    float last_t() const { return _last_t; }
+    PixelView* last_dst() const { return _last_dst; }
+    const PixelView* last_src() const { return _last_src; }
+    PixelView* last_work() const { return _last_work; }
+
+    void set_render_value(hsva_t v) { _render_value = v; }
+
+private:
+    int _init_count = 0;
+    int _render_count = 0;
+    float _last_t = -1.0f;
+    PixelView* _last_dst = nullptr;
+    const PixelView* _last_src = nullptr;
+    PixelView* _last_work = nullptr;
+    hsva_t _render_value = hsva_t(0.0f, 0.0f, 0.0f, 1.0f);
 };
 
-// Helper: decode + build engine from test blob
-static Engine* make_engine(TestStrip& ts) {
-    auto blob = load_blob("test/fixtures/test_animation.bin");
-    Program* prog = decode_program(blob.data(), blob.size());
-    REQUIRE(prog != nullptr);
-    return new Engine(prog, ts.strip, true);
+// Animation that copies its src view's first pixel into its dst on render.
+// Used to make copy-op-before-render order observable through the strip.
+class SrcReadAnim : public Animation {
+public:
+    void initialize(const PixelView* src, PixelView*) override { _src = src; }
+    void render(PixelView& dst, float) override {
+        if (_src && _src->size() > 0 && dst.size() > 0) {
+            dst[0] = (*_src)[0];
+        }
+    }
+private:
+    const PixelView* _src = nullptr;
+};
+
+// Build a 1-buffer, 1-view, no-layers Program. View 0 binds buffer 0 with
+// identity storage and identity physical mapping.
+Program* basic_program(float duration, uint16_t buffer_size = 1) {
+    Program* p = new Program();
+    p->duration = duration;
+    REQUIRE(p->pixel_buffer_pool.initialize(&buffer_size, 1));
+    PixelViewSpec spec;
+    spec.buffer_idx = 0;
+    spec.size = buffer_size;
+    spec.storage_identity = true;
+    spec.has_physical_mapping = true;
+    spec.physical_identity = true;
+    REQUIRE(p->pixel_views.initialize(p->pixel_buffer_pool, &spec, 1));
+    return p;
+}
+
+void give_layers(Program* p, uint8_t count) {
+    p->layer_count = count;
+    p->layers = new Layer[count];
+}
+
+AnimationEvent make_event(Animation* anim, float start, float duration,
+                          uint16_t dst, uint16_t src = PIXV_NONE,
+                          uint16_t work = PIXV_NONE) {
+    AnimationEvent e;
+    e.animation = anim;
+    e.start = start;
+    e.duration = duration;
+    e.dst_pixv_idx = dst;
+    e.src_pixv_idx = src;
+    e.work_pixv_idx = work;
+    return e;
+}
+
+void install_event(Layer& layer, AnimationEvent e) {
+    AnimationEvent* arr = new AnimationEvent[1];
+    arr[0] = e;
+    layer.initialize(arr, 1);
+}
+
+}  // namespace
+
+// ---------------------------------------------------------------------------
+// Construction / boundaries
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Engine: create(nullptr) yields a valid Engine that renders nothing",
+          "[engine]") {
+    Engine* eng = Engine::create(nullptr);
+    REQUIRE(eng != nullptr);
+
+    Strip strip;
+    REQUIRE(strip.resize(2));
+    CHECK_FALSE(eng->render_frame(0.0f, strip));
+
+    delete eng;
+}
+
+TEST_CASE("Engine: render_frame on empty Program clears the strip", "[engine]") {
+    Program* prog = basic_program(/*duration*/ 1.0f);
+    Engine* eng = Engine::create(prog);
+    REQUIRE(eng != nullptr);
+
+    Strip strip;
+    REQUIRE(strip.resize(1));
+    strip[0] = rgb_t(99, 99, 99);
+
+    REQUIRE(eng->render_frame(0.5f, strip));
+    CHECK(strip[0].r == 0);
+
+    delete eng;
+}
+
+TEST_CASE("Engine: render_frame returns false outside [0, duration)", "[engine]") {
+    Program* prog = basic_program(1.0f);
+    Engine* eng = Engine::create(prog);
+    Strip strip; REQUIRE(strip.resize(1));
+
+    CHECK(eng->render_frame(0.0f, strip));        // inclusive lower
+    CHECK(eng->render_frame(0.999f, strip));
+    CHECK_FALSE(eng->render_frame(-0.001f, strip));
+    CHECK_FALSE(eng->render_frame(1.0f, strip));  // exclusive upper
+    CHECK_FALSE(eng->render_frame(2.0f, strip));
+
+    delete eng;
 }
 
 // ---------------------------------------------------------------------------
-// Tests
+// Event activation lifecycle
 // ---------------------------------------------------------------------------
 
-TEST_CASE("Engine loads program", "[engine]") {
-    TestStrip ts;
-    Engine* engine = make_engine(ts);
-    REQUIRE(engine != nullptr);
-    delete engine;
+TEST_CASE("Engine: initialize fires once on first activation, render every frame",
+          "[engine]") {
+    Program* prog = basic_program(2.0f);
+    give_layers(prog, 1);
+    auto* anim = new FakeAnim();
+    anim->set_render_value(hsva_t(0.0f, 1.0f, 1.0f, 1.0f));  // opaque red
+    install_event(prog->layers[0], make_event(anim, /*start*/ 0.5f, /*dur*/ 1.0f, /*dst*/ 0));
+
+    Engine* eng = Engine::create(prog);
+    Strip strip; REQUIRE(strip.resize(1));
+
+    REQUIRE(eng->render_frame(0.0f, strip));   // before event
+    CHECK(anim->init_count() == 0);
+    CHECK(anim->render_count() == 0);
+    CHECK(strip[0].r == 0);
+
+    REQUIRE(eng->render_frame(0.5f, strip));   // first activation
+    CHECK(anim->init_count() == 1);
+    CHECK(anim->render_count() == 1);
+    CHECK(anim->last_t() == 0.0f);
+
+    REQUIRE(eng->render_frame(1.0f, strip));   // mid event
+    CHECK(anim->init_count() == 1);            // not re-initialized
+    CHECK(anim->render_count() == 2);
+    CHECK(anim->last_t() == 0.5f);
+
+    REQUIRE(eng->render_frame(1.6f, strip));   // past event end
+    CHECK(anim->init_count() == 1);
+    CHECK(anim->render_count() == 2);
+    CHECK(strip[0].r == 0);                    // no active layer
+
+    delete eng;
 }
 
-TEST_CASE("Tick at t=0 renders wave on layer 0", "[engine]") {
-    TestStrip ts;
-    Engine* engine = make_engine(ts);
+TEST_CASE("Engine: cursor advances to the next event on the same layer", "[engine]") {
+    Program* prog = basic_program(2.0f);
+    give_layers(prog, 1);
+    auto* a1 = new FakeAnim();
+    auto* a2 = new FakeAnim();
+    AnimationEvent* events = new AnimationEvent[2];
+    events[0] = make_event(a1, 0.0f, 0.5f, 0);
+    events[1] = make_event(a2, 0.5f, 0.5f, 0);
+    prog->layers[0].initialize(events, 2);
 
-    bool active = engine->tick(0.0f);
-    CHECK(active);
+    Engine* eng = Engine::create(prog);
+    Strip strip; REQUIRE(strip.resize(1));
 
-    // Wave is active — strip should not be all-black
-    bool any_nonzero = false;
-    for (uint16_t i = 0; i < STRIP_LEN * 3; i++) {
-        if (ts.rgb[i] != 0) { any_nonzero = true; break; }
+    REQUIRE(eng->render_frame(0.25f, strip));
+    CHECK(a1->init_count() == 1);
+    CHECK(a1->render_count() == 1);
+    CHECK(a2->init_count() == 0);
+
+    REQUIRE(eng->render_frame(0.75f, strip));
+    CHECK(a1->render_count() == 1);   // first event no longer active
+    CHECK(a2->init_count() == 1);     // second event activated
+    CHECK(a2->render_count() == 1);
+    CHECK(a2->last_t() == 0.25f);
+
+    delete eng;
+}
+
+TEST_CASE("Engine: passes src and work views to initialize when present", "[engine]") {
+    // Two extra views (1 src, 1 work) on top of the basic dst view.
+    Program* prog = new Program();
+    prog->duration = 1.0f;
+    const uint16_t sizes[] = { 1, 1, 1 };
+    REQUIRE(prog->pixel_buffer_pool.initialize(sizes, 3));
+    PixelViewSpec specs[3];
+    for (int i = 0; i < 3; i++) {
+        specs[i].buffer_idx = static_cast<uint16_t>(i);
+        specs[i].size = 1;
+        specs[i].storage_identity = true;
+        specs[i].has_physical_mapping = (i == 0);
+        specs[i].physical_identity = (i == 0);
     }
-    // At t=0, wave renders with phase0=-pi/2, so v=min=0.0 for pixel 0.
-    // But pixel 1 has pixel_step=pi, so v could be nonzero depending on params.
-    // Just verify tick returns true and doesn't crash.
-    CHECK(active);
+    REQUIRE(prog->pixel_views.initialize(prog->pixel_buffer_pool, specs, 3));
 
-    delete engine;
-}
+    give_layers(prog, 1);
+    auto* anim = new FakeAnim();
+    install_event(prog->layers[0],
+                  make_event(anim, 0.0f, 1.0f, /*dst*/ 0, /*src*/ 1, /*work*/ 2));
 
-TEST_CASE("Tick at t=0.05 has spark active on layer 1", "[engine]") {
-    TestStrip ts;
-    Engine* engine = make_engine(ts);
+    Engine* eng = Engine::create(prog);
+    Strip strip; REQUIRE(strip.resize(1));
 
-    // Spark event 0 on layer 1: t=0.0-0.1, remap=[0,1] → layer indices 0,1
-    // Layer 1 index_map = [0,4,5,9], so remap[0]=0→phys 0, remap[1]=1→phys 4
-    engine->tick(0.05f);
+    REQUIRE(eng->render_frame(0.1f, strip));
+    REQUIRE(anim->init_count() == 1);
+    CHECK(anim->last_src() == &prog->pixel_views.at(1));
+    CHECK(anim->last_work() == &prog->pixel_views.at(2));
+    CHECK(anim->last_dst() == &prog->pixel_views.at(0));
 
-    // Spark should have rendered white with some alpha (fade=0.05/0.1)
-    // After compositing with wave background + gamma, pixels 0 and 4
-    // should show spark influence. Just verify no crash.
-
-    delete engine;
-}
-
-TEST_CASE("Tick at t=1.5 has shift active on layer 0", "[engine]") {
-    TestStrip ts;
-    Engine* engine = make_engine(ts);
-
-    // First tick at t=0.5 to let wave render (fills layer 0 buffer)
-    engine->tick(0.5f);
-
-    // Tick at t=1.5 — wave ended at t=1.0, shift starts at t=1.0
-    // Shift should be active with t_rel=0.5
-    bool active = engine->tick(1.5f);
-    CHECK(active);
-
-    delete engine;
-}
-
-TEST_CASE("Tick past duration returns false", "[engine]") {
-    TestStrip ts;
-    Engine* engine = make_engine(ts);
-
-    bool active = engine->tick(2.5f);
-    CHECK_FALSE(active);
-
-    delete engine;
-}
-
-TEST_CASE("Shift snapshots wave buffer via source_layer", "[engine]") {
-    TestStrip ts;
-    Engine* engine = make_engine(ts);
-
-    // Render wave at t=0.99 (just before it ends)
-    engine->tick(0.99f);
-
-    // Now tick at t=1.0 — shift activates, should snapshot wave's buffer
-    // The shift event has source_layer=0, same layer, identity remap
-    engine->tick(1.0f);
-
-    // Shift is rendering — strip should not be all-black
-    bool any_nonzero = false;
-    for (uint16_t i = 0; i < STRIP_LEN * 3; i++) {
-        if (ts.rgb[i] != 0) { any_nonzero = true; break; }
-    }
-    CHECK(any_nonzero);
-
-    delete engine;
-}
-
-TEST_CASE("Spark remap scatters to correct physical pixels", "[engine]") {
-    TestStrip ts;
-    Engine* engine = make_engine(ts);
-
-    // Clear any state, then tick at t=0.01 — spark 0 active
-    // Spark 0: layer 1, remap=[0,1] → layer 1 indices 0,1 → physical LEDs 0,4
-    engine->tick(0.01f);
-
-    // Physical LEDs 0 and 4 should have spark contribution (white flash with alpha)
-    // Physical LEDs 1,2,3 should only have wave contribution
-    // We can't easily assert exact values due to gamma + blending,
-    // but we verify no crash and some output
-
-    delete engine;
-}
-
-TEST_CASE("Multiple ticks advance cursor correctly", "[engine]") {
-    TestStrip ts;
-    Engine* engine = make_engine(ts);
-
-    // Tick through several points to exercise cursor advancement
-    CHECK(engine->tick(0.0f));
-    CHECK(engine->tick(0.15f));  // between spark events
-    CHECK(engine->tick(0.5f));
-    CHECK(engine->tick(1.0f));   // wave→shift transition
-    CHECK(engine->tick(1.5f));
-    CHECK(engine->tick(1.99f));  // near end
-    CHECK_FALSE(engine->tick(2.0f));  // at duration boundary
-
-    delete engine;
-}
-
-TEST_CASE("Engine destructor cleans up without leaks", "[engine]") {
-    // This test relies on valgrind memcheck to verify — here we just
-    // verify that construction + ticking + destruction doesn't crash
-    TestStrip ts;
-    Engine* engine = make_engine(ts);
-    engine->tick(0.5f);
-    engine->tick(1.5f);
-    delete engine;
-}
-
-TEST_CASE("Reset restores initial state", "[engine][reset]") {
-    TestStrip ts;
-    Engine* engine = make_engine(ts);
-
-    // First pass: tick to t=0.5
-    engine->tick(0.5f);
-    uint8_t first_pass[STRIP_LEN * 3];
-    memcpy(first_pass, ts.rgb, sizeof(first_pass));
-
-    // Reset and replay
-    engine->reset();
-    memset(ts.rgb, 0, sizeof(ts.rgb));
-    engine->tick(0.5f);
-
-    // Output must be identical
-    for (uint16_t i = 0; i < STRIP_LEN * 3; i++) {
-        CHECK(ts.rgb[i] == first_pass[i]);
-    }
-
-    delete engine;
-}
-
-TEST_CASE("Reset + replay reproduces source dependencies", "[engine][reset]") {
-    TestStrip ts;
-    Engine* engine = make_engine(ts);
-
-    // First pass: render wave then shift (shift snapshots wave)
-    engine->tick(0.99f);  // wave active
-    engine->tick(1.0f);   // shift activates, snapshots wave
-    engine->tick(1.5f);   // shift mid-animation
-    uint8_t first_pass[STRIP_LEN * 3];
-    memcpy(first_pass, ts.rgb, sizeof(first_pass));
-
-    // Reset and replay the same sequence
-    engine->reset();
-    memset(ts.rgb, 0, sizeof(ts.rgb));
-    engine->tick(0.99f);
-    engine->tick(1.0f);
-    engine->tick(1.5f);
-
-    for (uint16_t i = 0; i < STRIP_LEN * 3; i++) {
-        CHECK(ts.rgb[i] == first_pass[i]);
-    }
-
-    delete engine;
-}
-
-TEST_CASE("Reset from ENDED state", "[engine][reset]") {
-    TestStrip ts;
-    Engine* engine = make_engine(ts);
-
-    // Tick past duration — engine reports ended
-    CHECK_FALSE(engine->tick(2.5f));
-
-    // Reset and tick from beginning — should work as if freshly constructed
-    engine->reset();
-    memset(ts.rgb, 0, sizeof(ts.rgb));
-    bool active = engine->tick(0.0f);
-    CHECK(active);
-
-    delete engine;
+    delete eng;
 }
 
 // ---------------------------------------------------------------------------
-// Edge cases: event boundaries, gamma flag, time jumps
+// Multi-layer
 // ---------------------------------------------------------------------------
 
-TEST_CASE("Tick at exact event start activates event", "[engine][boundary]") {
-    TestStrip ts;
-    Engine* engine = make_engine(ts);
+TEST_CASE("Engine: layers track their own active events independently", "[engine]") {
+    // Two views on two buffers, each mapped to a different physical LED.
+    Program* prog = new Program();
+    prog->duration = 2.0f;
+    const uint16_t sizes[] = { 1, 1 };
+    REQUIRE(prog->pixel_buffer_pool.initialize(sizes, 2));
+    const uint16_t phys0[] = { 0 };
+    const uint16_t phys1[] = { 1 };
+    PixelViewSpec specs[2];
+    specs[0].buffer_idx = 0; specs[0].size = 1;
+    specs[0].storage_identity = true;
+    specs[0].has_physical_mapping = true;
+    specs[0].physical_indices = phys0;
+    specs[1].buffer_idx = 1; specs[1].size = 1;
+    specs[1].storage_identity = true;
+    specs[1].has_physical_mapping = true;
+    specs[1].physical_indices = phys1;
+    REQUIRE(prog->pixel_views.initialize(prog->pixel_buffer_pool, specs, 2));
 
-    // Wave starts at t=0.0 — should be active
-    CHECK(engine->tick(0.0f));
+    give_layers(prog, 2);
+    auto* a0 = new FakeAnim();
+    auto* a1 = new FakeAnim();
+    a0->set_render_value(hsva_t(0.0f,   1.0f, 1.0f, 1.0f));
+    a1->set_render_value(hsva_t(120.0f, 1.0f, 1.0f, 1.0f));
+    install_event(prog->layers[0], make_event(a0, 0.0f, 1.0f, /*dst*/ 0));
+    install_event(prog->layers[1], make_event(a1, 1.0f, 1.0f, /*dst*/ 1));
 
-    // Shift starts at t=1.0 — should be active
-    CHECK(engine->tick(1.0f));
+    Engine* eng = Engine::create(prog);
+    Strip strip; REQUIRE(strip.resize(2));
 
-    delete engine;
+    // t=0.5: only layer 0 active
+    REQUIRE(eng->render_frame(0.5f, strip));
+    CHECK(a0->render_count() == 1);
+    CHECK(a1->render_count() == 0);
+    rgb_t red = hsv_to_rgb(0.0f, 1.0f, 1.0f);
+    CHECK(strip[0].r == red.r);
+    CHECK(strip[0].g == red.g);
+    CHECK(strip[0].b == red.b);
+    CHECK(strip[1].r == 0);
+
+    // t=1.5: only layer 1 active
+    REQUIRE(eng->render_frame(1.5f, strip));
+    CHECK(a0->render_count() == 1);
+    CHECK(a1->render_count() == 1);
+    rgb_t green = hsv_to_rgb(120.0f, 1.0f, 1.0f);
+    CHECK(strip[0].r == 0);
+    CHECK(strip[1].r == green.r);
+    CHECK(strip[1].g == green.g);
+    CHECK(strip[1].b == green.b);
+
+    delete eng;
 }
 
-TEST_CASE("Tick at exact event end finishes event", "[engine][boundary]") {
-    TestStrip ts;
-    Engine* engine = make_engine(ts);
+// ---------------------------------------------------------------------------
+// Copy ops
+// ---------------------------------------------------------------------------
 
-    // Program duration is 2.0, so tick at exactly 2.0 should report ended
-    // (engine: t >= duration -> return false)
-    CHECK_FALSE(engine->tick(2.0f));
+TEST_CASE("Engine: copy ops fire before layers render", "[engine]") {
+    // Three buffers: 0 pre-filled with green; 1 receives the copy; 2 is the
+    // animation's dst (with physical mapping). SrcReadAnim reads view 1 and
+    // writes it to view 2. If the copy ran before render, the strip is green;
+    // if it ran after (or not at all), the strip is black.
+    Program* prog = new Program();
+    prog->duration = 1.0f;
+    const uint16_t sizes[] = { 1, 1, 1 };
+    REQUIRE(prog->pixel_buffer_pool.initialize(sizes, 3));
 
-    delete engine;
-}
-
-TEST_CASE("Gamma disabled produces different output", "[engine][gamma]") {
-    auto blob1 = load_blob("test/fixtures/test_animation.bin");
-    auto blob2 = load_blob("test/fixtures/test_animation.bin");
-
-    TestStrip ts_on, ts_off;
-    Program* prog_on  = decode_program(blob1.data(), blob1.size());
-    Program* prog_off = decode_program(blob2.data(), blob2.size());
-    REQUIRE(prog_on  != nullptr);
-    REQUIRE(prog_off != nullptr);
-
-    Engine* engine_on  = new Engine(prog_on,  ts_on.strip,  true);
-    Engine* engine_off = new Engine(prog_off, ts_off.strip, false);
-
-    engine_on->tick(0.5f);
-    engine_off->tick(0.5f);
-
-    bool differs = false;
-    for (uint16_t i = 0; i < STRIP_LEN * 3; i++) {
-        if (ts_on.rgb[i] != ts_off.rgb[i]) { differs = true; break; }
+    PixelViewSpec specs[3];
+    for (int i = 0; i < 3; i++) {
+        specs[i].buffer_idx = static_cast<uint16_t>(i);
+        specs[i].size = 1;
+        specs[i].storage_identity = true;
+        specs[i].has_physical_mapping = (i == 2);
+        specs[i].physical_identity = (i == 2);
     }
-    CHECK(differs);
+    REQUIRE(prog->pixel_views.initialize(prog->pixel_buffer_pool, specs, 3));
 
-    delete engine_on;
-    delete engine_off;
+    prog->pixel_views.at(0)[0] = hsva_t(120.0f, 1.0f, 1.0f, 1.0f);  // green seed
+
+    CopyOp op;
+    op.at = 0.0f;
+    op.src_pixv_idx = 0;
+    op.dst_pixv_idx = 1;
+    REQUIRE(prog->copy_ops.initialize(&op, 1));
+
+    give_layers(prog, 1);
+    install_event(prog->layers[0],
+                  make_event(new SrcReadAnim(), 0.0f, 1.0f, /*dst*/ 2, /*src*/ 1));
+
+    Engine* eng = Engine::create(prog);
+    Strip strip; REQUIRE(strip.resize(1));
+
+    REQUIRE(eng->render_frame(0.5f, strip));
+    rgb_t green = hsv_to_rgb(120.0f, 1.0f, 1.0f);
+    CHECK(strip[0].r == green.r);
+    CHECK(strip[0].g == green.g);
+    CHECK(strip[0].b == green.b);
+
+    delete eng;
 }
 
-TEST_CASE("Large time jump skips finished events", "[engine]") {
-    TestStrip ts;
-    Engine* engine = make_engine(ts);
-
-    // Tick once at t=0 so wave renders (fills layer 0 buffer)
-    engine->tick(0.0f);
-
-    // Jump directly to t=1.5 — wave should be skipped, shift should render
-    bool active = engine->tick(1.5f);
-    CHECK(active);
-
-    // Strip should have some output from shift animation
-    bool any_nonzero = false;
-    for (uint16_t i = 0; i < STRIP_LEN * 3; i++) {
-        if (ts.rgb[i] != 0) { any_nonzero = true; break; }
+TEST_CASE("Engine: copy_op cursor only advances past due ops", "[engine]") {
+    Program* prog = new Program();
+    prog->duration = 2.0f;
+    const uint16_t sizes[] = { 1, 1, 1 };
+    REQUIRE(prog->pixel_buffer_pool.initialize(sizes, 3));
+    PixelViewSpec specs[3];
+    for (int i = 0; i < 3; i++) {
+        specs[i].buffer_idx = static_cast<uint16_t>(i);
+        specs[i].size = 1;
+        specs[i].storage_identity = true;
+        specs[i].has_physical_mapping = false;
     }
-    CHECK(any_nonzero);
+    REQUIRE(prog->pixel_views.initialize(prog->pixel_buffer_pool, specs, 3));
 
-    delete engine;
+    prog->pixel_views.at(0)[0] = hsva_t(60.0f,  1.0f, 1.0f, 1.0f);
+    prog->pixel_views.at(1)[0] = hsva_t(180.0f, 1.0f, 1.0f, 1.0f);
+
+    CopyOp ops[2];
+    ops[0].at = 0.5f; ops[0].src_pixv_idx = 0; ops[0].dst_pixv_idx = 2;
+    ops[1].at = 1.5f; ops[1].src_pixv_idx = 1; ops[1].dst_pixv_idx = 2;
+    REQUIRE(prog->copy_ops.initialize(ops, 2));
+
+    Engine* eng = Engine::create(prog);
+    Strip strip; REQUIRE(strip.resize(1));
+
+    REQUIRE(eng->render_frame(0.25f, strip));        // before any op
+    CHECK(prog->pixel_views.at(2)[0].h == 0.0f);
+
+    REQUIRE(eng->render_frame(1.0f, strip));         // op 0 due
+    CHECK(prog->pixel_views.at(2)[0].h == 60.0f);
+
+    REQUIRE(eng->render_frame(1.75f, strip));        // op 1 due
+    CHECK(prog->pixel_views.at(2)[0].h == 180.0f);
+
+    delete eng;
+}
+
+// ---------------------------------------------------------------------------
+// reset()
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Engine: reset re-arms initialize for the next render", "[engine]") {
+    Program* prog = basic_program(2.0f);
+    give_layers(prog, 1);
+    auto* anim = new FakeAnim();
+    install_event(prog->layers[0], make_event(anim, 0.0f, 1.0f, /*dst*/ 0));
+
+    Engine* eng = Engine::create(prog);
+    Strip strip; REQUIRE(strip.resize(1));
+
+    REQUIRE(eng->render_frame(0.1f, strip));
+    CHECK(anim->init_count() == 1);
+    CHECK(anim->render_count() == 1);
+
+    eng->reset();
+
+    REQUIRE(eng->render_frame(0.2f, strip));
+    CHECK(anim->init_count() == 2);   // re-armed
+    CHECK(anim->render_count() == 2);
+
+    delete eng;
+}
+
+TEST_CASE("Engine: reset rewinds the copy-op cursor", "[engine]") {
+    Program* prog = new Program();
+    prog->duration = 1.0f;
+    const uint16_t sizes[] = { 1, 1, 1 };
+    REQUIRE(prog->pixel_buffer_pool.initialize(sizes, 3));
+    PixelViewSpec specs[3];
+    for (int i = 0; i < 3; i++) {
+        specs[i].buffer_idx = static_cast<uint16_t>(i);
+        specs[i].size = 1;
+        specs[i].storage_identity = true;
+        specs[i].has_physical_mapping = (i == 2);
+        specs[i].physical_identity = (i == 2);
+    }
+    REQUIRE(prog->pixel_views.initialize(prog->pixel_buffer_pool, specs, 3));
+
+    prog->pixel_views.at(0)[0] = hsva_t(120.0f, 1.0f, 1.0f, 1.0f);
+
+    CopyOp op;
+    op.at = 0.0f;
+    op.src_pixv_idx = 0;
+    op.dst_pixv_idx = 1;
+    REQUIRE(prog->copy_ops.initialize(&op, 1));
+
+    give_layers(prog, 1);
+    install_event(prog->layers[0],
+                  make_event(new SrcReadAnim(), 0.0f, 1.0f, /*dst*/ 2, /*src*/ 1));
+
+    Engine* eng = Engine::create(prog);
+    Strip strip; REQUIRE(strip.resize(1));
+
+    REQUIRE(eng->render_frame(0.5f, strip));
+    rgb_t green = hsv_to_rgb(120.0f, 1.0f, 1.0f);
+    REQUIRE(strip[0].r == green.r);
+
+    eng->reset();
+    // Reset zeroes every pool buffer (including the green seed in buffer 0).
+    // Re-seed so the replayed copy has data.
+    prog->pixel_views.at(0)[0] = hsva_t(120.0f, 1.0f, 1.0f, 1.0f);
+
+    REQUIRE(eng->render_frame(0.5f, strip));
+    CHECK(strip[0].r == green.r);   // copy ran again post-reset
+
+    delete eng;
+}
+
+TEST_CASE("Engine: reset zeroes every pool buffer", "[engine]") {
+    Program* prog = basic_program(1.0f);
+    give_layers(prog, 1);
+    auto* anim = new FakeAnim();
+    anim->set_render_value(hsva_t(45.0f, 0.5f, 0.5f, 1.0f));
+    install_event(prog->layers[0], make_event(anim, 0.0f, 1.0f, /*dst*/ 0));
+
+    Engine* eng = Engine::create(prog);
+    Strip strip; REQUIRE(strip.resize(1));
+
+    REQUIRE(eng->render_frame(0.5f, strip));
+    REQUIRE(prog->pixel_views.at(0)[0].h == 45.0f);
+
+    eng->reset();
+
+    CHECK(prog->pixel_views.at(0)[0].h == 0.0f);
+    CHECK(prog->pixel_views.at(0)[0].s == 0.0f);
+    CHECK(prog->pixel_views.at(0)[0].v == 0.0f);
+    CHECK(prog->pixel_views.at(0)[0].a == 0.0f);
+
+    delete eng;
+}
+
+// ---------------------------------------------------------------------------
+// Same-`at` ordering and same-LED layer overlap
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Engine: chained same-`at` copy ops execute in table order",
+          "[engine]") {
+    // Two copy ops at the same time, chained: view0 -> view1, then view1 ->
+    // view2. The animation reads view2 and writes its dst. If both ops run in
+    // table order, view2 carries the seed; reverse order would leave view2
+    // untouched (still zero) and the strip black.
+    Program* prog = new Program();
+    prog->duration = 1.0f;
+    const uint16_t sizes[] = { 1, 1, 1, 1 };
+    REQUIRE(prog->pixel_buffer_pool.initialize(sizes, 4));
+    PixelViewSpec specs[4];
+    for (int i = 0; i < 4; i++) {
+        specs[i].buffer_idx = static_cast<uint16_t>(i);
+        specs[i].size = 1;
+        specs[i].storage_identity = true;
+        specs[i].has_physical_mapping = (i == 3);
+        specs[i].physical_identity = (i == 3);
+    }
+    REQUIRE(prog->pixel_views.initialize(prog->pixel_buffer_pool, specs, 4));
+
+    prog->pixel_views.at(0)[0] = hsva_t(120.0f, 1.0f, 1.0f, 1.0f);  // green seed
+
+    CopyOp ops[2];
+    ops[0].at = 0.0f; ops[0].src_pixv_idx = 0; ops[0].dst_pixv_idx = 1;
+    ops[1].at = 0.0f; ops[1].src_pixv_idx = 1; ops[1].dst_pixv_idx = 2;
+    REQUIRE(prog->copy_ops.initialize(ops, 2));
+
+    give_layers(prog, 1);
+    install_event(prog->layers[0],
+                  make_event(new SrcReadAnim(), 0.0f, 1.0f, /*dst*/ 3, /*src*/ 2));
+
+    Engine* eng = Engine::create(prog);
+    Strip strip; REQUIRE(strip.resize(1));
+
+    REQUIRE(eng->render_frame(0.5f, strip));
+
+    rgb_t green = hsv_to_rgb(120.0f, 1.0f, 1.0f);
+    CHECK(strip[0].r == green.r);
+    CHECK(strip[0].g == green.g);
+    CHECK(strip[0].b == green.b);
+
+    delete eng;
+}
+
+TEST_CASE("Engine: top layer wins on a shared physical LED", "[engine]") {
+    // Two layers, two views on different buffers but mapped to the same
+    // physical LED. Both events active simultaneously, both opaque. The
+    // compositor walks active_dst_views[] bottom-to-top, so the top layer's
+    // green must overwrite the bottom layer's red.
+    Program* prog = new Program();
+    prog->duration = 1.0f;
+    const uint16_t sizes[] = { 1, 1 };
+    REQUIRE(prog->pixel_buffer_pool.initialize(sizes, 2));
+    const uint16_t shared_phys[] = { 0 };
+    PixelViewSpec specs[2];
+    for (int i = 0; i < 2; i++) {
+        specs[i].buffer_idx = static_cast<uint16_t>(i);
+        specs[i].size = 1;
+        specs[i].storage_identity = true;
+        specs[i].has_physical_mapping = true;
+        specs[i].physical_indices = shared_phys;
+    }
+    REQUIRE(prog->pixel_views.initialize(prog->pixel_buffer_pool, specs, 2));
+
+    give_layers(prog, 2);
+    auto* bottom = new FakeAnim();
+    auto* top    = new FakeAnim();
+    bottom->set_render_value(hsva_t(0.0f,   1.0f, 1.0f, 1.0f));   // red
+    top->set_render_value(   hsva_t(120.0f, 1.0f, 1.0f, 1.0f));   // green
+    install_event(prog->layers[0], make_event(bottom, 0.0f, 1.0f, /*dst*/ 0));
+    install_event(prog->layers[1], make_event(top,    0.0f, 1.0f, /*dst*/ 1));
+
+    Engine* eng = Engine::create(prog);
+    Strip strip; REQUIRE(strip.resize(1));
+
+    REQUIRE(eng->render_frame(0.5f, strip));
+
+    rgb_t green = hsv_to_rgb(120.0f, 1.0f, 1.0f);
+    CHECK(strip[0].r == green.r);
+    CHECK(strip[0].g == green.g);
+    CHECK(strip[0].b == green.b);
+
+    delete eng;
 }

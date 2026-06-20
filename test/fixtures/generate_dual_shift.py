@@ -13,8 +13,16 @@ Expected RGB at key times (no gamma, S=0 → R=G=B=round(V*255)):
   left  t=3.0: [0,  0,   51,  102, 153]    right t=3.0: [0,   0,   255, 204, 153]
 """
 
+import sys
 from pathlib import Path
 from elements.dsl import *
+
+
+def _out_dir() -> Path:
+    """Output directory: argv[1] if given (CMake passes the build dir), else here."""
+    d = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parent
+    d.mkdir(parents=True, exist_ok=True)
+    return d
 
 
 def main():
@@ -46,7 +54,7 @@ def main():
 
     blobs = build(beat=1.0, duration=5.0)
 
-    fixtures = Path(__file__).resolve().parent
+    fixtures = _out_dir()
     left_path = fixtures / "test_dual_shift_left.bin"
     right_path = fixtures / "test_dual_shift_right.bin"
 

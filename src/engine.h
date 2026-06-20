@@ -1,30 +1,56 @@
 #pragma once
 
-#include "decoder.h"
+#include <cstdint>
+
 #include "compositor.h"
-#include "animation.h"
+#include "program.h"
+#include "strip.h"
+
+// Engine plays a decoded Program. It tracks where each layer is on the
+// timeline, runs due copy ops, lets each active animation render its dst
+// view, and composites the result into a Strip.
+//
+// Engine owns the Program for its whole lifetime. Build with
+// Engine::create(); free by deleting the Engine.
 
 class Engine {
 public:
-    // Takes ownership of prog (freed on destroy).
-    Engine(Program* prog, Strip& strip, bool gamma_enabled);
+    // Build an Engine for `program`. Engine takes ownership whether or not
+    // the call succeeds: on failure the Program is freed via free_program()
+    // before nullptr is returned. Returns nullptr if Engine itself or any of
+    // its internal allocations fail.
+    static Engine* create(Program* program);
+
     ~Engine();
 
-    // Advance to time t (seconds since program start).
-    // Returns false if program has ended.
-    bool tick(float t);
+    // Render the frame at program time `t_program` into `out`. Returns false
+    // if `t_program` is outside [0, program duration).
+    bool render_frame(float t_program, Strip& out);
 
-    // Reset engine to initial state (cursors, instances, buffers).
-    // After reset, tick(0) behaves as if the engine were freshly constructed.
+    // Rewind every layer to its first event, clear per-layer init flags,
+    // rewind the copy-op cursor, and zero every pool buffer.
     void reset();
 
 private:
-    struct LayerState {
-        uint16_t cursor;
-        Animation* instance;
+    struct LayerPlaybackState {
+        uint16_t cursor = 0;
+        bool initialized = false;
     };
 
-    Program* _prog;
+    explicit Engine(Program* program);
+
+    // Allocate per-layer state and the active-view table. Returns false on
+    // OOM; create() then deletes the Engine.
+    bool initialize_();
+
+    // Run every copy op with at <= t_program that hasn't run yet.
+    void run_copy_ops_until(float t_program);
+
+    static void copy_view(const PixelView& src, PixelView& dst);
+
+    Program* _program = nullptr;
     Compositor _compositor;
-    LayerState* _states;
+    LayerPlaybackState* _layer_states = nullptr;
+    PixelView** _active_dst_views = nullptr;
+    uint16_t _copy_cursor = 0;
 };

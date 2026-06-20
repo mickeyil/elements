@@ -35,17 +35,18 @@ def test_encode_ws_frame_extended_payload():
     assert frame[4:] == payload
 
 
-def test_make_disconnected_snapshot_clears_session_and_devices():
+def test_make_disconnected_snapshot_offlines_configured_and_drops_discovered():
     snap = {
         'type': 'event',
         'event': 'snapshot',
         'protocol_version': PROTOCOL_VERSION,
-        'online_count': 2,
-        'expected_count': 2,
-        'session': {'session_id': 5},
+        'online_count': 1,
+        'expected_count': 1,
+        'session': {'state': 'playing'},
         'devices': [
-            {'device_id': 1, 'connected': True},
-            {'device_id': 2, 'connected': True},
+            {'uid': 'sim-a', 'configured': True, 'status': 'online',
+             'attached': True, 'serving': True},
+            {'uid': 'sim-x', 'configured': False, 'status': 'discovered'},
         ],
     }
 
@@ -54,8 +55,11 @@ def test_make_disconnected_snapshot_clears_session_and_devices():
     assert out['protocol_version'] == PROTOCOL_VERSION
     assert out['session'] is None
     assert out['online_count'] == 0
-    assert out['expected_count'] == 2
-    assert [dev['connected'] for dev in out['devices']] == [False, False]
+    assert out['expected_count'] == 1
+    assert [d['uid'] for d in out['devices']] == ['sim-a']   # discovered dropped
+    dev = out['devices'][0]
+    assert dev['status'] == 'offline'
+    assert dev['attached'] is False and dev['serving'] is False
 
 
 def test_empty_snapshot_includes_programs_after_disconnect():
@@ -64,22 +68,12 @@ def test_empty_snapshot_includes_programs_after_disconnect():
     assert out['programs'] == []
 
 
-def test_programs_updated_refreshes_cached_snapshot_programs():
+def test_catalog_message_replaces_snapshot_programs():
     server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080)
-    server._snapshot = {
-        'type': 'event',
-        'event': 'snapshot',
-        'protocol_version': PROTOCOL_VERSION,
-        'online_count': 0,
-        'expected_count': 0,
-        'session': None,
-        'devices': [],
-        'programs': [{'program_id': 'old', 'beat': 1.0, 'duration': 2.0, 'error': None}],
-    }
+    server._snapshot['programs'] = [{'program_id': 'old'}]
 
     server._apply_json_message({
-        'type': 'event',
-        'event': 'programs_updated',
+        'type': 'catalog',
         'programs': [{'program_id': 'new', 'beat': 0.5, 'duration': 4.0, 'error': None}],
     })
 
@@ -88,82 +82,29 @@ def test_programs_updated_refreshes_cached_snapshot_programs():
     ]
 
 
-def test_device_status_event_updates_reported_and_session_role():
+def test_state_message_replaces_devices_session_and_sim_map():
     server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080)
-    server._snapshot = {
-        'type': 'event',
-        'event': 'snapshot',
-        'protocol_version': PROTOCOL_VERSION,
-        'online_count': 1,
-        'expected_count': 1,
-        'session': None,
-        'devices': [{
-            'device_id': 1,
-            'connected': True,
-            'session_role': 'serving',
-            'reported': None,
-            'reported_at': None,
-        }],
-        'programs': [],
-    }
 
     server._apply_json_message({
-        'type': 'event',
-        'event': 'device_status',
-        'source': 'reported',
-        'device_id': 1,
-        'connected': False,
-        'session_role': 'detached',
-        'reported': {
-            'mode': 'detached_background',
-            'background_present': True,
-        },
-        'reported_at': 123.5,
+        'type': 'state',
+        'session': {'state': 'idle', 'session_id': 0},
+        'devices': [
+            {'uid': 'sim-a', 'configured': True, 'status': 'online',
+             'strip_id': 'main', 'length': 30},
+            {'uid': 'esp-000000000001', 'configured': True, 'status': 'offline',
+             'strip_id': 'side', 'length': 60},
+            {'uid': 'sim-new', 'configured': False, 'status': 'discovered'},
+        ],
     })
 
-    device = server._snapshot['devices'][0]
-    assert device['connected'] is False
-    assert device['session_role'] == 'detached'
-    assert device['reported'] == {
-        'mode': 'detached_background',
-        'background_present': True,
-    }
-    assert device['reported_at'] == 123.5
-    assert server._snapshot['online_count'] == 0
-
-
-def test_session_events_update_observer_suspended():
-    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080)
-    server._apply_json_message({
-        'type': 'event',
-        'event': 'session_start',
-        'session_id': 7,
-        'epoch': 0,
-        'duration': 4.0,
-        'observer_suspended': True,
-        'safe_intervals': [],
-        'strips': [],
-    })
-
-    assert server._snapshot['session']['observer_suspended'] is True
-
-    server._apply_json_message({
-        'type': 'event',
-        'event': 'state',
-        'session_id': 7,
-        'state': 'playing',
-        'observer_suspended': False,
-    })
-    assert server._snapshot['session']['observer_suspended'] is False
-
-    server._apply_json_message({
-        'type': 'event',
-        'event': 'loop',
-        'session_id': 7,
-        'epoch': 1,
-        'observer_suspended': True,
-    })
-    assert server._snapshot['session']['observer_suspended'] is True
+    snap = server._snapshot
+    assert [d['uid'] for d in snap['devices']] == [
+        'sim-a', 'esp-000000000001', 'sim-new']
+    assert snap['session'] == {'state': 'idle', 'session_id': 0}
+    assert snap['online_count'] == 1     # only the online configured device
+    assert snap['expected_count'] == 2   # both configured devices
+    # only configured sim-* devices feed the layout map
+    assert server._sim_devices == {'sim-a': 30}
 
 
 def test_web_ui_server_initial_snapshot_includes_layouts():
@@ -173,19 +114,16 @@ def test_web_ui_server_initial_snapshot_includes_layouts():
     assert server._snapshot['layouts'] == layouts
 
 
-def test_snapshot_event_reapplies_layouts():
+def test_state_message_keeps_layouts_and_server_version():
     layouts = {'sim-1': {'rows': [[1, None], [2, 3]]}}
-    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, layouts, server_version='v-test')
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, layouts,
+                         server_version='v-test')
 
     server._apply_json_message({
-        'type': 'event',
-        'event': 'snapshot',
-        'protocol_version': PROTOCOL_VERSION,
-        'online_count': 1,
-        'expected_count': 1,
+        'type': 'state',
         'session': None,
-        'devices': [{'device_id': 1, 'connected': True}],
-        'programs': [],
+        'devices': [{'uid': 'sim-1', 'configured': True, 'status': 'online',
+                     'strip_id': 'main', 'length': 12}],
     })
 
     assert server._snapshot['layouts'] == layouts
@@ -200,7 +138,7 @@ def test_make_disconnected_snapshot_preserves_layouts():
         'online_count': 1,
         'expected_count': 1,
         'session': {'session_id': 7},
-        'devices': [{'device_id': 1, 'connected': True}],
+        'devices': [{'uid': 'sim-1', 'configured': True, 'status': 'online'}],
         'programs': [],
         'layouts': {'sim-1': {'rows': [[1], [2]]}},
     }
@@ -209,7 +147,7 @@ def test_make_disconnected_snapshot_preserves_layouts():
 
     assert out['layouts'] == {'sim-1': {'rows': [[1], [2]]}}
     assert out['session'] is None
-    assert out['devices'][0]['connected'] is False
+    assert out['devices'][0]['status'] == 'offline'
 
 
 def test_make_disconnected_snapshot_preserves_server_version():
@@ -221,7 +159,7 @@ def test_make_disconnected_snapshot_preserves_server_version():
         'online_count': 1,
         'expected_count': 1,
         'session': {'session_id': 7},
-        'devices': [{'device_id': 1, 'connected': True}],
+        'devices': [{'uid': 'sim-1', 'configured': True, 'status': 'online'}],
         'programs': [],
     }
 
@@ -469,7 +407,6 @@ def test_create_device_response_forwards_add_device(monkeypatch, tmp_path):
     monkeypatch.setattr(web_mod, 'ControllerClient', FakeClient)
 
     status, payload = server._create_device_response({
-        'device_type': 'sim',
         'device_uid': 'sim-1',
         'strip_id': 'main',
         'length': 60,
@@ -480,7 +417,6 @@ def test_create_device_response_forwards_add_device(monkeypatch, tmp_path):
     assert commands == [{
         'id': 1,
         'cmd': 'add_device',
-        'device_type': 'sim',
         'device_uid': 'sim-1',
         'strip_id': 'main',
         'length': 60,
@@ -491,7 +427,6 @@ def test_create_device_response_rejects_invalid_payload(tmp_path):
     server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
 
     status, payload = server._create_device_response({
-        'device_type': 'sim',
         'device_uid': 'sim-1',
         'strip_id': '',
         'length': 60,
@@ -511,7 +446,6 @@ def test_create_device_response_returns_503_when_controller_unavailable(monkeypa
     monkeypatch.setattr(web_mod, 'ControllerClient', FailingClient)
 
     status, payload = server._create_device_response({
-        'device_type': 'sim',
         'device_uid': 'sim-1',
         'strip_id': 'main',
         'length': 60,
@@ -556,7 +490,6 @@ def test_create_device_response_returns_503_when_controller_reply_times_out(monk
     monkeypatch.setattr(web_mod, '_CONTROLLER_REPLY_TIMEOUT', 0.01)
 
     status, payload = server._create_device_response({
-        'device_type': 'sim',
         'device_uid': 'sim-1',
         'strip_id': 'main',
         'length': 60,

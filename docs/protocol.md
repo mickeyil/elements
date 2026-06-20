@@ -142,7 +142,9 @@ Device backs off for 5 seconds on rejection.
 
 ### Clock Sync
 
-The controller probes each ESP32 to measure clock offset. Simulators skip sync (shared clock domain, offset = 0).
+The controller probes devices to measure clock offset. In v3, sims use
+the same sync path as firmware; on localhost the measured offset should
+be near zero because both endpoints share the host clock domain.
 
 ```
 Controller                           Device
@@ -224,8 +226,8 @@ Each command carries an `id` that the controller echoes in the reply. Replies ar
 {"type": "event", "event": "session_start", "session_id": 42, "duration": 300.0, ...}
 {"type": "event", "event": "state", "state": "playing", "epoch": 1}
 {"type": "event", "event": "device_status", "source": "connectivity", "device_uid": "sim-1", "connected": true}
-{"type": "event", "event": "device_status", "source": "clock", "device_uid": "esp32-246f28b5f190", "clock_state": "synced", ...}
-{"type": "event", "event": "device_status", "source": "reported", "device_uid": "esp32-246f28b5f190", "reported": {"mode": "detached_background", ...}, ...}
+{"type": "event", "event": "device_status", "source": "clock", "device_uid": "esp-246f28b5f190", "clock_state": "synced", ...}
+{"type": "event", "event": "device_status", "source": "reported", "device_uid": "esp-246f28b5f190", "reported": {"mode": "detached_background", ...}, ...}
 {"type": "event", "event": "device_detached", "device_id": 1, "device_uid": "sim-1", "strip": "main", ...}
 {"type": "event", "event": "device_rejoined", "device_id": 1, "device_uid": "sim-1", "strip": "main", ...}
 ```

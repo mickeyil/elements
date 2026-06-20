@@ -18,11 +18,7 @@ from elemctl.sim_layout import (
 
 def _sim_device(device_uid: str = 'sim-1', length: int = 10) -> DeviceConfig:
     return DeviceConfig(
-        device_id=1,
         device_uid=device_uid,
-        device_type='sim',
-        host='127.0.0.1',
-        tcp_port=9001,
         strip_id='main',
         length=length,
     )
@@ -92,11 +88,7 @@ def test_load_layouts_for_devices_skips_missing_and_invalid(tmp_path, caplog):
         _sim_device('sim-1', length=4),
         _sim_device('sim-2', length=4),
         DeviceConfig(
-            device_id=3,
-            device_uid='esp-1',
-            device_type='esp32',
-            host='127.0.0.1',
-            tcp_port=9003,
+            device_uid='esp-aabbccddeeff',
             strip_id='main',
             length=4,
         ),

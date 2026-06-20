@@ -1,6 +1,6 @@
 # Firmware & Engine
 
-The ESP32 firmware receives compiled animation blobs over TCP, decodes them into memory, and plays them back on a WS2812B LED strip. A desktop simulator (`network_sim`) uses the same engine with the same wire protocol, so you can develop without hardware.
+The ESP32 firmware receives compiled animation blobs over TCP, decodes them into memory, and plays them back on a WS2812B LED strip. The old desktop simulator (`network_sim`) is deprecated and staged under `src/deprecated/` while the v3 sim path is implemented.
 
 ## Pipeline
 
@@ -103,33 +103,28 @@ One compiled strip blob per device, persisted in LittleFS with metadata in NVS:
 
 ## Shared C++ Core (`src/`)
 
-Used by both firmware and simulator:
+Used by firmware, active v3 sim work, and host-side tests:
 
 | File | Role |
 |------|------|
-| `playback_device.h/cpp` | Abstract base: state machine, blob loading, tick loop, sync offset |
+| `playback.h/cpp` | Concrete playback state machine and frame rendering |
 | `decoder.h/cpp` | Binary blob parser → `Program` struct tree |
 | `engine.h/cpp` | Timeline cursor, animation lifecycle, remap scatter-copy |
 | `compositor.h/cpp` | Layer blending, HSV→RGB, gamma LUT |
 | `animation.h` | Abstract base class |
-| `anim_wave.h` | Wave animation |
-| `anim_spark.h` | Spark animation |
-| `anim_paint.h` | Paint animation |
-| `anim_shift.h` | Shift animation (stateful) |
+| `animations/wave.h` | Wave animation |
+| `animations/spark.h` | Spark animation |
+| `animations/paint.h` | Paint animation |
+| `animations/shift.h` | Shift animation (stateful) |
 | `colors.h/cpp` | `hsva_t`, `rgb_t`, conversion, gamma table |
 | `strip.h` | RGB buffer wrapper |
-| `hardware_profile.h` | Strip length constraint (max 250 pixels) |
+| `hardware_profile.h` | Strip/profile constraints, including `MAX_STRIP_PIXELS` |
 
-## Desktop Simulator
+## Deprecated Desktop Simulator
 
-`network_sim` (`src/network_sim.cpp`) is a standalone binary that wraps `ESPSimulated` with the same TCP/UDP protocol as real firmware. It sends HELLO packets, accepts commands, and streams RGB frames back over UDP. Use it for development without hardware:
+`network_sim` (`src/deprecated/network_sim.cpp`) is the old standalone binary that wraps `ESPSimulated` with the same TCP/UDP protocol as real firmware. It is staged for deletion after v3 sim support lands and is not part of the active sim path.
 
-```bash
-./build/network_sim --device-uid sim-1 --tcp-port 6053 \
-  --discovery-port 6040 --discovery-host 127.0.0.1
-```
-
-`ESPSimulated` (`src/esp_simulated.h/cpp`) extends `PlaybackDevice` with queue-based frame capture and debug seek (replay from t=0).
+`ESPSimulated` (`src/deprecated/esp_simulated.h/cpp`) extends `PlaybackDevice` with queue-based frame capture and debug seek (replay from t=0).
 
 `strip_render` (`src/strip_render.cpp`) is an offline CLI tool that reads a blob from stdin and writes frames to stdout.
 

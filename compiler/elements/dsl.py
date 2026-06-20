@@ -107,17 +107,21 @@ def paint(**params) -> AnimDef:
     return _make_anim("paint", params)
 
 
-def build(beat: float, duration: float) -> dict[str, bytes]:
+def build(beat: float, duration: float,
+          target_fps: int = 50, requires_sync: bool = False) -> dict[str, bytes]:
     """Compile the accumulated program. Returns one binary blob per strip."""
     try:
-        return compile_program(_builder.strips, _builder.events, beat, duration)
+        return compile_program(_builder.strips, _builder.events, beat, duration,
+                               target_fps=target_fps, requires_sync=requires_sync)
     finally:
         _builder.reset()
 
 
-def build_manifest(beat: float, duration: float) -> CompiledManifest:
+def build_manifest(beat: float, duration: float,
+                   target_fps: int = 50, requires_sync: bool = False) -> CompiledManifest:
     """Compile the accumulated program. Returns manifest with blobs + safe intervals."""
     try:
-        return compile_manifest(_builder.strips, _builder.events, beat, duration)
+        return compile_manifest(_builder.strips, _builder.events, beat, duration,
+                                target_fps=target_fps, requires_sync=requires_sync)
     finally:
         _builder.reset()

@@ -6,10 +6,13 @@ import DeviceModal from '../components/DeviceModal.vue';
 import RemoveDeviceModal from '../components/RemoveDeviceModal.vue';
 import { useInjectedServerState, type SnapshotDevice } from '../composables/useServerState';
 
-type DeviceStatus = 'online' | 'dropped' | 'offline';
+type DeviceStatus = 'online' | 'offline' | 'discovered';
 
 interface StatusCardDevice extends SnapshotDevice {
-  status: DeviceStatus;
+  uid: string;
+  cardStatus: DeviceStatus;
+  isSim: boolean;
+  isConfigured: boolean;
   hasLayout: boolean;
 }
 
@@ -18,6 +21,7 @@ const openMenuUid = ref<string | null>(null);
 const showNewDeviceModal = ref(false);
 const editingDevice = ref<StatusCardDevice | null>(null);
 const removingDevice = ref<StatusCardDevice | null>(null);
+const configuringUid = ref<string | null>(null);
 
 const layouts = computed<Record<string, unknown>>(() => {
   const value = snapshot.value?.layouts;
@@ -29,64 +33,82 @@ const devices = computed<SnapshotDevice[]>(() => {
   return [...items];
 });
 
-function deriveStatus(device: SnapshotDevice): DeviceStatus {
-  if (device.connected) {
-    return 'online';
+// Device edits are valid only before a program is loaded; the controller
+// enforces this, and the UI mirrors it so dead controls are not offered.
+const editable = computed<boolean>(() => {
+  if (!controllerConnected.value || !snapshot.value) {
+    return false;
   }
-  if (device.last_seen != null) {
-    return 'dropped';
+  const state = snapshot.value.session?.state;
+  return !state || state === 'idle';
+});
+
+const editDisabledReason = computed<string>(() => {
+  if (!controllerConnected.value) {
+    return 'Controller offline';
   }
-  return 'offline';
+  if (!editable.value) {
+    return 'Devices can only be edited before a program is loaded';
+  }
+  return '';
+});
+
+function isSimUid(uid: string): boolean {
+  return uid.startsWith('sim-');
 }
 
-function hasLayout(deviceUid: string | undefined): boolean {
-  return Boolean(deviceUid && layouts.value[deviceUid]);
+function hasLayout(uid: string): boolean {
+  return Boolean(layouts.value[uid]);
 }
 
 const sortedDevices = computed<StatusCardDevice[]>(() => {
   const priority: Record<DeviceStatus, number> = {
-    dropped: 0,
-    online: 1,
-    offline: 2,
+    online: 0,
+    offline: 1,
+    discovered: 2,
   };
 
   return devices.value
+    .filter((device): device is SnapshotDevice & { uid: string } => Boolean(device?.uid))
     .map((device) => ({
       ...device,
-      status: deriveStatus(device),
-      hasLayout: hasLayout(device.device_uid),
+      uid: device.uid,
+      cardStatus: (device.status as DeviceStatus) ?? 'offline',
+      isSim: isSimUid(device.uid),
+      isConfigured: Boolean(device.configured),
+      hasLayout: hasLayout(device.uid),
     }))
     .sort((left, right) => {
-      const statusDelta = priority[left.status] - priority[right.status];
+      const statusDelta = priority[left.cardStatus] - priority[right.cardStatus];
       if (statusDelta !== 0) {
         return statusDelta;
       }
-      return String(left.strip ?? '').localeCompare(String(right.strip ?? ''));
+      return String(left.strip_id ?? left.uid).localeCompare(String(right.strip_id ?? right.uid));
     });
 });
 
 const counts = computed(() => {
   let online = 0;
-  let dropped = 0;
   let offline = 0;
+  let discovered = 0;
   for (const device of sortedDevices.value) {
-    if (device.status === 'online') {
+    if (device.cardStatus === 'online') {
       online += 1;
-    } else if (device.status === 'dropped') {
-      dropped += 1;
+    } else if (device.cardStatus === 'discovered') {
+      discovered += 1;
     } else {
       offline += 1;
     }
   }
-  return { online, dropped, offline };
+  return { online, offline, discovered };
 });
 
 function statusLabel(status: DeviceStatus): string {
   if (status === 'online') {
     return 'Online';
   }
-  if (status === 'dropped') {
-    return 'Dropped';
+  if (status === 'discovered') {
+    return 'Discovered';
   }
   return 'Offline';
 }
@@ -95,37 +117,17 @@ function statusClass(status: DeviceStatus): string {
   if (status === 'online') {
     return 'device-status-online';
   }
-  if (status === 'dropped') {
-    return 'device-status-dropped';
+  if (status === 'discovered') {
+    return 'device-status-discovered';
   }
   return 'device-status-offline';
 }
 
-function statusTitle(device: StatusCardDevice): string {
-  if (device.status !== 'dropped' || device.last_seen == null) {
-    return statusLabel(device.status);
+function stripLabel(device: StatusCardDevice): string {
+  if (!device.isConfigured) {
+    return 'Unconfigured';
   }
-  return `Dropped · last seen ${new Date(device.last_seen * 1000).toLocaleString()}`;
-}
-
-function clockLabel(device: SnapshotDevice): string {
-  if (device.clock_state === 'host') {
-    return '0.0 ms';
-  }
-  if (device.clock_state === 'stale') {
-    return 'stale';
-  }
-  if (typeof device.clock_offset_ms === 'number' && Number.isFinite(device.clock_offset_ms)) {
-    const sign = device.clock_offset_ms >= 0 ? '+' : '';
-    return `${sign}${device.clock_offset_ms.toFixed(1)} ms`;
-  }
-  if (device.clock_state === 'settling') {
-    return 'settling';
-  }
-  if (device.clock_state === 'pending') {
-    return 'syncing';
-  }
-  return '—';
+  return device.strip_id ?? 'unknown_strip';
 }
 
 function layoutMenuLabel(device: StatusCardDevice): string {
@@ -133,7 +135,7 @@ function layoutMenuLabel(device: StatusCardDevice): string {
 }
 
 function actionMenuLabel(device: StatusCardDevice): string {
-  return `Actions for ${device.device_uid ?? device.strip ?? 'device'}`;
+  return `Actions for ${device.uid}`;
 }
 
 function toggleMenu(deviceUid: string): void {
@@ -145,7 +147,7 @@ function closeMenu(): void {
 }
 
 function openNewDeviceModal(): void {
-  if (!controllerConnected.value) {
+  if (!editable.value) {
     return;
   }
   showNewDeviceModal.value = true;
@@ -155,8 +157,20 @@ function closeNewDeviceModal(): void {
   showNewDeviceModal.value = false;
 }
 
+function openConfigureModal(device: StatusCardDevice): void {
+  if (!editable.value) {
+    return;
+  }
+  configuringUid.value = device.uid;
+  closeMenu();
+}
+
+function closeConfigureModal(): void {
+  configuringUid.value = null;
+}
+
 function openEditDeviceModal(device: StatusCardDevice): void {
-  if (!device.device_uid || !controllerConnected.value) {
+  if (!editable.value) {
     return;
   }
   editingDevice.value = device;
@@ -168,7 +182,7 @@ function closeEditDeviceModal(): void {
 }
 
 function openRemoveDeviceModal(device: StatusCardDevice): void {
-  if (!device.device_uid || !controllerConnected.value) {
+  if (!editable.value) {
     return;
   }
   removingDevice.value = device;
@@ -208,7 +222,7 @@ onBeforeUnmount(() => {
     <div class="status-frame">
       <div class="status-toolbar">
         <div v-if="snapshot && devices.length" class="status-inline-summary" aria-label="Device status summary">
-          <span v-if="counts.dropped" class="status-summary-dropped">{{ counts.dropped }} dropped</span>
+          <span v-if="counts.discovered" class="status-summary-discovered">{{ counts.discovered }} discovered</span>
           <span v-if="counts.online" class="status-summary-online">{{ counts.online }} online</span>
           <span v-if="counts.offline" class="status-summary-offline">{{ counts.offline }} offline</span>
         </div>
@@ -216,8 +230,8 @@ onBeforeUnmount(() => {
         <button
           type="button"
           class="action-button status-new-device-button"
-          :disabled="!controllerConnected"
-          :title="controllerConnected ? 'Create a configured device' : 'Controller offline'"
+          :disabled="!editable"
+          :title="editable ? 'Create a configured device' : editDisabledReason"
           @click="openNewDeviceModal"
         >
           <span class="status-new-device-plus" aria-hidden="true">+</span>
@@ -241,70 +255,79 @@ onBeforeUnmount(() => {
       <section v-else class="device-grid">
         <article
           v-for="device in sortedDevices"
-          :key="device.device_uid"
+          :key="device.uid"
           class="device-card"
-          :class="{ 'device-card-offline': device.status === 'offline' }"
+          :class="{ 'device-card-offline': device.cardStatus === 'offline' }"
         >
           <div class="device-card-head">
             <span
               class="device-type-badge"
-              :class="device.device_type === 'sim' ? 'device-type-badge-sim' : 'device-type-badge-esp'"
+              :class="device.isSim ? 'device-type-badge-sim' : 'device-type-badge-esp'"
             >
-              {{ device.device_type === 'sim' ? 'SIM' : 'ESP' }}
+              {{ device.isSim ? 'SIM' : 'ESP' }}
             </span>
-            <span class="device-head-offset mono">
-              {{ clockLabel(device) }}
-            </span>
-            <span class="device-status" :class="statusClass(device.status)" :title="statusTitle(device)">
+            <span class="device-status" :class="statusClass(device.cardStatus)" :title="statusLabel(device.cardStatus)">
               <span class="device-status-dot" />
-              {{ statusLabel(device.status) }}
+              {{ statusLabel(device.cardStatus) }}
             </span>
           </div>
 
           <div class="device-card-body">
-            <h2 class="device-strip" :title="device.strip ?? device.device_uid ?? 'unknown device'">
-              {{ device.strip ?? 'unknown_strip' }}
+            <h2 class="device-strip" :title="stripLabel(device)">
+              {{ stripLabel(device) }}
             </h2>
             <div class="device-bottom-row">
-              <p class="device-uid mono">DEVICE: {{ device.device_uid ?? 'unknown-device' }}</p>
+              <p class="device-uid mono">DEVICE: {{ device.uid }}</p>
               <div class="device-action-slot">
-                <div v-if="device.device_uid" class="device-menu" data-device-menu>
+                <div class="device-menu" data-device-menu>
                   <button
                     type="button"
                     class="device-menu-trigger"
                     aria-label="Device actions"
                     :title="actionMenuLabel(device)"
-                    @click.stop="toggleMenu(device.device_uid)"
+                    @click.stop="toggleMenu(device.uid)"
                   >
                     ⋮
                   </button>
-                  <div v-if="openMenuUid === device.device_uid" class="device-menu-list">
+                  <div v-if="openMenuUid === device.uid" class="device-menu-list">
+                    <template v-if="device.isConfigured">
+                      <button
+                        type="button"
+                        class="device-menu-item"
+                        :disabled="!editable"
+                        :title="editable ? 'Edit device' : editDisabledReason"
+                        @click="openEditDeviceModal(device)"
+                      >
+                        Edit device
+                      </button>
+                      <button
+                        type="button"
+                        class="device-menu-item device-menu-item-danger"
+                        :disabled="!editable"
+                        :title="editable ? 'Remove device' : editDisabledReason"
+                        @click="openRemoveDeviceModal(device)"
+                      >
+                        Remove device
+                      </button>
+                      <RouterLink
+                        v-if="device.isSim"
+                        class="device-menu-item"
+                        :to="`/layouts/${encodeURIComponent(device.uid)}`"
+                        @click="closeMenu"
+                      >
+                        {{ layoutMenuLabel(device) }}
+                      </RouterLink>
+                    </template>
                     <button
+                      v-else
                       type="button"
                       class="device-menu-item"
-                      :disabled="!controllerConnected"
-                      :title="controllerConnected ? 'Edit device' : 'Controller offline'"
-                      @click="openEditDeviceModal(device)"
+                      :disabled="!editable"
+                      :title="editable ? 'Configure device' : editDisabledReason"
+                      @click="openConfigureModal(device)"
                     >
-                      Edit device
+                      Configure
                     </button>
-                    <button
-                      type="button"
-                      class="device-menu-item device-menu-item-danger"
-                      :disabled="!controllerConnected"
-                      :title="controllerConnected ? 'Remove device' : 'Controller offline'"
-                      @click="openRemoveDeviceModal(device)"
-                    >
-                      Remove device
-                    </button>
-                    <RouterLink
-                      v-if="device.device_type === 'sim'"
-                      class="device-menu-item"
-                      :to="`/layouts/${encodeURIComponent(device.device_uid)}`"
-                      @click="closeMenu"
-                    >
-                      {{ layoutMenuLabel(device) }}
-                    </RouterLink>
                   </div>
                 </div>
               </div>
@@ -322,6 +345,14 @@ onBeforeUnmount(() => {
       @saved="closeNewDeviceModal"
     />
     <DeviceModal
+      v-if="configuringUid"
+      mode="create"
+      :preset-uid="configuringUid"
+      :controller-connected="controllerConnected"
+      @close="closeConfigureModal"
+      @saved="closeConfigureModal"
+    />
+    <DeviceModal
       v-if="editingDevice"
       mode="edit"
       :device="editingDevice"
@@ -330,8 +361,8 @@ onBeforeUnmount(() => {
       @saved="closeEditDeviceModal"
     />
     <RemoveDeviceModal
-      v-if="removingDevice && removingDevice.device_uid"
-      :device-uid="removingDevice.device_uid"
+      v-if="removingDevice && removingDevice.uid"
+      :device-uid="removingDevice.uid"
       :controller-connected="controllerConnected"
       @close="closeRemoveDeviceModal"
       @removed="closeRemoveDeviceModal"
@@ -390,8 +421,8 @@ onBeforeUnmount(() => {
   color: var(--status-online);
 }
 
-.status-summary-dropped {
-  color: var(--status-dropped);
+.status-summary-discovered {
+  color: #8df0dd;
 }
 
 .status-summary-offline {
@@ -425,21 +456,10 @@ onBeforeUnmount(() => {
 }
 
 .device-card-head {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 0.75rem;
-}
-
-.device-head-offset {
-  justify-self: center;
-  min-width: 0;
-  color: var(--muted);
-  font-size: 0.64rem;
-  font-weight: 400;
-  letter-spacing: 0.04em;
-  white-space: nowrap;
-  text-align: center;
 }
 
 .device-type-badge {
@@ -484,8 +504,8 @@ onBeforeUnmount(() => {
   color: var(--status-online);
 }
 
-.device-status-dropped {
-  color: var(--status-dropped);
+.device-status-discovered {
+  color: #8df0dd;
 }
 
 .device-status-offline {

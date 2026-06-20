@@ -388,11 +388,11 @@ def main(argv: Optional[list[str]] = None) -> None:
         sys.exit(1)
 
     # Step 2 — Filter strips
-    artifacts = manifest.strips
+    artifacts = list(manifest.strips.values())
     if args.strip is not None:
         artifacts = [a for a in artifacts if a.strip_id == args.strip]
         if not artifacts:
-            available = [a.strip_id for a in manifest.strips]
+            available = list(manifest.strips)
             print(f'Error: strip {args.strip!r} not found (available: {available})',
                   file=sys.stderr)
             sys.exit(1)

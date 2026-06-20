@@ -12,8 +12,16 @@ Expected RGB (no gamma, S=0 → R=G=B=round(V*255)):
   t=4.0: [0,  0,   0,   51,  102]
 """
 
+import sys
 from pathlib import Path
 from elements.dsl import *
+
+
+def _out_dir() -> Path:
+    """Output directory: argv[1] if given (CMake passes the build dir), else here."""
+    d = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parent
+    d.mkdir(parents=True, exist_ok=True)
+    return d
 
 def main():
     s = strip("test", length=5)
@@ -32,7 +40,7 @@ def main():
 
     blobs = build(beat=1.0, duration=5.0)
 
-    out = Path(__file__).resolve().parent / "test_shift.bin"
+    out = _out_dir() / "test_shift.bin"
     out.write_bytes(blobs["test"])
     print(f"wrote {out} ({len(blobs['test'])} bytes)")
 

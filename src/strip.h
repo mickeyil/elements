@@ -2,49 +2,56 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
-#include "colors.h"
 
-// Thin wrapper around the physical LED output buffer (FastLED's CRGB array).
-// Provides indexed RGB access. The compositor blends directly into this.
+#include "colors.h"
+#include "gamma.h"
+#include "hardware_profile.h"
+
+// Strip is the canonical linear-RGB frame buffer. Sim, tests, and debug
+// paths read it directly; the LED output reads it via copy_to().
+//
+// Owns pixel storage. Allocate via resize(); release via reset() or
+// destruction.
+
+// `bytes()` and `copy_to()` walk the buffer as packed 3-byte triples.
+static_assert(sizeof(rgb_t) == 3, "Strip assumes packed rgb_t storage");
 
 class Strip {
 public:
-    Strip(uint8_t* rgb_buf = nullptr, uint16_t length = 0)
-        : _buf(rgb_buf), _len(length) {}
+    ~Strip();
 
-    void rebind(uint8_t* rgb_buf, uint16_t length)
-    {
-        _buf = rgb_buf;
-        _len = length;
-    }
+    // Allocate storage for `size` pixels (zeroed). Returns false on allocation
+    // failure; the strip is left empty.
+    bool resize(uint16_t size);
 
-    void clear()
-    {
-        if (!_buf || _len == 0) {
-            return;
-        }
-        memset(_buf, 0, byte_size());
-    }
+    // Release owned pixel storage.
+    void reset();
 
-    void set_rgb(uint16_t idx, const rgb_t& c) {
-        uint8_t* p = &_buf[idx * 3];
-        p[0] = c.r;  // CRGB is RGB order; FastLED handles reorder to wire format
-        p[1] = c.g;
-        p[2] = c.b;
-    }
+    // Zero every pixel.
+    void clear();
 
-    rgb_t get_rgb(uint16_t idx) const {
-        const uint8_t* p = &_buf[idx * 3];
-        return rgb_t(p[0], p[1], p[2]);
-    }
+    rgb_t& operator[](uint16_t idx) { return _pixels[idx]; }
+    const rgb_t& operator[](uint16_t idx) const { return _pixels[idx]; }
 
-    uint16_t length() const { return _len; }
-    size_t byte_size() const { return static_cast<size_t>(_len) * 3; }
-    uint8_t* data() { return _buf; }
-    const uint8_t* data() const { return _buf; }
+    uint16_t size() const { return _size; }
+    bool empty() const { return _size == 0; }
+    size_t byte_size() const { return static_cast<size_t>(_size) * sizeof(rgb_t); }
+
+    rgb_t* pixels() { return _pixels; }
+    const rgb_t* pixels() const { return _pixels; }
+
+    uint8_t* bytes() { return reinterpret_cast<uint8_t*>(_pixels); }
+    const uint8_t* bytes() const { return reinterpret_cast<const uint8_t*>(_pixels); }
+
+    // Copy the frame into `dst` using `order` for channel layout. Writes
+    // exactly `dst_pixels * 3` bytes -- the tail past size() is zeroed.
+    void copy_to(uint8_t* dst, uint16_t dst_pixels, ColorOrder order) const;
 
 private:
-    uint8_t* _buf;
-    uint16_t _len;
+    rgb_t* _pixels = nullptr;
+    uint16_t _size = 0;
 };
+
+// Apply gamma in place. Default-constructed GammaCorrection is identity,
+// so the call is safe on sim/test/debug paths without a guard.
+void apply_gamma(Strip& strip, const GammaCorrection& gamma);
