@@ -38,10 +38,14 @@ class FakeHub:
         self.pending_events = []
         self.frames = []
         self.sent = []
+        self.discovered = set()
         self.closed = False
 
     def emit(self, *events):
         self.pending_events.extend(events)
+
+    def discovered_uids(self):
+        return set(self.discovered)
 
     def poll(self, wanted_uids):
         events, self.pending_events = self.pending_events, []
@@ -240,6 +244,36 @@ def test_state_includes_strip_layout(tmp_path):
     cmd(service, 'load', program_id='prog')
     state = _by_type(_json(service.snapshot_messages()), 'state')[0]
     assert state['session']['strips'] == [{'strip_id': 'main', 'length': 30}]
+
+
+def test_configured_device_status_tracks_attachment(tmp_path):
+    service, hub = make_service(tmp_path)
+    device = _by_type(_json(service.snapshot_messages()), 'state')[0]['devices'][0]
+    assert device['configured'] is True
+    assert device['status'] == 'offline'
+
+    hub.emit(DeviceConnected(uid='sim-a', boot_token=1, rebooted=False))
+    service.tick_once()
+    device = _by_type(_json(service.snapshot_messages()), 'state')[0]['devices'][0]
+    assert device['status'] == 'online'
+
+
+def test_discovered_device_surfaced_as_stub(tmp_path):
+    service, hub = make_service(tmp_path)
+    hub.discovered = {'sim-new'}
+    devices = _by_type(_json(service.snapshot_messages()), 'state')[0]['devices']
+    discovered = [d for d in devices if d['uid'] == 'sim-new']
+    assert discovered == [{'uid': 'sim-new', 'configured': False,
+                           'status': 'discovered'}]
+
+
+def test_configured_device_not_duplicated_when_also_discovered(tmp_path):
+    service, hub = make_service(tmp_path)
+    hub.discovered = {'sim-a'}   # the configured device is also broadcasting
+    devices = _by_type(_json(service.snapshot_messages()), 'state')[0]['devices']
+    sim_a = [d for d in devices if d['uid'] == 'sim-a']
+    assert len(sim_a) == 1
+    assert sim_a[0]['configured'] is True
 
 
 def test_preview_frame_emitted_only_when_enabled(tmp_path):

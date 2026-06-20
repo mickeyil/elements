@@ -330,6 +330,40 @@ def test_unwanted_discover_gets_no_offer(hub):
     client.close()
 
 
+def poll_until_discovered(hub, uid, timeout_s=2.0):
+    deadline = time.monotonic() + timeout_s
+    while uid not in hub.discovered_uids() and time.monotonic() < deadline:
+        hub.poll(WANTED)
+    return hub.discovered_uids()
+
+
+def test_valid_unwanted_discover_is_recorded_but_not_offered(hub):
+    client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    client.sendto(discover_packet('sim-new'), ('127.0.0.1', hub.discovery_port))
+    assert 'sim-new' in poll_until_discovered(hub, 'sim-new')
+    client.settimeout(0.1)
+    with pytest.raises(socket.timeout):
+        client.recvfrom(64)              # recorded, but never offered
+    client.close()
+
+
+def test_invalid_discover_uid_is_not_recorded(hub):
+    client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    client.sendto(discover_packet('bad-uid'), ('127.0.0.1', hub.discovery_port))
+    poll_until(hub, lambda e, f: False, timeout_s=0.2)
+    assert hub.discovered_uids() == set()
+    client.close()
+
+
+def test_discovered_uid_ages_out(hub, clock):
+    client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    client.sendto(discover_packet('sim-new'), ('127.0.0.1', hub.discovery_port))
+    assert 'sim-new' in poll_until_discovered(hub, 'sim-new')
+    clock.advance_ms(hub_mod.DISCOVERED_TTL_US // 1000 + 1)
+    assert hub.discovered_uids() == set()
+    client.close()
+
+
 # ---------------------------------------------------------------------------
 # Clock sync
 # ---------------------------------------------------------------------------

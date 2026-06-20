@@ -230,10 +230,14 @@ class ControllerService:
                        if manifest is not None else []),
         }
         devices = []
+        configured = set()
         for dc in self._config.devices:
+            configured.add(dc.device_uid)
             m = s.member(dc.device_uid)
             devices.append({
                 'uid': dc.device_uid,
+                'configured': True,
+                'status': 'online' if m.attached else 'offline',
                 'label': dc.label,
                 'strip_id': dc.strip_id,
                 'length': dc.length,
@@ -248,6 +252,10 @@ class ControllerService:
                 'last_refusal': list(m.last_refusal) if m.last_refusal else None,
                 'blocked': list(m.blocked) if m.blocked else None,
             })
+        # Devices broadcasting DISCOVER but not in the config: a UID stub the
+        # operator can configure. Configured devices win, so none appears twice.
+        for uid in sorted(self._hub.discovered_uids() - configured):
+            devices.append({'uid': uid, 'configured': False, 'status': 'discovered'})
         return {'type': 'state', 'session': session, 'devices': devices}
 
     def _catalog_dict(self):

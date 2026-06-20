@@ -27,10 +27,17 @@ import time
 from dataclasses import dataclass
 
 from . import wire
+from .config import validate_device_uid
 
 log = logging.getLogger(__name__)
 
+_US_PER_S = 1_000_000
+
 PING_INTERVAL_US = wire.PING_INTERVAL_MS * 1_000
+
+# A discovered device stays listed for this long after its last DISCOVER.
+# Devices broadcast every 1.5 s, so this tolerates one missed broadcast.
+DISCOVERED_TTL_US = 4 * _US_PER_S
 
 # A connection that has not sent REGISTER after this long is not a
 # device (devices register immediately after connect); reclaim the fd.
@@ -92,17 +99,23 @@ def _udp_listener(port):
 
 class DiscoveryServer:
     """Answers DISCOVER broadcasts from wanted devices with a unicast
-    OFFER, every time; a device treats a quiet controller as gone."""
+    OFFER, every time; a device treats a quiet controller as gone.
+
+    Every valid DISCOVER is recorded by last-seen time, wanted or not, so
+    the layer above can surface unconfigured devices that are broadcasting.
+    Recording is not offering: only wanted UIDs get an OFFER, which keeps
+    the controller talking solely to devices it means to."""
 
     def __init__(self, port, link_port):
         self._sock = _udp_listener(port)
         self._link_port = link_port
+        self._last_seen = {}   # uid -> us of its last DISCOVER, valid UIDs only
 
     @property
     def port(self):
         return self._sock.getsockname()[1]
 
-    def poll(self, wanted_uids):
+    def poll(self, now_us, wanted_uids):
         while True:
             try:
                 datagram, src = self._sock.recvfrom(_UDP_RECV_SIZE)
@@ -112,7 +125,10 @@ class DiscoveryServer:
                 log.warning('discovery: recv failed: %s', e)
                 return
             uid = wire.parse_discover(datagram)
-            if uid is None or uid not in wanted_uids:
+            if uid is None or validate_device_uid(uid) is not None:
+                continue
+            self._last_seen[uid] = now_us
+            if uid not in wanted_uids:
                 continue
             advertised = _advertised_ip_toward(src[0])
             if advertised is None:
@@ -122,6 +138,13 @@ class DiscoveryServer:
                 self._sock.sendto(wire.encode_offer(advertised, self._link_port), src)
             except OSError as e:
                 log.debug('discovery: OFFER to %s failed: %s', src, e)
+
+    def discovered(self, now_us):
+        """UIDs heard within DISCOVERED_TTL_US; stale entries are pruned."""
+        live = {uid: seen for uid, seen in self._last_seen.items()
+                if now_us - seen <= DISCOVERED_TTL_US}
+        self._last_seen = live
+        return set(live)
 
     def close(self):
         self._sock.close()
@@ -477,7 +500,7 @@ class DeviceHub:
         """One tick: drain all four listeners. Returns HubPoll."""
         now_us = self._clock_us()
         events = []
-        self._discovery.poll(wanted_uids)
+        self._discovery.poll(now_us, wanted_uids)
         self._link_server.poll(now_us, wanted_uids, events)
         self._sync.poll(self._registered_boot_token)
         frames = self._frames.poll(self.is_connected)
@@ -490,6 +513,10 @@ class DeviceHub:
         if link is None:
             return False
         return link.send(encoded, on_ack or (lambda ack: None), self._clock_us())
+
+    def discovered_uids(self):
+        """UIDs broadcasting DISCOVER now, wanted or not (see DiscoveryServer)."""
+        return self._discovery.discovered(self._clock_us())
 
     def is_connected(self, uid):
         return self._link_server.link(uid) is not None
