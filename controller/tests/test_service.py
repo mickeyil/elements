@@ -5,7 +5,9 @@ through handle_cmd()/tick_once()/snapshot_messages() directly. The load path
 compiles a real (tiny) program against the configured topology.
 """
 
-from elemctl.config import Config, DeviceConfig
+import json
+
+from elemctl.config import Config, DeviceConfig, load_config_obj
 from elemctl.controller_protocol import KIND_FRAME, KIND_JSON, parse_json_payload
 from elemctl.hub import DeviceConnected, HubPoll
 from elemctl.library import ProgramLibrary
@@ -39,6 +41,7 @@ class FakeHub:
         self.frames = []
         self.sent = []
         self.discovered = set()
+        self.disconnected = []
         self.closed = False
 
     def emit(self, *events):
@@ -46,6 +49,9 @@ class FakeHub:
 
     def discovered_uids(self):
         return set(self.discovered)
+
+    def disconnect(self, uid, reason='removed'):
+        self.disconnected.append((uid, reason))
 
     def poll(self, wanted_uids):
         events, self.pending_events = self.pending_events, []
@@ -77,6 +83,24 @@ def make_service(tmp_path, with_program=True):
     service = ControllerService(config, hub=hub, clock_us=FakeClock(),
                                 library=ProgramLibrary(str(tmp_path)))
     return service, hub
+
+
+def make_service_with_config(tmp_path):
+    """A service backed by a real config file, so device-edit commands can
+    persist (make_service leaves config_path None)."""
+    (tmp_path / 'prog.py').write_text(PROGRAM)
+    doc = {
+        'controller': {'discovery_port': 6040, 'link_port': 6041,
+                       'frame_port': 6042, 'sync_port': 6043},
+        'devices': [{'device_uid': 'sim-a', 'strip_id': 'main', 'length': 30}],
+    }
+    config_path = tmp_path / 'config.json'
+    config_path.write_text(json.dumps(doc))
+    hub = FakeHub()
+    service = ControllerService(load_config_obj(doc), config_path=str(config_path),
+                               hub=hub, clock_us=FakeClock(),
+                               library=ProgramLibrary(str(tmp_path)))
+    return service, hub, config_path
 
 
 def cmd(service, name, _id=1, **kw):
@@ -274,6 +298,79 @@ def test_configured_device_not_duplicated_when_also_discovered(tmp_path):
     sim_a = [d for d in devices if d['uid'] == 'sim-a']
     assert len(sim_a) == 1
     assert sim_a[0]['configured'] is True
+
+
+# ---------------------------------------------------------------------------
+# Device editing commands
+# ---------------------------------------------------------------------------
+
+def _devices(service):
+    return _by_type(_json(service.snapshot_messages()), 'state')[0]['devices']
+
+
+def test_add_device_persists_and_surfaces(tmp_path):
+    service, _hub, config_path = make_service_with_config(tmp_path)
+    reply = cmd(service, 'add_device', device_uid='sim-b', strip_id='side', length=30)
+    assert reply['ok'] is True
+
+    doc = json.loads(config_path.read_text())
+    assert any(d['device_uid'] == 'sim-b' for d in doc['devices'])
+    sim_b = [d for d in _devices(service) if d['uid'] == 'sim-b']
+    assert sim_b and sim_b[0]['status'] == 'offline'
+
+
+def test_add_device_ignores_device_type(tmp_path):
+    service, _hub, config_path = make_service_with_config(tmp_path)
+    reply = cmd(service, 'add_device', device_type='sim', device_uid='sim-b',
+                strip_id='side', length=30)
+    assert reply['ok'] is True
+    sim_b = next(d for d in json.loads(config_path.read_text())['devices']
+                 if d['device_uid'] == 'sim-b')
+    assert 'device_type' not in sim_b
+
+
+def test_device_edit_rejected_while_a_program_is_loaded(tmp_path):
+    service, _hub, _ = make_service_with_config(tmp_path)
+    cmd(service, 'load', program_id='prog')
+    reply = cmd(service, 'add_device', device_uid='sim-b', strip_id='side', length=30)
+    assert reply['ok'] is False
+    assert 'before a program is loaded' in reply['error']
+
+
+def test_device_edit_without_config_path_errors(tmp_path):
+    service, _hub = make_service(tmp_path)   # config_path is None
+    reply = cmd(service, 'add_device', device_uid='sim-b', strip_id='side', length=30)
+    assert reply['ok'] is False
+    assert 'config file' in reply['error']
+
+
+def test_add_device_invalid_input_changes_nothing(tmp_path):
+    service, _hub, config_path = make_service_with_config(tmp_path)
+    before = config_path.read_text()
+    reply = cmd(service, 'add_device', device_uid='sim-b', strip_id='side', length=0)
+    assert reply['ok'] is False
+    assert config_path.read_text() == before
+    assert service._session.member('sim-b') is None
+
+
+def test_edit_device_preserves_label_when_omitted(tmp_path):
+    service, _hub, config_path = make_service_with_config(tmp_path)
+    cmd(service, 'add_device', device_uid='sim-b', strip_id='side', length=30,
+        label='Stage')
+    reply = cmd(service, 'edit_device', target_device_uid='sim-b',
+                device_uid='sim-b', strip_id='side', length=45)
+    assert reply['ok'] is True
+    sim_b = next(d for d in json.loads(config_path.read_text())['devices']
+                 if d['device_uid'] == 'sim-b')
+    assert sim_b['label'] == 'Stage' and sim_b['length'] == 45
+
+
+def test_remove_device_persists_and_disconnects(tmp_path):
+    service, hub, config_path = make_service_with_config(tmp_path)
+    reply = cmd(service, 'remove_device', device_uid='sim-a')
+    assert reply['ok'] is True
+    assert json.loads(config_path.read_text())['devices'] == []
+    assert ('sim-a', 'removed') in hub.disconnected
 
 
 def test_preview_frame_emitted_only_when_enabled(tmp_path):

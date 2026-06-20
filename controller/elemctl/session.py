@@ -437,6 +437,56 @@ class Session:
                 cursor_us=cursor_us,
             ))
 
+    # -----------------------------------------------------------------------
+    # Device editing: add / edit / remove a configured device. The service
+    # persists the config change; these apply it to the live membership.
+    # Allowed only before a program is loaded (can_edit_devices), so a mutation
+    # can never race the runtime of a loaded program.
+    # -----------------------------------------------------------------------
+
+    def can_edit_devices(self):
+        # IDLE only happens before the first load, where no member is ever
+        # serving and so no command is ever in flight: that is the whole guard.
+        return self.state is SessionState.IDLE
+
+    def _ensure_editable(self):
+        # The topology-safety rule is the session's to enforce, not only the
+        # service's; a mutation after load would desync the loaded program.
+        if not self.can_edit_devices():
+            raise ValueError('devices can only be edited before a program is loaded')
+
+    def add_device(self, dc):
+        """Add a configured device. It joins the wanted set and parks DETACHED
+        until the next load routes a strip onto it."""
+        self._ensure_editable()
+        self._members[dc.device_uid] = Member(dc.device_uid, dc.strip_id, dc.length)
+        self._wanted_uids.add(dc.device_uid)
+
+    def edit_device(self, target_uid, dc):
+        """Apply an edited device config. A changed uid is a different device:
+        drop the old slot and add the new. Otherwise update the routing fields
+        in place, which keeps a live link's attachment; the device re-profiles
+        on the next load, since edits always precede any load."""
+        self._ensure_editable()
+        if dc.device_uid != target_uid:
+            self.remove_device(target_uid)
+            self.add_device(dc)
+            return
+        member = self._members.get(target_uid)
+        if member is None:          # membership slipped from config: apply as an add
+            self.add_device(dc)
+            return
+        member.strip_id = dc.strip_id
+        member.strip_length = dc.length
+
+    def remove_device(self, uid):
+        """Remove a configured device: close any live link (so it returns to
+        discovery) and drop it from the membership and the wanted set."""
+        self._ensure_editable()
+        self._hub.disconnect(uid)
+        self._members.pop(uid, None)
+        self._wanted_uids.discard(uid)
+
     def tick(self):
         """One loop iteration: drain the hub, apply lifecycle events, drive
         each member toward its target, and return the session events."""

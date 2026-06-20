@@ -10,16 +10,19 @@ One clock backs both halves: the session stamps program_start_us with it and
 the hub's sync server hands the same domain to devices, so they share a
 canonical time.
 
-This is the control core: it speaks load/play/pause/resume/stop plus library
-queries and shutdown, and it publishes session state, events, and assembled
-preview frames. The device-management and status vocabularies the v2 clients
-still use are not here yet (the TUI/web pass).
+This is the control core: it speaks load/play/pause/resume/stop, device
+add/edit/remove, plus library queries and shutdown, and it publishes session
+state, events, and assembled preview frames. The web client's full-state and
+status vocabulary is still the v2 shape (the TUI/web pass).
 """
 
 import logging
 import time
 
+from pathlib import Path
+
 from . import config as config_mod
+from . import config_edit
 from .controller_protocol import encode_frame, encode_json
 from .hub import DeviceHub
 from .library import ArtifactCache, ProgramLibrary
@@ -31,6 +34,14 @@ from .session import (
 )
 
 log = logging.getLogger(__name__)
+
+
+def _doc_label(doc, target_uid):
+    """The stored label of a device entry, or None if it has none / is absent."""
+    for d in doc.get('devices', []):
+        if isinstance(d, dict) and d.get('device_uid') == target_uid:
+            return d.get('label')
+    return None
 
 
 class ControllerService:
@@ -139,6 +150,12 @@ class ControllerService:
         if name == 'stop':
             self._session.stop()
             return {}
+        if name == 'add_device':
+            return self._cmd_add_device(cmd)
+        if name == 'edit_device':
+            return self._cmd_edit_device(cmd)
+        if name == 'remove_device':
+            return self._cmd_remove_device(cmd)
         if name == 'shutdown':
             self._shutdown = True
             return {}
@@ -172,6 +189,68 @@ class ControllerService:
         entry = self._library.publish(cmd.get('program_id'), cmd.get('source'))
         self._catalog_dirty = True
         return {'program_id': entry.program_id}
+
+    # -- device editing -----------------------------------------------------
+
+    def _cmd_add_device(self, cmd):
+        self._require_editable()
+        doc = self._editable_doc()
+        # device_type is inferred from the uid in v3; accept and ignore it.
+        entry = config_edit.make_device_entry(
+            device_uid=cmd.get('device_uid'), strip_id=cmd.get('strip_id'),
+            length=cmd.get('length'), label=cmd.get('label'))
+        config_edit.add_device(doc, entry)
+        new_config = self._commit_config(doc)
+        self._session.add_device(self._device_config(new_config, entry['device_uid']))
+        return {'device_uid': entry['device_uid']}
+
+    def _cmd_edit_device(self, cmd):
+        self._require_editable()
+        target = cmd.get('target_device_uid')
+        doc = self._editable_doc()
+        # Web edit forms omit label; preserve the stored one when absent, and
+        # treat an explicit null as a request to clear it.
+        label = cmd.get('label') if 'label' in cmd else _doc_label(doc, target)
+        config_edit.edit_device(doc, target, device_uid=cmd.get('device_uid'),
+                                strip_id=cmd.get('strip_id'),
+                                length=cmd.get('length'), label=label)
+        new_config = self._commit_config(doc)
+        self._session.edit_device(
+            target, self._device_config(new_config, cmd.get('device_uid')))
+        return {'device_uid': cmd.get('device_uid')}
+
+    def _cmd_remove_device(self, cmd):
+        self._require_editable()
+        uid = cmd.get('device_uid')
+        doc = self._editable_doc()
+        config_edit.remove_device(doc, uid)
+        self._commit_config(doc)
+        self._session.remove_device(uid)
+        return {'device_uid': uid}
+
+    def _require_editable(self):
+        if not self._session.can_edit_devices():
+            raise ValueError('devices can only be edited before a program is loaded')
+
+    def _editable_doc(self):
+        if self._config_path is None:
+            raise ValueError('device edits require a server config file')
+        return config_edit.load_config_doc(self._config_path)
+
+    def _commit_config(self, doc):
+        """Validate, persist, and adopt an edited config doc. Validation runs
+        before the write, so a rejected edit leaves the file untouched."""
+        new_config = config_mod.load_config_obj(doc)   # ConfigError is a ValueError
+        config_mod.write_json_file_atomic(Path(self._config_path), doc)
+        self._config = new_config
+        return new_config
+
+    @staticmethod
+    def _device_config(config, uid):
+        for dc in config.devices:
+            if dc.device_uid == uid:
+                return dc
+        raise ValueError(f'device not found after edit: {uid!r}')
 
     # -- compile path -------------------------------------------------------
 

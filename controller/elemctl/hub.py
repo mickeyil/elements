@@ -325,6 +325,17 @@ class LinkServer:
     def connected_uids(self):
         return set(self._links)
 
+    def disconnect(self, uid, reason='removed'):
+        """Drop a live link on request (device removed or re-identified). No
+        event is emitted: the caller is dropping the member this same tick, so
+        there is nothing left to notify."""
+        link = self._links.pop(uid, None)
+        self._last_boot_tokens.pop(uid, None)   # forget; a re-add starts fresh
+        if link is None:
+            return
+        link.close()
+        log.info('link: %s disconnected: %s', uid, reason)
+
     def poll(self, now_us, wanted_uids, events):
         self._accept(now_us)
         self._read_unregistered(now_us, wanted_uids, events)
@@ -517,6 +528,10 @@ class DeviceHub:
     def discovered_uids(self):
         """UIDs broadcasting DISCOVER now, wanted or not (see DiscoveryServer)."""
         return self._discovery.discovered(self._clock_us())
+
+    def disconnect(self, uid, reason='removed'):
+        """Close a device's link on request (remove or re-identify)."""
+        self._link_server.disconnect(uid, reason)
 
     def is_connected(self, uid):
         return self._link_server.link(uid) is not None

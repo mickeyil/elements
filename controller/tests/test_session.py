@@ -43,9 +43,13 @@ class FakeHub:
         self.frames = []
         self.wanted_seen = []
         self.sent = []   # (uid, encoded, on_ack) per reconciler command
+        self.disconnected = []   # (uid, reason) per disconnect() call
 
     def emit(self, *events):
         self.pending_events.extend(events)
+
+    def disconnect(self, uid, reason='removed'):
+        self.disconnected.append((uid, reason))
 
     def poll(self, wanted_uids):
         self.wanted_seen.append(set(wanted_uids))
@@ -151,6 +155,58 @@ def test_members_start_unattached_and_idle():
     for uid in ('sim-a', 'sim-b'):
         assert session.member(uid).attached is False
         assert session.member(uid).serving is False
+
+
+# ---------------------------------------------------------------------------
+# Device editing (add / edit / remove, gated to a pre-load session)
+# ---------------------------------------------------------------------------
+
+def test_can_edit_devices_only_before_a_program_is_loaded():
+    session, hub = make_session(SINGLE)
+    assert session.can_edit_devices() is True
+    drive_to_loaded(session, hub)
+    assert session.can_edit_devices() is False
+
+
+def test_add_device_joins_membership_and_wanted_set():
+    session, hub = make_session(SINGLE)
+    session.add_device(DeviceConfig(device_uid='sim-b', strip_id='side', length=30))
+    assert session.member('sim-b') is not None
+    tick(session)
+    assert 'sim-b' in hub.wanted_seen[-1]
+
+
+def test_added_device_routes_on_the_next_load():
+    session, _hub = make_session(SINGLE)
+    session.add_device(DeviceConfig(device_uid='sim-b', strip_id='side', length=30))
+    session.load(make_manifest(('main', 30, b'M'), ('side', 30, b'S')))
+    assert session.member('sim-b').target.intent is Intent.READY
+
+
+def test_edit_device_updates_routing_fields_in_place():
+    session, _hub = make_session(SINGLE)
+    session.edit_device('sim-a',
+                        DeviceConfig(device_uid='sim-a', strip_id='main', length=60))
+    member = session.member('sim-a')
+    assert member.strip_length == 60 and member.strip_id == 'main'
+
+
+def test_edit_device_uid_change_is_remove_then_add():
+    session, hub = make_session(SINGLE)
+    session.edit_device('sim-a',
+                        DeviceConfig(device_uid='sim-b', strip_id='main', length=30))
+    assert session.member('sim-a') is None
+    assert ('sim-a', 'removed') in hub.disconnected
+    assert session.member('sim-b') is not None
+
+
+def test_remove_device_disconnects_and_drops():
+    session, hub = make_session()   # DISTINCT_STRIPS: sim-a, sim-b
+    session.remove_device('sim-b')
+    assert session.member('sim-b') is None
+    assert ('sim-b', 'removed') in hub.disconnected
+    tick(session)
+    assert 'sim-b' not in hub.wanted_seen[-1]
 
 
 # ---------------------------------------------------------------------------
