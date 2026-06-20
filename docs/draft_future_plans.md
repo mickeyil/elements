@@ -39,7 +39,7 @@ Extend `elemctl web` beyond observer mode to support:
 - Browser-side program/scene submission
 - Browser-side device provisioning UX
 
-Currently the browser can watch animations, manage devices, and edit layouts — but all playback control goes through the TUI.
+The browser now drives load and play/pause/resume/stop alongside watching animations, managing devices, and editing layouts. Seek and program/scene submission remain future work.
 
 ---
 

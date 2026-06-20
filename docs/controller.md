@@ -9,7 +9,7 @@ The controller is a long-running Python service on the base station. It compiles
 │                  Base Station                    │
 │                                                  │
 │  ┌────────────────┐       ┌──────────────────┐  │
-│  │   Controller    │ unix │   TUI / Web      │  │
+│  │   Controller    │ unix │   Web client     │  │
 │  │  (compiles,     │socket│  (clients)       │  │
 │  │                 │◄─────►│                  │  │
 │  │   routes blobs, │       └──────────────────┘  │
@@ -36,7 +36,7 @@ The controller is a long-running Python service on the base station. It compiles
 6. **Manages sessions** — tracks session_id (per load), epoch (per discontinuity), generation counter (for stale frame filtering)
 7. **Owns config** — reads/writes the static config file, handles add/edit/remove device mutations
 8. **Syncs clocks** — probes ESP32 devices via UDP, filters samples, sends corrections over TCP
-9. **Serves controller API** — unix socket with writer (TUI) and observer (web) roles
+9. **Serves controller API** — unix socket with writer (commands) and observer (state/frames) roles, both served to the web app
 
 ## Config
 
@@ -158,7 +158,6 @@ The compiler identifies time ranges where no event carries prior state, making e
 | `controller/elemctl/device_protocol.py` | Device protocol encode/decode |
 | `controller/elemctl/controller_protocol.py` | Controller protocol encode/decode |
 | `controller/elemctl/library.py` | Program catalog, metadata extraction, artifact cache |
-| `controller/elemctl/tui.py` | Interactive terminal UI (writer client) |
 | `controller/elemctl/run.py` | Standalone playback runner (no persistent service) |
 | `controller/elemctl/sim.py` | Legacy launcher for deprecated `network_sim` processes; v3 sim launcher work is pending |
 | `compiler/elements/dsl.py` | User-facing DSL functions |
@@ -170,8 +169,7 @@ The compiler identifies time ranges where no event carries prior state, making e
 
 ```bash
 ./elemctl server                        # start controller service using instance/config.json
-./elemctl tui                           # connect TUI as writer
-./elemctl web                           # start web UI server (observer client)
+./elemctl web                           # start web UI server (load + playback control)
 ./elemctl run program.py                # standalone: compile + play
 ```
 

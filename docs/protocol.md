@@ -1,12 +1,12 @@
 # Protocol
 
-All communication between the controller and devices uses three transport channels. A separate unix socket channel connects the controller to local clients (TUI, web app).
+All communication between the controller and devices uses three transport channels. A separate unix socket channel connects the controller to local clients (the web app).
 
 ```
                         Controller
                        ┌──────────┐
           TCP (cmds)   │          │ unix socket
-  Device ◄────────────►│          │◄──────► TUI / Web
+  Device ◄────────────►│          │◄──────► Web app
           UDP (frames) │          │
   Device ──────────────►          │
           UDP (hello   │          │

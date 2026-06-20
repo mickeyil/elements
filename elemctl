@@ -24,13 +24,12 @@ _USAGE = """\
 usage: elemctl <command> [args]
 
 commands:
-  tui      interactive TUI shell
   sim      launch a configured network simulator
   server   start controller server
   web      start web UI server and realtime viewer
   setup    install/update dependencies"""
 
-_PUBLIC_SUBCOMMANDS = {'tui', 'sim', 'server', 'web', 'setup'}
+_PUBLIC_SUBCOMMANDS = {'sim', 'server', 'web', 'setup'}
 _HIDDEN_SUBCOMMANDS = {'run'}
 _SUBCOMMANDS = _PUBLIC_SUBCOMMANDS | _HIDDEN_SUBCOMMANDS
 
@@ -127,10 +126,7 @@ def main():
     # Pop subcommand so downstream argparse sees clean args
     del sys.argv[1]
 
-    if sub == 'tui':
-        from elemctl.tui import main as m
-        m()
-    elif sub == 'sim':
+    if sub == 'sim':
         from elemctl.sim import main as m
         m()
     elif sub == 'server':

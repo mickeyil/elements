@@ -55,8 +55,7 @@ local multi-process smoke path is temporarily unavailable.
 
 ## Runtime Notes
 
-- `tui` connects as the single writer client
-- `web` starts the web UI server and connects to the controller as an observer client
+- `web` starts the web UI server and connects to the controller as an observer client, issuing playback commands over transient writer connections
 - discovery defaults to UDP port `6040` when `controller.discovery_port` is omitted
 - set `"discovery_port": null` in the config to disable discovery explicitly
 - `elemctl` creates and maintains its managed environment at `local/venv`
@@ -74,7 +73,7 @@ src/deprecated/   old simulator stack staged for deletion after v3
 test/             Catch2 tests
 test/deprecated/  tests for old simulator stack, staged with deprecated code
 compiler/         Python compiler (DSL → binary blob)
-controller/       Python controller service, TUI, web UI server
+controller/       Python controller service, web UI server
 controller/web_ui/ Vue 3 browser interface source + built assets
 docs/             Documentation
 build/            Disposable build output (cmake, PlatformIO)

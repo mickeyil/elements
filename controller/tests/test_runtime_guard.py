@@ -43,7 +43,6 @@ class TestRuntimeGuard:
         )
 
     def test_ignores_non_conflicting_processes(self):
-        assert _runtime_conflict_label(['elemctl', 'tui']) is None
         assert _runtime_conflict_label(['elemctl', 'web']) is None
         assert _runtime_conflict_label(['elemctl', 'run']) is None
-        assert _runtime_conflict_label(['python3', '-m', 'elemctl.tui']) is None
+        assert _runtime_conflict_label(['python3', '-m', 'elemctl.web']) is None

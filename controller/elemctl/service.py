@@ -13,7 +13,7 @@ canonical time.
 This is the control core: it speaks load/play/pause/resume/stop, device
 add/edit/remove, plus library queries and shutdown, and it publishes session
 state, events, and assembled preview frames. The web client's full-state and
-status vocabulary is still the v2 shape (the TUI/web pass).
+status vocabulary is still the v2 shape (the web pass).
 """
 
 import logging

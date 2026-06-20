@@ -39,7 +39,7 @@ These endpoints back the layout editor and operate on simulator layout documents
 
 ## Current Scope
 
-The web app is currently observer-only for playback — it can watch animations and manage devices/layouts, but playback controls (load, play, pause, seek) are driven from the TUI. Web-side playback control is planned future work.
+The web app drives playback: load a program and control play/pause/resume/stop from the browser, alongside watching animations and managing devices/layouts. Playback state is reflected from the controller's full-state snapshots. Seek is not yet available (planned future work).
 
 ## Key Files
 
