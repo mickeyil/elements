@@ -44,7 +44,7 @@ log = logging.getLogger(__name__)
 _TICK_INTERVAL_S = 0.020   # ~50 Hz
 
 
-@dataclass
+@dataclass(eq=False)   # identity equality/hash: a connection is its own key
 class _ClientConn:
     sock: socket.socket
     reader: ProtocolReader
@@ -75,7 +75,9 @@ class ControllerServer:
         self._running = False
         self._server_sock: socket.socket | None = None
         self._clients: dict[int, _ClientConn] = {}
-        self._frame_subscriber: _ClientConn | None = None   # last subscriber wins
+        # Every client that asked for frames; the web relay and any diagnostic
+        # observer coexist instead of displacing each other.
+        self._frame_subscribers: set[_ClientConn] = set()
 
     def run(self) -> None:
         """Blocking main loop; returns on shutdown."""
@@ -221,25 +223,26 @@ class ControllerServer:
         return False
 
     def _handle_subscription(self, client: _ClientConn, cmd_id, name: str) -> None:
-        """Frame subscription, single subscriber, last register wins. Preview
-        assembly is enabled only on the empty -> subscribed edge and disabled
-        on the subscribed -> empty edge; replacing one subscriber with another
-        just moves the target."""
+        """Frame subscription, any number of subscribers. Preview assembly is
+        enabled on the empty -> non-empty edge and disabled on the non-empty ->
+        empty edge; adding or removing one subscriber among others is a no-op
+        for preview."""
         if name == 'subscribe_frames':
-            if self._frame_subscriber is None:
+            if not self._frame_subscribers:
                 self._service.set_preview_enabled(True)
-            self._frame_subscriber = client
-        elif self._frame_subscriber is client:   # unsubscribe; ignore if stale
-            self._frame_subscriber = None
-            self._service.set_preview_enabled(False)
+            self._frame_subscribers.add(client)
+        elif client in self._frame_subscribers:
+            self._frame_subscribers.discard(client)
+            if not self._frame_subscribers:
+                self._service.set_preview_enabled(False)
         self._send(client, self._reply(cmd_id, True))
 
     def _send_frames(self, frame_msgs: list[bytes]) -> None:
         for msg in frame_msgs:
-            sub = self._frame_subscriber   # re-read: a send may close it
-            if sub is None:
-                return
-            self._send_bytes(sub, msg, reliable=False)
+            # Snapshot the set: a failed send drops the client, which mutates
+            # _frame_subscribers via _close_client.
+            for sub in list(self._frame_subscribers):
+                self._send_bytes(sub, msg, reliable=False)
 
     def _broadcast(self, messages: list[bytes], *, reliable: bool) -> None:
         for msg in messages:
@@ -277,9 +280,10 @@ class ControllerServer:
 
     def _close_client(self, client: _ClientConn) -> None:
         self._clients.pop(client.sock.fileno(), None)
-        if self._frame_subscriber is client:
-            self._frame_subscriber = None
-            self._service.set_preview_enabled(False)
+        if client in self._frame_subscribers:
+            self._frame_subscribers.discard(client)
+            if not self._frame_subscribers:
+                self._service.set_preview_enabled(False)
         try:
             client.sock.close()
         except OSError:

@@ -61,7 +61,7 @@ def test_subscribe_enables_and_targets_frames():
 
     server._handle_subscription(conn, 1, 'subscribe_frames')
     assert server._service.preview_enabled is True
-    assert server._frame_subscriber is conn
+    assert server._frame_subscribers == {conn}
 
     server._send_frames([FRAME])
     assert KIND_FRAME in kinds_on(peer)          # reply (json) then the frame
@@ -80,32 +80,46 @@ def test_non_subscriber_gets_no_frames():
     assert KIND_FRAME not in kinds_on(other_peer)
 
 
-def test_last_subscriber_wins_without_retoggle():
+def test_all_subscribers_receive_frames():
     server = make_server()
     a, a_peer = add_conn(server)
     b, b_peer = add_conn(server)
 
     server._handle_subscription(a, 1, 'subscribe_frames')
-    server._handle_subscription(b, 2, 'subscribe_frames')   # B replaces A
-    assert server._frame_subscriber is b
-    assert server._service.preview_enabled is True          # never toggled off
+    server._handle_subscription(b, 2, 'subscribe_frames')   # B coexists with A
+    assert server._frame_subscribers == {a, b}
+    assert server._service.preview_enabled is True          # enabled once, on 0->1
 
     kinds_on(a_peer); kinds_on(b_peer)
     server._send_frames([FRAME])
+    assert KIND_FRAME in kinds_on(a_peer)
     assert KIND_FRAME in kinds_on(b_peer)
-    assert KIND_FRAME not in kinds_on(a_peer)
 
 
-def test_stale_unsubscribe_ignored():
+def test_preview_stays_enabled_until_last_unsubscribe():
     server = make_server()
     a, _ = add_conn(server)
     b, _ = add_conn(server)
     server._handle_subscription(a, 1, 'subscribe_frames')
-    server._handle_subscription(b, 2, 'subscribe_frames')   # current is B
+    server._handle_subscription(b, 2, 'subscribe_frames')
 
-    server._handle_subscription(a, 3, 'unsubscribe_frames')  # A is stale
-    assert server._frame_subscriber is b
+    server._handle_subscription(a, 3, 'unsubscribe_frames')  # one of two leaves
+    assert server._frame_subscribers == {b}
     assert server._service.preview_enabled is True
+
+    server._handle_subscription(b, 4, 'unsubscribe_frames')  # last one leaves
+    assert server._frame_subscribers == set()
+    assert server._service.preview_enabled is False
+
+
+def test_redundant_unsubscribe_ignored():
+    server = make_server()
+    a, _ = add_conn(server)
+    server._handle_subscription(a, 1, 'subscribe_frames')
+    server._handle_subscription(a, 2, 'unsubscribe_frames')
+    server._handle_subscription(a, 3, 'unsubscribe_frames')  # already gone
+    assert server._frame_subscribers == set()
+    assert server._service.preview_enabled is False
 
 
 def test_unsubscribe_disables():
@@ -113,7 +127,7 @@ def test_unsubscribe_disables():
     conn, _ = add_conn(server)
     server._handle_subscription(conn, 1, 'subscribe_frames')
     server._handle_subscription(conn, 2, 'unsubscribe_frames')
-    assert server._frame_subscriber is None
+    assert server._frame_subscribers == set()
     assert server._service.preview_enabled is False
 
 
@@ -122,5 +136,21 @@ def test_subscriber_disconnect_disables():
     conn, _ = add_conn(server)
     server._handle_subscription(conn, 1, 'subscribe_frames')
     server._close_client(conn)
-    assert server._frame_subscriber is None
+    assert server._frame_subscribers == set()
     assert server._service.preview_enabled is False
+
+
+def test_disconnect_keeps_preview_for_remaining_subscriber():
+    server = make_server()
+    a, _ = add_conn(server)
+    b, b_peer = add_conn(server)
+    server._handle_subscription(a, 1, 'subscribe_frames')
+    server._handle_subscription(b, 2, 'subscribe_frames')
+
+    server._close_client(a)                       # one drops, one remains
+    assert server._frame_subscribers == {b}
+    assert server._service.preview_enabled is True
+
+    kinds_on(b_peer)
+    server._send_frames([FRAME])
+    assert KIND_FRAME in kinds_on(b_peer)
