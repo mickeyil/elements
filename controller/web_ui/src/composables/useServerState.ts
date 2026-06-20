@@ -38,6 +38,7 @@ export interface SessionState {
   epoch?: number;
   duration?: number;
   state?: string;            // v3 playback state: idle/loaded/playing/paused/ended
+  program_id?: string | null;
   current_t_rel?: number;
   safe_intervals?: unknown[];
   strips?: SessionStrip[];

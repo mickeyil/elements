@@ -1,19 +1,13 @@
 <script setup lang="ts">
-import { computed } from 'vue';
-
 import { useInjectedServerState } from '../composables/useServerState';
 import { CELL_PX, type SimTarget } from '../lib/viewerRenderer';
+import ControlPanel from '../components/ControlPanel.vue';
 
 const {
   assignCanvas,
   emptyState,
-  session,
   simTargets,
 } = useInjectedServerState();
-
-const playbackState = computed(() => session.value?.state ?? 'idle');
-const sessionId = computed(() => session.value?.session_id ?? 'none');
-const timeReadout = computed(() => `${Number(session.value?.current_t_rel ?? 0).toFixed(2)}s`);
 
 function pillClass(isOnline: boolean): string {
   return isOnline ? 'pill-online' : 'pill-offline';
@@ -37,20 +31,7 @@ function hasLayout(target: SimTarget): boolean {
         </div>
       </header>
 
-      <section class="summary">
-        <div class="panel summary-card">
-          <span class="label">Playback</span>
-          <strong>{{ playbackState }}</strong>
-        </div>
-        <div class="panel summary-card">
-          <span class="label">Session</span>
-          <strong>{{ sessionId }}</strong>
-        </div>
-        <div class="panel summary-card">
-          <span class="label">Time</span>
-          <strong>{{ timeReadout }}</strong>
-        </div>
-      </section>
+      <ControlPanel />
 
       <section class="panel viewer">
         <div v-if="emptyState" class="empty-state">
@@ -101,27 +82,6 @@ function hasLayout(target: SimTarget): boolean {
 <style scoped>
 .viewer-page {
   min-height: 0;
-}
-
-.summary {
-  display: flex;
-  gap: 0.75rem;
-  flex-wrap: wrap;
-  margin-bottom: 1.5rem;
-}
-
-.summary-card {
-  min-width: 10rem;
-  padding: 0.9rem 1rem;
-}
-
-.label {
-  display: block;
-  margin-bottom: 0.3rem;
-  font-size: 0.78rem;
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
 }
 
 .viewer {
