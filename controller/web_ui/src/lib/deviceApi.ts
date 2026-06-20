@@ -1,5 +1,4 @@
 export interface CreateDevicePayload {
-  device_type: 'sim' | 'esp32';
   device_uid: string;
   strip_id: string;
   length: number;

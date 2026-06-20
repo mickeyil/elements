@@ -3,12 +3,9 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 
 import { createDevice, updateDevice } from '../lib/deviceApi';
 
-type DeviceType = 'sim' | 'esp32';
-
 interface EditableDevice {
-  device_uid?: string;
-  device_type?: string;
-  strip?: string;
+  uid?: string;
+  strip_id?: string;
   length?: number;
 }
 
@@ -16,6 +13,7 @@ const props = defineProps<{
   mode: 'create' | 'edit';
   controllerConnected: boolean;
   device?: EditableDevice | null;
+  presetUid?: string | null;
 }>();
 
 const emit = defineEmits<{
@@ -24,14 +22,15 @@ const emit = defineEmits<{
 }>();
 
 const deviceUidRef = ref<HTMLInputElement | null>(null);
-const deviceType = ref<DeviceType>((props.mode === 'edit' && props.device?.device_type === 'esp32') ? 'esp32' : 'sim');
-const deviceUid = ref(props.mode === 'edit' ? props.device?.device_uid ?? '' : '');
-const stripId = ref(props.mode === 'edit' ? props.device?.strip ?? '' : '');
+const deviceUid = ref(props.mode === 'edit' ? props.device?.uid ?? '' : props.presetUid ?? '');
+const stripId = ref(props.mode === 'edit' ? props.device?.strip_id ?? '' : '');
 const length = ref(props.mode === 'edit' && props.device?.length != null ? String(props.device.length) : '');
 const saving = ref(false);
 const error = ref('');
 
 const isEditMode = computed(() => props.mode === 'edit');
+// Configuring a discovered device: the uid is known and fixed, so lock it.
+const uidLocked = computed(() => props.mode === 'create' && Boolean(props.presetUid));
 const canSubmit = computed(() => props.controllerConnected && !saving.value);
 const title = computed(() => (isEditMode.value ? 'Edit device' : 'New device'));
 const submitLabel = computed(() => {
@@ -54,10 +53,7 @@ function close(): void {
   emit('close');
 }
 
-function validate():
-  | { device_type: DeviceType; device_uid: string; strip_id: string; length: number }
-  | { device_uid: string; strip_id: string; length: number }
-  | null {
+function validate(): { device_uid: string; strip_id: string; length: number } | null {
   const trimmedUid = deviceUid.value.trim();
   const trimmedStrip = stripId.value.trim();
   const parsedLength = Number.parseInt(length.value, 10);
@@ -75,16 +71,7 @@ function validate():
     return null;
   }
 
-  if (isEditMode.value) {
-    return {
-      device_uid: trimmedUid,
-      strip_id: trimmedStrip,
-      length: parsedLength,
-    };
-  }
-
   return {
-    device_type: deviceType.value,
     device_uid: trimmedUid,
     strip_id: trimmedStrip,
     length: parsedLength,
@@ -106,7 +93,7 @@ async function submit(): Promise<void> {
     saving.value = true;
     error.value = '';
     if (isEditMode.value) {
-      const targetDeviceUid = props.device?.device_uid;
+      const targetDeviceUid = props.device?.uid;
       if (!targetDeviceUid) {
         throw new Error('Missing device uid.');
       }
@@ -162,14 +149,6 @@ onBeforeUnmount(() => {
 
       <div class="modal-fields">
         <label class="modal-field">
-          <span class="modal-label">Type</span>
-          <select v-model="deviceType" :disabled="saving || isEditMode">
-            <option value="sim">Simulation</option>
-            <option value="esp32">ESP32</option>
-          </select>
-        </label>
-
-        <label class="modal-field">
           <span class="modal-label">Device UID</span>
           <input
             ref="deviceUidRef"
@@ -177,7 +156,7 @@ onBeforeUnmount(() => {
             type="text"
             autocomplete="off"
             placeholder="unique device identifier"
-            :disabled="saving"
+            :disabled="saving || uidLocked"
           />
         </label>
 

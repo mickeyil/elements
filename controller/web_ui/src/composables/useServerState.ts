@@ -17,11 +17,20 @@ import {
 } from '../lib/viewerRenderer';
 
 export interface SnapshotDevice {
+  // v3 device shape (the status panel renders these)
+  uid?: string;
+  configured?: boolean;
+  status?: 'online' | 'offline' | 'discovered';
+  strip_id?: string;
+  length?: number;
+  label?: string | null;
+  phase?: string;
+  target_intent?: string;
+  // v2 fields still referenced by the deferred viewer/playback migration
   device_id?: number;
   device_uid?: string;
   device_type?: string;
   strip?: string;
-  length?: number;
   connected?: boolean;
   last_seen?: number | null;
   clock_state?: string;
@@ -46,6 +55,7 @@ export interface SessionState {
   session_id?: number | string;
   epoch?: number;
   duration?: number;
+  state?: string;            // v3 playback state: idle/loaded/playing/paused/ended
   playback_state?: string;
   current_t_rel?: number;
   safe_intervals?: unknown[];

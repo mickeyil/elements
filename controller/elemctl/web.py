@@ -111,13 +111,18 @@ def _make_disconnected_snapshot(snapshot: dict | None) -> dict:
         out['programs'] = []
     devices = out.get('devices')
     if isinstance(devices, list):
+        # Discovery is the controller's to report; with it gone, keep only the
+        # configured devices and show them offline with no live runtime detail.
+        configured = []
         for dev in devices:
-            if isinstance(dev, dict):
-                dev['connected'] = False
-        out['online_count'] = sum(
-            1 for dev in devices if isinstance(dev, dict) and dev.get('connected')
-        )
-        out['expected_count'] = len(devices)
+            if isinstance(dev, dict) and dev.get('configured'):
+                dev['status'] = 'offline'
+                dev['attached'] = False
+                dev['serving'] = False
+                configured.append(dev)
+        out['devices'] = configured
+        out['online_count'] = 0
+        out['expected_count'] = len(configured)
     else:
         out['devices'] = []
         out['online_count'] = 0
@@ -432,7 +437,9 @@ class WebUiServer:
                 msg = payload
                 assert isinstance(msg, dict)
                 self._apply_json_message(msg)
-                if msg.get('type') == 'event' and msg.get('event') == 'snapshot':
+                # state/catalog fold into the snapshot; rebroadcast the merged
+                # snapshot so the browser only ever sees one shape.
+                if msg.get('type') in ('state', 'catalog'):
                     await self._broadcast_json(self._snapshot)
                 else:
                     await self._broadcast_json(msg)
@@ -445,85 +452,34 @@ class WebUiServer:
                 await self._broadcast_binary(frame)
 
     def _apply_json_message(self, msg: dict) -> None:
-        if msg.get('type') != 'event':
-            return
+        """Fold a v3 controller message into the browser snapshot. The service
+        sends full state and catalog messages (not incremental v2 events), so
+        each one replaces its slice wholesale."""
+        msg_type = msg.get('type')
 
-        event = msg.get('event')
-        if event == 'snapshot':
-            self._snapshot = copy.deepcopy(msg)
-            self._snapshot['server_version'] = self._server_version
-            self._snapshot['layouts'] = self._layouts
-            return
-
-        if event == 'session_start':
-            self._snapshot['session'] = {
-                'session_id': msg.get('session_id'),
-                'epoch': msg.get('epoch'),
-                'playback_state': 'loaded',
-                'duration': msg.get('duration'),
-                'current_t_rel': 0.0,
-                'observer_suspended': msg.get('observer_suspended'),
-                'safe_intervals': msg.get('safe_intervals', []),
-                'strips': msg.get('strips', []),
+        if msg_type == 'state':
+            devices = msg.get('devices') or []
+            self._snapshot['devices'] = devices
+            self._snapshot['session'] = msg.get('session')
+            self._snapshot['online_count'] = sum(
+                1 for d in devices
+                if isinstance(d, dict) and d.get('status') == 'online'
+            )
+            self._snapshot['expected_count'] = sum(
+                1 for d in devices if isinstance(d, dict) and d.get('configured')
+            )
+            # Keep the sim-device map current so the layout APIs follow dynamic
+            # add/edit/remove rather than the startup config.
+            self._sim_devices = {
+                d['uid']: d['length'] for d in devices
+                if isinstance(d, dict) and d.get('configured')
+                and str(d.get('uid', '')).startswith('sim-')
             }
             return
 
-        if event == 'state':
-            session = self._snapshot.get('session')
-            if isinstance(session, dict):
-                session['playback_state'] = msg.get('state')
-                if 'epoch' in msg:
-                    session['epoch'] = msg.get('epoch')
-                if 'observer_suspended' in msg:
-                    session['observer_suspended'] = msg.get('observer_suspended')
-            return
-
-        if event == 'loop':
-            session = self._snapshot.get('session')
-            if isinstance(session, dict):
-                session['epoch'] = msg.get('epoch')
-                session['current_t_rel'] = 0.0
-                if 'observer_suspended' in msg:
-                    session['observer_suspended'] = msg.get('observer_suspended')
-            return
-
-        if event == 'device_status':
-            devices = self._snapshot.get('devices')
-            if isinstance(devices, list):
-                for dev in devices:
-                    if (
-                        isinstance(dev, dict)
-                        and dev.get('device_id') == msg.get('device_id')
-                    ):
-                        if 'connected' in msg:
-                            dev['connected'] = bool(msg.get('connected'))
-                        if 'last_seen' in msg:
-                            dev['last_seen'] = msg.get('last_seen')
-                        for key in (
-                            'session_role',
-                            'reported',
-                            'reported_at',
-                        ):
-                            if key in msg:
-                                dev[key] = copy.deepcopy(msg.get(key))
-                        for key in (
-                            'clock_state',
-                            'clock_offset_ms',
-                            'clock_rtt_ms',
-                            'clock_last_sync_age_s',
-                        ):
-                            if key in msg:
-                                dev[key] = msg.get(key)
-                        break
-                self._snapshot['online_count'] = sum(
-                    1 for dev in devices if isinstance(dev, dict) and dev.get('connected')
-                )
-            return
-
-        if event == 'programs_updated':
+        if msg_type == 'catalog':
             programs = msg.get('programs')
-            if isinstance(programs, list):
-                self._snapshot['programs'] = copy.deepcopy(programs)
+            self._snapshot['programs'] = programs if isinstance(programs, list) else []
 
     def _apply_frame(self, payload: bytes) -> None:
         session = self._snapshot.get('session')
@@ -742,13 +698,11 @@ class WebUiServer:
         if not isinstance(payload, dict):
             return 400, {'error': 'request body must be a JSON object'}
 
-        device_type = payload.get('device_type')
+        # v3 infers the device type from the uid prefix; no device_type field.
         device_uid = payload.get('device_uid')
         strip_id = payload.get('strip_id')
         length = payload.get('length')
 
-        if device_type not in {'sim', 'esp32'}:
-            return 400, {'error': "device_type must be 'sim' or 'esp32'"}
         if not isinstance(device_uid, str) or not device_uid:
             return 400, {'error': 'device_uid must be a non-empty string'}
         if not isinstance(strip_id, str) or not strip_id:
@@ -759,7 +713,6 @@ class WebUiServer:
         try:
             reply = self._send_controller_cmd({
                 'cmd': 'add_device',
-                'device_type': device_type,
                 'device_uid': device_uid,
                 'strip_id': strip_id,
                 'length': length,

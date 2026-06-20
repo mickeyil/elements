@@ -188,18 +188,19 @@ const matchedSnapshotDevice = computed<SnapshotDevice | null>(() => {
     return null;
   }
   return (
-    snapshotDevices.value.find((device) => device?.device_uid === routeDeviceUid.value) ?? null
+    snapshotDevices.value.find((device) => device?.uid === routeDeviceUid.value) ?? null
   );
 });
 
 const currentDeviceMeta = computed<DeviceMeta | null>(() => {
   const matched = matchedSnapshotDevice.value;
-  if (matched?.device_uid) {
+  const uid = matched?.uid;
+  if (uid) {
     return {
-      deviceUid: matched.device_uid,
-      deviceType: String(matched.device_type ?? ''),
-      length: Number(matched.length ?? 0),
-      strip: String(matched.strip ?? 'n/a'),
+      deviceUid: uid,
+      deviceType: uid.startsWith('sim-') ? 'sim' : 'esp32',
+      length: Number(matched?.length ?? 0),
+      strip: String(matched?.strip_id ?? 'n/a'),
     };
   }
   if (resolvedDeviceMeta.value?.deviceUid === routeDeviceUid.value) {
