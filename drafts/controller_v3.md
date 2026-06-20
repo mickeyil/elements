@@ -223,11 +223,12 @@ works without it.
 
   Preview is an opt-in stream, not a default broadcast. A client sends
   `subscribe_frames` / `unsubscribe_frames` (server-scoped commands, allowed
-  from any role, since wanting frames is independent of controlling); there is
-  a single subscriber, last register wins. Assembly is gated off until someone
-  subscribes, so the controller does no preview work while nobody watches, and
-  `KIND_FRAME` is sent only to the subscriber. The web relay subscribes while a
-  browser is connected and unsubscribes when the last one leaves.
+  from any role, since wanting frames is independent of controlling); any
+  number of subscribers coexist, so the web relay and a diagnostic observer do
+  not displace each other. Assembly is gated off until someone subscribes, so
+  the controller does no preview work while nobody watches, and `KIND_FRAME` is
+  sent to every subscriber. The web relay subscribes while a browser is
+  connected and unsubscribes when the last one leaves.
 - **Sync visibility (resolved).** The controller no longer measures
   offsets, so the per-device clock columns read from the device's own
   `QueryDeviceStatus` report (a synced flag plus offset, RTT, and

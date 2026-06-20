@@ -122,3 +122,24 @@ policy exists for what synced playback does on lease loss.
 Sync measurement, filtering, and lease issuance are all device-side;
 see `drafts/synced_clock.md`. This item is only about what playback
 does when the lease lapses.
+
+---
+
+## Wait for device readiness before play
+
+**Today.** A `load` reply means the controller accepted the program and
+set device targets, not that the device has ACKed the load. Sending
+`play` immediately can run `Session.play()` before the device joins the
+start cohort; it then parks at `phase: loaded` while the session is
+`playing`, and `_preview_active()` rejects its frames. The tell is
+`session.state: playing` with no frames flowing, and the device showing
+`phase: loaded` / `target_intent: playing`. The controller is correct
+here — this is control-flow on whoever drives playback.
+
+**Action.** Before sending `play`, wait until the device snapshot
+reports settled: `phase == "loaded"` and `target_intent == "ready"`.
+The round-1 smoke (`local/smoke_ws.py`) already gates on this; the
+operator web UI's transport controls (round 3, `web.py` + the Vue
+control panel) need the same gate — defer or disable `play` until the
+configured devices are ready, and surface the waiting state rather than
+firing a play that renders nothing.

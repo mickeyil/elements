@@ -3,8 +3,8 @@
 A role-aware, single-threaded ~50 Hz loop wrapping a ControllerService: it
 accepts client connections, runs the hello handshake, forwards writer commands
 to the service, and broadcasts the service's state and events to every client.
-Preview frames are an opt-in stream sent only to the single frame subscriber
-(see subscribe_frames). The service holds the device-facing half; this shell
+Preview frames are an opt-in stream sent to every frame subscriber (see
+subscribe_frames). The service holds the device-facing half; this shell
 holds only the client sockets.
 """
 
