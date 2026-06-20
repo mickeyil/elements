@@ -11,7 +11,7 @@ const {
   simTargets,
 } = useInjectedServerState();
 
-const playbackState = computed(() => session.value?.playback_state ?? 'idle');
+const playbackState = computed(() => session.value?.state ?? 'idle');
 const sessionId = computed(() => session.value?.session_id ?? 'none');
 const timeReadout = computed(() => `${Number(session.value?.current_t_rel ?? 0).toFixed(2)}s`);
 

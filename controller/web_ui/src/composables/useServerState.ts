@@ -10,11 +10,11 @@ import {
 
 import {
   attachTargetCanvas,
-  measureLayout,
   paintTargets,
   type LayoutPayload,
   type SimTarget,
 } from '../lib/viewerRenderer';
+import { deriveSimTargets } from '../lib/viewerModel';
 
 export interface SnapshotDevice {
   // v3 device shape (the status panel renders these)
@@ -26,29 +26,11 @@ export interface SnapshotDevice {
   label?: string | null;
   phase?: string;
   target_intent?: string;
-  // v2 fields still referenced by the deferred viewer/playback migration
-  device_id?: number;
-  device_uid?: string;
-  device_type?: string;
-  strip?: string;
-  connected?: boolean;
-  last_seen?: number | null;
-  clock_state?: string;
-  clock_offset_ms?: number | null;
-  clock_rtt_ms?: number | null;
-  clock_last_sync_age_s?: number | null;
-}
-
-interface SessionStripTarget {
-  device_uid?: string;
-  device_type?: string;
-  length?: number;
 }
 
 interface SessionStrip {
-  name?: string;
+  strip_id?: string;
   length?: number;
-  targets?: SessionStripTarget[];
 }
 
 export interface SessionState {
@@ -56,7 +38,6 @@ export interface SessionState {
   epoch?: number;
   duration?: number;
   state?: string;            // v3 playback state: idle/loaded/playing/paused/ended
-  playback_state?: string;
   current_t_rel?: number;
   safe_intervals?: unknown[];
   strips?: SessionStrip[];
@@ -114,11 +95,6 @@ export function useServerState() {
     return layouts && typeof layouts === 'object' ? layouts : {};
   }
 
-  function getDeviceConnected(deviceUid: string): boolean {
-    const device = getSnapshotDevices().find((item) => item?.device_uid === deviceUid);
-    return Boolean(device?.connected);
-  }
-
   function clearFrameState(): void {
     latestSlices.value = [];
     frameDirty.value = false;
@@ -133,100 +109,17 @@ export function useServerState() {
       return;
     }
 
-    const layouts = getSnapshotLayouts();
-    const nextTargets: SimTarget[] = [];
-
-    for (let logicalIndex = 0; logicalIndex < logicalStrips.value.length; logicalIndex += 1) {
-      const strip = logicalStrips.value[logicalIndex];
-      const targets = Array.isArray(strip?.targets) ? strip.targets : [];
-      for (const target of targets) {
-        if (target?.device_type !== 'sim' || !target?.device_uid) {
-          continue;
-        }
-
-        const layout = layouts[target.device_uid] ?? null;
-        const { gridWidth, gridHeight } = measureLayout(layout);
-        nextTargets.push({
-          deviceUid: target.device_uid,
-          stripName: strip?.name ?? 'unknown',
-          logicalIndex,
-          logicalLength: Number(strip?.length ?? 0),
-          physicalLength: Number(target?.length ?? 0),
-          connected: getDeviceConnected(target.device_uid),
-          layout,
-          gridWidth,
-          gridHeight,
-          canvas: null,
-          ctx: null,
-        });
-      }
-    }
-
-    simTargets.value = nextTargets;
+    simTargets.value = deriveSimTargets(
+      getSnapshotDevices(),
+      session.value?.strips ?? [],
+      getSnapshotLayouts(),
+    );
   }
 
   function applySnapshot(nextSnapshot: SnapshotEvent): void {
     snapshot.value = nextSnapshot;
     session.value = nextSnapshot?.session ?? null;
     rebuildTargets();
-  }
-
-  function handleDeviceStatus(msg: {
-    device_uid?: string;
-    connected?: boolean;
-    last_seen?: number | null;
-    clock_state?: string;
-    clock_offset_ms?: number | null;
-    clock_rtt_ms?: number | null;
-    clock_last_sync_age_s?: number | null;
-  }): void {
-    const deviceUid = msg.device_uid;
-    if (!deviceUid) {
-      return;
-    }
-
-    const connected = Boolean(msg.connected);
-    const hasLastSeen = Object.prototype.hasOwnProperty.call(msg, 'last_seen');
-    const hasConnected = Object.prototype.hasOwnProperty.call(msg, 'connected');
-    const hasClockState = Object.prototype.hasOwnProperty.call(msg, 'clock_state');
-    const hasClockOffset = Object.prototype.hasOwnProperty.call(msg, 'clock_offset_ms');
-    const hasClockRtt = Object.prototype.hasOwnProperty.call(msg, 'clock_rtt_ms');
-    const hasClockAge = Object.prototype.hasOwnProperty.call(msg, 'clock_last_sync_age_s');
-    const currentSnapshot = snapshot.value;
-    const devices = Array.isArray(currentSnapshot?.devices) ? currentSnapshot.devices : [];
-    if (currentSnapshot && devices.length) {
-      let updated = false;
-      const nextDevices = devices.map((device) => {
-        if (device?.device_uid !== deviceUid) {
-          return device;
-        }
-
-        updated = true;
-        return {
-          ...device,
-          ...(hasConnected ? { connected } : {}),
-          ...(hasLastSeen ? { last_seen: msg.last_seen ?? null } : {}),
-          ...(hasClockState ? { clock_state: msg.clock_state } : {}),
-          ...(hasClockOffset ? { clock_offset_ms: msg.clock_offset_ms ?? null } : {}),
-          ...(hasClockRtt ? { clock_rtt_ms: msg.clock_rtt_ms ?? null } : {}),
-          ...(hasClockAge ? { clock_last_sync_age_s: msg.clock_last_sync_age_s ?? null } : {}),
-        };
-      });
-
-      if (updated) {
-        snapshot.value = {
-          ...currentSnapshot,
-          devices: nextDevices,
-        };
-      }
-    }
-
-    for (const target of simTargets.value) {
-      if (target.deviceUid === deviceUid && hasConnected) {
-        target.connected = connected;
-        break;
-      }
-    }
   }
 
   function requestPaint(): void {
@@ -285,45 +178,6 @@ export function useServerState() {
 
     if (msg.event === 'snapshot') {
       applySnapshot(msg as SnapshotEvent);
-      return;
-    }
-
-    if (msg.event === 'session_start') {
-      session.value = {
-        session_id: msg.session_id as number | string | undefined,
-        epoch: msg.epoch as number | undefined,
-        duration: msg.duration as number | undefined,
-        playback_state: 'loaded',
-        current_t_rel: 0,
-        safe_intervals: (msg.safe_intervals as unknown[]) ?? [],
-        strips: (msg.strips as SessionStrip[]) ?? [],
-      };
-      rebuildTargets();
-      return;
-    }
-
-    if (msg.event === 'device_status') {
-      handleDeviceStatus(msg as {
-        device_uid?: string;
-        connected?: boolean;
-        last_seen?: number | null;
-      });
-      return;
-    }
-
-    if (!session.value) {
-      return;
-    }
-
-    if (msg.event === 'state') {
-      session.value.playback_state = msg.state as string | undefined;
-      session.value.epoch = msg.epoch as number | undefined;
-      return;
-    }
-
-    if (msg.event === 'loop') {
-      session.value.epoch = msg.epoch as number | undefined;
-      session.value.current_t_rel = 0;
     }
   }
 
