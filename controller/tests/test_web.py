@@ -12,7 +12,9 @@ from elemctl.web import (
     _encode_ws_frame,
     _layout_device_uid_from_path,
     _make_disconnected_snapshot,
+    _program_id_from_load_path,
     _resolve_asset_path,
+    _session_verb_from_path,
     _static_cache_control,
 )
 
@@ -865,3 +867,173 @@ def test_web_parser_defaults_bind_all_interfaces():
 
     assert args.host == '0.0.0.0'
     assert args.port == 8080
+
+
+# --- round 2: program / session playback endpoints ---------------------------
+
+
+def _capturing_client(commands: list, reply: dict):
+    """A ControllerClient stand-in that records sent commands and replies with
+    a snapshot read followed by `reply` (mirrors the device-endpoint fakes)."""
+
+    class FakeClient:
+        def __init__(self, socket_path: str, timeout: float, role: str) -> None:
+            assert socket_path == '/tmp/elemctl.sock'
+            assert role == web_mod.ROLE_WRITER
+            self._reads = [
+                [(web_mod.KIND_JSON,
+                  json.dumps({'type': 'event', 'event': 'snapshot'}).encode('utf-8'))],
+                [(web_mod.KIND_JSON, json.dumps(reply).encode('utf-8'))],
+            ]
+
+        def next_id(self) -> int:
+            return 1
+
+        def send_cmd(self, cmd: dict) -> None:
+            commands.append(cmd)
+
+        def recv_once(self):
+            return self._reads.pop(0)
+
+        def close(self) -> None:
+            return None
+
+    return FakeClient
+
+
+_OK_REPLY = {'type': 'reply', 'id': 1, 'ok': True, 'result': {}}
+
+
+class _FakeHttpWriter:
+    def __init__(self) -> None:
+        self.buffer = bytearray()
+
+    def write(self, data: bytes) -> None:
+        self.buffer.extend(data)
+
+    async def drain(self) -> None:
+        return None
+
+    def close(self) -> None:
+        return None
+
+    async def wait_closed(self) -> None:
+        return None
+
+
+def _run_http_request(server, method: str, path: str) -> tuple[int, dict]:
+    async def run() -> tuple[int, dict]:
+        reader = asyncio.StreamReader()
+        reader.feed_data(f'{method} {path} HTTP/1.1\r\nHost: x\r\n\r\n'.encode('ascii'))
+        reader.feed_eof()
+        writer = _FakeHttpWriter()
+        await server._handle_http_client(reader, writer)  # type: ignore[arg-type]
+        head, _, body = bytes(writer.buffer).partition(b'\r\n\r\n')
+        status = int(head.split(b'\r\n')[0].split()[1])
+        try:
+            return status, json.loads(body)
+        except (json.JSONDecodeError, ValueError):
+            return status, {}   # non-JSON body (e.g. plain-text 405)
+
+    return asyncio.run(run())
+
+
+def test_program_id_from_load_path_extracts_id():
+    assert _program_id_from_load_path('/api/programs/ring16_blue_wave/load') == 'ring16_blue_wave'
+    assert _program_id_from_load_path('/api/programs/rescan') is None
+    assert _program_id_from_load_path('/api/programs//load') is None
+    assert _program_id_from_load_path('/api/programs/a/b/load') is None
+
+
+def test_session_verb_from_path_accepts_only_known_verbs():
+    for verb in ('play', 'pause', 'resume', 'stop'):
+        assert _session_verb_from_path(f'/api/session/{verb}') == verb
+    assert _session_verb_from_path('/api/session/loop') is None
+    assert _session_verb_from_path('/api/session/') is None
+
+
+def test_load_program_response_forwards_load(monkeypatch, tmp_path):
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+    commands: list[dict] = []
+    monkeypatch.setattr(web_mod, 'ControllerClient', _capturing_client(commands, _OK_REPLY))
+
+    status, payload = server._load_program_response('ring16_blue_wave')
+
+    assert status == 200
+    assert payload == {'ok': True, 'result': {}}
+    assert commands == [{'id': 1, 'cmd': 'load', 'program_id': 'ring16_blue_wave'}]
+
+
+def test_load_program_response_rejects_empty_program_id(tmp_path):
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+    status, payload = server._load_program_response('')
+    assert status == 400
+    assert payload == {'error': 'program_id must be a non-empty string'}
+
+
+def test_controller_command_response_forwards_rescan(monkeypatch, tmp_path):
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+    commands: list[dict] = []
+    monkeypatch.setattr(web_mod, 'ControllerClient', _capturing_client(commands, _OK_REPLY))
+
+    status, payload = server._controller_command_response({'cmd': 'rescan'})
+
+    assert status == 200
+    assert payload == {'ok': True, 'result': {}}
+    assert commands == [{'id': 1, 'cmd': 'rescan'}]
+
+
+def test_controller_command_response_maps_controller_error(monkeypatch, tmp_path):
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+    reply = {'type': 'reply', 'id': 1, 'ok': False, 'error': 'unknown program: x'}
+    monkeypatch.setattr(web_mod, 'ControllerClient', _capturing_client([], reply))
+
+    status, payload = server._controller_command_response({'cmd': 'load', 'program_id': 'x'})
+
+    assert status == 400
+    assert payload == {'error': 'unknown program: x'}
+
+
+def test_controller_command_response_returns_503_when_unavailable(monkeypatch, tmp_path):
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+
+    class FailingClient:
+        def __init__(self, socket_path: str, timeout: float, role: str) -> None:
+            raise ConnectionError('hello failed')
+
+    monkeypatch.setattr(web_mod, 'ControllerClient', FailingClient)
+
+    status, payload = server._controller_command_response({'cmd': 'play'})
+
+    assert status == 503
+    assert payload == {'error': 'controller unavailable: hello failed'}
+
+
+def test_route_load_forwards_to_controller(monkeypatch, tmp_path):
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+    commands: list[dict] = []
+    monkeypatch.setattr(web_mod, 'ControllerClient', _capturing_client(commands, _OK_REPLY))
+
+    status, payload = _run_http_request(server, 'POST', '/api/programs/ring16_blue_wave/load')
+
+    assert status == 200
+    assert payload == {'ok': True, 'result': {}}
+    assert commands == [{'id': 1, 'cmd': 'load', 'program_id': 'ring16_blue_wave'}]
+
+
+def test_route_session_play_forwards_to_controller(monkeypatch, tmp_path):
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+    commands: list[dict] = []
+    monkeypatch.setattr(web_mod, 'ControllerClient', _capturing_client(commands, _OK_REPLY))
+
+    status, payload = _run_http_request(server, 'POST', '/api/session/play')
+
+    assert status == 200
+    assert payload == {'ok': True, 'result': {}}
+    assert commands == [{'id': 1, 'cmd': 'play'}]
+
+
+def test_route_session_rejects_get(tmp_path):
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+    status, _ = _run_http_request(server, 'GET', '/api/session/play')
+    assert status == 405

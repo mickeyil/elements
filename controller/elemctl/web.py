@@ -190,6 +190,36 @@ def _device_uid_from_path(path: str) -> str | None:
     return device_uid
 
 
+_SESSION_VERBS = ('play', 'pause', 'resume', 'stop')
+
+
+def _is_program_api_path(path: str) -> bool:
+    return path == '/api/programs/rescan' or _program_id_from_load_path(path) is not None
+
+
+def _program_id_from_load_path(path: str) -> str | None:
+    prefix = '/api/programs/'
+    suffix = '/load'
+    if not path.startswith(prefix) or not path.endswith(suffix):
+        return None
+    program_id = unquote(path[len(prefix):-len(suffix)])
+    if not program_id or '/' in program_id:
+        return None
+    return program_id
+
+
+def _session_verb_from_path(path: str) -> str | None:
+    prefix = '/api/session/'
+    if not path.startswith(prefix):
+        return None
+    verb = path[len(prefix):]
+    return verb if verb in _SESSION_VERBS else None
+
+
+def _is_session_api_path(path: str) -> bool:
+    return _session_verb_from_path(path) is not None
+
+
 def _tailscale_urls(port: int) -> list[str]:
     if port <= 0:
         return []
@@ -539,6 +569,14 @@ class WebUiServer:
                 await self._handle_device_api(method, path, headers, reader, writer)
                 return
 
+            if _is_program_api_path(path):
+                await self._handle_program_api(method, path, writer)
+                return
+
+            if _is_session_api_path(path):
+                await self._handle_session_api(method, path, writer)
+                return
+
             if method != 'GET':
                 await self._write_http_response(writer, 405, b'method not allowed')
                 return
@@ -639,6 +677,71 @@ class WebUiServer:
             return
 
         await self._write_http_response(writer, 405, b'method not allowed')
+
+    async def _handle_program_api(
+        self,
+        method: str,
+        path: str,
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        if method != 'POST':
+            await self._write_http_response(writer, 405, b'method not allowed')
+            return
+
+        if path == '/api/programs/rescan':
+            status, response = self._controller_command_response({'cmd': 'rescan'})
+            await self._write_json_response(writer, status, response)
+            return
+
+        program_id = _program_id_from_load_path(path)
+        if program_id is not None:
+            status, response = self._load_program_response(program_id)
+            await self._write_json_response(writer, status, response)
+            return
+
+        await self._write_http_response(writer, 405, b'method not allowed')
+
+    async def _handle_session_api(
+        self,
+        method: str,
+        path: str,
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        if method != 'POST':
+            await self._write_http_response(writer, 405, b'method not allowed')
+            return
+
+        verb = _session_verb_from_path(path)
+        if verb is None:
+            await self._write_http_response(writer, 405, b'method not allowed')
+            return
+
+        status, response = self._controller_command_response({'cmd': verb})
+        await self._write_json_response(writer, status, response)
+
+    def _load_program_response(self, program_id: str) -> tuple[int, dict]:
+        if not isinstance(program_id, str) or not program_id:
+            return 400, {'error': 'program_id must be a non-empty string'}
+        return self._controller_command_response({
+            'cmd': 'load',
+            'program_id': program_id,
+        })
+
+    def _controller_command_response(self, cmd: dict) -> tuple[int, dict]:
+        """Forward a command over a transient writer and shape the reply the
+        same way the device endpoints do: controller errors map to 400, an
+        unreachable controller to its _HttpError status."""
+        try:
+            reply = self._send_controller_cmd(cmd)
+        except _HttpError as e:
+            return e.status, {'error': e.message}
+
+        if not reply.get('ok'):
+            error = reply.get('error')
+            return 400, {'error': error if isinstance(error, str) else 'controller command failed'}
+
+        result = reply.get('result')
+        return 200, {'ok': True, 'result': result if isinstance(result, dict) else {}}
 
     def _remove_device_response(self, device_uid: str) -> tuple[int, dict]:
         if not isinstance(device_uid, str) or not device_uid:

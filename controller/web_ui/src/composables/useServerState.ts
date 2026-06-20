@@ -43,11 +43,21 @@ export interface SessionState {
   strips?: SessionStrip[];
 }
 
+export interface SnapshotProgram {
+  program_id: string;
+  // Null for entries the compiler rejected; populated otherwise.
+  beat?: number | null;
+  duration?: number | null;
+  strips?: string[] | null;
+  error?: string | null;
+}
+
 export interface SnapshotEvent {
   devices?: SnapshotDevice[];
   layouts?: Record<string, LayoutPayload>;
   server_version?: string | null;
   session?: SessionState | null;
+  programs?: SnapshotProgram[];
 }
 
 export interface EmptyState {
