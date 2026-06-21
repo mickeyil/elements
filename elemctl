@@ -29,9 +29,7 @@ commands:
   web      start web UI server and realtime viewer
   setup    install/update dependencies"""
 
-_PUBLIC_SUBCOMMANDS = {'sim', 'server', 'web', 'setup'}
-_HIDDEN_SUBCOMMANDS = {'run'}
-_SUBCOMMANDS = _PUBLIC_SUBCOMMANDS | _HIDDEN_SUBCOMMANDS
+_SUBCOMMANDS = {'sim', 'server', 'web', 'setup'}
 
 
 def _inside_venv():
@@ -134,9 +132,6 @@ def main():
         m()
     elif sub == 'web':
         from elemctl.web import main as m
-        m()
-    elif sub == 'run':
-        from elemctl.run import main as m
         m()
     elif sub == 'setup':
         if not os.environ.pop('_ELEMCTL_SETUP_DONE', None):
