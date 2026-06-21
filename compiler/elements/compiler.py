@@ -668,7 +668,11 @@ def _resolve_anim_params(event: dict) -> dict:
             "pixel_step": float(p["pixel_step"]),
         }
     elif anim_type == "spark":
-        color_h, color_s, color_v = _resolve_color(p["color"])
+        color = p["color"]
+        if isinstance(color, str):
+            color_h, color_s, color_v = _resolve_color(color)
+        else:
+            color_h, color_s, color_v, _color_a = _convert_color_tuple(color, p.get("format", "hsv"))
         return {
             "color_h": color_h,
             "color_s": color_s,

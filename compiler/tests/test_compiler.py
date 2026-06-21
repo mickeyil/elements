@@ -540,6 +540,24 @@ class TestMultiStrip:
 
 
 # ---------------------------------------------------------------------------
+# Spark
+# ---------------------------------------------------------------------------
+
+class TestSpark:
+    def test_spark_accepts_hsv_tuple_color(self):
+        strip1 = strip("spark_tuple", length=1)
+        sp = spark(color=(0.0, 0.0, 0.5), fade=sec(0.5))
+        sp.schedule(strip1.pixels("0"), at=0, duration=sec(0.5))
+
+        dec = decode_blob(build(beat=1.0, duration=0.5)["spark_tuple"])
+        params = decode_params(ANIM_SPARK, dec.layers[0].events[0].params)
+        assert abs(params["color_h"] - 0.0) < 1e-6
+        assert abs(params["color_s"] - 0.0) < 1e-6
+        assert abs(params["color_v"] - 0.5) < 1e-6
+        assert abs(params["fade"] - 0.5) < 1e-6
+
+
+# ---------------------------------------------------------------------------
 # Paint
 # ---------------------------------------------------------------------------
 
