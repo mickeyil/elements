@@ -23,10 +23,12 @@ from pathlib import Path
 
 from . import config as config_mod
 from . import config_edit
+from . import wire
 from .controller_protocol import encode_frame, encode_json
 from .hub import DeviceHub
 from .library import ArtifactCache, ProgramLibrary
 from .session import (
+    Intent,
     MemberAttached,
     MemberCommandFailed,
     MemberDetached,
@@ -42,6 +44,11 @@ def _doc_label(doc, target_uid):
         if isinstance(d, dict) and d.get('device_uid') == target_uid:
             return d.get('label')
     return None
+
+
+def _bg_refused(step, status):
+    """Human-readable reason for a background step a device refused."""
+    return f'{step} refused: {wire.ACK_STATUS_NAMES.get(status, status)}'
 
 
 class ControllerService:
@@ -75,6 +82,10 @@ class ControllerService:
         self._last_state = None      # last published state dict (change gate)
         self._catalog_dirty = True   # send the catalog on the next tick
         self._shutdown = False
+        # In-flight / last background install per device uid: the set_background
+        # command stores a program as a device's local fallback animation. Each
+        # value is {'program_id', 'phase', 'error'}; surfaced in the state dict.
+        self._bg_pushes = {}
 
     @property
     def should_shutdown(self):
@@ -104,6 +115,7 @@ class ControllerService:
         lists of encoded bytes."""
         json_msgs = [encode_json(self._event_dict(ev))
                      for ev in self._session.tick()]
+        self._reap_orphaned_background()
 
         state = self._state_dict()
         if state != self._last_state:
@@ -169,6 +181,8 @@ class ControllerService:
             return {}
         if name == 'publish':
             return self._cmd_publish(cmd)
+        if name == 'set_background':
+            return self._cmd_set_background(cmd)
         raise ValueError(f'unknown command: {name!r}')
 
     def _cmd_load(self, cmd):
@@ -255,6 +269,123 @@ class ControllerService:
                 return dc
         raise ValueError(f'device not found after edit: {uid!r}')
 
+    # -- background install --------------------------------------------------
+
+    _BG_TERMINAL = ('ready', 'failed')
+
+    def _cmd_set_background(self, cmd):
+        """Install a program as a device's local fallback background animation.
+
+        Compiles the program for the device's strip, then stores it and makes it
+        the device's sole local animation (STORE_ANIMATION + SET_ANIMATION_ORDER).
+        With preview=true it also starts it locally now (PLAY_LOCAL_ANIMATION),
+        which is what the device will do on its own once the detach-to-background
+        firmware/App behaviour lands.
+
+        Precondition: the device must already hold a hardware profile (e.g. from
+        previewing the strip via load/play). SET_PROFILE is intentionally not
+        sent here; without a profile the store still succeeds, but the background
+        cannot start (preview, or the eventual detach playback, falls back to a
+        blank strip).
+
+        Validation is synchronous (a bad request fails the command immediately);
+        the device commands are async, so their progress shows up as the device's
+        'background' phase in the state dict: storing -> ordering -> [starting ->]
+        ready, or failed."""
+        uid = cmd.get('device_uid')
+        program_id = cmd.get('program_id')
+        preview = bool(cmd.get('preview', False))
+        if not isinstance(uid, str) or not uid:
+            raise ValueError('set_background requires a device_uid')
+        if not isinstance(program_id, str) or not program_id:
+            raise ValueError('set_background requires a program_id')
+
+        dc = next((d for d in self._config.devices if d.device_uid == uid), None)
+        if dc is None:
+            raise ValueError(f'unknown configured device: {uid!r}')
+        if not self._hub.is_connected(uid):
+            raise ValueError(f'device {uid!r} is not connected')
+        # Storing/ordering are harmless while a program runs, but a preview's
+        # PLAY_LOCAL would hijack a device the session is actively driving.
+        if preview and self._session.member(uid).target.intent is not Intent.DETACHED:
+            raise ValueError(
+                f'cannot preview on {uid!r} while it is serving a loaded program; '
+                'stop the program first, or omit preview')
+
+        existing = self._bg_pushes.get(uid)
+        if existing is not None and existing['phase'] not in self._BG_TERMINAL:
+            raise ValueError(f'a background install is already in progress for {uid!r}')
+
+        entry = self._library.get(program_id)
+        if entry is None:
+            raise ValueError(f'unknown program: {program_id!r}')
+        if entry.error is not None:
+            raise ValueError(f'program {program_id!r} has errors: {entry.error}')
+        manifest = self._resolve_manifest(entry)
+        artifact = manifest.strips.get(dc.strip_id)
+        if artifact is None:
+            raise ValueError(
+                f'program {program_id!r} has no strip for {dc.strip_id!r}')
+        if manifest.requires_sync:
+            raise ValueError(
+                f'program {program_id!r} requires sync and cannot be a background; '
+                'a background plays on the device alone, with no controller clock')
+
+        # Encode every step up front so any wire-level rejection (name too long,
+        # blob too large) fails the command synchronously rather than mid-chain.
+        store_msg = wire.encode_store_animation(program_id, artifact.blob)
+        order_msg = wire.encode_set_animation_order([program_id])
+        play_msg = wire.encode_play_local_animation(0) if preview else None
+
+        push = {'program_id': program_id, 'phase': 'storing', 'error': None}
+
+        def on_store(ack):
+            if ack.status != wire.ACK_OK:
+                return self._bg_fail(uid, push, _bg_refused('store_animation', ack.status))
+            push['phase'] = 'ordering'
+            if not self._hub.send(uid, order_msg, on_order):
+                self._bg_fail(uid, push, 'set_animation_order failed: device not connected')
+
+        def on_order(ack):
+            if ack.status != wire.ACK_OK:
+                return self._bg_fail(uid, push, _bg_refused('set_animation_order', ack.status))
+            if play_msg is None:
+                push['phase'] = 'ready'
+                return
+            push['phase'] = 'starting'
+            if not self._hub.send(uid, play_msg, on_play):
+                self._bg_fail(uid, push, 'play_local_animation failed: device not connected')
+
+        def on_play(ack):
+            if ack.status != wire.ACK_OK:
+                return self._bg_fail(uid, push, _bg_refused('play_local_animation', ack.status))
+            push['phase'] = 'ready'
+
+        self._bg_pushes[uid] = push
+        if not self._hub.send(uid, store_msg, on_store):
+            # is_connected raced us between the check and the send.
+            del self._bg_pushes[uid]
+            raise ValueError(f'device {uid!r} is not connected')
+
+        log.info('set_background: installing %s on %s (preview=%s)',
+                 program_id, uid, preview)
+        return {'device_uid': uid, 'program_id': program_id, 'phase': push['phase']}
+
+    def _bg_fail(self, uid, push, reason):
+        push['phase'] = 'failed'
+        push['error'] = reason
+        log.warning('set_background: %s failed on %s: %s',
+                    push['program_id'], uid, reason)
+
+    def _reap_orphaned_background(self):
+        """Fail any in-flight install whose device has dropped. The hub abandons
+        a link's pending ACK callbacks when it closes, so without this a mid-
+        install disconnect would wedge the device's slot as 'in progress' and
+        reject every retry after it reconnects."""
+        for uid, push in self._bg_pushes.items():
+            if push['phase'] not in self._BG_TERMINAL and not self._hub.is_connected(uid):
+                self._bg_fail(uid, push, 'device disconnected during install')
+
     # -- compile path -------------------------------------------------------
 
     def _resolve_manifest(self, entry):
@@ -333,6 +464,12 @@ class ControllerService:
                 'profile_state': m.profile_state.name.lower(),
                 'last_refusal': list(m.last_refusal) if m.last_refusal else None,
                 'blocked': list(m.blocked) if m.blocked else None,
+                # Progress of a set_background install, or None if never run. A
+                # copy, so in-place phase mutations by ACK callbacks don't also
+                # mutate the cached _last_state and defeat the change gate.
+                'background': (dict(push)
+                               if (push := self._bg_pushes.get(dc.device_uid)) is not None
+                               else None),
             })
         # Devices broadcasting DISCOVER but not in the config: a UID stub the
         # operator can configure. Configured devices win, so none appears twice.

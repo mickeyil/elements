@@ -12,6 +12,7 @@ from elemctl.controller_protocol import KIND_FRAME, KIND_JSON, parse_json_payloa
 from elemctl.hub import DeviceConnected, HubPoll
 from elemctl.library import ProgramLibrary
 from elemctl.service import ControllerService
+from elemctl import wire
 from elemctl.wire import AckMsg, FramePreview
 
 import pytest
@@ -41,8 +42,12 @@ class FakeHub:
         self.frames = []
         self.sent = []
         self.discovered = set()
+        self.connected = set()
         self.disconnected = []
         self.closed = False
+
+    def is_connected(self, uid):
+        return uid in self.connected
 
     def emit(self, *events):
         self.pending_events.extend(events)
@@ -415,3 +420,139 @@ def test_observer_role_unaffected_close(tmp_path):
     service, hub = make_service(tmp_path)
     service.close()
     assert hub.closed is True
+
+
+# ---------------------------------------------------------------------------
+# set_background: install a program as a device's local fallback animation
+# ---------------------------------------------------------------------------
+
+def _device_background(service, uid='sim-a'):
+    state = _by_type(_json(service.snapshot_messages()), 'state')[0]
+    return next(d['background'] for d in state['devices'] if d['uid'] == uid)
+
+
+def _published_background(msgs, uid='sim-a'):
+    """The sim-a background phase from a state message in tick_once output, or
+    None if no state was published."""
+    states = _by_type(_json(msgs), 'state')
+    if not states:
+        return None
+    bg = next(d['background'] for d in states[-1]['devices'] if d['uid'] == uid)
+    return bg['phase'] if bg else None
+
+
+def _ack(hub, status, uid='sim-a'):
+    _, on_ack = hub.last_send(uid)
+    on_ack(AckMsg(status=status, payload=b''))
+
+
+def test_set_background_stores_then_orders(tmp_path):
+    service, hub = make_service(tmp_path)
+    hub.connected.add('sim-a')
+
+    reply = cmd(service, 'set_background', device_uid='sim-a', program_id='prog')
+    assert reply['ok'] is True
+    assert reply['result'] == {'device_uid': 'sim-a', 'program_id': 'prog',
+                               'phase': 'storing'}
+    assert hub.last_send('sim-a')[0] == wire.CMD_STORE_ANIMATION
+
+    _ack(hub, wire.ACK_OK)                                  # store accepted
+    assert hub.last_send('sim-a')[0] == wire.CMD_SET_ANIMATION_ORDER
+    assert _device_background(service)['phase'] == 'ordering'
+
+    _ack(hub, wire.ACK_OK)                                  # order accepted
+    # No preview, so the chain ends at ready without a local play.
+    assert _device_background(service) == {
+        'program_id': 'prog', 'phase': 'ready', 'error': None}
+
+
+def test_set_background_preview_also_plays_local(tmp_path):
+    service, hub = make_service(tmp_path)
+    hub.connected.add('sim-a')
+
+    cmd(service, 'set_background', device_uid='sim-a', program_id='prog', preview=True)
+    _ack(hub, wire.ACK_OK)                                  # store
+    _ack(hub, wire.ACK_OK)                                  # order
+    assert hub.last_send('sim-a')[0] == wire.CMD_PLAY_LOCAL_ANIMATION
+    assert _device_background(service)['phase'] == 'starting'
+
+    _ack(hub, wire.ACK_OK)                                  # play_local
+    assert _device_background(service)['phase'] == 'ready'
+
+
+def test_set_background_refusal_marks_failed(tmp_path):
+    service, hub = make_service(tmp_path)
+    hub.connected.add('sim-a')
+
+    cmd(service, 'set_background', device_uid='sim-a', program_id='prog')
+    sent_before = len(hub.sent)
+    _ack(hub, wire.ACK_ERROR)                               # store refused
+
+    bg = _device_background(service)
+    assert bg['phase'] == 'failed' and 'store_animation' in bg['error']
+    assert len(hub.sent) == sent_before                    # chain stopped
+
+
+def test_set_background_rejects_unconnected_device(tmp_path):
+    service, _hub = make_service(tmp_path)                  # sim-a not connected
+    reply = cmd(service, 'set_background', device_uid='sim-a', program_id='prog')
+    assert reply['ok'] is False and 'not connected' in reply['error']
+
+
+def test_set_background_rejects_unknown_program(tmp_path):
+    service, hub = make_service(tmp_path)
+    hub.connected.add('sim-a')
+    reply = cmd(service, 'set_background', device_uid='sim-a', program_id='nope')
+    assert reply['ok'] is False and 'unknown program' in reply['error']
+
+
+def test_set_background_rejects_concurrent_install(tmp_path):
+    service, hub = make_service(tmp_path)
+    hub.connected.add('sim-a')
+    cmd(service, 'set_background', device_uid='sim-a', program_id='prog')   # in flight
+    reply = cmd(service, 'set_background', device_uid='sim-a', program_id='prog')
+    assert reply['ok'] is False and 'already in progress' in reply['error']
+
+
+def test_set_background_phase_changes_are_published(tmp_path):
+    # Each phase transition must survive the tick_once change gate, not get
+    # masked by a shared mutable dict in _last_state.
+    service, hub = make_service(tmp_path)
+    hub.connected.add('sim-a')
+    cmd(service, 'set_background', device_uid='sim-a', program_id='prog')
+
+    assert _published_background(service.tick_once()[0]) == 'storing'
+    _ack(hub, wire.ACK_OK)                                   # store -> ordering
+    _ack(hub, wire.ACK_OK)                                   # ordering -> ready
+    assert _published_background(service.tick_once()[0]) == 'ready'
+
+
+def test_set_background_orphaned_by_disconnect_is_reaped(tmp_path):
+    service, hub = make_service(tmp_path)
+    hub.connected.add('sim-a')
+    cmd(service, 'set_background', device_uid='sim-a', program_id='prog')   # storing
+
+    hub.connected.discard('sim-a')                          # link drops, no ACK
+    service.tick_once()                                     # reaper runs
+
+    bg = _device_background(service)
+    assert bg['phase'] == 'failed' and 'disconnected' in bg['error']
+
+    # The wedge is cleared: a retry after reconnect is accepted, not rejected
+    # as "already in progress".
+    hub.connected.add('sim-a')
+    assert cmd(service, 'set_background', device_uid='sim-a', program_id='prog')['ok']
+
+
+def test_set_background_preview_rejected_while_device_is_serving(tmp_path):
+    service, hub = make_service(tmp_path)
+    drive_service_to_playing(service, hub)                  # sim-a serving 'prog'
+    hub.connected.add('sim-a')
+
+    reply = cmd(service, 'set_background', device_uid='sim-a',
+                program_id='prog', preview=True)
+    assert reply['ok'] is False and 'serving a loaded program' in reply['error']
+
+    # Storing/ordering don't disrupt live playback, so a non-preview install is
+    # still allowed.
+    assert cmd(service, 'set_background', device_uid='sim-a', program_id='prog')['ok']
