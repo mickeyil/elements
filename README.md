@@ -4,7 +4,27 @@ Beat-synced LED animation engine targeting ESP32. Work in progress.
 
 **Docs:** [firmware & engine](drafts/firmware.md) · [controller](drafts/controller.md) · [protocol](drafts/protocol.md) · [web app](docs/web_app.md) · [future plans](docs/draft_future_plans.md)
 
+## Setup
+
+`./elemctl setup` takes a fresh clone to ready-to-run. Run it **online**: it
+creates the Python venv, builds the web UI into `local/web_dist`, and builds the
+native `sim_device` binary into `build/`. Afterwards `./elemctl server`, `web`,
+and `sim` run offline from that checkout.
+
+```bash
+./elemctl setup
+```
+
+Setup-time prerequisites (not needed at runtime): Python 3.10+, Node/npm, CMake,
+and a C++17 compiler. Re-running setup is cheap and idempotent; run it again
+after a pull. Generated artifacts live in the gitignored `local/` and `build/`
+dirs; `make cleanall` removes them, after which setup must be run again (online).
+
+ESP32 firmware is built separately (`make firmware`); it is not part of setup.
+
 ## Build
+
+The native build alone (without the web UI / venv):
 
 ```bash
 make build

@@ -52,7 +52,9 @@ from .version import get_runtime_version
 
 log = logging.getLogger(__name__)
 
-_STATIC_DIR = Path(__file__).resolve().parents[1] / 'web_ui' / 'dist'
+# Built web UI assets, produced by `./elemctl setup` (vite build -> here).
+# Repo-local and gitignored, alongside local/venv; never built at runtime.
+_STATIC_DIR = Path(__file__).resolve().parents[2] / 'local' / 'web_dist'
 _STATIC_ROOT = _STATIC_DIR.resolve()
 _WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
 _FRAME_HEADER = struct.Struct('<If')
@@ -1146,6 +1148,13 @@ def main() -> None:
     args = parser.parse_args()
 
     configure_logger(level='INFO')
+
+    if not (_STATIC_DIR / 'index.html').exists():
+        log.error(
+            "web UI is not built at %s; run './elemctl setup' while online",
+            _STATIC_DIR,
+        )
+        raise SystemExit(1)
 
     try:
         config_path = resolve_config_path(args.config)

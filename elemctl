@@ -19,6 +19,9 @@ VENV_DIR = REPO_ROOT / 'local' / 'venv'
 VENV_PYTHON = VENV_DIR / 'bin' / 'python'
 REQUIREMENTS = REPO_ROOT / 'requirements.txt'
 STAMP_FILE = VENV_DIR / '.deps-stamp.json'
+WEB_UI_DIR = REPO_ROOT / 'controller' / 'web_ui'
+WEB_STAMP_FILE = REPO_ROOT / 'local' / '.web-deps-stamp.json'
+BUILD_DIR = REPO_ROOT / 'build'
 
 _USAGE = """\
 usage: elemctl <command> [args]
@@ -27,7 +30,7 @@ commands:
   sim      launch a configured network simulator
   server   start controller server
   web      start web UI server and realtime viewer
-  setup    install/update dependencies"""
+  setup    install deps, build the web UI and native binaries (online)"""
 
 _SUBCOMMANDS = {'sim', 'server', 'web', 'setup'}
 
@@ -68,6 +71,58 @@ def _install_deps():
         check=True,
     )
     STAMP_FILE.write_text(json.dumps(_current_stamp()))
+
+
+def _run(cmd, *, cwd=None, tool=None):
+    """Run a setup subprocess, turning the common failures (tool missing, build
+    failed) into a clean exit instead of a traceback."""
+    try:
+        subprocess.run(cmd, cwd=cwd, check=True)
+    except FileNotFoundError:
+        print(f'elemctl: {tool or cmd[0]} is not installed or not on PATH',
+              file=sys.stderr)
+        sys.exit(1)
+    except subprocess.CalledProcessError as e:
+        sys.exit(e.returncode)
+
+
+def _web_deps_stamp():
+    """Stamp the only expensive web step worth gating: the npm install."""
+    lock = WEB_UI_DIR / 'package-lock.json'
+    return {'package_lock_sha256': hashlib.sha256(lock.read_bytes()).hexdigest()}
+
+
+def _needs_npm_install():
+    if not (WEB_UI_DIR / 'node_modules').exists() or not WEB_STAMP_FILE.exists():
+        return True
+    try:
+        return json.loads(WEB_STAMP_FILE.read_text()) != _web_deps_stamp()
+    except (json.JSONDecodeError, OSError):
+        return True
+
+
+def _build_web():
+    """Install web deps (only when package-lock changed) and build the UI into
+    local/web_dist. The build itself is fast and always run, so the output is
+    current for the checkout after setup; web.py refuses to serve if it's
+    missing."""
+    if _needs_npm_install():
+        print('elemctl: installing web UI dependencies (npm ci)...', file=sys.stderr)
+        _run(['npm', 'ci'], cwd=WEB_UI_DIR, tool='npm')
+        WEB_STAMP_FILE.write_text(json.dumps(_web_deps_stamp()))
+    print('elemctl: building web UI...', file=sys.stderr)
+    _run(['npm', 'run', 'build'], cwd=WEB_UI_DIR, tool='npm')
+
+
+def _build_native():
+    """Configure and build the host runtime binary (sim_device) into build/.
+    CMake tracks freshness, so re-running is cheap; the ~50 test executables are
+    left for `make test` (we build only the sim_device target here)."""
+    jobs = str(os.cpu_count() or 1)
+    print('elemctl: building native sim_device...', file=sys.stderr)
+    _run(['cmake', '-S', str(REPO_ROOT), '-B', str(BUILD_DIR)], tool='cmake')
+    _run(['cmake', '--build', str(BUILD_DIR),
+          '--target', 'sim_device', '--parallel', jobs], tool='cmake')
 
 
 def _ensure_venv(force=False):
@@ -136,7 +191,9 @@ def main():
     elif sub == 'setup':
         if not os.environ.pop('_ELEMCTL_SETUP_DONE', None):
             _install_deps()
-        print(f'elemctl: venv ready at {VENV_DIR}')
+        _build_web()
+        _build_native()
+        print(f'elemctl: setup complete; ready to run from {REPO_ROOT}')
 
 
 if __name__ == '__main__':
