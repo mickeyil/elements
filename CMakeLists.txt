@@ -20,6 +20,7 @@ FetchContent_MakeAvailable(nlohmann_json)
 add_library(elements_core STATIC
     src/animation_store.cpp
     src/command_handler.cpp
+    src/local_animation.cpp
     src/command_processor.cpp
     src/controller_link.cpp
     src/crc32.cpp
@@ -379,6 +380,7 @@ if(BUILD_TESTS)
         test/test_command_handler.cpp
         test/test_platform_clock.cpp
         src/command_handler.cpp
+        src/local_animation.cpp
         src/animation_store.cpp
         src/crc32.cpp
         src/hardware_profile_store.cpp
@@ -411,6 +413,7 @@ if(BUILD_TESTS)
         test/test_platform_clock.cpp
         src/command_processor.cpp
         src/command_handler.cpp
+        src/local_animation.cpp
         src/animation_store.cpp
         src/crc32.cpp
         src/hardware_profile_store.cpp
@@ -445,6 +448,7 @@ if(BUILD_TESTS)
         src/discovery.cpp
         src/command_processor.cpp
         src/command_handler.cpp
+        src/local_animation.cpp
         src/animation_store.cpp
         src/crc32.cpp
         src/hardware_profile_store.cpp
@@ -481,6 +485,7 @@ if(BUILD_TESTS)
         src/discovery.cpp
         src/command_processor.cpp
         src/command_handler.cpp
+        src/local_animation.cpp
         src/animation_store.cpp
         src/crc32.cpp
         src/hardware_profile_store.cpp

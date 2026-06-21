@@ -574,3 +574,102 @@ TEST_CASE("a local animation restarts on Ended")
     REQUIRE(h.frames() == 3);
     CHECK(is_red(h.last_frame()));
 }
+
+// ---------------------------------------------------------------------------
+// Detach-to-background
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Store a long red background animation on an attached device (order index 0).
+void install_background(Harness& h, const char* name = "bg")
+{
+    std::vector<uint8_t> payload = name_slot(name);
+    const std::vector<uint8_t> blob = build_paint_blob(10.0f);
+    payload.insert(payload.end(), blob.begin(), blob.end());
+    h.command(CMD_STORE_ANIMATION, payload);
+}
+
+}  // namespace
+
+TEST_CASE("detach resumes the stored background animation")
+{
+    Harness h;
+    h.attach();
+    install_background(h);
+    h.output.frames.clear();
+
+    h.advance(PING_TIMEOUT_MS * 1000 + 1);
+    h.app.tick();  // link silence -> detach
+
+    CHECK_FALSE(h.app.is_attached());
+    CHECK(h.app.status().mode == DeviceMode::DetachedBackground);
+    REQUIRE(h.frames() >= 1);
+    CHECK(is_red(h.last_frame()));  // rendering the background, not blanked
+}
+
+TEST_CASE("detach with no stored background still blanks")
+{
+    // Same as the plain detach test, but stated alongside the background path:
+    // an empty store falls back to the blank behaviour.
+    Harness h;
+    h.attach();
+
+    h.advance(PING_TIMEOUT_MS * 1000 + 1);
+    h.app.tick();
+
+    CHECK(h.app.status().mode == DeviceMode::DetachedBlank);
+    REQUIRE(h.frames() == 1);
+    CHECK(is_black(h.last_frame()));
+}
+
+TEST_CASE("re-attaching stops the local background")
+{
+    Harness h;
+    h.attach();
+    install_background(h);
+
+    h.advance(PING_TIMEOUT_MS * 1000 + 1);
+    h.app.tick();
+    REQUIRE(h.app.status().mode == DeviceMode::DetachedBackground);
+
+    h.attach();  // controller comes back
+    CHECK(h.app.status().mode == DeviceMode::AttachedControlled);
+
+    // Playback was reset on attach, so the device renders nothing on its own
+    // now (the background is not still looping).
+    const size_t before = h.frames();
+    h.advance(1'000'000);
+    h.app.tick();
+    CHECK(h.frames() == before);
+}
+
+TEST_CASE("boot resumes the stored background from the persisted store")
+{
+    Harness h;
+    h.attach();
+    install_background(h);
+
+    // A second device boots over the same persisted store and profile, with no
+    // controller present: it must come up playing the background (the reboot
+    // path, which begin() now covers).
+    FakeNetworkInterface net2;
+    FakeUdpTransport discovery2, sync2;
+    FakeTcpTransport tcp2;
+    RecordingSystemPlatform system2{tcp2};
+    RecordingFrameOutput output2;
+    DeviceIdentity id2;
+    std::strcpy(id2.uid, "sim-app");
+    id2.boot_token = 0x55667788;
+    DiscoveryClient discovery_client2{discovery2, id2};
+    App app2{net2, discovery_client2, tcp2, sync2, h.files, h.kv,
+             system2, output2, id2};
+    app2.begin();
+
+    CHECK(app2.status().mode == DeviceMode::DetachedBackground);
+
+    set_test_now_us(h.now + 1);
+    app2.tick();
+    REQUIRE_FALSE(output2.frames.empty());
+    CHECK(is_red(output2.frames.back()));
+}

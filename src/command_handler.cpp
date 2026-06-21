@@ -8,6 +8,7 @@
 #include "device_status.h"
 #include "hardware_profile_store.h"
 #include "link_protocol.h"
+#include "local_animation.h"
 #include "playback.h"
 #include "wire_reader.h"
 #include "wire_writer.h"
@@ -175,38 +176,18 @@ AckStatus CommandHandler::handle_play_local_animation_(WireReader& r)
     if (!r.read_u16(order_index) || !r.require_empty()) {
         return AckStatus::BadPayload;
     }
-    if (!_ctx.playback.has_hardware_profile()) {
-        return AckStatus::WrongState;
+    // The load-and-start path is shared with the App's detach / boot background
+    // policy (local_animation.cpp); map its neutral outcome back to the wire.
+    const LocalPlayOutcome out = play_stored_animation(_ctx, order_index);
+    switch (out.status) {
+        case LocalPlayOutcome::Status::Ok:           return AckStatus::Ok;
+        case LocalPlayOutcome::Status::NoProfile:    return AckStatus::WrongState;
+        case LocalPlayOutcome::Status::NoSuchEntry:  return AckStatus::BadPayload;
+        case LocalPlayOutcome::Status::Error:        return AckStatus::Error;
+        case LocalPlayOutcome::Status::DecodeFailed: return map_decode_error(out.decode_err);
+        case LocalPlayOutcome::Status::StartFailed:  return map_playback_result(out.start_result);
     }
-    if (order_index >= _ctx.animations.count()) {
-        return AckStatus::BadPayload;
-    }
-
-    const AnimationEntry entry = _ctx.animations.entry(order_index);
-    uint8_t* blob = new (std::nothrow) uint8_t[entry.blob_len];
-    if (blob == nullptr) {
-        return AckStatus::Error;
-    }
-    if (!_ctx.animations.read_blob(entry.name, blob, entry.blob_len)) {
-        delete[] blob;
-        return AckStatus::Error;
-    }
-
-    DecodeError err = DecodeError::Ok;
-    const bool loaded = _ctx.playback.handle_load(blob, entry.blob_len, &err);
-    delete[] blob;
-    if (!loaded) {
-        return map_decode_error(err);
-    }
-
-    // Stored blobs are unsynced by construction (the store rejects
-    // requires_sync), so an immediate start cannot hit Unsynced.
-    const PlaybackResult started = _ctx.playback.handle_start(0);
-    if (started != PlaybackResult::Ok) {
-        return map_playback_result(started);
-    }
-    _ctx.local_program_loaded = true;
-    return AckStatus::Ok;
+    return AckStatus::Error;  // unreachable
 }
 
 AckStatus CommandHandler::handle_store_animation_(WireReader& r)

@@ -2,6 +2,7 @@
 
 #include "frame_output.h"
 #include "hardware_profile_store.h"
+#include "local_animation.h"
 #include "network_interface.h"
 #include "platform_clock.h"
 #include "system_platform.h"
@@ -36,6 +37,12 @@ void App::begin()
         _output.apply_profile(profile);
         _status.flags |= STATUS_FLAG_PROFILE_PRESENT;
     }
+
+    // Boot detached: a device that powers up with no controller resumes its
+    // installed background, so it shows something on its own. A controller
+    // attaching later takes over (update_mode_). With no background installed
+    // this leaves the strip as-is (DetachedBlank) until a controller arrives.
+    try_start_background_();
 }
 
 void App::tick()
@@ -65,19 +72,39 @@ void App::update_mode_()
     _link_was_ready = ready;
 
     if (ready) {
+        // The controller owns playback now. Drop any local background so it
+        // stops animating and a later controller program can't inherit its
+        // loop flag; the reconciler will load/start its own program over this.
+        _playback.reset_for_detach();
+        _ctx.local_program_loaded = false;
         _status.mode = DeviceMode::AttachedControlled;
         return;
     }
 
-    // Placeholder detach policy: drop everything and go dark. With no
-    // profile nothing was ever shown and the output is not set up.
+    // Detached: resume the stored background if one is installed and playable.
+    if (try_start_background_()) {
+        return;
+    }
+
+    // No background to fall back to: go dark. With no profile nothing was ever
+    // shown and the output is not set up. (try_start_background_ already reset
+    // playback and cleared the local flag.)
     _status.mode = DeviceMode::DetachedBlank;
-    _ctx.local_program_loaded = false;
-    _playback.reset_for_detach();
     if (_playback.has_hardware_profile()) {
         _playback.render_black_frame();
         write_frame_();
     }
+}
+
+bool App::try_start_background_()
+{
+    _playback.reset_for_detach();
+    _ctx.local_program_loaded = false;
+    if (play_stored_animation(_ctx, 0).ok()) {
+        _status.mode = DeviceMode::DetachedBackground;
+        return true;
+    }
+    return false;
 }
 
 void App::drive_playback_()

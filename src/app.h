@@ -54,10 +54,16 @@ public:
     const DeviceStatus& status() const { return _status; }
 
 private:
-    // Placeholder attach/detach policy: mirror the link state into
-    // status.mode and blank the strip on detach. Grace hold and
-    // background playback are open design items.
+    // Attach/detach policy: mirror the link state into status.mode. On detach
+    // (and at boot) resume the stored background if one is installed and
+    // playable, otherwise blank the strip. Grace hold is an open design item.
     void update_mode_();
+
+    // Reset playback and try to start stored animation order 0 as the local
+    // background. Sets DetachedBackground and returns true on success; on
+    // failure leaves playback reset and returns false (the caller decides
+    // whether to blank). Shared by boot (begin) and detach.
+    bool try_start_background_();
 
     // Render frames at the loaded program's fps and write them to the
     // frame output; restart local animations on Ended.
