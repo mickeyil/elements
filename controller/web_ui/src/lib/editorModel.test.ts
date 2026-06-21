@@ -62,8 +62,8 @@ describe('expandCircleCells', () => {
     expect(circleStartFromAngle({ x: 10, y: 10 }, 3, 0)).toEqual({ x: 13, y: 10 });
   });
 
-  it('expands a clockwise circle deterministically', () => {
-    expect(expandCircleCells({ x: 0, y: 0 }, { x: 2, y: 0 }, 0, 'cw')).toEqual([
+  it('returns the whole perimeter for a full-ring count', () => {
+    expect(expandCircleCells({ x: 0, y: 0 }, { x: 2, y: 0 }, 12, 'cw')).toEqual([
       { x: 2, y: 0 },
       { x: 2, y: 1 },
       { x: 1, y: 2 },
@@ -79,8 +79,9 @@ describe('expandCircleCells', () => {
     ]);
   });
 
-  it('respects counterclockwise ordering and spacing', () => {
-    expect(expandCircleCells({ x: 0, y: 0 }, { x: 2, y: 0 }, 1, 'ccw')).toEqual([
+  it('distributes a count evenly, respecting counterclockwise ordering', () => {
+    // 6 LEDs over the 12-cell perimeter: every other cell.
+    expect(expandCircleCells({ x: 0, y: 0 }, { x: 2, y: 0 }, 6, 'ccw')).toEqual([
       { x: 2, y: 0 },
       { x: 1, y: -2 },
       { x: -1, y: -2 },
@@ -90,8 +91,29 @@ describe('expandCircleCells', () => {
     ]);
   });
 
+  it('matches the backend floor sampling (parity fixture: 8 over 12)', () => {
+    // Mirrors test_sim_layout.py RADIUS_2_COUNT_8_CW; exercises the k*P/n == .5
+    // case where Math.round would diverge from Python's banker's rounding.
+    expect(expandCircleCells({ x: 0, y: 0 }, { x: 2, y: 0 }, 8, 'cw')).toEqual([
+      { x: 2, y: 0 },
+      { x: 2, y: 1 },
+      { x: 0, y: 2 },
+      { x: -1, y: 2 },
+      { x: -2, y: 0 },
+      { x: -2, y: -1 },
+      { x: 0, y: -2 },
+      { x: 1, y: -2 },
+    ]);
+  });
+
+  it('throws when the count exceeds the perimeter', () => {
+    expect(() => expandCircleCells({ x: 0, y: 0 }, { x: 2, y: 0 }, 13, 'cw')).toThrow(
+      /exceeds the 12 cells/,
+    );
+  });
+
   it('rounds the radius from a non-axis start point', () => {
-    expect(expandCircleCells({ x: 0, y: 0 }, { x: 3, y: 1 }, 0, 'cw')).toEqual([
+    expect(expandCircleCells({ x: 0, y: 0 }, { x: 3, y: 1 }, 16, 'cw')).toEqual([
       { x: 3, y: 1 },
       { x: 2, y: 2 },
       { x: 1, y: 3 },
@@ -158,7 +180,7 @@ describe('editorModel inactive LEDs', () => {
       createEmptyDocument(20),
       { x: 0, y: 0 },
       { x: 2, y: 0 },
-      1,
+      6,
       'cw',
     );
 
@@ -166,7 +188,6 @@ describe('editorModel inactive LEDs', () => {
       type: 'circle',
       startIndex: 1,
       count: 6,
-      spacing: 1,
       center: [0, 0],
       start: [2, 0],
       direction: 'cw',
@@ -317,7 +338,7 @@ describe('editorModel inactive LEDs', () => {
       createEmptyDocument(20),
       { x: 0, y: 0 },
       { x: 2, y: 0 },
-      1,
+      6,
       'cw',
       [1, 4],
     );
@@ -327,7 +348,6 @@ describe('editorModel inactive LEDs', () => {
         type: 'circle',
         startIndex: 1,
         count: 6,
-        spacing: 1,
         center: [0, 0],
         start: [2, 0],
         direction: 'cw',
@@ -357,7 +377,6 @@ describe('editorModel inactive LEDs', () => {
             type: 'circle',
             startIndex: 1,
             count: 6,
-            spacing: 1,
             center: [2, 2],
             start: [4, 2],
             direction: 'cw',
@@ -443,7 +462,6 @@ describe('editorModel inactive LEDs', () => {
             type: 'circle' as const,
             startIndex: 1,
             count: 6,
-            spacing: 1,
             center: [2, 2] as [number, number],
             start: [4, 2] as [number, number],
             direction: 'cw' as const,
@@ -465,7 +483,7 @@ describe('editorModel inactive LEDs', () => {
       placeLinePrimitive(createEmptyDocument(20), { x: 0, y: 0 }, { x: 2, y: 0 }, 0),
       { x: 6, y: 0 },
       { x: 8, y: 0 },
-      1,
+      6,
       'cw',
     );
 
@@ -541,7 +559,7 @@ describe('editorModel inactive LEDs', () => {
       placeLinePrimitive(createEmptyDocument(20), { x: 0, y: 0 }, { x: 2, y: 0 }, 0),
       { x: 8, y: 0 },
       { x: 10, y: 0 },
-      1,
+      6,
       'cw',
     );
 
@@ -566,15 +584,14 @@ describe('editorModel inactive LEDs', () => {
       placeLinePrimitive(createEmptyDocument(20), { x: 0, y: 0 }, { x: 2, y: 0 }, 0),
       { x: 8, y: 0 },
       { x: 10, y: 0 },
-      1,
+      6,
       'cw',
     );
 
     const replaced = replacePrimitive(original, 1, {
       type: 'circle',
       startIndex: 999,
-      count: expandCircleCells({ x: 8, y: 0 }, { x: 10, y: 0 }, 0, 'cw').length,
-      spacing: 0,
+      count: 6,
       center: [8, 0],
       start: [10, 0],
       direction: 'cw',
@@ -592,7 +609,7 @@ describe('editorModel inactive LEDs', () => {
       placeLinePrimitive(createEmptyDocument(20), { x: 0, y: 0 }, { x: 2, y: 0 }, 0),
       { x: 8, y: 0 },
       { x: 10, y: 0 },
-      1,
+      6,
       'cw',
     );
 
@@ -611,7 +628,7 @@ describe('editorModel inactive LEDs', () => {
 
   it('removes a primitive and reindexes later primitives', () => {
     const original = placeSinglePrimitive(
-      placeCirclePrimitive(createEmptyDocument(20), { x: 6, y: 0 }, { x: 8, y: 0 }, 1, 'cw'),
+      placeCirclePrimitive(createEmptyDocument(20), { x: 6, y: 0 }, { x: 8, y: 0 }, 6, 'cw'),
       12,
       0,
     );
@@ -677,7 +694,6 @@ describe('editorModel inactive LEDs', () => {
           type: 'circle',
           startIndex: 4,
           count: 6,
-          spacing: 1,
           center: [5, 5],
           start: [7, 5],
           direction: 'cw',
@@ -689,7 +705,6 @@ describe('editorModel inactive LEDs', () => {
       type: 'circle',
       startIndex: 4,
       count: 6,
-      spacing: 1,
       center: [3, 6],
       start: [5, 6],
       direction: 'cw',

@@ -221,36 +221,67 @@ def test_expand_line_cells_matches_expected_points(start, end, spacing, expected
     assert _expand_line_cells(start, end, spacing) == expected
 
 
-def test_expand_circle_cells_matches_expected_points():
-    assert _expand_circle_cells((0, 0), (2, 0), 0, 'cw') == [
+# The radius-2 perimeter has 12 cells; a full-ring count returns them all in
+# clockwise order from the start.
+RADIUS_2_PERIMETER_CW = [
+    (2, 0),
+    (2, 1),
+    (1, 2),
+    (0, 2),
+    (-1, 2),
+    (-2, 1),
+    (-2, 0),
+    (-2, -1),
+    (-1, -2),
+    (0, -2),
+    (1, -2),
+    (2, -1),
+]
+
+# Frontend/backend parity fixture: 8 LEDs evenly distributed over the 12-cell
+# perimeter. count 8 over 12 cells exercises the k*P/n == .5 case (k=2 -> 3.0,
+# but k=1 -> 1.5, k=3 -> 4.5), which floor sampling must resolve identically in
+# both languages. The matching TypeScript assertion lives in editorModel.test.ts.
+RADIUS_2_COUNT_8_CW = [
+    (2, 0),
+    (2, 1),
+    (0, 2),
+    (-1, 2),
+    (-2, 0),
+    (-2, -1),
+    (0, -2),
+    (1, -2),
+]
+
+
+def test_expand_circle_cells_full_ring_returns_whole_perimeter():
+    assert _expand_circle_cells((0, 0), (2, 0), 12, 'cw') == RADIUS_2_PERIMETER_CW
+
+
+def test_expand_circle_cells_distributes_count_evenly():
+    # 6 LEDs over the 12-cell perimeter: every other cell, counter-clockwise.
+    assert _expand_circle_cells((0, 0), (2, 0), 6, 'ccw') == [
         (2, 0),
-        (2, 1),
-        (1, 2),
-        (0, 2),
-        (-1, 2),
-        (-2, 1),
-        (-2, 0),
-        (-2, -1),
-        (-1, -2),
-        (0, -2),
         (1, -2),
-        (2, -1),
+        (-1, -2),
+        (-2, 0),
+        (-1, 2),
+        (1, 2),
     ]
 
 
-def test_expand_circle_cells_respects_spacing_and_direction():
-    assert _expand_circle_cells((0, 0), (2, 0), 1, 'ccw') == [
-        (2, 0),
-        (1, -2),
-        (-1, -2),
-        (-2, 0),
-        (-1, 2),
-        (1, 2),
-    ]
+def test_expand_circle_cells_count_8_parity_fixture():
+    assert _expand_circle_cells((0, 0), (2, 0), 8, 'cw') == RADIUS_2_COUNT_8_CW
+
+
+def test_expand_circle_cells_rejects_count_over_perimeter():
+    with pytest.raises(LayoutError, match='exceeds the 12 cells'):
+        _expand_circle_cells((0, 0), (2, 0), 13, 'cw')
 
 
 def test_expand_circle_cells_rounds_radius_from_start_point():
-    assert _expand_circle_cells((0, 0), (3, 1), 0, 'cw') == [
+    # (3, 1) rounds to radius 3; a full-ring count returns the 16-cell perimeter.
+    assert _expand_circle_cells((0, 0), (3, 1), 16, 'cw') == [
         (3, 1),
         (2, 2),
         (1, 3),
@@ -434,6 +465,8 @@ def test_save_and_load_layout_for_editor_round_trip_with_circle(tmp_path):
                     'type': 'circle',
                     'startIndex': 1,
                     'count': 6,
+                    # A stray legacy 'spacing' key is tolerated on input and
+                    # dropped from the canonical saved shape.
                     'spacing': 1,
                     'center': [2, 2],
                     'start': [4, 2],
@@ -456,7 +489,6 @@ def test_save_and_load_layout_for_editor_round_trip_with_circle(tmp_path):
             'type': 'circle',
             'startIndex': 1,
             'count': 6,
-            'spacing': 1,
             'center': [2, 2],
             'start': [4, 2],
             'direction': 'cw',
@@ -515,8 +547,9 @@ def test_save_layout_for_editor_rejects_line_inactive_offsets_out_of_range(tmp_p
         )
 
 
-def test_save_layout_for_editor_rejects_circle_count_mismatch(tmp_path):
-    with pytest.raises(LayoutError, match='editor circle count does not match expanded cells'):
+def test_save_layout_for_editor_rejects_circle_rows_mismatch(tmp_path):
+    # count 5 expands to 5 cells, which cannot match a single-cell CSV.
+    with pytest.raises(LayoutError, match='do not match rows'):
         save_layout_for_editor(
             'sim-1',
             configured_length=10,
@@ -529,7 +562,6 @@ def test_save_layout_for_editor_rejects_circle_count_mismatch(tmp_path):
                         'type': 'circle',
                         'startIndex': 1,
                         'count': 5,
-                        'spacing': 1,
                         'center': [2, 2],
                         'start': [4, 2],
                         'direction': 'cw',

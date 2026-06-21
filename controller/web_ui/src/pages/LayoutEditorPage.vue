@@ -149,12 +149,13 @@ const lineSpacing = ref(0);
 const lineStart = ref<Point | null>(null);
 const circleCenter = ref<Point | null>(null);
 const circleDirection = ref<'cw' | 'ccw'>('cw');
+const circleCount = ref(8);
 const selectedPrimitiveIndex = ref<number | null>(null);
 const dragState = shallowRef<DragState | null>(null);
 const armedMoveState = shallowRef<ArmedMoveState | null>(null);
 const lineEditSpacing = ref(0);
 const circleEditDirection = ref<'cw' | 'ccw'>('cw');
-const circleEditSpacing = ref(0);
+const circleEditCount = ref(8);
 const selectionError = ref('');
 const pendingRenumberConfirm = shallowRef<PendingRenumberConfirm | null>(null);
 
@@ -266,6 +267,7 @@ const canSave = computed(
 );
 const isDirty = computed(() => !documentsEqual(documentRef.value, baselineDocument.value));
 const currentSpacing = computed(() => Math.max(0, Math.floor(Number(lineSpacing.value) || 0)));
+const currentCircleCount = computed(() => Math.max(1, Math.floor(Number(circleCount.value) || 1)));
 const inactiveLedNumbers = computed(() => inactiveIndices(documentRef.value));
 const selectedPrimitive = computed<Primitive | null>(() => {
   if (selectedPrimitiveIndex.value == null) {
@@ -378,13 +380,15 @@ const dragPreview = computed(() => {
             Math.atan2(previousStart.y - previousCenter.y, previousStart.x - previousCenter.x),
           )
         : target;
-    const count = expandCircleCells(center, start, primitive.spacing, primitive.direction).length;
+    // count is fixed by the user; dragging the center or radius keeps the same
+    // number of LEDs (previewPrimitiveReplacement surfaces an error if the new
+    // radius can no longer hold them).
+    const count = primitive.count;
     const inactiveOffsets = trimInactiveOffsets(primitive.inactiveOffsets, count);
     return previewPrimitiveReplacement(documentRef.value, state.primitiveIndex, {
       type: 'circle',
       startIndex: primitive.startIndex,
       count,
-      spacing: primitive.spacing,
       center: [center.x, center.y],
       start: [start.x, start.y],
       direction: primitive.direction,
@@ -540,7 +544,7 @@ const placementPreview = computed<EditorPreview | null>(() => {
         documentRef.value,
         circleCenter.value,
         hoverCell.value,
-        currentSpacing.value,
+        currentCircleCount.value,
         circleDirection.value,
       );
       return {
@@ -587,7 +591,7 @@ function syncSelectedCircleDraft(): void {
     return;
   }
   circleEditDirection.value = selectedCircle.value.direction;
-  circleEditSpacing.value = selectedCircle.value.spacing;
+  circleEditCount.value = selectedCircle.value.count;
 }
 
 function parsePanelInteger(value: number, message: string): number {
@@ -932,23 +936,24 @@ function applySelectedCircleEdit(): void {
   }
 
   try {
-    const spacing = parsePanelInteger(circleEditSpacing.value, 'Spacing must be an integer.');
-    if (spacing < 0) {
-      selectionError.value = 'Spacing must be zero or greater.';
+    const count = parsePanelInteger(circleEditCount.value, 'Count must be an integer.');
+    if (count < 1) {
+      selectionError.value = 'Count must be one or greater.';
       return;
     }
 
     const direction = circleEditDirection.value;
     const center = { x: primitive.center[0], y: primitive.center[1] };
     const start = { x: primitive.start[0], y: primitive.start[1] };
-    const count = expandCircleCells(center, start, spacing, direction).length;
+    // Validates count against the perimeter (throws when it overflows), caught
+    // below and surfaced as a selection error.
+    expandCircleCells(center, start, count, direction);
     const inactiveOffsets = trimInactiveOffsets(primitive.inactiveOffsets, count);
 
     const outcome = commitPrimitiveReplacement(selectedPrimitiveIndex.value, {
       type: 'circle',
       startIndex: primitive.startIndex,
       count,
-      spacing,
       center: [center.x, center.y],
       start: [start.x, start.y],
       direction,
@@ -1401,7 +1406,7 @@ function commitCircleAt(cell: Point, event: MouseEvent): void {
       documentRef.value,
       circleCenter.value,
       cell,
-      currentSpacing.value,
+      currentCircleCount.value,
       circleDirection.value,
     );
     commitDocument(nextDocument);
@@ -1760,6 +1765,7 @@ watch(
     circleCenter,
     lineSpacing,
     circleDirection,
+    circleCount,
     toolPopoverOpen,
     contextMenu,
     dragState,
@@ -1922,12 +1928,23 @@ onBeforeUnmount(() => {
                 <p class="editor-tool-popover-label">
                   {{ toolPopoverOpen === 'line' ? 'Line defaults' : 'Circle defaults' }}
                 </p>
-                <label class="editor-context-row">
+                <label v-if="toolPopoverOpen === 'line'" class="editor-context-row">
                   <span class="editor-inline-label">Spacing</span>
                   <input
                     v-model.number="lineSpacing"
                     class="spacing-input"
                     min="0"
+                    step="1"
+                    type="number"
+                    :disabled="loadingLayout || saving"
+                  />
+                </label>
+                <label v-else class="editor-context-row">
+                  <span class="editor-inline-label">Count</span>
+                  <input
+                    v-model.number="circleCount"
+                    class="spacing-input"
+                    min="1"
                     step="1"
                     type="number"
                     :disabled="loadingLayout || saving"
@@ -2169,12 +2186,12 @@ onBeforeUnmount(() => {
 
           <div v-else-if="selectedCircle" class="editor-context-menu-fields">
             <label class="editor-context-row">
-              <span class="editor-inline-label">Spacing</span>
+              <span class="editor-inline-label">Count</span>
               <input
-                v-model.number="circleEditSpacing"
+                v-model.number="circleEditCount"
                 class="spacing-input"
                 type="number"
-                min="0"
+                min="1"
                 step="1"
                 :disabled="saving"
               />

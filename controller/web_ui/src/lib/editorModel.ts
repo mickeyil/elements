@@ -26,7 +26,6 @@ export interface CirclePrimitive {
   type: 'circle';
   startIndex: number;
   count: number;
-  spacing: number;
   center: [number, number];
   start: [number, number];
   direction: 'cw' | 'ccw';
@@ -133,7 +132,6 @@ function clonePrimitive(primitive: Primitive): Primitive {
       type: 'circle',
       startIndex: primitive.startIndex,
       count: primitive.count,
-      spacing: primitive.spacing,
       center: clonePoint(primitive.center),
       start: clonePoint(primitive.start),
       direction: primitive.direction,
@@ -168,6 +166,13 @@ function normalizeSpacing(spacing: number): number {
     throw new Error('Line spacing must be a non-negative integer.');
   }
   return spacing;
+}
+
+function normalizeCircleCount(count: number): number {
+  if (!Number.isInteger(count) || count < 1) {
+    throw new Error('Circle count must be a positive integer.');
+  }
+  return count;
 }
 
 function ensureGridCell(position: [number, number], gridSize: number): void {
@@ -303,10 +308,10 @@ function orientCirclePath(points: readonly Point[], direction: 'cw' | 'ccw'): Po
 export function expandCircleCells(
   center: Point,
   start: Point,
-  spacing: number,
+  count: number,
   direction: 'cw' | 'ccw',
 ): Point[] {
-  const normalizedSpacing = normalizeSpacing(spacing);
+  const normalizedCount = normalizeCircleCount(count);
   const normalizedDirection = normalizeCircleDirection(direction);
   const radius = circleRadiusFromPoints(center, start);
   const raw = buildRawCirclePerimeter(center, radius);
@@ -342,10 +347,19 @@ export function expandCircleCells(
 
   const rotated = rotatePoints(ordered, nearestIndex);
   const oriented = orientCirclePath(rotated, normalizedDirection);
-  const step = normalizedSpacing + 1;
+  // Distribute count LEDs evenly around the perimeter. Math.floor((k * P) /
+  // count) must match the backend's k * P // count exactly (sim_layout.py), or
+  // the CSV this writes would fail the backend's rows check; do not use
+  // Math.round (it diverges from Python's banker's rounding on .5 values).
+  const perimeter = oriented.length;
+  if (normalizedCount > perimeter) {
+    throw new Error(
+      `Circle count ${normalizedCount} exceeds the ${perimeter} cells available at this radius.`,
+    );
+  }
   const cells: Point[] = [];
-  for (let i = 0; i < oriented.length; i += step) {
-    cells.push(oriented[i]);
+  for (let k = 0; k < normalizedCount; k += 1) {
+    cells.push(oriented[Math.floor((k * perimeter) / normalizedCount)]);
   }
   return cells;
 }
@@ -365,23 +379,19 @@ function expandPrimitive(primitive: Primitive, gridSize: number): OccupiedCell[]
   }
 
   if (primitive.type === 'circle') {
-    normalizeSpacing(primitive.spacing);
     normalizeCircleDirection(primitive.direction);
-    if (!Number.isInteger(primitive.count) || primitive.count < 1) {
-      throw new Error('Circle primitive count must be a positive integer.');
-    }
+    normalizeCircleCount(primitive.count);
     ensureGridCell(primitive.center, gridSize);
     ensureGridCell(primitive.start, gridSize);
 
+    // count is the input; expandCircleCells returns exactly count cells or
+    // throws when count exceeds the perimeter.
     const points = expandCircleCells(
       { x: primitive.center[0], y: primitive.center[1] },
       { x: primitive.start[0], y: primitive.start[1] },
-      primitive.spacing,
+      primitive.count,
       primitive.direction,
     );
-    if (points.length !== primitive.count) {
-      throw new Error('Loaded circle primitive count does not match the expanded cells.');
-    }
 
     const inactiveSet = new Set(normalizeInactiveOffsets(primitive.inactiveOffsets, primitive.count));
     return points.map((point, offset) => ({
@@ -549,7 +559,6 @@ export function translatePrimitive(primitive: Primitive, offset: Point): Primiti
       type: 'circle',
       startIndex: primitive.startIndex,
       count: primitive.count,
-      spacing: primitive.spacing,
       center: [primitive.center[0] + offset.x, primitive.center[1] + offset.y],
       start: [primitive.start[0] + offset.x, primitive.start[1] + offset.y],
       direction: primitive.direction,
@@ -689,10 +698,10 @@ export function previewCirclePlacement(
   document: EditorDocument,
   center: Point,
   start: Point,
-  spacing: number,
+  count: number,
   direction: 'cw' | 'ccw',
 ): PlacementPreview {
-  const cells = expandCircleCells(center, start, spacing, direction).map((point, offset) => ({
+  const cells = expandCircleCells(center, start, count, direction).map((point, offset) => ({
     index: document.currentIndex + offset,
     x: point.x,
     y: point.y,
@@ -708,7 +717,6 @@ export function previewCirclePlacement(
     type: 'circle',
     startIndex: document.currentIndex,
     count: cells.length,
-    spacing: normalizeSpacing(spacing),
     center: [center.x, center.y],
     start: [start.x, start.y],
     direction: normalizeCircleDirection(direction),
@@ -770,11 +778,11 @@ export function placeCirclePrimitive(
   document: EditorDocument,
   center: Point,
   start: Point,
-  spacing: number,
+  count: number,
   direction: 'cw' | 'ccw',
   inactiveOffsets?: number[],
 ): EditorDocument {
-  const preview = previewCirclePlacement(document, center, start, spacing, direction);
+  const preview = previewCirclePlacement(document, center, start, count, direction);
   if (preview.error) {
     throw new Error(preview.error);
   }
@@ -809,7 +817,6 @@ function assignSequentialIndices(primitives: readonly Primitive[]): Primitive[] 
         type: 'circle',
         startIndex: nextIndex,
         count: primitive.count,
-        spacing: primitive.spacing,
         center: clonePoint(primitive.center),
         start: clonePoint(primitive.start),
         direction: primitive.direction,
@@ -947,10 +954,14 @@ export function previewPrimitiveReplacement(
     ),
   );
   const primitive = nextPrimitives[primitiveIndex];
-  const cells = expandPrimitive(primitive, document.gridSize);
 
+  // expandPrimitive can throw (e.g. a circle whose count exceeds the perimeter
+  // at a shrunk radius); surface that as a preview error rather than letting it
+  // break the live drag render.
+  let cells: OccupiedCell[] = [];
   let error: string | null = null;
   try {
+    cells = expandPrimitive(primitive, document.gridSize);
     buildDocument(document.maxIndex, nextPrimitives);
   } catch (err) {
     error = err instanceof Error ? err.message : 'Failed to preview primitive.';
@@ -1040,7 +1051,6 @@ function applyInactiveState(
             type: 'circle',
             startIndex: primitive.startIndex,
             count: primitive.count,
-            spacing: primitive.spacing,
             center: clonePoint(primitive.center),
             start: clonePoint(primitive.start),
             direction: primitive.direction,
@@ -1088,7 +1098,6 @@ export function clearInactiveIndices(document: EditorDocument): EditorDocument {
           type: 'circle' as const,
           startIndex: primitive.startIndex,
           count: primitive.count,
-          spacing: primitive.spacing,
           center: clonePoint(primitive.center),
           start: clonePoint(primitive.start),
           direction: primitive.direction,
@@ -1159,7 +1168,6 @@ function primitivesEqual(left: Primitive, right: Primitive): boolean {
     return (
       left.startIndex === right.startIndex &&
       left.count === right.count &&
-      left.spacing === right.spacing &&
       left.direction === right.direction &&
       leftInactive.length === rightInactive.length &&
       leftInactive.every((value, index) => value === rightInactive[index]) &&
@@ -1227,7 +1235,6 @@ export function serializeDocument(document: EditorDocument): SerializedDocument 
         type: 'circle' as const,
         startIndex: primitive.startIndex,
         count: primitive.count,
-        spacing: primitive.spacing,
         center: [primitive.center[0] - minX, primitive.center[1] - minY] as [number, number],
         start: [primitive.start[0] - minX, primitive.start[1] - minY] as [number, number],
         direction: primitive.direction,

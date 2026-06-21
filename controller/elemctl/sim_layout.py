@@ -232,11 +232,11 @@ def _build_raw_circle_perimeter(
 def _expand_circle_cells(
     center: tuple[int, int],
     start: tuple[int, int],
-    spacing: int,
+    count: int,
     direction: str,
 ) -> list[tuple[int, int]]:
-    if spacing < 0:
-        raise LayoutError('editor circle spacing must be >= 0')
+    if count < 1:
+        raise LayoutError('editor circle count must be a positive integer')
     normalized_direction = _normalize_circle_direction(direction)
     radius = max(
         1,
@@ -264,8 +264,17 @@ def _expand_circle_cells(
     if normalized_direction == 'ccw' and len(rotated) > 1:
         rotated = [rotated[0], *reversed(rotated[1:])]
 
-    step = spacing + 1
-    return rotated[::step]
+    # Distribute count LEDs evenly around the perimeter. Integer floor sampling
+    # (k * P // count) must match the frontend's Math.floor((k * P) / count)
+    # exactly, or the device CSV the frontend writes would fail the rows check
+    # here; do not use round() (its banker's rounding diverges from JS).
+    perimeter = len(rotated)
+    if count > perimeter:
+        raise LayoutError(
+            f'editor circle count {count} exceeds the {perimeter} cells '
+            'available at this radius'
+        )
+    return [rotated[(k * perimeter) // count] for k in range(count)]
 
 
 def _expand_editor_primitive_cells(
@@ -405,17 +414,15 @@ def _expand_editor_primitive_cells(
         if isinstance(count, bool) or not isinstance(count, int) or count < 1:
             raise LayoutError('editor circle count must be a positive integer')
 
-        spacing = primitive.get('spacing')
-        if isinstance(spacing, bool) or not isinstance(spacing, int) or spacing < 0:
-            raise LayoutError('editor circle spacing must be a non-negative integer')
-
         center = _parse_position(primitive.get('center'), 'editor circle center')
         start = _parse_position(primitive.get('start'), 'editor circle start')
         direction = _normalize_circle_direction(primitive.get('direction'))
 
-        cells = _expand_circle_cells(center, start, spacing, direction)
-        if len(cells) != count:
-            raise LayoutError('editor circle count does not match expanded cells')
+        # count is the input; _expand_circle_cells returns exactly count cells
+        # (evenly distributed) or raises when count exceeds the perimeter. A
+        # legacy 'spacing' key, if present, is ignored. The rows check below is
+        # the real integrity guard against the device CSV.
+        cells = _expand_circle_cells(center, start, count, direction)
 
         raw_inactive_offsets = primitive.get('inactiveOffsets')
         if raw_inactive_offsets is None:
@@ -461,7 +468,6 @@ def _expand_editor_primitive_cells(
                 'type': 'circle',
                 'startIndex': start_index,
                 'count': count,
-                'spacing': spacing,
                 'center': [center[0], center[1]],
                 'start': [start[0], start[1]],
                 'direction': direction,
