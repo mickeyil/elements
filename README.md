@@ -2,7 +2,7 @@
 
 Beat-synced LED animation engine targeting ESP32. Work in progress.
 
-**Docs:** [firmware & engine](docs/firmware.md) · [controller](docs/controller.md) · [protocol](docs/protocol.md) · [web app](docs/web_app.md) · [future plans](docs/draft_future_plans.md)
+**Docs:** [firmware & engine](drafts/firmware.md) · [controller](drafts/controller.md) · [protocol](drafts/protocol.md) · [web app](docs/web_app.md) · [future plans](docs/draft_future_plans.md)
 
 ## Build
 

@@ -5,6 +5,25 @@ Claude to act without spelunking.
 
 ---
 
+## Report sync health in QueryDeviceStatus
+
+**Today.** The device is the only party that can compute its clock
+offset (the controller answers PINGs but never sees t4), so the device
+report is the authoritative source of sync health. But the
+QueryDeviceStatus ACK does not carry it yet: `src/device_status.h` is
+only `u8 mode, u8 flags, u16 animation_count`. `drafts/synced_clock.md`
+describes this reporting as if it were already built; it is not.
+
+**Action.** Add a synced flag plus offset, RTT, and last-sync age (as a
+duration, so it is clock-agnostic) to `DeviceStatus` and the
+QueryDeviceStatus ACK encoder (`src/command_handler.cpp`). The feeder
+that owns these numbers is `src/clock_sync_client.{h,cpp}`. Then plumb
+the fields through the controller's `wire.py` decode and surface them in
+the per-device clock columns; the controller polls QueryDeviceStatus on
+a steady cadence already.
+
+---
+
 ## Run the v3 firmware on hardware
 
 **Today.** Both v3 entry points exist. Sim: verified live end to end

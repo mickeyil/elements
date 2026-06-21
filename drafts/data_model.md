@@ -1,8 +1,7 @@
 # Time-Naming Policy
 
 Canonical naming conventions for time-related identifiers in the
-runtime. `compiler.md` links here as the source of truth; runtime
-semantics for `Playback` live in `src/playback.{h,cpp}`.
+runtime. Runtime semantics for `Playback` live in `src/playback.{h,cpp}`.
 
 ## Rules
 

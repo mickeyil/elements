@@ -64,7 +64,7 @@ asking too much of the hardware at its declared fps.
 
 The sim implementation sends the frame-preview UDP packet
 (`uid[16] + frame_index:u32 + t_program:f32 + rgb...`, port 6042;
-see `controller_v3.md`) and keeps its own frame counter. It applies
+see `protocol.md`) and keeps its own frame counter. It applies
 no gamma: gamma compensates the physical LEDs, and the controller UI
 renders on a screen that does its own.
 
