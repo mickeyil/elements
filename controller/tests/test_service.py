@@ -329,12 +329,30 @@ def test_add_device_ignores_device_type(tmp_path):
     assert 'device_type' not in sim_b
 
 
-def test_device_edit_rejected_while_a_program_is_loaded(tmp_path):
-    service, _hub, _ = make_service_with_config(tmp_path)
+def test_add_device_allowed_while_a_program_is_loaded(tmp_path):
+    # Adding a device after load is allowed: it persists and joins membership
+    # parked DETACHED, so it cannot disturb the running program (it routes only
+    # on the next load).
+    service, _hub, config_path = make_service_with_config(tmp_path)
     cmd(service, 'load', program_id='prog')
     reply = cmd(service, 'add_device', device_uid='sim-b', strip_id='side', length=30)
-    assert reply['ok'] is False
-    assert 'before a program is loaded' in reply['error']
+    assert reply['ok'] is True
+    assert any(d['device_uid'] == 'sim-b'
+               for d in json.loads(config_path.read_text())['devices'])
+    sim_b = next(d for d in _devices(service) if d['uid'] == 'sim-b')
+    assert sim_b['target_intent'] == 'detached'
+
+
+def test_edit_and_remove_rejected_while_a_program_is_loaded(tmp_path):
+    service, _hub, _ = make_service_with_config(tmp_path)
+    cmd(service, 'load', program_id='prog')
+    edit = cmd(service, 'edit_device', target_device_uid='sim-a',
+               device_uid='sim-a', strip_id='main', length=45)
+    assert edit['ok'] is False
+    assert 'before a program is loaded' in edit['error']
+    remove = cmd(service, 'remove_device', device_uid='sim-a')
+    assert remove['ok'] is False
+    assert 'before a program is loaded' in remove['error']
 
 
 def test_device_edit_without_config_path_errors(tmp_path):

@@ -183,6 +183,35 @@ def test_added_device_routes_on_the_next_load():
     assert session.member('sim-b').target.intent is Intent.READY
 
 
+def test_add_device_allowed_after_load_parks_detached():
+    # Adding a device with a program already loaded is allowed: the new member
+    # parks DETACHED, so it does not join or disturb the running program.
+    session, hub = make_session(SINGLE)
+    drive_to_loaded(session, hub)
+    assert session.can_edit_devices() is False   # edit/remove stay gated
+    session.add_device(DeviceConfig(device_uid='sim-b', strip_id='side', length=30))
+    assert session.member('sim-b') is not None
+    assert session.member('sim-b').target.intent is Intent.DETACHED
+
+
+def test_device_added_after_load_routes_on_the_next_load():
+    session, hub = make_session(SINGLE)
+    drive_to_loaded(session, hub)
+    session.add_device(DeviceConfig(device_uid='sim-b', strip_id='side', length=30))
+    session.load(make_manifest(('main', 30, b'M'), ('side', 30, b'S')))
+    assert session.member('sim-b').target.intent is Intent.READY
+
+
+def test_edit_and_remove_rejected_after_load():
+    session, hub = make_session(SINGLE)
+    drive_to_loaded(session, hub)
+    with pytest.raises(ValueError, match='only be edited before a program'):
+        session.edit_device(
+            'sim-a', DeviceConfig(device_uid='sim-a', strip_id='main', length=60))
+    with pytest.raises(ValueError, match='only be edited before a program'):
+        session.remove_device('sim-a')
+
+
 def test_edit_device_updates_routing_fields_in_place():
     session, _hub = make_session(SINGLE)
     session.edit_device('sim-a',

@@ -193,7 +193,10 @@ class ControllerService:
     # -- device editing -----------------------------------------------------
 
     def _cmd_add_device(self, cmd):
-        self._require_editable()
+        # Adding a device is allowed even with a program loaded: the new member
+        # parks DETACHED and joins only on the next load, so it cannot disturb
+        # the running program. Edit/remove stay gated (they can touch a serving
+        # member); see Session.add_device and _require_editable.
         doc = self._editable_doc()
         # device_type is inferred from the uid in v3; accept and ignore it.
         entry = config_edit.make_device_entry(

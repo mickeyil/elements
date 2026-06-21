@@ -33,8 +33,9 @@ const devices = computed<SnapshotDevice[]>(() => {
   return [...items];
 });
 
-// Device edits are valid only before a program is loaded; the controller
-// enforces this, and the UI mirrors it so dead controls are not offered.
+// Editing or removing a configured device is valid only before a program is
+// loaded (it can touch a member already serving); the controller enforces this
+// and the UI mirrors it so dead controls are not offered.
 const editable = computed<boolean>(() => {
   if (!controllerConnected.value || !snapshot.value) {
     return false;
@@ -42,6 +43,11 @@ const editable = computed<boolean>(() => {
   const state = snapshot.value.session?.state;
   return !state || state === 'idle';
 });
+
+// Adding / configuring a device is always allowed while connected: the new
+// member parks detached and joins only on the next load, so it cannot disturb
+// a running program. The controller allows this regardless of session state.
+const canAddDevice = computed<boolean>(() => controllerConnected.value);
 
 const editDisabledReason = computed<string>(() => {
   if (!controllerConnected.value) {
@@ -52,6 +58,9 @@ const editDisabledReason = computed<string>(() => {
   }
   return '';
 });
+
+const addDisabledReason = computed<string>(() =>
+  controllerConnected.value ? '' : 'Controller offline');
 
 function isSimUid(uid: string): boolean {
   return uid.startsWith('sim-');
@@ -147,7 +156,7 @@ function closeMenu(): void {
 }
 
 function openNewDeviceModal(): void {
-  if (!editable.value) {
+  if (!canAddDevice.value) {
     return;
   }
   showNewDeviceModal.value = true;
@@ -158,7 +167,7 @@ function closeNewDeviceModal(): void {
 }
 
 function openConfigureModal(device: StatusCardDevice): void {
-  if (!editable.value) {
+  if (!canAddDevice.value) {
     return;
   }
   configuringUid.value = device.uid;
@@ -230,8 +239,8 @@ onBeforeUnmount(() => {
         <button
           type="button"
           class="action-button status-new-device-button"
-          :disabled="!editable"
-          :title="editable ? 'Create a configured device' : editDisabledReason"
+          :disabled="!canAddDevice"
+          :title="canAddDevice ? 'Create a configured device' : addDisabledReason"
           @click="openNewDeviceModal"
         >
           <span class="status-new-device-plus" aria-hidden="true">+</span>
@@ -322,8 +331,8 @@ onBeforeUnmount(() => {
                       v-else
                       type="button"
                       class="device-menu-item"
-                      :disabled="!editable"
-                      :title="editable ? 'Configure device' : editDisabledReason"
+                      :disabled="!canAddDevice"
+                      :title="canAddDevice ? 'Configure device' : addDisabledReason"
                       @click="openConfigureModal(device)"
                     >
                       Configure

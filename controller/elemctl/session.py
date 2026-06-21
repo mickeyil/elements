@@ -440,8 +440,9 @@ class Session:
     # -----------------------------------------------------------------------
     # Device editing: add / edit / remove a configured device. The service
     # persists the config change; these apply it to the live membership.
-    # Allowed only before a program is loaded (can_edit_devices), so a mutation
-    # can never race the runtime of a loaded program.
+    # add() is always allowed (a new member parks DETACHED, racing nothing);
+    # edit/remove are gated to before a program is loaded (can_edit_devices),
+    # so they can never race the runtime of a loaded program.
     # -----------------------------------------------------------------------
 
     def can_edit_devices(self):
@@ -457,8 +458,10 @@ class Session:
 
     def add_device(self, dc):
         """Add a configured device. It joins the wanted set and parks DETACHED
-        until the next load routes a strip onto it."""
-        self._ensure_editable()
+        until the next load routes a strip onto it. Allowed at any time: a fresh
+        member is DETACHED, which the reconciler leaves idle, so it cannot
+        disturb a loaded program. Only edit/remove are gated (_ensure_editable),
+        since those can touch a member already serving."""
         self._members[dc.device_uid] = Member(dc.device_uid, dc.strip_id, dc.length)
         self._wanted_uids.add(dc.device_uid)
 
