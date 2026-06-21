@@ -58,25 +58,6 @@ def validate_sim_uid(uid: str) -> str | None:
     return None
 
 
-def ensure_sim_device_built(*, build_dir: Path = BUILD_DIR) -> None:
-    """Build sim_device in an already-configured build tree."""
-    if not (build_dir / 'CMakeCache.txt').is_file():
-        raise ValueError(
-            f'build directory is not configured at {build_dir}; run `cmake -B build` first'
-        )
-
-    try:
-        subprocess.run(
-            ['cmake', '--build', str(build_dir), '--target', 'sim_device'],
-            check=True,
-            cwd=REPO_ROOT,
-        )
-    except FileNotFoundError as e:
-        raise ValueError('cmake is not available on PATH') from e
-    except subprocess.CalledProcessError as e:
-        raise ValueError(f'failed to build sim_device in {build_dir}') from e
-
-
 def build_sim_command(
     device_uid: str,
     *,
@@ -88,7 +69,9 @@ def build_sim_command(
     if not (1 <= frame_port <= 65535):
         raise ValueError(f'--frame-port must be 1-65535, got {frame_port}')
     if not sim_device_bin.is_file():
-        raise ValueError(f'sim_device not built at {sim_device_bin}')
+        raise ValueError(
+            f"sim_device not built at {sim_device_bin}; run './elemctl setup'"
+        )
 
     return [
         str(sim_device_bin),
@@ -179,7 +162,6 @@ def main() -> None:
         sys.exit(2)
 
     try:
-        ensure_sim_device_built()
         cmd = build_sim_command(
             args.device_uid,
             controller_host=args.controller_host,

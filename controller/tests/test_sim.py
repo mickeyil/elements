@@ -11,7 +11,6 @@ import pytest
 from elemctl.sim import (
     SIM_REBOOT_EXIT_CODE,
     build_sim_command,
-    ensure_sim_device_built,
     supervise,
     validate_sim_uid,
 )
@@ -67,12 +66,6 @@ class TestBuildSimCommand:
         fake_bin.write_text('')
         with pytest.raises(ValueError, match='frame-port'):
             build_sim_command('sim-1', frame_port=0, sim_device_bin=fake_bin)
-
-
-class TestEnsureSimDeviceBuilt:
-    def test_rejects_unconfigured_build_dir(self, tmp_path):
-        with pytest.raises(ValueError, match='not configured'):
-            ensure_sim_device_built(build_dir=tmp_path)
 
 
 def _stub_cmd(tmp_path, codes):
