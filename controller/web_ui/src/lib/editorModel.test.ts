@@ -62,7 +62,7 @@ describe('expandCircleCells', () => {
     expect(circleStartFromAngle({ x: 10, y: 10 }, 3, 0)).toEqual({ x: 13, y: 10 });
   });
 
-  it('returns the whole perimeter for a full-ring count', () => {
+  it('returns the whole radius band when the count fills it', () => {
     expect(expandCircleCells({ x: 0, y: 0 }, { x: 2, y: 0 }, 12, 'cw')).toEqual([
       { x: 2, y: 0 },
       { x: 2, y: 1 },
@@ -80,7 +80,6 @@ describe('expandCircleCells', () => {
   });
 
   it('distributes a count evenly, respecting counterclockwise ordering', () => {
-    // 6 LEDs over the 12-cell perimeter: every other cell.
     expect(expandCircleCells({ x: 0, y: 0 }, { x: 2, y: 0 }, 6, 'ccw')).toEqual([
       { x: 2, y: 0 },
       { x: 1, y: -2 },
@@ -91,9 +90,18 @@ describe('expandCircleCells', () => {
     ]);
   });
 
-  it('matches the backend floor sampling (parity fixture: 8 over 12)', () => {
-    // Mirrors test_sim_layout.py RADIUS_2_COUNT_8_CW; exercises the k*P/n == .5
-    // case where Math.round would diverge from Python's banker's rounding.
+  it('wraps clockwise angular slots past zero degrees', () => {
+    expect(expandCircleCells({ x: 0, y: 0 }, { x: 2, y: -1 }, 6, 'cw')).toEqual([
+      { x: 2, y: -1 },
+      { x: 2, y: 1 },
+      { x: 0, y: 2 },
+      { x: -2, y: 1 },
+      { x: -2, y: -1 },
+      { x: 0, y: -2 },
+    ]);
+  });
+
+  it('matches the backend parity fixture for 8 LEDs over a radius 2 band', () => {
     expect(expandCircleCells({ x: 0, y: 0 }, { x: 2, y: 0 }, 8, 'cw')).toEqual([
       { x: 2, y: 0 },
       { x: 2, y: 1 },
@@ -106,7 +114,47 @@ describe('expandCircleCells', () => {
     ]);
   });
 
-  it('throws when the count exceeds the perimeter', () => {
+  it('uses nearest angular slots for a 35 LED circle', () => {
+    expect(expandCircleCells({ x: 0, y: 0 }, { x: 6, y: 0 }, 35, 'cw')).toEqual([
+      { x: 6, y: 0 },
+      { x: 6, y: 1 },
+      { x: 6, y: 2 },
+      { x: 5, y: 3 },
+      { x: 5, y: 4 },
+      { x: 4, y: 5 },
+      { x: 3, y: 5 },
+      { x: 2, y: 6 },
+      { x: 1, y: 6 },
+      { x: 0, y: 6 },
+      { x: -1, y: 6 },
+      { x: -2, y: 6 },
+      { x: -3, y: 5 },
+      { x: -4, y: 4 },
+      { x: -5, y: 4 },
+      { x: -5, y: 3 },
+      { x: -6, y: 2 },
+      { x: -6, y: 1 },
+      { x: -6, y: -1 },
+      { x: -6, y: -2 },
+      { x: -5, y: -3 },
+      { x: -5, y: -4 },
+      { x: -4, y: -4 },
+      { x: -3, y: -5 },
+      { x: -2, y: -6 },
+      { x: -1, y: -6 },
+      { x: 0, y: -6 },
+      { x: 1, y: -6 },
+      { x: 2, y: -6 },
+      { x: 3, y: -5 },
+      { x: 4, y: -5 },
+      { x: 5, y: -4 },
+      { x: 5, y: -3 },
+      { x: 6, y: -2 },
+      { x: 6, y: -1 },
+    ]);
+  });
+
+  it('throws when the count exceeds the available radius-band cells', () => {
     expect(() => expandCircleCells({ x: 0, y: 0 }, { x: 2, y: 0 }, 13, 'cw')).toThrow(
       /exceeds the 12 cells/,
     );

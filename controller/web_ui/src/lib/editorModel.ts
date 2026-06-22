@@ -244,7 +244,14 @@ export function visibleLineEndpoints(
 }
 
 function normalizeAngle(angle: number): number {
-  return angle < 0 ? angle + Math.PI * 2 : angle;
+  const fullTurn = Math.PI * 2;
+  const normalized = angle % fullTurn;
+  return normalized < 0 ? normalized + fullTurn : normalized;
+}
+
+function angleDistance(left: number, right: number): number {
+  const diff = Math.abs(left - right);
+  return Math.min(diff, Math.PI * 2 - diff);
 }
 
 export function circleRadiusFromPoints(center: Point, start: Point): number {
@@ -259,50 +266,62 @@ export function circleStartFromAngle(center: Point, radius: number, angle: numbe
   };
 }
 
-function buildRawCirclePerimeter(center: Point, radius: number): Point[] {
-  const unique = new Map<string, Point>();
-  let x = radius;
-  let y = 0;
-  let decision = 1 - radius;
-
-  const addPoint = (px: number, py: number): void => {
-    const key = keyOf(px, py);
-    if (!unique.has(key)) {
-      unique.set(key, { x: px, y: py });
+function buildCircleCandidates(center: Point, radius: number): Point[] {
+  const candidates: Point[] = [];
+  for (let y = center.y - radius; y <= center.y + radius; y += 1) {
+    for (let x = center.x - radius; x <= center.x + radius; x += 1) {
+      if (Math.round(Math.hypot(x - center.x, y - center.y)) === radius) {
+        candidates.push({ x, y });
+      }
     }
-  };
+  }
+  return candidates;
+}
 
-  while (y <= x) {
-    addPoint(center.x + x, center.y + y);
-    addPoint(center.x + y, center.y + x);
-    addPoint(center.x - y, center.y + x);
-    addPoint(center.x - x, center.y + y);
-    addPoint(center.x - x, center.y - y);
-    addPoint(center.x - y, center.y - x);
-    addPoint(center.x + y, center.y - x);
-    addPoint(center.x + x, center.y - y);
+function nearestCircleCandidate(
+  candidates: readonly Point[],
+  used: ReadonlySet<string>,
+  center: Point,
+  radius: number,
+  angle: number,
+): Point {
+  const idealX = center.x + radius * Math.cos(angle);
+  const idealY = center.y + radius * Math.sin(angle);
+  let best: Point | null = null;
+  let bestIdealDistance = Infinity;
+  let bestAngleDistance = Infinity;
 
-    y += 1;
-    if (decision <= 0) {
-      decision += 2 * y + 1;
-    } else {
-      x -= 1;
-      decision += 2 * (y - x) + 1;
+  for (const candidate of candidates) {
+    if (used.has(keyOf(candidate.x, candidate.y))) {
+      continue;
+    }
+
+    const dx = candidate.x - center.x;
+    const dy = candidate.y - center.y;
+    const idealDistance =
+      (candidate.x - idealX) * (candidate.x - idealX) +
+      (candidate.y - idealY) * (candidate.y - idealY);
+    const candidateAngle = normalizeAngle(Math.atan2(dy, dx));
+    const candidateAngleDistance = angleDistance(candidateAngle, angle);
+
+    if (
+      !best ||
+      idealDistance < bestIdealDistance ||
+      (idealDistance === bestIdealDistance && candidateAngleDistance < bestAngleDistance) ||
+      (idealDistance === bestIdealDistance &&
+        candidateAngleDistance === bestAngleDistance &&
+        (candidate.y < best.y || (candidate.y === best.y && candidate.x < best.x)))
+    ) {
+      best = candidate;
+      bestIdealDistance = idealDistance;
+      bestAngleDistance = candidateAngleDistance;
     }
   }
 
-  return [...unique.values()];
-}
-
-function rotatePoints(points: readonly Point[], startIndex: number): Point[] {
-  return [...points.slice(startIndex), ...points.slice(0, startIndex)];
-}
-
-function orientCirclePath(points: readonly Point[], direction: 'cw' | 'ccw'): Point[] {
-  if (direction === 'cw' || points.length <= 1) {
-    return [...points];
+  if (!best) {
+    throw new Error('Circle placement produced no available cells.');
   }
-  return [points[0], ...points.slice(1).reverse()];
+  return best;
 }
 
 export function expandCircleCells(
@@ -314,52 +333,22 @@ export function expandCircleCells(
   const normalizedCount = normalizeCircleCount(count);
   const normalizedDirection = normalizeCircleDirection(direction);
   const radius = circleRadiusFromPoints(center, start);
-  const raw = buildRawCirclePerimeter(center, radius);
-  const ordered = [...raw].sort((left, right) => {
-    const leftAngle = normalizeAngle(Math.atan2(left.y - center.y, left.x - center.x));
-    const rightAngle = normalizeAngle(Math.atan2(right.y - center.y, right.x - center.x));
-    if (leftAngle !== rightAngle) {
-      return leftAngle - rightAngle;
-    }
-
-    const leftError = Math.abs(Math.hypot(left.x - center.x, left.y - center.y) - radius);
-    const rightError = Math.abs(Math.hypot(right.x - center.x, right.y - center.y) - radius);
-    if (leftError !== rightError) {
-      return leftError - rightError;
-    }
-    if (left.y !== right.y) {
-      return left.y - right.y;
-    }
-    return left.x - right.x;
-  });
-
-  let nearestIndex = 0;
-  let nearestDistance = Infinity;
-  for (let i = 0; i < ordered.length; i += 1) {
-    const point = ordered[i];
-    const distance =
-      (point.x - start.x) * (point.x - start.x) + (point.y - start.y) * (point.y - start.y);
-    if (distance < nearestDistance) {
-      nearestDistance = distance;
-      nearestIndex = i;
-    }
-  }
-
-  const rotated = rotatePoints(ordered, nearestIndex);
-  const oriented = orientCirclePath(rotated, normalizedDirection);
-  // Distribute count LEDs evenly around the perimeter. Math.floor((k * P) /
-  // count) must match the backend's k * P // count exactly (sim_layout.py), or
-  // the CSV this writes would fail the backend's rows check; do not use
-  // Math.round (it diverges from Python's banker's rounding on .5 values).
-  const perimeter = oriented.length;
-  if (normalizedCount > perimeter) {
+  const candidates = buildCircleCandidates(center, radius);
+  if (normalizedCount > candidates.length) {
     throw new Error(
-      `Circle count ${normalizedCount} exceeds the ${perimeter} cells available at this radius.`,
+      `Circle count ${normalizedCount} exceeds the ${candidates.length} cells available at this radius.`,
     );
   }
+  const startAngle = normalizeAngle(Math.atan2(start.y - center.y, start.x - center.x));
+  const directionSign = normalizedDirection === 'cw' ? 1 : -1;
+  const step = (Math.PI * 2) / normalizedCount;
+  const used = new Set<string>();
   const cells: Point[] = [];
   for (let k = 0; k < normalizedCount; k += 1) {
-    cells.push(oriented[Math.floor((k * perimeter) / normalizedCount)]);
+    const angle = normalizeAngle(startAngle + directionSign * step * k);
+    const cell = nearestCircleCandidate(candidates, used, center, radius, angle);
+    cells.push(cell);
+    used.add(keyOf(cell.x, cell.y));
   }
   return cells;
 }
@@ -385,7 +374,7 @@ function expandPrimitive(primitive: Primitive, gridSize: number): OccupiedCell[]
     ensureGridCell(primitive.start, gridSize);
 
     // count is the input; expandCircleCells returns exactly count cells or
-    // throws when count exceeds the perimeter.
+    // throws when count exceeds the available radius-band cells.
     const points = expandCircleCells(
       { x: primitive.center[0], y: primitive.center[1] },
       { x: primitive.start[0], y: primitive.start[1] },
@@ -955,9 +944,9 @@ export function previewPrimitiveReplacement(
   );
   const primitive = nextPrimitives[primitiveIndex];
 
-  // expandPrimitive can throw (e.g. a circle whose count exceeds the perimeter
-  // at a shrunk radius); surface that as a preview error rather than letting it
-  // break the live drag render.
+  // expandPrimitive can throw (e.g. a circle whose count exceeds the available
+  // radius-band cells after a radius change); surface that as a preview error
+  // rather than letting it break the live drag render.
   let cells: OccupiedCell[] = [];
   let error: string | null = null;
   try {

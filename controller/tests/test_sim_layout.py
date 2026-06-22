@@ -221,9 +221,9 @@ def test_expand_line_cells_matches_expected_points(start, end, spacing, expected
     assert _expand_line_cells(start, end, spacing) == expected
 
 
-# The radius-2 perimeter has 12 cells; a full-ring count returns them all in
+# The radius-2 band has 12 cells; a full-ring count returns them all in
 # clockwise order from the start.
-RADIUS_2_PERIMETER_CW = [
+RADIUS_2_BAND_CW = [
     (2, 0),
     (2, 1),
     (1, 2),
@@ -238,10 +238,8 @@ RADIUS_2_PERIMETER_CW = [
     (2, -1),
 ]
 
-# Frontend/backend parity fixture: 8 LEDs evenly distributed over the 12-cell
-# perimeter. count 8 over 12 cells exercises the k*P/n == .5 case (k=2 -> 3.0,
-# but k=1 -> 1.5, k=3 -> 4.5), which floor sampling must resolve identically in
-# both languages. The matching TypeScript assertion lives in editorModel.test.ts.
+# Frontend/backend parity fixture: 8 LEDs distributed over the 12-cell radius-2
+# band. The matching TypeScript assertion lives in editorModel.test.ts.
 RADIUS_2_COUNT_8_CW = [
     (2, 0),
     (2, 1),
@@ -253,13 +251,50 @@ RADIUS_2_COUNT_8_CW = [
     (1, -2),
 ]
 
+RADIUS_6_COUNT_35_CW = [
+    (6, 0),
+    (6, 1),
+    (6, 2),
+    (5, 3),
+    (5, 4),
+    (4, 5),
+    (3, 5),
+    (2, 6),
+    (1, 6),
+    (0, 6),
+    (-1, 6),
+    (-2, 6),
+    (-3, 5),
+    (-4, 4),
+    (-5, 4),
+    (-5, 3),
+    (-6, 2),
+    (-6, 1),
+    (-6, -1),
+    (-6, -2),
+    (-5, -3),
+    (-5, -4),
+    (-4, -4),
+    (-3, -5),
+    (-2, -6),
+    (-1, -6),
+    (0, -6),
+    (1, -6),
+    (2, -6),
+    (3, -5),
+    (4, -5),
+    (5, -4),
+    (5, -3),
+    (6, -2),
+    (6, -1),
+]
 
-def test_expand_circle_cells_full_ring_returns_whole_perimeter():
-    assert _expand_circle_cells((0, 0), (2, 0), 12, 'cw') == RADIUS_2_PERIMETER_CW
+
+def test_expand_circle_cells_full_ring_returns_whole_radius_band():
+    assert _expand_circle_cells((0, 0), (2, 0), 12, 'cw') == RADIUS_2_BAND_CW
 
 
 def test_expand_circle_cells_distributes_count_evenly():
-    # 6 LEDs over the 12-cell perimeter: every other cell, counter-clockwise.
     assert _expand_circle_cells((0, 0), (2, 0), 6, 'ccw') == [
         (2, 0),
         (1, -2),
@@ -270,17 +305,32 @@ def test_expand_circle_cells_distributes_count_evenly():
     ]
 
 
+def test_expand_circle_cells_wraps_clockwise_slots_past_zero_degrees():
+    assert _expand_circle_cells((0, 0), (2, -1), 6, 'cw') == [
+        (2, -1),
+        (2, 1),
+        (0, 2),
+        (-2, 1),
+        (-2, -1),
+        (0, -2),
+    ]
+
+
 def test_expand_circle_cells_count_8_parity_fixture():
     assert _expand_circle_cells((0, 0), (2, 0), 8, 'cw') == RADIUS_2_COUNT_8_CW
 
 
-def test_expand_circle_cells_rejects_count_over_perimeter():
+def test_expand_circle_cells_count_35_uses_nearest_angular_slots():
+    assert _expand_circle_cells((0, 0), (6, 0), 35, 'cw') == RADIUS_6_COUNT_35_CW
+
+
+def test_expand_circle_cells_rejects_count_over_available_radius_band():
     with pytest.raises(LayoutError, match='exceeds the 12 cells'):
         _expand_circle_cells((0, 0), (2, 0), 13, 'cw')
 
 
 def test_expand_circle_cells_rounds_radius_from_start_point():
-    # (3, 1) rounds to radius 3; a full-ring count returns the 16-cell perimeter.
+    # (3, 1) rounds to radius 3; a full-ring count returns the 16-cell band.
     assert _expand_circle_cells((0, 0), (3, 1), 16, 'cw') == [
         (3, 1),
         (2, 2),

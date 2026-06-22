@@ -945,8 +945,8 @@ function applySelectedCircleEdit(): void {
     const direction = circleEditDirection.value;
     const center = { x: primitive.center[0], y: primitive.center[1] };
     const start = { x: primitive.start[0], y: primitive.start[1] };
-    // Validates count against the perimeter (throws when it overflows), caught
-    // below and surfaced as a selection error.
+    // Validates count against the available radius-band cells, caught below and
+    // surfaced as a selection error.
     expandCircleCells(center, start, count, direction);
     const inactiveOffsets = trimInactiveOffsets(primitive.inactiveOffsets, count);
 

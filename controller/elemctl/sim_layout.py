@@ -193,40 +193,51 @@ def _normalize_circle_direction(direction: object) -> str:
 
 
 def _normalize_angle(angle: float) -> float:
-    return angle + math.tau if angle < 0 else angle
+    return angle % math.tau
 
 
-def _build_raw_circle_perimeter(
+def _angle_distance(left: float, right: float) -> float:
+    diff = abs(left - right)
+    return min(diff, math.tau - diff)
+
+
+def _build_circle_candidates(
     center: tuple[int, int],
     radius: int,
 ) -> list[tuple[int, int]]:
-    unique: dict[tuple[int, int], None] = {}
     cx, cy = center
-    x = radius
-    y = 0
-    decision = 1 - radius
+    candidates: list[tuple[int, int]] = []
+    for y in range(cy - radius, cy + radius + 1):
+        for x in range(cx - radius, cx + radius + 1):
+            if int(math.floor(math.hypot(x - cx, y - cy) + 0.5)) == radius:
+                candidates.append((x, y))
+    return candidates
 
-    def add_point(px: int, py: int) -> None:
-        unique[(px, py)] = None
 
-    while y <= x:
-        add_point(cx + x, cy + y)
-        add_point(cx + y, cy + x)
-        add_point(cx - y, cy + x)
-        add_point(cx - x, cy + y)
-        add_point(cx - x, cy - y)
-        add_point(cx - y, cy - x)
-        add_point(cx + y, cy - x)
-        add_point(cx + x, cy - y)
+def _nearest_circle_candidate(
+    candidates: list[tuple[int, int]],
+    used: set[tuple[int, int]],
+    center: tuple[int, int],
+    radius: int,
+    angle: float,
+) -> tuple[int, int]:
+    cx, cy = center
+    ideal_x = cx + radius * math.cos(angle)
+    ideal_y = cy + radius * math.sin(angle)
+    available = (candidate for candidate in candidates if candidate not in used)
 
-        y += 1
-        if decision <= 0:
-            decision += 2 * y + 1
-        else:
-            x -= 1
-            decision += 2 * (y - x) + 1
-
-    return list(unique.keys())
+    return min(
+        available,
+        key=lambda point: (
+            (point[0] - ideal_x) ** 2 + (point[1] - ideal_y) ** 2,
+            _angle_distance(
+                _normalize_angle(math.atan2(point[1] - cy, point[0] - cx)),
+                angle,
+            ),
+            point[1],
+            point[0],
+        ),
+    )
 
 
 def _expand_circle_cells(
@@ -242,39 +253,24 @@ def _expand_circle_cells(
         1,
         int(math.floor(math.hypot(start[0] - center[0], start[1] - center[1]) + 0.5)),
     )
-    raw = _build_raw_circle_perimeter(center, radius)
-    ordered = sorted(
-        raw,
-        key=lambda point: (
-            _normalize_angle(math.atan2(point[1] - center[1], point[0] - center[0])),
-            abs(math.hypot(point[0] - center[0], point[1] - center[1]) - radius),
-            point[1],
-            point[0],
-        ),
-    )
-
-    nearest_index = min(
-        range(len(ordered)),
-        key=lambda index: (
-            (ordered[index][0] - start[0]) ** 2 + (ordered[index][1] - start[1]) ** 2,
-            index,
-        ),
-    )
-    rotated = ordered[nearest_index:] + ordered[:nearest_index]
-    if normalized_direction == 'ccw' and len(rotated) > 1:
-        rotated = [rotated[0], *reversed(rotated[1:])]
-
-    # Distribute count LEDs evenly around the perimeter. Integer floor sampling
-    # (k * P // count) must match the frontend's Math.floor((k * P) / count)
-    # exactly, or the device CSV the frontend writes would fail the rows check
-    # here; do not use round() (its banker's rounding diverges from JS).
-    perimeter = len(rotated)
-    if count > perimeter:
+    candidates = _build_circle_candidates(center, radius)
+    if count > len(candidates):
         raise LayoutError(
-            f'editor circle count {count} exceeds the {perimeter} cells '
+            f'editor circle count {count} exceeds the {len(candidates)} cells '
             'available at this radius'
         )
-    return [rotated[(k * perimeter) // count] for k in range(count)]
+
+    start_angle = _normalize_angle(math.atan2(start[1] - center[1], start[0] - center[0]))
+    direction_sign = 1 if normalized_direction == 'cw' else -1
+    step = math.tau / count
+    used: set[tuple[int, int]] = set()
+    cells: list[tuple[int, int]] = []
+    for k in range(count):
+        angle = _normalize_angle(start_angle + direction_sign * step * k)
+        cell = _nearest_circle_candidate(candidates, used, center, radius, angle)
+        cells.append(cell)
+        used.add(cell)
+    return cells
 
 
 def _expand_editor_primitive_cells(
@@ -419,9 +415,9 @@ def _expand_editor_primitive_cells(
         direction = _normalize_circle_direction(primitive.get('direction'))
 
         # count is the input; _expand_circle_cells returns exactly count cells
-        # (evenly distributed) or raises when count exceeds the perimeter. A
-        # legacy 'spacing' key, if present, is ignored. The rows check below is
-        # the real integrity guard against the device CSV.
+        # or raises when count exceeds the available radius-band cells. A legacy
+        # 'spacing' key, if present, is ignored. The rows check below is the real
+        # integrity guard against the device CSV.
         cells = _expand_circle_cells(center, start, count, direction)
 
         raw_inactive_offsets = primitive.get('inactiveOffsets')
