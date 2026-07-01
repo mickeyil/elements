@@ -41,13 +41,16 @@ EspSystemPlatform g_system;
 EspFrameOutput    g_output;
 
 // Filled in setup(); reading the MAC and drawing the boot token need
-// a running chip, not static-init time. Everything holding a
-// reference only dereferences it from begin()/tick().
+// a running chip, not static-init time. References are dereferenced
+// only after setup() has assigned this.
 DeviceIdentity g_identity;
 
 DiscoveryClient g_discovery(g_discovery_udp, g_identity);
-App g_app(g_network, g_discovery, g_tcp, g_sync_udp, g_files,
-          g_profile_kv, g_system, g_output, g_identity);
+
+// App construction touches the file store through AnimationStore. Keep
+// it out of global initialization so an erased LittleFS partition is not
+// formatted before the Arduino runtime is ready.
+App* g_app = nullptr;
 
 }  // namespace
 
@@ -67,14 +70,20 @@ void setup()
         run_wifi_provisioning_portal(g_identity.uid, g_wifi_creds);
     }
 
+    static App app(g_network, g_discovery, g_tcp, g_sync_udp, g_files,
+                   g_profile_kv, g_system, g_output, g_identity);
+    g_app = &app;
+
     FastLED.addLeds<WS2812B, LED_PIN, GRB>(g_output.leds(), MAX_STRIP_PIXELS);
     FastLED.setBrightness(255);
 
-    g_app.begin();
+    g_app->begin();
     Serial.printf("elements device %s up\n", g_identity.uid);
 }
 
 void loop()
 {
-    g_app.tick();
+    if (g_app != nullptr) {
+        g_app->tick();
+    }
 }
