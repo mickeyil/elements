@@ -15,6 +15,7 @@
 #include "nvs_key_value_store.h"
 #include "wifi_cred_store.h"
 #include "wifi_manager.h"
+#include "wifi_provisioning.h"
 
 // The firmware entry point: constructs the ESP platform pieces, hands
 // them to the shared App, and ticks it from loop(). The sim
@@ -55,6 +56,16 @@ void setup()
     Serial.begin(115200);
 
     g_identity = make_esp_device_identity();
+
+    // Wi-Fi provisioning: an installed boot jumper or an empty credential
+    // store diverts into the captive portal before the App starts. A
+    // faulted NVS store also reads as empty here, so it lands in the
+    // portal too; the save then fails visibly (put() returns false, error
+    // page) instead of pretending to succeed. The portal reboots on a
+    // successful save, so this call never returns when taken.
+    if (wifi_provisioning_jumper_present() || g_wifi_creds.empty()) {
+        run_wifi_provisioning_portal(g_identity.uid, g_wifi_creds);
+    }
 
     FastLED.addLeds<WS2812B, LED_PIN, GRB>(g_output.leds(), MAX_STRIP_PIXELS);
     FastLED.setBrightness(255);
