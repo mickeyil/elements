@@ -56,7 +56,7 @@ bool PosixTcpTransport::connect(uint32_t dst_ip, uint16_t dst_port)
     if (rc < 0) {
         // Wait for writability up to the deadline, retrying on EINTR.
         const auto deadline = std::chrono::steady_clock::now()
-                            + std::chrono::milliseconds(TIMEOUT_MS);
+                            + std::chrono::milliseconds(CONNECT_TIMEOUT_MS);
         for (;;) {
             const auto now = std::chrono::steady_clock::now();
             if (now >= deadline) {
@@ -122,51 +122,15 @@ int PosixTcpTransport::read(uint8_t* dst, size_t n)
     return -1;
 }
 
-bool PosixTcpTransport::write(const uint8_t* src, size_t len)
+int PosixTcpTransport::write(const uint8_t* src, size_t len)
 {
-    if (_fd < 0) return false;
+    if (_fd < 0) return -1;
+    if (len == 0) return 0;
 
-    const auto deadline =
-        std::chrono::steady_clock::now()
-        + std::chrono::milliseconds(TIMEOUT_MS);
-
-    size_t written = 0;
-    while (written < len) {
-        const ssize_t w = ::send(_fd, src + written, len - written,
-                                 MSG_NOSIGNAL);
-        if (w > 0) {
-            written += static_cast<size_t>(w);
-            continue;
-        }
-        if (w < 0 && errno == EINTR) continue;
-        if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-            // Kernel send buffer full; wait for writability up to
-            // the deadline.
-            const auto now = std::chrono::steady_clock::now();
-            if (now >= deadline) {
-                disconnect();
-                return false;
-            }
-            const auto left =
-                std::chrono::duration_cast<std::chrono::microseconds>(
-                    deadline - now);
-            timeval tv{};
-            tv.tv_sec  = left.count() / 1'000'000;
-            tv.tv_usec = left.count() % 1'000'000;
-            fd_set wfds;
-            FD_ZERO(&wfds);
-            FD_SET(_fd, &wfds);
-            const int s = ::select(_fd + 1, nullptr, &wfds, nullptr, &tv);
-            if (s < 0 && errno == EINTR) continue;
-            if (s <= 0) {
-                disconnect();
-                return false;
-            }
-            continue;
-        }
-        // Hard error.
-        disconnect();
-        return false;
-    }
-    return true;
+    const ssize_t w = ::send(_fd, src, len, MSG_NOSIGNAL);
+    if (w > 0) return static_cast<int>(w);
+    if (w == 0) return 0;
+    if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) return 0;
+    disconnect();
+    return -1;
 }

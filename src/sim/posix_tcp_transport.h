@@ -18,7 +18,7 @@ public:
     void disconnect() override;
     bool is_connected() const override { return _fd >= 0; }
     int  read(uint8_t* dst, size_t n) override;
-    bool write(const uint8_t* src, size_t len) override;
+    int  write(const uint8_t* src, size_t len) override;
 
 private:
     int _fd = -1;

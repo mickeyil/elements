@@ -43,20 +43,25 @@ public:
         return static_cast<int>(take);
     }
 
-    bool write(const uint8_t* src, size_t len) override
+    int write(const uint8_t* src, size_t len) override
     {
         if (!connected || fail_writes) {
             connected = false;
-            return false;
+            return -1;
         }
-        sent.insert(sent.end(), src, src + len);
-        return true;
+        const size_t take = std::min(len, write_budget);
+        if (take == 0) return 0;   // "buffer full"
+        write_budget -= take;
+        sent.insert(sent.end(), src, src + take);
+        return static_cast<int>(take);
     }
 
     bool connected = true;
     bool read_error = false;
     bool fail_writes = false;
     size_t max_read_chunk = SIZE_MAX;
+    // Bytes the socket accepts before reporting "buffer full" (0).
+    size_t write_budget = SIZE_MAX;
     std::vector<uint8_t> inbox;
     std::vector<uint8_t> sent;
 };
@@ -273,27 +278,102 @@ TEST_CASE("a near-max message is consumed and the stream continues")
     CHECK(h.tcp.sent == expected);
 }
 
-TEST_CASE("reset_buffer drops a partial message")
+TEST_CASE("reset_stream drops a partial message")
 {
     Harness h;
     h.tcp.max_read_chunk = 3;
     h.feed({0xFF, 0xFF, 0xFF});             // garbage prefix, would misparse
     CHECK(h.processor.poll() == PollResult::Idle);
 
-    h.processor.reset_buffer();
+    h.processor.reset_stream();
     h.tcp.max_read_chunk = SIZE_MAX;
     h.feed(make_msg(CMD_PING));
     CHECK(h.processor.poll() == PollResult::Handled);
     CHECK(h.tcp.sent == make_ack(ACK_OK));
 }
 
-TEST_CASE("a failed ACK write is best-effort; the next poll faults")
+TEST_CASE("a transport write error while ACKing faults")
 {
     Harness h;
     h.tcp.fail_writes = true;
     h.feed(make_msg(CMD_PING));
-
-    CHECK(h.processor.poll() == PollResult::Handled);  // message consumed
+    CHECK(h.processor.poll() == PollResult::Fault);
     CHECK(h.tcp.sent.empty());
-    CHECK(h.processor.poll() == PollResult::Fault);    // transport now dead
+}
+
+TEST_CASE("a partial ACK drains across polls before the next command")
+{
+    Harness h;
+    h.feed(make_msg(CMD_PING));
+    h.feed(make_msg(CMD_PING));
+
+    const auto ack = make_ack(ACK_OK);   // 6 bytes
+
+    h.tcp.write_budget = 2;
+    CHECK(h.processor.poll() == PollResult::Handled);  // ping 1; 2 of 6 out
+    CHECK(h.processor.tx_pending());
+    CHECK(h.tcp.sent.size() == 2);
+
+    h.tcp.write_budget = 2;
+    CHECK(h.processor.poll() == PollResult::Idle);     // 4 of 6; ping 2 waits
+    CHECK(h.tcp.sent.size() == 4);
+
+    h.tcp.write_budget = SIZE_MAX;
+    CHECK(h.processor.poll() == PollResult::Handled);  // tail out; ping 2 runs
+    CHECK_FALSE(h.processor.tx_pending());
+
+    std::vector<uint8_t> expected = ack;
+    expected.insert(expected.end(), ack.begin(), ack.end());
+    CHECK(h.tcp.sent == expected);
+}
+
+TEST_CASE("no command is parsed while the socket takes nothing")
+{
+    Harness h;
+    h.feed(make_msg(CMD_PING));
+    h.feed(make_msg(CMD_PING));
+
+    CHECK(h.processor.poll() == PollResult::Handled);  // ACK 1 sent whole
+    h.tcp.write_budget = 0;
+    CHECK(h.processor.poll() == PollResult::Handled);  // ACK 2 staged, 0 sent
+    REQUIRE(h.processor.tx_pending());
+
+    h.feed(make_msg(CMD_PING));
+    CHECK(h.processor.poll() == PollResult::Idle);     // ping 3 waits
+    CHECK(h.processor.poll() == PollResult::Idle);
+
+    h.tcp.write_budget = SIZE_MAX;
+    CHECK(h.processor.poll() == PollResult::Handled);  // tail out, ping 3 runs
+    CHECK(h.tcp.sent.size() == 3 * make_ack(ACK_OK).size());
+}
+
+TEST_CASE("a write error while draining a pending tail faults")
+{
+    Harness h;
+    h.tcp.write_budget = 0;
+    h.feed(make_msg(CMD_PING));
+    CHECK(h.processor.poll() == PollResult::Handled);
+    REQUIRE(h.processor.tx_pending());
+
+    h.tcp.fail_writes = true;
+    CHECK(h.processor.poll() == PollResult::Fault);
+}
+
+TEST_CASE("reset_stream clears a pending ACK tail")
+{
+    Harness h;
+    h.tcp.write_budget = 2;
+    h.feed(make_msg(CMD_PING));
+    CHECK(h.processor.poll() == PollResult::Handled);
+    REQUIRE(h.processor.tx_pending());
+
+    h.processor.reset_stream();
+    CHECK_FALSE(h.processor.tx_pending());
+
+    // A fresh stream never sees the stale tail bytes.
+    h.tcp.sent.clear();
+    h.tcp.write_budget = SIZE_MAX;
+    h.feed(make_msg(CMD_PING));
+    CHECK(h.processor.poll() == PollResult::Handled);
+    CHECK(h.tcp.sent == make_ack(ACK_OK));
 }

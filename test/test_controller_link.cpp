@@ -91,20 +91,25 @@ public:
         return static_cast<int>(take);
     }
 
-    bool write(const uint8_t* src, size_t len) override
+    int write(const uint8_t* src, size_t len) override
     {
         if (!connected || fail_writes) {
             connected = false;
-            return false;
+            return -1;
         }
-        sent.insert(sent.end(), src, src + len);
-        return true;
+        const size_t take = std::min(len, write_budget);
+        if (take == 0) return 0;   // "buffer full"
+        write_budget -= take;
+        sent.insert(sent.end(), src, src + take);
+        return static_cast<int>(take);
     }
 
     bool connected = false;
     bool accept_connect = true;
     bool read_error = false;
     bool fail_writes = false;
+    // Bytes the socket accepts before reporting "buffer full" (0).
+    size_t write_budget = SIZE_MAX;
     int connect_calls = 0;
     uint32_t last_ip = 0;
     uint16_t last_port = 0;
@@ -308,6 +313,24 @@ TEST_CASE("a failed REGISTER write tears down and retries later")
     CHECK_FALSE(h.tcp.is_connected());
 
     h.tcp.fail_writes = false;
+    h.advance(CONNECT_RETRY_INTERVAL_MS * 1000 + 1);
+    h.link.poll();
+    CHECK(h.link.is_ready());
+}
+
+TEST_CASE("a short REGISTER write counts as a failed connect")
+{
+    // A fresh socket's send buffer takes 26 bytes whole or the
+    // connection is broken; the link must not come up half-registered.
+    Harness h;
+    h.tcp.write_budget = 5;
+    h.offer();
+    h.link.poll();
+
+    CHECK_FALSE(h.link.is_ready());
+    CHECK_FALSE(h.tcp.is_connected());
+
+    h.tcp.write_budget = SIZE_MAX;
     h.advance(CONNECT_RETRY_INTERVAL_MS * 1000 + 1);
     h.link.poll();
     CHECK(h.link.is_ready());

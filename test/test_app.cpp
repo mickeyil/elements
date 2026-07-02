@@ -17,6 +17,7 @@
 #include "key_value_store.h"
 #include "link_protocol.h"
 #include "network_interface.h"
+#include "platform_clock.h"
 #include "runtime_constants.h"
 #include "system_platform.h"
 #include "tcp_transport.h"
@@ -96,14 +97,26 @@ public:
         return static_cast<int>(take);
     }
 
-    bool write(const uint8_t* src, size_t len) override
+    int write(const uint8_t* src, size_t len) override
     {
-        if (!connected) return false;
+        // Models time passing while the App retries a full socket, so
+        // a drain loop against a frozen test clock still hits its
+        // deadline instead of spinning forever.
+        if (advance_us_on_write != 0) {
+            set_test_now_us(now_us() + advance_us_on_write);
+        }
+        if (!connected) return -1;
+        if (stalled_writes > 0) {
+            --stalled_writes;
+            return 0;   // "buffer full"
+        }
         sent.insert(sent.end(), src, src + len);
-        return true;
+        return static_cast<int>(len);
     }
 
     bool connected = false;
+    int stalled_writes = 0;   // next N write calls accept nothing
+    int64_t advance_us_on_write = 0;
     uint32_t last_ip = 0;
     uint16_t last_port = 0;
     std::vector<uint8_t> inbox;
@@ -478,6 +491,52 @@ TEST_CASE("a Reboot command reboots only after the ACK is on the wire")
     h.attach();
 
     h.command(CMD_REBOOT);
+
+    REQUIRE(h.system.reboots == 1);
+    CHECK(h.system.sent_at_reboot == ack_ok());
+}
+
+TEST_CASE("a reboot ACK the socket resists is drained before rebooting")
+{
+    Harness h;
+    h.attach();
+
+    // The socket refuses the ACK three times (1 ms of fake time each),
+    // then opens up: the drain inside the reboot tick must retry until
+    // the whole ACK is out, and only then reboot.
+    h.tcp.stalled_writes = 3;
+    h.tcp.advance_us_on_write = 1'000;
+    h.command(CMD_REBOOT);
+
+    REQUIRE(h.system.reboots == 1);
+    CHECK(h.system.sent_at_reboot == ack_ok());
+}
+
+TEST_CASE("reboot proceeds once the drain deadline passes")
+{
+    Harness h;
+    h.attach();
+
+    // The socket never takes a byte; each retry costs 100 ms of fake
+    // time, so the 500 ms drain deadline passes after a few attempts.
+    h.tcp.stalled_writes = 1'000'000;
+    h.tcp.advance_us_on_write = 100'000;
+    h.command(CMD_REBOOT);
+
+    REQUIRE(h.system.reboots == 1);
+    CHECK(h.system.sent_at_reboot.empty());  // ACK abandoned, reboot anyway
+}
+
+TEST_CASE("SET_PROFILE's reboot also waits for its ACK")
+{
+    Harness h;
+    h.attach();
+
+    h.tcp.stalled_writes = 3;
+    h.tcp.advance_us_on_write = 1'000;
+    std::vector<uint8_t> new_length;
+    put_u16(new_length, 2);   // differs from the stored profile (1)
+    h.command(CMD_SET_PROFILE, new_length);
 
     REQUIRE(h.system.reboots == 1);
     CHECK(h.system.sent_at_reboot == ack_ok());

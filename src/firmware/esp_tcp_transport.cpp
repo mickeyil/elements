@@ -1,8 +1,6 @@
 #include "esp_tcp_transport.h"
 
-#include <sys/select.h>
 #include <sys/socket.h>
-#include <sys/time.h>
 
 #include <cerrno>
 #include <cstring>
@@ -23,7 +21,7 @@ bool EspTcpTransport::connect(uint32_t dst_ip, uint16_t dst_port)
     std::memcpy(o, &dst_ip, 4);
     IPAddress ip(o[0], o[1], o[2], o[3]);
 
-    if (_client.connect(ip, dst_port, TIMEOUT_MS) != 1) {
+    if (_client.connect(ip, dst_port, CONNECT_TIMEOUT_MS) != 1) {
         // Defensive: own the cleanup rather than trust WiFiClient's
         // failure path.
         _client.stop();
@@ -65,54 +63,24 @@ int EspTcpTransport::read(uint8_t* dst, size_t n)
     return 0;
 }
 
-bool EspTcpTransport::write(const uint8_t* src, size_t len)
+int EspTcpTransport::write(const uint8_t* src, size_t len)
 {
-    if (!_connected) return false;
+    if (!_connected) return -1;
+    if (len == 0) return 0;
 
     // Bypass WiFiClient::write: its retry budget resets on partial
-    // progress and can block for tens of seconds. Drive the lwIP fd
-    // directly with our own deadline.
+    // progress and can block for tens of seconds. One non-blocking
+    // send on the lwIP fd; the caller keeps the unsent tail.
     const int fd = _client.fd();
     if (fd < 0) {
         disconnect();
-        return false;
+        return -1;
     }
 
-    const uint32_t start = millis();
-    size_t written = 0;
-    while (written < len) {
-        const ssize_t w = ::send(fd, src + written, len - written,
-                                 MSG_DONTWAIT);
-        if (w > 0) {
-            written += static_cast<size_t>(w);
-            continue;
-        }
-        if (w < 0 && errno == EINTR) continue;
-        if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-            // tx buffer full; wait for writability up to the deadline.
-            const uint32_t elapsed = millis() - start;
-            if (elapsed >= static_cast<uint32_t>(TIMEOUT_MS)) {
-                disconnect();
-                return false;
-            }
-            const uint32_t left_ms = TIMEOUT_MS - elapsed;
-            timeval tv{};
-            tv.tv_sec  = left_ms / 1000;
-            tv.tv_usec = (left_ms % 1000) * 1000;
-            fd_set wfds;
-            FD_ZERO(&wfds);
-            FD_SET(fd, &wfds);
-            const int s = ::select(fd + 1, nullptr, &wfds, nullptr, &tv);
-            if (s < 0 && errno == EINTR) continue;
-            if (s <= 0) {
-                disconnect();
-                return false;
-            }
-            continue;
-        }
-        // Hard error.
-        disconnect();
-        return false;
-    }
-    return true;
+    const ssize_t w = ::send(fd, src, len, MSG_DONTWAIT);
+    if (w > 0) return static_cast<int>(w);
+    if (w == 0) return 0;
+    if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) return 0;
+    disconnect();
+    return -1;
 }

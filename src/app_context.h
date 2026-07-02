@@ -22,9 +22,9 @@ struct AppContext
     DeviceStatus&   status;
     SystemPlatform& system;       // called by the App, never by handlers
 
-    // Set by the Reboot handler. The App's outer loop reboots once the
-    // ACK is on the wire; rebooting from inside the handler would cut
-    // the ACK off.
+    // Set by the Reboot and SetProfile handlers. The App's outer loop
+    // drains the ACK (bounded) and then reboots; rebooting from inside
+    // the handler would cut the ACK off.
     bool reboot_requested = false;
 
     // The loaded program came from the AnimationStore, not a live

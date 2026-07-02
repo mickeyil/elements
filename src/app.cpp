@@ -7,6 +7,15 @@
 #include "platform_clock.h"
 #include "system_platform.h"
 
+namespace {
+
+// How long a pending reboot ACK may hold the reboot back. Writes are
+// non-blocking, so an ACK the socket refused stays queued; give it a
+// bounded last chance to reach the controller before the device dies.
+constexpr int64_t REBOOT_ACK_DRAIN_TIMEOUT_MS = 500;
+
+}  // namespace
+
 App::App(NetworkInterface& network,
          DiscoveryClient&  discovery,
          TcpTransport&     tcp,
@@ -51,9 +60,11 @@ void App::tick()
     _link.poll();
 
     // The reboot side effect is deferred to here so the ACK reaches
-    // the controller first; the link has flushed it by the time its
-    // poll() returns.
+    // the controller first: drain any unsent tail (bounded), then go
+    // down. Past the deadline the ACK is abandoned; the controller
+    // sees the connection drop and a fresh boot_token either way.
     if (_ctx.reboot_requested) {
+        _link.drain_tx(now_us() + REBOOT_ACK_DRAIN_TIMEOUT_MS * 1000);
         _ctx.system.reboot();
         return;  // real reboots never get here; test fakes do
     }

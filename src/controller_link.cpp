@@ -82,7 +82,7 @@ void ControllerLink::try_connect_()
 
     if (!_tcp.connect(ip, port)) return;
 
-    _processor.reset_buffer();
+    _processor.reset_stream();
     if (!send_register_()) {
         _tcp.disconnect();
         return;
@@ -108,13 +108,29 @@ bool ControllerLink::send_register_()
     w.write_u32(_identity.boot_token);
     w.write_u8(PROTOCOL_VERSION);
 
-    return w.ok() && _tcp.write(msg, w.bytes_written());
+    // A freshly connected socket has an empty send buffer, so these
+    // few bytes go whole or something is wrong with the connection;
+    // a short write is treated as a failed connect and retried.
+    return w.ok() &&
+           _tcp.write(msg, w.bytes_written()) ==
+               static_cast<int>(w.bytes_written());
+}
+
+void ControllerLink::drain_tx(int64_t deadline_us)
+{
+    while (_state == LinkState::Ready && _processor.tx_pending()) {
+        if (!_processor.flush_tx()) {
+            drop_link_();
+            return;
+        }
+        if (now_us() >= deadline_us) return;
+    }
 }
 
 void ControllerLink::drop_link_()
 {
     _tcp.disconnect();
-    _processor.reset_buffer();
+    _processor.reset_stream();
     _controller_ip = 0;
     _last_connect_us = 0;   // reconnect promptly once prerequisites return
     _state = LinkState::Discovering;

@@ -11,7 +11,7 @@
 // Usage:
 //   connect(ip, port)  initiate a connection to a peer.
 //   read(dst, n)       non-blocking read; reports peer close as < 0.
-//   write(src, len)    all-or-fail send within TIMEOUT_MS.
+//   write(src, len)    non-blocking send; returns bytes accepted.
 //   disconnect()       drop the connection.
 //   is_connected()     whether a connection is currently up.
 //
@@ -24,15 +24,18 @@
 
 class TcpTransport {
 public:
-    // Maximum time connect() and write() may block before failing.
-    static constexpr int TIMEOUT_MS = 500;
+    // Maximum time connect() may block before failing. connect() is
+    // the one call allowed to block: it runs only against a
+    // freshly-offered controller, never in the steady-state tick.
+    static constexpr int CONNECT_TIMEOUT_MS = 500;
 
     virtual ~TcpTransport() = default;
 
-    // Open a connection to dst_ip:dst_port. Blocks up to TIMEOUT_MS.
-    // A second call while already connected returns true without
-    // re-opening. Returns false on timeout, refused, or unreachable;
-    // the transport stays not-connected and the caller may retry.
+    // Open a connection to dst_ip:dst_port. Blocks up to
+    // CONNECT_TIMEOUT_MS. A second call while already connected
+    // returns true without re-opening. Returns false on timeout,
+    // refused, or unreachable; the transport stays not-connected and
+    // the caller may retry.
     virtual bool connect(uint32_t dst_ip, uint16_t dst_port) = 0;
 
     // Drop the connection.
@@ -48,8 +51,11 @@ public:
     //         Caller should drop in-progress framing and reconnect.
     virtual int read(uint8_t* dst, size_t n) = 0;
 
-    // Send all len bytes, all-or-fail within TIMEOUT_MS. Returns
-    // false on socket error, partial write, peer close, or timeout;
-    // is_connected() flips false on any of those.
-    virtual bool write(const uint8_t* src, size_t len) = 0;
+    // Send up to len bytes without blocking (POSIX write(2)
+    // semantics on a non-blocking socket). Returns:
+    //   >  0  bytes the stack accepted (may be < len).
+    //   == 0  no buffer space right now (try again next tick).
+    //   <  0  socket error or peer closed; is_connected() flips
+    //         false. The caller should drop and reconnect.
+    virtual int write(const uint8_t* src, size_t len) = 0;
 };

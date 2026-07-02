@@ -19,7 +19,7 @@ constexpr int64_t PING_TIMEOUT_MS = 2 * PING_INTERVAL_MS;
 // Minimum wait between connect attempts: twice the worst-case block,
 // so even a half-dead controller (answers discovery, ignores TCP)
 // cannot eat more than half the loop's time.
-constexpr int64_t CONNECT_RETRY_INTERVAL_MS = 2 * TcpTransport::TIMEOUT_MS;
+constexpr int64_t CONNECT_RETRY_INTERVAL_MS = 2 * TcpTransport::CONNECT_TIMEOUT_MS;
 
 // ControllerLink's connectivity status: looking for a controller, or
 // attached to one.
@@ -46,6 +46,13 @@ public:
     // detached; runs the processor and the liveness deadline while
     // attached.
     void poll();
+
+    // Bounded blocking flush of a pending ACK tail, for the App's
+    // reboot path only: the device is about to go down, so blocking
+    // is harmless and the ACK deserves a last chance to get out.
+    // Loops until the tail drains, the link faults, or deadline_us
+    // passes. Steady-state code never blocks like this.
+    void drain_tx(int64_t deadline_us);
 
     // Is the link fully attached: TCP up, REGISTER written, liveness
     // deadline not expired.

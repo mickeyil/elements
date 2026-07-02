@@ -3,10 +3,10 @@
 // Pluggable system-level operations. Owned by the firmware app loop /
 // sim main, reachable from CommandHandler through AppContext but never
 // called from the handler directly. The reboot handler sets
-// ctx.reboot_requested; the outer loop calls system.reboot() once the
-// ACK has been flushed to the controller. That ordering (ACK first,
-// reboot after) is why the side effect is deferred to the loop and
-// not run from inside handle().
+// ctx.reboot_requested; the outer loop drains the ACK to the
+// controller (bounded) and then calls system.reboot(). That ordering
+// (ACK first, reboot after) is why the side effect is deferred to the
+// loop and not run from inside handle().
 //
 // Two impls:
 //   - EspSystemPlatform: ESP.restart() (firmware).

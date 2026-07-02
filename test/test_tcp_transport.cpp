@@ -122,7 +122,7 @@ TEST_CASE("Fresh transport is not connected", "[tcp_transport]") {
     uint8_t buf[8] = {};
     CHECK(t.read(buf, sizeof(buf)) == -1);
     const uint8_t one = 1;
-    CHECK_FALSE(t.write(&one, 1));
+    CHECK(t.write(&one, 1) < 0);
 }
 
 TEST_CASE("connect to a port with no listener fails", "[tcp_transport]") {
@@ -141,7 +141,9 @@ TEST_CASE("connect/echo round trip", "[tcp_transport]") {
     CHECK(t.is_connected());
 
     const uint8_t payload[] = {0xDE, 0xAD, 0xBE, 0xEF};
-    REQUIRE(t.write(payload, sizeof(payload)));
+    // A few bytes into a fresh socket's empty send buffer go whole.
+    REQUIRE(t.write(payload, sizeof(payload)) ==
+            static_cast<int>(sizeof(payload)));
 
     uint8_t buf[8] = {};
     const int r = await_read(t, buf, sizeof(buf));
@@ -196,10 +198,10 @@ TEST_CASE("write fails after disconnect", "[tcp_transport]") {
     REQUIRE(t.connect(LOOPBACK_BE, server.port()));
     t.disconnect();
     const uint8_t one = 1;
-    CHECK_FALSE(t.write(&one, 1));
+    CHECK(t.write(&one, 1) < 0);
 }
 
-TEST_CASE("write succeeds for a buffer larger than typical send buffer",
+TEST_CASE("a large buffer drains through repeated partial writes",
           "[tcp_transport]") {
     TcpEchoServer server;
     server.start();
@@ -207,12 +209,23 @@ TEST_CASE("write succeeds for a buffer larger than typical send buffer",
     REQUIRE(t.connect(LOOPBACK_BE, server.port()));
 
     // 64 KB is larger than most kernels' default per-socket send/recv
-    // buffers, so this exercises the write loop's wait-for-writable
-    // path under real backpressure.
+    // buffers, so this exercises partial acceptance (and 0 = "buffer
+    // full") under real backpressure while the echo server drains.
     constexpr size_t kBig = 64 * 1024;
     std::vector<uint8_t> tx(kBig);
     for (size_t i = 0; i < kBig; ++i) tx[i] = static_cast<uint8_t>(i);
-    REQUIRE(t.write(tx.data(), tx.size()));
+
+    size_t sent = 0;
+    for (int i = 0; i < 10'000 && sent < kBig; ++i) {
+        const int w = t.write(tx.data() + sent, kBig - sent);
+        REQUIRE(w >= 0);
+        if (w == 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            continue;
+        }
+        sent += static_cast<size_t>(w);
+    }
+    REQUIRE(sent == kBig);
 
     std::vector<uint8_t> rx;
     rx.reserve(kBig);
@@ -224,4 +237,48 @@ TEST_CASE("write succeeds for a buffer larger than typical send buffer",
     }
     REQUIRE(rx.size() == kBig);
     CHECK(std::memcmp(rx.data(), tx.data(), kBig) == 0);
+}
+
+TEST_CASE("write reports a full buffer instead of blocking",
+          "[tcp_transport]") {
+    // A listener that never accepts: the connection completes via the
+    // backlog, but nobody drains the peer side, so the client's send
+    // buffer eventually fills for good.
+    const int listen_fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    REQUIRE(listen_fd >= 0);
+    sockaddr_in addr{};
+    addr.sin_family      = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port        = htons(0);
+    REQUIRE(::bind(listen_fd, reinterpret_cast<sockaddr*>(&addr),
+                   sizeof(addr)) == 0);
+    REQUIRE(::listen(listen_fd, 1) == 0);
+    sockaddr_in actual{};
+    socklen_t alen = sizeof(actual);
+    REQUIRE(::getsockname(listen_fd, reinterpret_cast<sockaddr*>(&actual),
+                          &alen) == 0);
+
+    PosixTcpTransport t;
+    REQUIRE(t.connect(LOOPBACK_BE, ntohs(actual.sin_port)));
+
+    std::vector<uint8_t> chunk(64 * 1024, 0x55);
+    bool saw_full = false;
+    // Buffers on loopback can be large; cap the attempts, not the time.
+    for (int i = 0; i < 1'000; ++i) {
+        const auto start = std::chrono::steady_clock::now();
+        const int w = t.write(chunk.data(), chunk.size());
+        const auto elapsed = std::chrono::steady_clock::now() - start;
+        // Non-blocking: any single call must return promptly, far
+        // under the old 500 ms all-or-fail deadline.
+        CHECK(elapsed < std::chrono::milliseconds(200));
+        REQUIRE(w >= 0);
+        if (w == 0) {
+            saw_full = true;
+            break;
+        }
+    }
+    CHECK(saw_full);
+    CHECK(t.is_connected());
+
+    ::close(listen_fd);
 }
