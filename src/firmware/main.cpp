@@ -13,6 +13,7 @@
 #include "esp_udp_transport.h"
 #include "hardware_profile_store.h"
 #include "nvs_key_value_store.h"
+#include "slog.h"
 #include "wifi_cred_store.h"
 #include "wifi_manager.h"
 #include "wifi_provisioning.h"
@@ -34,6 +35,7 @@ EspNetworkInterface g_network(g_wifi);
 
 EspUdpTransport   g_discovery_udp;
 EspUdpTransport   g_sync_udp;
+EspUdpTransport   g_log_udp;
 EspTcpTransport   g_tcp;
 EspFileStore      g_files;
 NvsKeyValueStore  g_profile_kv(HARDWARE_PROFILE_KV_NAMESPACE);
@@ -70,15 +72,15 @@ void setup()
         run_wifi_provisioning_portal(g_identity.uid, g_wifi_creds);
     }
 
-    static App app(g_network, g_discovery, g_tcp, g_sync_udp, g_files,
-                   g_profile_kv, g_system, g_output, g_identity);
+    static App app(g_network, g_discovery, g_tcp, g_sync_udp, g_log_udp,
+                   g_files, g_profile_kv, g_system, g_output, g_identity);
     g_app = &app;
 
     FastLED.addLeds<WS2812B, LED_PIN, GRB>(g_output.leds(), MAX_STRIP_PIXELS);
     FastLED.setBrightness(255);
 
     g_app->begin();
-    Serial.printf("elements device %s up\n", g_identity.uid);
+    slog_info("elements device %s up", g_identity.uid);
 }
 
 void loop()

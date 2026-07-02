@@ -4,14 +4,17 @@ How the controller and devices talk to each other, and how the web app
 talks to the controller.
 
 A device always connects *out* to the controller; the controller only
-listens. The two then use three network channels, on three separate
-ports. A fourth channel, a local unix socket, connects the controller
-to the web app.
+listens. The two then use four network channels, on separate ports.
+Another channel, a local unix socket, connects the controller to the
+web app.
 
 ## Ports
 
-Four ports, kept next to each other so they are easy to allow through a
-firewall. The controller config holds all four.
+Five ports, kept next to each other so they are easy to allow through a
+firewall. The controller config holds all five, but note that devices
+know 6040, 6043 and 6044 as compile-time constants (the link and frame
+ports travel in the OFFER and argv): changing those three in the config
+alone breaks devices built with the defaults.
 
 | Port | Type | Used for |
 |------|------|----------|
@@ -19,6 +22,7 @@ firewall. The controller config holds all four.
 | 6041 | TCP  | the controller link (commands and replies) |
 | 6042 | UDP  | sim frame previews (simulator only) |
 | 6043 | UDP  | clock sync |
+| 6044 | UDP  | device logs |
 
 ## Discovery (UDP 6040)
 
@@ -184,6 +188,35 @@ uid(16) | frame_index: u32 | t_program: f32 | rgb bytes
 
 The `uid` lets the controller tell simulators apart, since they all send
 from `127.0.0.1`. `rgb` is 3 bytes per pixel.
+
+## Device logs (UDP 6044)
+
+Devices forward their log lines to the controller, one datagram per
+record, fire and forget. Each line is also echoed locally (the ESP's
+serial port, the sim's terminal), so the channel adds visibility, it
+does not replace anything. The controller writes accepted records into
+its own log, uid-prefixed; only configured UIDs are accepted, but a
+device does not need a live link, so registration failures are exactly
+what this channel can show.
+
+```
+device -> ctrl   magic(2)=0xD16C version(1)=1 uid(16) boot_token(u32)
+                 seq(u32) uptime_ms(u32) level(u8) text(rest)
+```
+
+`seq` counts from 1 per boot; `boot_token` tells reboots apart from
+reordering. The device buffers records in a small ring (16 records)
+and ships only while the controller is evidently alive (link up, or a
+fresh OFFER), so a short controller outage is bridged by the ring.
+Anything beyond that is lost by design: the controller logs "lost N
+records" when it sees a sequence gap, covering ring overflow and
+dropped packets alike. `level` is ASCII `I`/`W`/`E`. `uptime_ms` is the
+device's own clock (sync may be down when it matters); the controller's
+log stamps arrival time.
+
+The device side is `src/slog.{h,cpp}` (ring and local echo) and
+`src/log_shipper.{h,cpp}` (wire format and sending); the controller
+side is `LogReceiver` in `controller/elemctl/hub.py`.
 
 ## Controller API (unix socket)
 

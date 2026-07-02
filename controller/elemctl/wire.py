@@ -111,6 +111,14 @@ SYNC_PONG_WIRE_SIZE = 33
 
 FRAME_PREVIEW_HEADER_BYTES = UID_SIZE + 4 + 4
 
+# ---- Constants mirroring src/log_shipper.cpp ---------------------------------
+
+LOG_MAGIC = 0xD16C
+LOG_VERSION = 1
+LOG_HEADER_BYTES = 2 + 1 + UID_SIZE + 4 + 4 + 4 + 1
+# Mirrors SLOG_TEXT_CAP in src/slog.h; anything longer is a forgery.
+LOG_TEXT_CAP = 224
+
 
 class WireError(ValueError):
     """Raised for bytes that violate the protocol, or values that cannot
@@ -131,6 +139,9 @@ _OFFER_PREFIX = struct.Struct('<HB')                # magic + type; then ipv4 + 
 _SYNC_PING = struct.Struct(f'<B{UID_SIZE}sIIq')     # type + uid + boot_token + seq + t1
 _SYNC_PONG = struct.Struct('<BIIqqq')               # type + token + seq + t1 + t2 + t3
 _FRAME_PREVIEW = struct.Struct(f'<{UID_SIZE}sIf')   # uid + frame_index + t_program
+_LOG_HEADER = struct.Struct(f'<HB{UID_SIZE}sIIIB')  # magic + version + uid
+                                                    # + boot_token + seq
+                                                    # + uptime_ms + level
 
 
 # ---- Slot helpers ------------------------------------------------------------
@@ -475,3 +486,47 @@ def parse_frame_preview(datagram):
         return None
     return FramePreview(uid=uid, frame_index=frame_index,
                         t_program=t_program, rgb=bytes(rgb))
+
+
+# ---- Device logs (UDP 6044) --------------------------------------------------
+
+_LOG_LEVELS = frozenset('IWE')
+
+
+@dataclass(frozen=True)
+class LogRecord:
+    uid: str
+    boot_token: int
+    seq: int          # per boot, monotonically increasing from 1
+    uptime_ms: int    # device clock at log time; arrival is stamped here
+    level: str        # 'I' | 'W' | 'E'
+    text: str
+
+
+def parse_log_record(datagram):
+    """Decode one device log datagram into a LogRecord; None for
+    anything malformed. Gaps in seq within one boot_token mean lost
+    records (ring overflow on the device, or packets dropped).
+
+    The uid is unauthenticated, so the text is defanged here: clamped
+    to the device's cap and stripped of control characters, keeping a
+    spoofed packet from injecting newlines or terminal escapes into
+    the controller's log."""
+    if len(datagram) < LOG_HEADER_BYTES:
+        return None
+    (magic, version, uid_raw, boot_token, seq, uptime_ms,
+     level) = _LOG_HEADER.unpack_from(datagram, 0)
+    if magic != LOG_MAGIC or version != LOG_VERSION:
+        return None
+    level_ch = chr(level)
+    if level_ch not in _LOG_LEVELS:
+        return None
+    try:
+        uid = _unpack_slot(uid_raw, 'uid')
+    except WireError:
+        return None
+    raw = datagram[LOG_HEADER_BYTES:LOG_HEADER_BYTES + LOG_TEXT_CAP]
+    text = raw.decode('utf-8', errors='replace')
+    text = ''.join(ch if ch.isprintable() else '\ufffd' for ch in text)
+    return LogRecord(uid=uid, boot_token=boot_token, seq=seq,
+                     uptime_ms=uptime_ms, level=level_ch, text=text)

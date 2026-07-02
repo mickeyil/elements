@@ -40,20 +40,6 @@ issues land here.
 
 ---
 
-## Log decode failures on LOAD
-
-**Today.** `CommandHandler::handle_load_` (`src/command_handler.cpp`)
-maps `DecodeError` onto the wire ACK (`StripLengthMismatch` →
-`ProfileMismatch`, everything else → `Error`) but logs nothing;
-`src/slogger.h` is host-only (`<mutex>`, `<fstream>`) and no shared
-logging seam exists yet.
-
-**Action.** Once the firmware logging story lands, log
-`decode_error_name(err)` on every failed load so serial logs identify
-the rejection reason without a debugger.
-
----
-
 ## Write the v3 `strip_render` offline CLI
 
 **Today.** The v2 offline renderer (frames to stdout for golden tests

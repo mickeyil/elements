@@ -5,6 +5,7 @@
 #include "local_animation.h"
 #include "network_interface.h"
 #include "platform_clock.h"
+#include "slog.h"
 #include "system_platform.h"
 
 namespace {
@@ -20,6 +21,7 @@ App::App(NetworkInterface& network,
          DiscoveryClient&  discovery,
          TcpTransport&     tcp,
          UdpTransport&     sync_udp,
+         UdpTransport&     log_udp,
          FileStore&        files,
          KeyValueStore&    profile_kv,
          SystemPlatform&   system,
@@ -32,7 +34,8 @@ App::App(NetworkInterface& network,
       _ctx{_playback, _animations, profile_kv, _status, system},
       _handler(_ctx),
       _link(network, discovery, tcp, identity, _handler),
-      _sync(sync_udp, _clock, identity)
+      _sync(sync_udp, _clock, identity),
+      _log_shipper(log_udp, discovery, identity)
 {
 }
 
@@ -58,6 +61,11 @@ void App::tick()
 {
     _network.poll();
     _link.poll();
+
+    // Ship after the link poll so records from this tick's command
+    // handling go out the same tick; before the reboot check so a
+    // reboot's own logs get one send window.
+    _log_shipper.tick(_link.is_ready());
 
     // The reboot side effect is deferred to here so the ACK reaches
     // the controller first: drain any unsent tail (bounded), then go
@@ -86,11 +94,14 @@ void App::update_mode_()
         // The controller owns playback now. Drop any local background so it
         // stops animating and a later controller program can't inherit its
         // loop flag; the reconciler will load/start its own program over this.
+        slog_info("attached to controller");
         _playback.reset_for_detach();
         _ctx.local_program_loaded = false;
         _status.mode = DeviceMode::AttachedControlled;
         return;
     }
+
+    slog_info("detached from controller");
 
     // Detached: resume the stored background if one is installed and playable.
     if (try_start_background_()) {

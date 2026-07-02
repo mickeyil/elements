@@ -71,6 +71,7 @@ class ControllerService:
                             link_port=config.link_port,
                             frame_port=config.frame_port,
                             sync_port=config.sync_port,
+                            log_port=config.log_port,
                             clock_us=clock_us)
         self._hub = hub
         self._session = Session(hub, config.devices, clock_us)

@@ -29,9 +29,11 @@ UID = 'sim-hubtest'
 
 @pytest.fixture
 def hub():
-    # 6040/6043 are compile-time well-known on the device; the link and
-    # frame ports travel in the OFFER and argv, so they can be ephemeral.
-    h = DeviceHub(discovery_port=6040, link_port=0, frame_port=0, sync_port=6043)
+    # 6040/6043/6044 are compile-time well-known on the device; the link
+    # and frame ports travel in the OFFER and argv, so they can be
+    # ephemeral.
+    h = DeviceHub(discovery_port=6040, link_port=0, frame_port=0,
+                  sync_port=6043, log_port=6044)
     yield h
     h.close()
 

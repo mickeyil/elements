@@ -9,6 +9,7 @@ from elemctl.config import (
     DEFAULT_DISCOVERY_PORT,
     DEFAULT_FRAME_PORT,
     DEFAULT_LINK_PORT,
+    DEFAULT_LOG_PORT,
     DEFAULT_SYNC_PORT,
     MAX_DEVICE_PIXELS,
     default_config_doc,
@@ -58,6 +59,7 @@ def test_ports_default_to_well_known_values(tmp_path):
     assert config.link_port == DEFAULT_LINK_PORT == 6041
     assert config.frame_port == DEFAULT_FRAME_PORT == 6042
     assert config.sync_port == DEFAULT_SYNC_PORT == 6043
+    assert config.log_port == DEFAULT_LOG_PORT == 6044
 
 
 def test_explicit_ports_override_defaults(tmp_path):
@@ -66,14 +68,16 @@ def test_explicit_ports_override_defaults(tmp_path):
         "link_port": 7041,
         "frame_port": 7042,
         "sync_port": 7043,
+        "log_port": 7044,
     })
     config = load_config(_write_config(tmp_path, doc))
-    assert (config.discovery_port, config.link_port,
-            config.frame_port, config.sync_port) == (7040, 7041, 7042, 7043)
+    assert (config.discovery_port, config.link_port, config.frame_port,
+            config.sync_port, config.log_port) == (7040, 7041, 7042,
+                                                   7043, 7044)
 
 
 @pytest.mark.parametrize('field', [
-    'discovery_port', 'link_port', 'frame_port', 'sync_port',
+    'discovery_port', 'link_port', 'frame_port', 'sync_port', 'log_port',
 ])
 @pytest.mark.parametrize('bad', [0, 65536, -1, 'x', None, True])
 def test_invalid_port_rejected(tmp_path, field, bad):

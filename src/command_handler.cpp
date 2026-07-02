@@ -5,11 +5,13 @@
 
 #include "animation_store.h"
 #include "app_context.h"
+#include "blob_reader.h"
 #include "device_status.h"
 #include "hardware_profile_store.h"
 #include "link_protocol.h"
 #include "local_animation.h"
 #include "playback.h"
+#include "slog.h"
 #include "wire_reader.h"
 #include "wire_writer.h"
 
@@ -119,6 +121,8 @@ AckStatus CommandHandler::handle_load_(WireReader& r)
 
     DecodeError err = DecodeError::Ok;
     if (!_ctx.playback.handle_load(blob, blob_len, &err)) {
+        slog_warn("LOAD rejected: %s (%u bytes)", decode_error_name(err),
+                  static_cast<unsigned>(blob_len));
         return map_decode_error(err);
     }
     _ctx.local_program_loaded = false;

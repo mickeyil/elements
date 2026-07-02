@@ -52,6 +52,8 @@ add_library(elements_core STATIC
     src/playback.cpp
     src/clock_sync_client.cpp
     src/discovery.cpp
+    src/slog.cpp
+    src/log_shipper.cpp
 )
 target_include_directories(elements_core PUBLIC src)
 target_link_libraries(elements_core PUBLIC nlohmann_json::nlohmann_json)
@@ -380,6 +382,7 @@ if(BUILD_TESTS)
         test/test_command_handler.cpp
         test/test_platform_clock.cpp
         src/command_handler.cpp
+        src/slog.cpp
         src/local_animation.cpp
         src/animation_store.cpp
         src/crc32.cpp
@@ -413,6 +416,7 @@ if(BUILD_TESTS)
         test/test_platform_clock.cpp
         src/command_processor.cpp
         src/command_handler.cpp
+        src/slog.cpp
         src/local_animation.cpp
         src/animation_store.cpp
         src/crc32.cpp
@@ -448,6 +452,7 @@ if(BUILD_TESTS)
         src/discovery.cpp
         src/command_processor.cpp
         src/command_handler.cpp
+        src/slog.cpp
         src/local_animation.cpp
         src/animation_store.cpp
         src/crc32.cpp
@@ -485,6 +490,8 @@ if(BUILD_TESTS)
         src/discovery.cpp
         src/command_processor.cpp
         src/command_handler.cpp
+        src/slog.cpp
+        src/log_shipper.cpp
         src/local_animation.cpp
         src/animation_store.cpp
         src/crc32.cpp
@@ -512,6 +519,26 @@ if(BUILD_TESTS)
     )
     target_include_directories(test_app PRIVATE src test)
     target_link_libraries(test_app Catch2::Catch2WithMain)
+
+    # test_slog and test_log_shipper follow the standalone pattern: they
+    # link the test platform_clock fake so uptime stamps are controllable.
+    add_executable(test_slog
+        test/test_slog.cpp
+        test/test_platform_clock.cpp
+        src/slog.cpp
+    )
+    target_include_directories(test_slog PRIVATE src test)
+    target_link_libraries(test_slog Catch2::Catch2WithMain)
+
+    add_executable(test_log_shipper
+        test/test_log_shipper.cpp
+        test/test_platform_clock.cpp
+        src/slog.cpp
+        src/log_shipper.cpp
+        src/discovery.cpp
+    )
+    target_include_directories(test_log_shipper PRIVATE src test)
+    target_link_libraries(test_log_shipper Catch2::Catch2WithMain)
 
     add_executable(test_crc32 test/test_crc32.cpp)
     target_link_libraries(test_crc32 elements_core Catch2::Catch2WithMain)
@@ -675,6 +702,22 @@ if(BUILD_TESTS)
     add_test(NAME test_crc32 COMMAND test_crc32
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_sim_device_identity COMMAND test_sim_device_identity
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    add_test(NAME test_command_handler COMMAND test_command_handler
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    add_test(NAME test_command_processor COMMAND test_command_processor
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    add_test(NAME test_controller_link COMMAND test_controller_link
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    add_test(NAME test_app COMMAND test_app
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    add_test(NAME test_animation_store COMMAND test_animation_store
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    add_test(NAME test_sim_frame_output COMMAND test_sim_frame_output
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    add_test(NAME test_slog COMMAND test_slog
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    add_test(NAME test_log_shipper COMMAND test_log_shipper
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
     # Valgrind memcheck (optional)

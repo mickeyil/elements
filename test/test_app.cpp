@@ -368,6 +368,7 @@ struct Harness
     FakeNetworkInterface net;
     FakeUdpTransport discovery_udp;
     FakeUdpTransport sync_udp;
+    FakeUdpTransport log_udp;
     FakeTcpTransport tcp;
     FakeFileStore files;
     MemoryKeyValueStore kv;
@@ -375,7 +376,8 @@ struct Harness
     RecordingFrameOutput output;
     DeviceIdentity identity;
     DiscoveryClient discovery{discovery_udp, identity};
-    App app{net, discovery, tcp, sync_udp, files, kv, system, output, identity};
+    App app{net, discovery, tcp, sync_udp, log_udp, files, kv, system,
+            output, identity};
 
     int64_t now = 1'000'000;
 
@@ -713,7 +715,7 @@ TEST_CASE("boot resumes the stored background from the persisted store")
     // controller present: it must come up playing the background (the reboot
     // path, which begin() now covers).
     FakeNetworkInterface net2;
-    FakeUdpTransport discovery2, sync2;
+    FakeUdpTransport discovery2, sync2, log2;
     FakeTcpTransport tcp2;
     RecordingSystemPlatform system2{tcp2};
     RecordingFrameOutput output2;
@@ -721,7 +723,7 @@ TEST_CASE("boot resumes the stored background from the persisted store")
     std::strcpy(id2.uid, "sim-app");
     id2.boot_token = 0x55667788;
     DiscoveryClient discovery_client2{discovery2, id2};
-    App app2{net2, discovery_client2, tcp2, sync2, h.files, h.kv,
+    App app2{net2, discovery_client2, tcp2, sync2, log2, h.files, h.kv,
              system2, output2, id2};
     app2.begin();
 

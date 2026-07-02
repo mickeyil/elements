@@ -19,6 +19,7 @@
 #include "sim/sim_device_identity.h"
 #include "sim/sim_frame_output.h"
 #include "sim/sim_system_platform.h"
+#include "slog.h"
 
 // The sim device entry point: constructs the POSIX platform pieces,
 // hands them to the shared App, and ticks it until a signal arrives.
@@ -116,6 +117,7 @@ int main(int argc, char** argv)
     PosixUdpTransport discovery_udp;
     PosixUdpTransport sync_udp;
     PosixUdpTransport frame_udp;
+    PosixUdpTransport log_udp;
     PosixTcpTransport tcp;
     PosixFileStore files(opts.device_uid);
     FileKeyValueStore profile_kv(opts.device_uid, HARDWARE_PROFILE_KV_NAMESPACE);
@@ -126,11 +128,11 @@ int main(int argc, char** argv)
     DiscoveryClient discovery(discovery_udp, identity, controller_ip);
     SimFrameOutput output(frame_udp, identity, controller_ip, opts.frame_port);
 
-    App app(network, discovery, tcp, sync_udp, files, profile_kv, system,
-            output, identity);
+    App app(network, discovery, tcp, sync_udp, log_udp, files, profile_kv,
+            system, output, identity);
 
-    std::printf("sim device %s up; controller %s, frame port %u\n",
-                identity.uid, opts.controller_host, opts.frame_port);
+    slog_info("sim device %s up; controller %s, frame port %u",
+              identity.uid, opts.controller_host, opts.frame_port);
 
     app.begin();
     while (!g_stop) {
@@ -138,6 +140,6 @@ int main(int argc, char** argv)
         usleep(TICK_SLEEP_US);
     }
 
-    std::printf("sim device %s stopped\n", identity.uid);
+    slog_info("sim device %s stopped", identity.uid);
     return 0;
 }

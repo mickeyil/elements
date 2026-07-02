@@ -134,6 +134,19 @@ def test_sync_constants_match_cpp():
     assert cpp['PONG_WIRE_SIZE'] == wire.SYNC_PONG_WIRE_SIZE
 
 
+def test_log_constants_match_cpp():
+    from elemctl.config import DEFAULT_LOG_PORT
+    cpp = _cpp_constants('src/log_shipper.cpp')
+    assert cpp['LOG_MAGIC'] == wire.LOG_MAGIC
+    assert cpp['LOG_VERSION'] == wire.LOG_VERSION
+    # The device's port is compile-time; the config default must match
+    # it or devices log into the void.
+    assert cpp['LOG_PORT'] == DEFAULT_LOG_PORT
+    # LOG_HEADER_BYTES is an expression in the C++ (uses UID_SIZE),
+    # which the constant parser skips; check the same formula instead.
+    assert wire.LOG_HEADER_BYTES == 2 + 1 + wire.UID_SIZE + 4 + 4 + 4 + 1
+
+
 # ---------------------------------------------------------------------------
 # TCP framing
 # ---------------------------------------------------------------------------
@@ -391,3 +404,44 @@ def test_parse_frame_preview_rejects_noise():
     assert parse_frame_preview(header) is None               # no pixels
     assert parse_frame_preview(header + b'\x00\x01') is None  # not divisible by 3
     assert parse_frame_preview(header[:-1]) is None          # short header
+
+
+def _log_datagram(uid='sim-a', magic=wire.LOG_MAGIC, version=wire.LOG_VERSION,
+                  boot_token=7, seq=3, uptime_ms=1500, level=b'W',
+                  text=b'wifi flaky'):
+    return (struct.pack('<HB', magic, version) + _uid_slot(uid)
+            + struct.pack('<III', boot_token, seq, uptime_ms) + level + text)
+
+
+def test_parse_log_record():
+    record = wire.parse_log_record(_log_datagram())
+    assert record.uid == 'sim-a'
+    assert record.boot_token == 7
+    assert record.seq == 3
+    assert record.uptime_ms == 1500
+    assert record.level == 'W'
+    assert record.text == 'wifi flaky'
+
+
+def test_parse_log_record_empty_text():
+    assert wire.parse_log_record(_log_datagram(text=b'')).text == ''
+
+
+def test_parse_log_record_defangs_control_characters():
+    record = wire.parse_log_record(
+        _log_datagram(text=b'line1\nline2 \x1b[31mred\x1b[0m'))
+    assert record.text == 'line1�line2 �[31mred�[0m'
+
+
+def test_parse_log_record_clamps_text_to_device_cap():
+    record = wire.parse_log_record(_log_datagram(text=b'x' * 1000))
+    assert record.text == 'x' * wire.LOG_TEXT_CAP
+
+
+def test_parse_log_record_rejects_noise():
+    short = _log_datagram(text=b'')[:wire.LOG_HEADER_BYTES - 1]
+    assert wire.parse_log_record(short) is None
+    assert wire.parse_log_record(_log_datagram(magic=0xBEEF)) is None
+    assert wire.parse_log_record(_log_datagram(version=2)) is None
+    assert wire.parse_log_record(_log_datagram(level=b'X')) is None
+    assert wire.parse_log_record(_log_datagram(uid='')) is None

@@ -81,7 +81,7 @@ def make_service(tmp_path, with_program=True):
     if with_program:
         (tmp_path / 'prog.py').write_text(PROGRAM)
     config = Config(discovery_port=6040, link_port=6041, frame_port=6042,
-                    sync_port=6043,
+                    sync_port=6043, log_port=6044,
                     devices=[DeviceConfig('sim-a', 'main', 30)],
                     animations_dir=str(tmp_path))
     hub = FakeHub()

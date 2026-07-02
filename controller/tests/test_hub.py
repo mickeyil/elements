@@ -5,6 +5,7 @@ scheduling decision (pings, ACK timeouts, the REGISTER deadline) is
 driven by advancing the injected clock.
 """
 
+import logging
 import socket
 import struct
 import time
@@ -37,7 +38,7 @@ def clock():
 @pytest.fixture
 def hub(clock):
     h = DeviceHub(discovery_port=0, link_port=0, frame_port=0, sync_port=0,
-                  clock_us=clock)
+                  log_port=0, clock_us=clock)
     yield h
     h.close()
 
@@ -447,3 +448,98 @@ def test_frames_from_unknown_uid_are_dropped(hub):
     _, frames = poll_until(hub, lambda e, f: False, timeout_s=0.2)
     assert frames == []
     client.close()
+
+
+# ---------------------------------------------------------------------------
+# Device logs
+# ---------------------------------------------------------------------------
+
+def log_packet(uid, boot_token=1, seq=1, uptime_ms=1000, level=b'I',
+               text=b'hello from device'):
+    return (struct.pack('<HB', wire.LOG_MAGIC, wire.LOG_VERSION)
+            + uid.encode().ljust(16, b'\x00')
+            + struct.pack('<III', boot_token, seq, uptime_ms)
+            + level + text)
+
+
+@pytest.fixture
+def log_client():
+    client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    yield client
+    client.close()
+
+
+def test_device_log_lands_in_controller_log(hub, log_client, caplog):
+    # No link is established: a configured uid logs even when it
+    # cannot register, which is the point of the channel.
+    caplog.set_level(logging.INFO, logger='elemctl.hub')
+    log_client.sendto(log_packet('sim-a', level=b'E', text=b'boom'),
+                      ('127.0.0.1', hub.log_port))
+    poll_until(hub, lambda e, f: 'boom' in caplog.text)
+
+    records = [r for r in caplog.records if 'boom' in r.getMessage()]
+    assert len(records) == 1
+    assert records[0].levelno == logging.ERROR
+    assert records[0].getMessage() == 'sim-a: boom'
+
+
+def test_device_log_from_unwanted_uid_is_dropped(hub, log_client, caplog):
+    caplog.set_level(logging.INFO, logger='elemctl.hub')
+    log_client.sendto(log_packet('sim-zz', text=b'noise'),
+                      ('127.0.0.1', hub.log_port))
+    poll_until(hub, lambda e, f: False, timeout_s=0.2)
+    assert 'noise' not in caplog.text
+
+
+def test_device_log_gap_is_reported(hub, log_client, caplog):
+    caplog.set_level(logging.INFO, logger='elemctl.hub')
+    log_client.sendto(log_packet('sim-a', seq=1, text=b'one'),
+                      ('127.0.0.1', hub.log_port))
+    poll_until(hub, lambda e, f: 'one' in caplog.text)
+
+    log_client.sendto(log_packet('sim-a', seq=5, text=b'five'),
+                      ('127.0.0.1', hub.log_port))
+    poll_until(hub, lambda e, f: 'five' in caplog.text)
+    assert 'lost 3 log records' in caplog.text
+
+
+def test_device_log_reboot_resets_gap_tracking(hub, log_client, caplog):
+    caplog.set_level(logging.INFO, logger='elemctl.hub')
+    log_client.sendto(log_packet('sim-a', boot_token=1, seq=1, text=b'old boot'),
+                      ('127.0.0.1', hub.log_port))
+    poll_until(hub, lambda e, f: 'old boot' in caplog.text)
+
+    log_client.sendto(log_packet('sim-a', boot_token=2, seq=1, text=b'new boot'),
+                      ('127.0.0.1', hub.log_port))
+    poll_until(hub, lambda e, f: 'new boot' in caplog.text)
+    assert 'lost' not in caplog.text
+
+
+def test_device_log_first_seq_above_one_reports_the_lost_head(
+        hub, log_client, caplog):
+    # The device's ring wrapped before anything shipped: the first
+    # record the controller ever sees for this boot is seq 5.
+    caplog.set_level(logging.INFO, logger='elemctl.hub')
+    log_client.sendto(log_packet('sim-a', seq=5, text=b'late start'),
+                      ('127.0.0.1', hub.log_port))
+    poll_until(hub, lambda e, f: 'late start' in caplog.text)
+    assert 'lost 4 log records' in caplog.text
+
+
+def test_device_log_stale_boot_straggler_does_not_derail_tracking(
+        hub, log_client, caplog):
+    caplog.set_level(logging.INFO, logger='elemctl.hub')
+
+    def send_and_wait(boot_token, seq, text):
+        log_client.sendto(
+            log_packet('sim-a', boot_token=boot_token, seq=seq, text=text),
+            ('127.0.0.1', hub.log_port))
+        poll_until(hub, lambda e, f: text.decode() in caplog.text)
+
+    send_and_wait(1, 1, b'boot one')
+    send_and_wait(2, 1, b'boot two')
+    send_and_wait(1, 2, b'straggler from boot one')   # late, reordered
+    assert 'lost' not in caplog.text                  # no spurious gap
+
+    send_and_wait(2, 5, b'boot two continues')
+    assert 'lost 3 log records' in caplog.text        # real gap still seen

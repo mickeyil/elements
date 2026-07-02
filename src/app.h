@@ -8,6 +8,7 @@
 #include "command_handler.h"
 #include "controller_link.h"
 #include "device_status.h"
+#include "log_shipper.h"
 #include "playback.h"
 #include "synced_clock.h"
 
@@ -34,6 +35,7 @@ public:
         DiscoveryClient&  discovery,
         TcpTransport&     tcp,
         UdpTransport&     sync_udp,
+        UdpTransport&     log_udp,
         FileStore&        files,
         KeyValueStore&    profile_kv,
         SystemPlatform&   system,
@@ -83,6 +85,7 @@ private:
     CommandHandler  _handler;
     ControllerLink  _link;
     ClockSyncClient _sync;
+    LogShipper      _log_shipper;
 
     bool    _link_was_ready    = false;
     int64_t _next_frame_due_us = 0;  // 0 = render immediately

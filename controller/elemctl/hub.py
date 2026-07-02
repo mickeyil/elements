@@ -1,12 +1,13 @@
 """The device hub: every socket the controller shares with devices.
 
-Four listeners on the four well-known ports, one nonblocking poll
+Five listeners on the five well-known ports, one nonblocking poll
 loop, everything keyed by UID:
 
   DiscoveryServer  UDP 6040  answers DISCOVER with OFFER
   LinkServer       TCP 6041  REGISTER validation, commands out, ACKs back
   FrameReceiver    UDP 6042  sim preview frames
   SyncServer       UDP 6043  stateless clock-sync PONGs
+  LogReceiver      UDP 6044  device log records into our own log
 
 The hub owns connections and bytes, never meaning: it matches each
 ACK to the callback that sent the command and reports device arrivals
@@ -186,6 +187,69 @@ class SyncServer:
                 self._sock.sendto(pong, src)
             except OSError as e:
                 log.debug('sync: PONG to %s failed: %s', src, e)
+
+    def close(self):
+        self._sock.close()
+
+
+_DEVICE_LOG_LEVELS = {
+    'I': logging.INFO,
+    'W': logging.WARNING,
+    'E': logging.ERROR,
+}
+
+
+class LogReceiver:
+    """Writes device log records into the controller's own log.
+
+    A deliberate exception to "the hub owns bytes, never meaning": a
+    log record's entire meaning is "write me to the log", so it is
+    rendered here instead of being routed through the session layer.
+
+    Records are accepted from configured UIDs whether or not the
+    device is connected; hearing from a device that cannot register is
+    the point of the channel. Sequence gaps within one boot are
+    reported as lost records (the device's ring overflowed, or packets
+    were dropped in flight); a first record above seq 1 means the boot's
+    earliest records are already gone. The cursor is per boot so a
+    straggler datagram from before a reboot cannot derail the current
+    boot's tracking; entries are two small ints and boots are rare, so
+    they are never pruned."""
+
+    def __init__(self, port):
+        self._sock = _udp_listener(port)
+        self._cursor = {}   # (uid, boot_token) -> last seq
+
+    @property
+    def port(self):
+        return self._sock.getsockname()[1]
+
+    def poll(self, wanted_uids):
+        while True:
+            try:
+                datagram, _src = self._sock.recvfrom(_UDP_RECV_SIZE)
+            except BlockingIOError:
+                return
+            except OSError as e:
+                log.warning('device log: recv failed: %s', e)
+                return
+            record = wire.parse_log_record(datagram)
+            if record is None or record.uid not in wanted_uids:
+                continue
+            self._emit(record)
+
+    def _emit(self, record):
+        key = (record.uid, record.boot_token)
+        last = self._cursor.get(key)
+        gap = record.seq - 1 if last is None else record.seq - last - 1
+        if gap > 0:
+            log.warning('%s: lost %d log records '
+                        '(ring overflow or packet loss)',
+                        record.uid, gap)
+        if last is None or record.seq > last:
+            self._cursor[key] = record.seq
+        level = _DEVICE_LOG_LEVELS[record.level]
+        log.log(level, '%s: %s', record.uid, record.text)
 
     def close(self):
         self._sock.close()
@@ -476,7 +540,7 @@ class DeviceHub:
     """The device-facing half of the controller; see the module doc."""
 
     def __init__(self, *, discovery_port, link_port, frame_port, sync_port,
-                 clock_us=None):
+                 log_port, clock_us=None):
         self._clock_us = clock_us or (lambda: time.monotonic_ns() // 1000)
         self._boot_token = 0
         while self._boot_token == 0:   # 0 is the device's unseeded sentinel
@@ -486,6 +550,7 @@ class DeviceHub:
         self._discovery = DiscoveryServer(discovery_port, self._link_server.port)
         self._frames = FrameReceiver(frame_port)
         self._sync = SyncServer(sync_port, self._clock_us, self._boot_token)
+        self._logs = LogReceiver(log_port)
 
     @property
     def boot_token(self):
@@ -507,14 +572,19 @@ class DeviceHub:
     def sync_port(self):
         return self._sync.port
 
+    @property
+    def log_port(self):
+        return self._logs.port
+
     def poll(self, wanted_uids):
-        """One tick: drain all four listeners. Returns HubPoll."""
+        """One tick: drain all five listeners. Returns HubPoll."""
         now_us = self._clock_us()
         events = []
         self._discovery.poll(now_us, wanted_uids)
         self._link_server.poll(now_us, wanted_uids, events)
         self._sync.poll(self._registered_boot_token)
         frames = self._frames.poll(self.is_connected)
+        self._logs.poll(wanted_uids)
         return HubPoll(events=events, frames=frames)
 
     def send(self, uid, encoded, on_ack=None):
@@ -544,6 +614,7 @@ class DeviceHub:
         self._link_server.close()
         self._frames.close()
         self._sync.close()
+        self._logs.close()
 
     def _registered_boot_token(self, uid):
         link = self._link_server.link(uid)

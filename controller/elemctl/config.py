@@ -31,6 +31,7 @@ DEFAULT_DISCOVERY_PORT = 6040
 DEFAULT_LINK_PORT = 6041
 DEFAULT_FRAME_PORT = 6042
 DEFAULT_SYNC_PORT = 6043
+DEFAULT_LOG_PORT = 6044
 
 # Must match MAX_STRIP_PIXELS in src/hardware_profile.h
 MAX_DEVICE_PIXELS = 300
@@ -40,7 +41,8 @@ MAX_UID_BYTES = 16
 DEFAULT_ANIMATIONS_PATH = str(REPO_ROOT / 'animations')
 DEFAULT_LOGS_PATH = str(REPO_ROOT / 'logs')
 
-_PORT_FIELDS = ('discovery_port', 'link_port', 'frame_port', 'sync_port')
+_PORT_FIELDS = ('discovery_port', 'link_port', 'frame_port', 'sync_port',
+                'log_port')
 _ESP_UID_RE = re.compile(r'^esp-[0-9a-f]{12}$')
 _STRIP_ID_RE = re.compile(r'^[A-Za-z0-9_-]+$')
 
@@ -84,6 +86,7 @@ def default_config_doc() -> dict:
             "link_port": DEFAULT_LINK_PORT,
             "frame_port": DEFAULT_FRAME_PORT,
             "sync_port": DEFAULT_SYNC_PORT,
+            "log_port": DEFAULT_LOG_PORT,
         },
         "devices": [],
     }
@@ -163,6 +166,7 @@ class Config:
     link_port: int
     frame_port: int
     sync_port: int
+    log_port: int
     devices: list[DeviceConfig]
     animations_dir: str | None = None  # override for animations directory
     logs_dir: str | None = None        # override for logs directory
@@ -295,6 +299,7 @@ def load_config_obj(raw: dict) -> Config:
         link_port=ports["link_port"],
         frame_port=ports["frame_port"],
         sync_port=ports["sync_port"],
+        log_port=ports["log_port"],
         devices=devices,
         animations_dir=animations_dir,
         logs_dir=logs_dir,
