@@ -7,7 +7,7 @@
 
 #include "device_identity.h"
 #include "discovery.h"
-#include "log_shipper.h"
+#include "log_sender.h"
 #include "slog.h"
 #include "test_platform_clock.h"
 #include "udp_transport.h"
@@ -69,7 +69,7 @@ void put_u32(std::vector<uint8_t>& b, uint32_t v)
     for (int i = 0; i < 4; ++i) b.push_back((v >> (8 * i)) & 0xFF);
 }
 
-// The datagram the shipper must produce for one record.
+// The datagram the sender must produce for one record.
 std::vector<uint8_t> expected_datagram(const char* uid, uint32_t boot_token,
                                        uint32_t seq, uint32_t uptime_ms,
                                        uint8_t level, const std::string& text)
@@ -92,7 +92,7 @@ struct Harness
     FakeUdpTransport discovery_udp;
     FakeUdpTransport log_udp;
     DiscoveryClient discovery{discovery_udp, identity};
-    LogShipper shipper{log_udp, discovery, identity};
+    LogSender sender{log_udp, discovery, identity};
 
     int64_t now = 1'000'000;
 
@@ -123,8 +123,8 @@ TEST_CASE("nothing ships before any OFFER arrives")
 {
     Harness h;
     slog_info("early");
-    h.shipper.tick(false);
-    h.shipper.tick(true);   // no controller address either way
+    h.sender.tick(false);
+    h.sender.tick(true);   // no controller address either way
 
     CHECK(h.log_udp.sent.empty());
     CHECK_FALSE(h.log_udp.bound);   // gate closed: no needless bind
@@ -140,7 +140,7 @@ TEST_CASE("a fresh OFFER opens the gate and records ship encoded")
     slog_warn("wifi flaky");
     h.offer();
 
-    h.shipper.tick(false);
+    h.sender.tick(false);
 
     REQUIRE(h.log_udp.sent.size() == 1);
     CHECK(h.log_udp.last_dst_ip == CONTROLLER_IP);
@@ -161,10 +161,10 @@ TEST_CASE("a stale OFFER holds records until the link stands in")
     h.advance(4'000'000);   // past the freshness window
     slog_info("buffered through the outage");
 
-    h.shipper.tick(false);
+    h.sender.tick(false);
     CHECK(h.log_udp.sent.empty());   // stale and no link: hold
 
-    h.shipper.tick(true);            // link up: controller evidently alive
+    h.sender.tick(true);            // link up: controller evidently alive
     REQUIRE(h.log_udp.sent.size() == 1);
 }
 
@@ -174,10 +174,10 @@ TEST_CASE("sends are capped per tick; the backlog drains across ticks")
     h.offer();
     for (int i = 0; i < 6; ++i) slog_info("msg %d", i);
 
-    h.shipper.tick(true);
+    h.sender.tick(true);
     CHECK(h.log_udp.sent.size() == 4);
 
-    h.shipper.tick(true);
+    h.sender.tick(true);
     CHECK(h.log_udp.sent.size() == 6);
 
     SlogRecord rec;
@@ -191,14 +191,14 @@ TEST_CASE("a failed send keeps the record for the next tick")
     slog_error("must not vanish");
 
     h.log_udp.send_ok = false;
-    h.shipper.tick(true);
+    h.sender.tick(true);
     CHECK(h.log_udp.sent.empty());
 
     SlogRecord rec;
     REQUIRE(slog_peek(rec));   // still buffered
 
     h.log_udp.send_ok = true;
-    h.shipper.tick(true);
+    h.sender.tick(true);
     REQUIRE(h.log_udp.sent.size() == 1);
     CHECK_FALSE(slog_peek(rec));
 }

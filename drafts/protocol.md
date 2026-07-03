@@ -215,7 +215,7 @@ device's own clock (sync may be down when it matters); the controller's
 log stamps arrival time.
 
 The device side is `src/slog.{h,cpp}` (ring and local echo) and
-`src/log_shipper.{h,cpp}` (wire format and sending); the controller
+`src/log_sender.{h,cpp}` (wire format and sending); the controller
 side is `LogReceiver` in `controller/elemctl/hub.py`.
 
 ## Controller API (unix socket)

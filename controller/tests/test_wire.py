@@ -136,7 +136,7 @@ def test_sync_constants_match_cpp():
 
 def test_log_constants_match_cpp():
     from elemctl.config import DEFAULT_LOG_PORT
-    cpp = _cpp_constants('src/log_shipper.cpp')
+    cpp = _cpp_constants('src/log_sender.cpp')
     assert cpp['LOG_MAGIC'] == wire.LOG_MAGIC
     assert cpp['LOG_VERSION'] == wire.LOG_VERSION
     # The device's port is compile-time; the config default must match

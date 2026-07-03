@@ -5,9 +5,9 @@
 
 // Device-side logging. Each call formats one line, echoes it to stdout
 // (the ESP's UART, the sim's terminal) and buffers the record in a
-// small static ring for LogShipper to forward to the controller over
+// small static ring for LogSender to forward to the controller over
 // UDP. Loss is acceptable by design: when the ring wraps, the oldest
-// unshipped record is overwritten and the controller reports the gap
+// unsent record is overwritten and the controller reports the gap
 // from the sequence numbers.
 //
 // Single-threaded like the rest of the device: call only from the main
@@ -37,7 +37,7 @@ void slog_info(const char* fmt, ...);
 void slog_warn(const char* fmt, ...);
 void slog_error(const char* fmt, ...);
 
-// Shipper interface: read the oldest buffered record without removing
+// Sender interface: read the oldest buffered record without removing
 // it; pop it once it is on the wire. peek returns false when empty.
 bool slog_peek(SlogRecord& out);
 void slog_pop();

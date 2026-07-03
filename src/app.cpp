@@ -35,7 +35,7 @@ App::App(NetworkInterface& network,
       _handler(_ctx),
       _link(network, discovery, tcp, identity, _handler),
       _sync(sync_udp, _clock, identity),
-      _log_shipper(log_udp, discovery, identity)
+      _log_sender(log_udp, discovery, identity)
 {
 }
 
@@ -65,7 +65,7 @@ void App::tick()
     // Ship after the link poll so records from this tick's command
     // handling go out the same tick; before the reboot check so a
     // reboot's own logs get one send window.
-    _log_shipper.tick(_link.is_ready());
+    _log_sender.tick(_link.is_ready());
 
     // The reboot side effect is deferred to here so the ACK reaches
     // the controller first: drain any unsent tail (bounded), then go

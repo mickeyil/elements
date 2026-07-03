@@ -8,7 +8,7 @@
 #include "command_handler.h"
 #include "controller_link.h"
 #include "device_status.h"
-#include "log_shipper.h"
+#include "log_sender.h"
 #include "playback.h"
 #include "synced_clock.h"
 
@@ -85,7 +85,7 @@ private:
     CommandHandler  _handler;
     ControllerLink  _link;
     ClockSyncClient _sync;
-    LogShipper      _log_shipper;
+    LogSender       _log_sender;
 
     bool    _link_was_ready    = false;
     int64_t _next_frame_due_us = 0;  // 0 = render immediately

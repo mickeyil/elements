@@ -111,7 +111,7 @@ SYNC_PONG_WIRE_SIZE = 33
 
 FRAME_PREVIEW_HEADER_BYTES = UID_SIZE + 4 + 4
 
-# ---- Constants mirroring src/log_shipper.cpp ---------------------------------
+# ---- Constants mirroring src/log_sender.cpp ---------------------------------
 
 LOG_MAGIC = 0xD16C
 LOG_VERSION = 1

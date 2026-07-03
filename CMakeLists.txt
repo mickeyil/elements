@@ -53,7 +53,7 @@ add_library(elements_core STATIC
     src/clock_sync_client.cpp
     src/discovery.cpp
     src/slog.cpp
-    src/log_shipper.cpp
+    src/log_sender.cpp
 )
 target_include_directories(elements_core PUBLIC src)
 target_link_libraries(elements_core PUBLIC nlohmann_json::nlohmann_json)
@@ -491,7 +491,7 @@ if(BUILD_TESTS)
         src/command_processor.cpp
         src/command_handler.cpp
         src/slog.cpp
-        src/log_shipper.cpp
+        src/log_sender.cpp
         src/local_animation.cpp
         src/animation_store.cpp
         src/crc32.cpp
@@ -520,7 +520,7 @@ if(BUILD_TESTS)
     target_include_directories(test_app PRIVATE src test)
     target_link_libraries(test_app Catch2::Catch2WithMain)
 
-    # test_slog and test_log_shipper follow the standalone pattern: they
+    # test_slog and test_log_sender follow the standalone pattern: they
     # link the test platform_clock fake so uptime stamps are controllable.
     add_executable(test_slog
         test/test_slog.cpp
@@ -530,15 +530,16 @@ if(BUILD_TESTS)
     target_include_directories(test_slog PRIVATE src test)
     target_link_libraries(test_slog Catch2::Catch2WithMain)
 
-    add_executable(test_log_shipper
-        test/test_log_shipper.cpp
+    add_executable(test_log_sender
+        test/test_log_sender.cpp
         test/test_platform_clock.cpp
         src/slog.cpp
-        src/log_shipper.cpp
+        src/log_sender.cpp
         src/discovery.cpp
+        src/wire_writer.cpp
     )
-    target_include_directories(test_log_shipper PRIVATE src test)
-    target_link_libraries(test_log_shipper Catch2::Catch2WithMain)
+    target_include_directories(test_log_sender PRIVATE src test)
+    target_link_libraries(test_log_sender Catch2::Catch2WithMain)
 
     add_executable(test_crc32 test/test_crc32.cpp)
     target_link_libraries(test_crc32 elements_core Catch2::Catch2WithMain)
@@ -717,7 +718,7 @@ if(BUILD_TESTS)
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_slog COMMAND test_slog
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
-    add_test(NAME test_log_shipper COMMAND test_log_shipper
+    add_test(NAME test_log_sender COMMAND test_log_sender
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
     # Valgrind memcheck (optional)
