@@ -243,13 +243,13 @@ class LogReceiver:
         last = self._cursor.get(key)
         gap = record.seq - 1 if last is None else record.seq - last - 1
         if gap > 0:
-            log.warning('%s: lost %d log records '
+            log.warning('[%s] lost %d log records '
                         '(ring overflow or packet loss)',
                         record.uid, gap)
         if last is None or record.seq > last:
             self._cursor[key] = record.seq
         level = _DEVICE_LOG_LEVELS[record.level]
-        log.log(level, '%s: %s', record.uid, record.text)
+        log.log(level, '[%s] %s', record.uid, record.text)
 
     def close(self):
         self._sock.close()

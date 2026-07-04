@@ -30,6 +30,7 @@ DSL (.py) -> Python compiler -> binary blob -> C++ decoder -> Program -> engine 
 
 ## Test Gotchas
 
+- Python tests run via the managed venv: `local/venv/bin/python -m pytest`. The venv lives at `local/venv` (created by `./elemctl setup`); there is no `.venv`, and system pythons don't have pytest.
 - `pytest.ini` adds `controller/` and `compiler/` to `PYTHONPATH`, so run Python tests from the repo root unless you have a specific reason not to.
 - Tests marked `runtime_integration` expect an isolated local runtime: no other `./elemctl server`, `./elemctl sim`, or legacy `network_sim` processes should be running unless you intentionally bypass the guard with `ELEMCTL_TEST_ALLOW_BUSY_RUNTIME=1`.
 - C++ test fixtures under `test/fixtures/` are CMake-generated from the Python compiler. If you change compiler output or fixture-generation code, regenerate before trusting C++ test results.

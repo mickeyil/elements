@@ -480,7 +480,7 @@ def test_device_log_lands_in_controller_log(hub, log_client, caplog):
     records = [r for r in caplog.records if 'boom' in r.getMessage()]
     assert len(records) == 1
     assert records[0].levelno == logging.ERROR
-    assert records[0].getMessage() == 'sim-a: boom'
+    assert records[0].getMessage() == '[sim-a] boom'
 
 
 def test_device_log_from_unwanted_uid_is_dropped(hub, log_client, caplog):
