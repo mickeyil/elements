@@ -12,7 +12,7 @@ loop, everything keyed by UID:
 The hub owns connections and bytes, never meaning: it matches each
 ACK to the callback that sent the command and reports device arrivals
 and departures; what a command or status means belongs to the session
-layer above. drafts/controller_v3.md ("The device hub") is the spec.
+layer above.
 
 Construct a DeviceHub, then call poll(wanted_uids) once per tick; it
 returns the events and preview frames that arrived. clock_us must be
@@ -152,7 +152,7 @@ class DiscoveryServer:
 
 
 class SyncServer:
-    """Stateless PONG responder (drafts/synced_clock.md). Replies only
+    """Stateless PONG responder. Replies only
     to registered devices whose boot_token matches; everything else is
     discarded without touching any state."""
 

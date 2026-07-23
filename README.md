@@ -1,102 +1,74 @@
 # Elements
 
-Beat-synced LED animation engine targeting ESP32. Work in progress.
+LED animation engine for ESP32 devices. Animations are written in a small
+Python DSL, compiled to compact binary blobs, and played by a C++ engine that
+runs identically on real hardware and on a host simulator, so animations can
+be developed and previewed in the browser with no hardware at all. A central
+controller distributes programs and keeps every device on a shared synced
+clock, so multiple devices play in lockstep.
 
-**Docs:** [firmware & engine](drafts/firmware.md) · [controller](drafts/controller.md) · [protocol](drafts/protocol.md) · [web app](docs/web_app.md) · [future plans](docs/draft_future_plans.md)
+## AI Assistance
+This project was made with the assistance of Codex & Claude models. Some parts
+got more scrutiny than others:
+
+Current state of quality control over the AI output:
+- Most of the C++ parts were fully reviewed with multiple iterations done to design/implementation
+  and comments until a satisfied result was achieved. There's still room for improvement.
+- Python: controller - partially reviewed, more work is needed.
+- Web parts: deemed not important enough for this stage. feel the vibe..
+
+## Architecture
+
+```
+DSL (.py) -> compiler -> blob -> controller -> devices (ESP32 / sim) -> LEDs
+```
+
+- **`compiler/`** — Python animation DSL and blob compiler.
+- **`src/`** — shared C++17 device runtime: discovery, controller link, clock
+  sync, blob decoder, playback engine, compositor. Two thin platform shells:
+  **`src/firmware/`** (ESP32, PlatformIO + FastLED) and **`src/sim/`** (the
+  `sim_device` host binary).
+- **`controller/`** — Python controller service: owns session time, discovers
+  devices, compiles and distributes programs, answers clock sync.
+- **`controller/web_ui/`** — Vue 3 web UI: live device preview and playback
+  control.
+
+## Prerequisites
+
+Python >= 3.10, Node >= 20.19 (with npm), CMake >= 3.14, a C++17 compiler,
+git.
+
+```bash
+sudo apt-get install build-essential cmake git python3 python3-venv nodejs npm
+```
+
+Check `node --version` afterwards; distro-packaged Node may be older than
+20.19. The ESP32 firmware additionally needs
+[PlatformIO](https://platformio.org/); it is not required for the simulator.
 
 ## Setup
-
-`./elemctl setup` takes a fresh clone to ready-to-run. Run it **online**: it
-creates the Python venv, builds the web UI into `local/web_dist`, and builds the
-native `sim_device` binary into `build/`. Afterwards `./elemctl server`, `web`,
-and `sim` run offline from that checkout.
 
 ```bash
 ./elemctl setup
 ```
 
-Setup-time prerequisites (not needed at runtime): Python 3.10+, Node/npm, CMake,
-and a C++17 compiler. Re-running setup is cheap and idempotent; run it again
-after a pull. Generated artifacts live in the gitignored `local/` and `build/`
-dirs; `make cleanall` removes them, after which setup must be run again (online).
+Run it online: it creates a Python venv at `local/venv`, builds the web UI
+into `local/web_dist`, and builds the native `sim_device` binary into
+`build/`. It is idempotent; re-run it after a pull. Everything generated
+lives in the gitignored `build/`, `local/`, and `instance/` directories.
 
-ESP32 firmware is built separately (`make firmware`); it is not part of setup.
+## Run
 
-## Build
-
-The native build alone (without the web UI / venv):
+In three terminals:
 
 ```bash
-make build
+./elemctl server      # controller
+./elemctl sim sim-1   # a simulated device
+./elemctl web         # web UI at http://localhost:8080
 ```
 
-Direct commands still work:
+Open http://localhost:8080, add device `sim-1` (strip id `ring8`, length 8),
+then load `ring8_blue_wave` and play. Animation sources live in
+`animations/`; add or edit `.py` files there and rescan from the UI.
 
-```bash
-cmake -B build
-cmake --build build
-```
-
-Requires C++11 and Python 3 (for test fixture generation).
-
-## Test
-
-```bash
-make test
-```
-
-Direct commands still work:
-
-```bash
-cd build && ctest
-```
-
-Python test suites can be run from the repo root:
-
-```bash
-pytest
-```
-
-Or run individually:
-
-```bash
-./build/test_decoder
-./build/test_engine
-./build/test_colors
-./build/test_compositor
-./build/test_animations
-```
-
-## Local Smoke Test
-
-The old `network_sim` smoke path is deprecated and staged under
-`src/deprecated/`. The v3 sim launcher is in implementation, so the
-local multi-process smoke path is temporarily unavailable.
-
-## Runtime Notes
-
-- `web` starts the web UI server and connects to the controller as an observer client, issuing playback commands over transient writer connections
-- discovery defaults to UDP port `6040` when `controller.discovery_port` is omitted
-- set `"discovery_port": null` in the config to disable discovery explicitly
-- `elemctl` creates and maintains its managed environment at `local/venv`
-- `build/` is disposable build output; `local/` is repo-local cache and tool state
-- repo-local deployment config now lives in `instance/config.json`; it is auto-created on first run
-- simulator layouts are stored in `instance/layouts/`
-
-## Project structure
-
-```
-src/              C++ engine core (decoder, engine, compositor, animations)
-src/firmware/     ESP32 firmware (WiFi, TCP, discovery, LED output)
-src/sim/          active host/sim platform implementations
-src/deprecated/   old simulator stack staged for deletion after v3
-test/             Catch2 tests
-test/deprecated/  tests for old simulator stack, staged with deprecated code
-compiler/         Python compiler (DSL → binary blob)
-controller/       Python controller service, web UI server
-controller/web_ui/ Vue 3 browser interface source + built assets
-docs/             Documentation
-build/            Disposable build output (cmake, PlatformIO)
-local/            Repo-local cache and tool state (venv, PlatformIO workspace)
-instance/         Local deployment config and simulator layouts (gitignored)
-```
+ESP32 hardware: `make firmware` builds, `make flash` uploads.

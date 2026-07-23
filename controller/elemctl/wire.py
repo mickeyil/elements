@@ -6,10 +6,9 @@ here mirror it byte for byte:
 
   - TCP link framing and opcodes: src/link_protocol.h,
     src/controller_link.cpp (REGISTER), src/command_handler.cpp
-    (ACK payloads). Reference: drafts/controller_v3.md appendices.
+    (ACK payloads).
   - Discovery DISCOVER/OFFER: src/discovery.cpp.
-  - Clock sync PING/PONG: src/clock_sync_client.cpp,
-    drafts/synced_clock.md appendix A.
+  - Clock sync PING/PONG: src/clock_sync_client.cpp.
   - Sim frame previews: src/sim/sim_frame_output.h.
 
 All multi-byte fields are little-endian except the OFFER's IPv4
@@ -243,7 +242,7 @@ def encode_start(program_start_us):
 
 
 # JUMP repositions playback onto a compiler-marked safe interval. Retained for
-# future seek and live rejoin; the v3 session does not issue it (drafts/jump.md).
+# future seek and live rejoin; the v3 session does not issue it.
 def encode_jump(t_program):
     return encode_message(CMD_JUMP, _F32.pack(_require_finite(t_program, 't_program')))
 

@@ -5,7 +5,7 @@ connects or drops and carries bytes either way, but understands nothing
 about command meaning or order. This layer fills that gap. It owns one
 Member per configured device, tracks which are attached, and carries the
 loaded program's identity (session_id, epoch) and the shared playback
-anchor. drafts/controller_v3.md ("Sessions") is the spec.
+anchor.
 
 Round A built the membership spine (the data model plus the connect /
 disconnect / reboot lifecycle and the load() identity contract). Round B1
@@ -14,8 +14,7 @@ time from its confirmed phase toward its target, and the play() / stop()
 verbs set those targets. Pause, resume, end-of-program completion, and
 preview-frame assembly (per-strip frames bucketed into whole-program frames)
 have since landed. Operator seek and live rejoin of a late or reconnecting
-device (a JUMP onto a compiler-marked safe interval) are deferred;
-drafts/jump.md records that design.
+device (a JUMP onto a compiler-marked safe interval) are deferred.
 """
 
 import logging
@@ -296,7 +295,7 @@ class Session:
         LOADED with the right program are authorized to issue the initial
         Start. Members still loading, or attaching later, park at LOADED (dark)
         for the rest of the run; a later stop() then play() restarts them from 0
-        with the rest. Live rejoin mid-program is deferred (drafts/jump.md).
+        with the rest. Live rejoin mid-program is deferred.
 
         Valid from a loaded, stopped session or a naturally ENDED one (replay
         from 0). From PLAYING/PAUSED the operator resumes or stops first, so a
@@ -398,7 +397,7 @@ class Session:
         until the Start ACK), a Start/Resume is in flight, or it is paused
         while the target wants PLAYING. pause() must wait for this to settle,
         or it would clear a cohort's start authorization (stranding the device,
-        since the controller has no live rejoin to recover it; drafts/jump.md)
+        since the controller has no live rejoin to recover it)
         or capture a cursor against an
         anchor the device has not adopted. Parked late members (start_authorized
         False, nothing in flight) are not caught, so pause() of the playing
@@ -630,7 +629,7 @@ class Session:
                 return
             # The authorized cohort starts from program time 0. An unauthorized
             # PLAYING member at LOADED (a late joiner / reconnector) parks dark
-            # for the rest of the run; live rejoin is deferred (drafts/jump.md).
+            # for the rest of the run; live rejoin is deferred.
             # ENDED is allowed so replay Starts without a reload (the device
             # permits Start from ENDED and resets its engine).
             if (member.phase in (DeviceState.LOADED, DeviceState.ENDED)
@@ -653,8 +652,7 @@ class Session:
                 self._send(member, 'pause', wire.encode_pause(),
                            lambda m: self._after_pause(m))
             # phase PAUSED is satisfied; a reloaded device at LOADED parks (it
-            # cannot show the paused frame). Paused rejoin is deferred
-            # (drafts/jump.md).
+            # cannot show the paused frame). Paused rejoin is deferred.
             return
 
     def _send(self, member, command, encoded, apply_ok, still_relevant=None):

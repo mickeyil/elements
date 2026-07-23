@@ -7,10 +7,11 @@ class SyncedClock;
 class UdpTransport;
 struct DeviceIdentity;
 
-// ClockSyncClient is the device's clock-sync agent. It runs
+// ClockSyncClient is the device's clock-sync agent: it runs
 // NTP-style ping/pong rounds against the controller's sync server
-// and keeps a SyncedClock instance updated with the resulting
-// offset estimates.
+// and keeps a SyncedClock updated with the resulting offset
+// estimates. The controller's clock is canonical session time;
+// devices only ever follow it.
 
 // One accepted sync round. The filter ranks by rtt_us ascending.
 struct SyncSample {

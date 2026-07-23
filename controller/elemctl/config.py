@@ -2,8 +2,8 @@
 
 Reads a JSON config describing the controller and device topology.
 
-v3 shape: the controller section holds the four well-known ports
-(drafts/controller_v3.md appendix C); a device entry is just
+v3 shape: the controller section holds the five well-known ports; a
+device entry is just
 `{device_uid, strip_id, length, label?}`. Devices connect in and are
 identified by UID alone, so the config stores no addresses and no
 numeric ids. The device type is implied by the UID prefix
@@ -57,7 +57,7 @@ class ConfigError(ValueError):
 
 
 def validate_device_uid(device_uid: str) -> str | None:
-    """Check a UID against the wire policy (controller_v3.md § Identity).
+    """Check a UID against the wire policy (src/device_identity.h).
 
     Returns an error message, or None when the uid is acceptable.
     """

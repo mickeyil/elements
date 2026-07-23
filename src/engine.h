@@ -10,6 +10,10 @@
 // timeline, runs due copy ops, lets each active animation render its dst
 // view, and composites the result into a Strip.
 //
+// Cross-layer data flow is trusted, not re-validated: the compiler
+// guarantees a copy-op source sits on a layer <= its dependent's and its
+// event ends before the dependent starts.
+//
 // Engine owns the Program for its whole lifetime. Build with
 // Engine::create(); free by deleting the Engine.
 
