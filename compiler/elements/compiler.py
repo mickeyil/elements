@@ -13,7 +13,7 @@ Pipeline:
     9. Blob emission      — serialize to the binary blob format
 
 The byte layout lives in blob.py (docs/blob_format.md), enforced by
-src/decoder.cpp. Structural caps mirror src/blob_limits.h via limits.py.
+src/core/decoder.cpp. Structural caps mirror src/core/blob_limits.h via limits.py.
 """
 
 from __future__ import annotations
@@ -792,7 +792,7 @@ def _apply_width_filter(intervals: list[tuple[float, float]],
 def _check_caps(strip_length: int, buffer_sizes: list[int],
                 pixel_views: list[PixelViewSpec], copy_ops: list[CopyOpSpec],
                 blob_layers: list[BlobLayer]):
-    """Reject programs the device decoder would reject (src/blob_limits.h)."""
+    """Reject programs the device decoder would reject (src/core/blob_limits.h)."""
     if strip_length < 1:
         raise CompileError(f"strip length must be at least 1, got {strip_length}")
     if strip_length > limits.MAX_STRIP_PIXELS:

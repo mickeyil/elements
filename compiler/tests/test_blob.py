@@ -2,7 +2,7 @@
 
 Verifies the serializer against docs/blob_format.md (offsets, flags,
 section order) and against its own decoder. Byte-for-byte agreement with
-src/decoder.cpp is checked separately once C++ fixtures regenerate.
+src/core/decoder.cpp is checked separately once C++ fixtures regenerate.
 """
 
 import struct

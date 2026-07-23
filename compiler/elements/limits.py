@@ -1,8 +1,8 @@
 """Structural caps mirrored from the C++ decoder.
 
 These bound the binary blob the compiler emits; the decoder rejects any
-blob that exceeds them (src/blob_limits.h, plus MAX_STRIP_PIXELS from
-src/hardware_profile.h). The compiler rejects the same programs at
+blob that exceeds them (src/core/blob_limits.h, plus MAX_STRIP_PIXELS from
+src/core/hardware_profile.h). The compiler rejects the same programs at
 compile time, where the error is far easier to act on than a firmware
 rejection. test_blob_limits.py parses the C++ headers and asserts these
 stay equal.

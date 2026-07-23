@@ -8,8 +8,8 @@
 #include <string>
 #include <utility>
 
-#include "hardware_profile_store.h"
-#include "sim/file_key_value_store.h"
+#include "app/hardware_profile_store.h"
+#include "platform/sim/file_key_value_store.h"
 
 namespace {
 

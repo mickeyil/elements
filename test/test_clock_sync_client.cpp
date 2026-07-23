@@ -5,10 +5,10 @@
 #include <deque>
 #include <vector>
 
-#include "../src/clock_sync_client.h"
-#include "../src/device_identity.h"
-#include "../src/synced_clock.h"
-#include "../src/udp_transport.h"
+#include "app/clock_sync_client.h"
+#include "platform/device_identity.h"
+#include "app/synced_clock.h"
+#include "platform/udp_transport.h"
 #include "test_platform_clock.h"
 
 // What is and is not tested here.

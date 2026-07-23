@@ -10,7 +10,7 @@
 #include <utility>
 #include <vector>
 
-#include "sim/posix_file_store.h"
+#include "platform/sim/posix_file_store.h"
 
 namespace {
 

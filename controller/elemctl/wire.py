@@ -4,12 +4,12 @@ One function per packet or command, shared by everything that talks to
 devices. The C++ device is the reference implementation; the layouts
 here mirror it byte for byte:
 
-  - TCP link framing and opcodes: src/link_protocol.h,
-    src/controller_link.cpp (REGISTER), src/command_handler.cpp
+  - TCP link framing and opcodes: src/app/link_protocol.h,
+    src/app/controller_link.cpp (REGISTER), src/app/command_handler.cpp
     (ACK payloads).
-  - Discovery DISCOVER/OFFER: src/discovery.cpp.
-  - Clock sync PING/PONG: src/clock_sync_client.cpp.
-  - Sim frame previews: src/sim/sim_frame_output.h.
+  - Discovery DISCOVER/OFFER: src/app/discovery.cpp.
+  - Clock sync PING/PONG: src/app/clock_sync_client.cpp.
+  - Sim frame previews: src/platform/sim/sim_frame_output.h.
 
 All multi-byte fields are little-endian except the OFFER's IPv4
 address, which is four octets in network order. TCP messages are
@@ -33,7 +33,7 @@ import socket
 import struct
 from dataclasses import dataclass
 
-# ---- Constants mirroring src/link_protocol.h --------------------------------
+# ---- Constants mirroring src/app/link_protocol.h --------------------------------
 
 PROTOCOL_VERSION = 3
 
@@ -78,11 +78,11 @@ PING_INTERVAL_MS = 5_000
 MAX_BLOB_BYTES = 16 * 1024
 TCP_MSG_MAX = MAX_BLOB_BYTES + 256
 
-# Mirrors src/device_identity.h and src/animation_store.h.
+# Mirrors src/platform/device_identity.h and src/app/animation_store.h.
 UID_SIZE = 16
 ANIM_NAME_SIZE = 32
 
-# Device mode byte in the QueryDeviceStatus ACK (src/device_status.h).
+# Device mode byte in the QueryDeviceStatus ACK (src/app/device_status.h).
 DEVICE_MODE_NAMES = {
     0: 'attached_controlled',
     1: 'detached_grace_hold',
@@ -91,7 +91,7 @@ DEVICE_MODE_NAMES = {
 }
 STATUS_FLAG_PROFILE_PRESENT = 0x01
 
-# ---- Constants mirroring src/discovery.cpp ----------------------------------
+# ---- Constants mirroring src/app/discovery.cpp ----------------------------------
 
 DISCOVERY_MAGIC = 0xD1CC
 PKT_DISCOVER = 0x01
@@ -99,23 +99,23 @@ PKT_OFFER = 0x02
 DISCOVER_WIRE_SIZE = 2 + 1 + UID_SIZE
 OFFER_WIRE_SIZE = 2 + 1 + 4 + 2
 
-# ---- Constants mirroring src/clock_sync_client.cpp --------------------------
+# ---- Constants mirroring src/app/clock_sync_client.cpp --------------------------
 
 SYNC_PKT_PING = 0x01
 SYNC_PKT_PONG = 0x02
 SYNC_PING_WIRE_SIZE = 33
 SYNC_PONG_WIRE_SIZE = 33
 
-# ---- Constants mirroring src/sim/sim_frame_output.h --------------------------
+# ---- Constants mirroring src/platform/sim/sim_frame_output.h --------------------------
 
 FRAME_PREVIEW_HEADER_BYTES = UID_SIZE + 4 + 4
 
-# ---- Constants mirroring src/log_sender.cpp ---------------------------------
+# ---- Constants mirroring src/app/log_sender.cpp ---------------------------------
 
 LOG_MAGIC = 0xD16C
 LOG_VERSION = 1
 LOG_HEADER_BYTES = 2 + 1 + UID_SIZE + 4 + 4 + 4 + 1
-# Mirrors SLOG_TEXT_CAP in src/slog.h; anything longer is a forgery.
+# Mirrors SLOG_TEXT_CAP in src/app/slog.h; anything longer is a forgery.
 LOG_TEXT_CAP = 224
 
 

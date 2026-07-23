@@ -6,21 +6,21 @@
 #include <string>
 #include <vector>
 
-#include "animation_store.h"
-#include "app_context.h"
-#include "command_handler.h"
-#include "controller_link.h"
-#include "device_identity.h"
-#include "device_status.h"
-#include "discovery.h"
-#include "key_value_store.h"
-#include "link_protocol.h"
-#include "network_interface.h"
-#include "playback.h"
-#include "system_platform.h"
-#include "tcp_transport.h"
+#include "app/animation_store.h"
+#include "app/app_context.h"
+#include "app/command_handler.h"
+#include "app/controller_link.h"
+#include "platform/device_identity.h"
+#include "app/device_status.h"
+#include "app/discovery.h"
+#include "platform/key_value_store.h"
+#include "app/link_protocol.h"
+#include "platform/network_interface.h"
+#include "app/playback.h"
+#include "platform/system_platform.h"
+#include "platform/tcp_transport.h"
 #include "test_platform_clock.h"
-#include "udp_transport.h"
+#include "platform/udp_transport.h"
 
 namespace {
 

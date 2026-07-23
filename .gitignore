@@ -5,6 +5,7 @@
 *__pycache__*
 *.swp
 src/firmware/secrets.h
+src/platform/esp32/secrets.h
 *.vscode*
 bin/*
 .pio/

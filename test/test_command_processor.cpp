@@ -6,16 +6,16 @@
 #include <string>
 #include <vector>
 
-#include "animation_store.h"
-#include "app_context.h"
-#include "command_handler.h"
-#include "command_processor.h"
-#include "device_status.h"
-#include "key_value_store.h"
-#include "link_protocol.h"
-#include "playback.h"
-#include "system_platform.h"
-#include "tcp_transport.h"
+#include "app/animation_store.h"
+#include "app/app_context.h"
+#include "app/command_handler.h"
+#include "app/command_processor.h"
+#include "app/device_status.h"
+#include "platform/key_value_store.h"
+#include "app/link_protocol.h"
+#include "app/playback.h"
+#include "platform/system_platform.h"
+#include "platform/tcp_transport.h"
 #include "test_platform_clock.h"
 
 namespace {

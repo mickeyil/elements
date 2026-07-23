@@ -8,8 +8,8 @@
 #include <string>
 #include <utility>
 
-#include "sim/file_key_value_store.h"
-#include "wifi_cred_store.h"
+#include "platform/sim/file_key_value_store.h"
+#include "app/wifi_cred_store.h"
 
 namespace {
 

@@ -6,14 +6,14 @@
 #include <cstring>
 #include <vector>
 
-#include "../src/animations/paint.h"
-#include "../src/animations/shift.h"
-#include "../src/animations/spark.h"
-#include "../src/animations/wave.h"
-#include "../src/animation.h"
-#include "../src/blob_reader.h"
-#include "../src/colors.h"
-#include "../src/pixel_view.h"
+#include "core/animations/paint.h"
+#include "core/animations/shift.h"
+#include "core/animations/spark.h"
+#include "core/animations/wave.h"
+#include "core/animation.h"
+#include "core/blob_reader.h"
+#include "core/colors.h"
+#include "core/pixel_view.h"
 
 using Catch::Approx;
 

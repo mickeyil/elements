@@ -45,7 +45,7 @@ class SessionState(Enum):
 
 
 # The controller's mirror of the device's playback core. The first five
-# values match the firmware DeviceState (src/playback.h); UNKNOWN is the
+# values match the firmware DeviceState (src/app/playback.h); UNKNOWN is the
 # controller-only addition, appended last, for a device whose state has
 # not been confirmed since it connected.
 class DeviceState(Enum):
@@ -67,7 +67,7 @@ class Intent(Enum):
 
 
 # A SET_PROFILE Ok means either "already matched" or "saved a new profile
-# and is rebooting", indistinguishable on the wire (src/command_handler.cpp).
+# and is rebooting", indistinguishable on the wire (src/app/command_handler.cpp).
 # So a confirmed profile is only ever ASSUMED_MATCH, and we always send
 # SET_PROFILE first on a fresh connection.
 class ProfileState(Enum):
@@ -140,7 +140,7 @@ class Member:
 
     def on_connected(self, boot_token, rebooted):
         """A link came up for this device. The device dropped any program
-        on its prior detach (src/app.cpp reset_for_detach), so its runtime
+        on its prior detach (src/app/app.cpp reset_for_detach), so its runtime
         starts unknown and the profile must be re-established."""
         self.attached = True
         self.boot_token = boot_token
@@ -754,7 +754,7 @@ class Session:
 
     def _check_end(self):
         """Natural end of program. The device transitions PLAYING -> ENDED when
-        its render passes the program duration (src/playback.cpp); there is no
+        its render passes the program duration (src/app/playback.cpp); there is no
         end event or query, so the controller ends the session by the same
         clock the devices follow: once live program time reaches the duration,
         the session and every playing member are ENDED.

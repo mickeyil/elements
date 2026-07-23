@@ -2,8 +2,8 @@
 
 #include <cstdint>
 
-#include "../src/colors.h"
-#include "../src/pixel_view.h"
+#include "core/colors.h"
+#include "core/pixel_view.h"
 
 namespace {
 hsva_t with_h(float h) { return hsva_t(h, 0.5f, 0.5f, 1.0f); }

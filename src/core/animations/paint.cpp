@@ -1,0 +1,99 @@
+#include "core/animations/paint.h"
+
+#include "core/pixel_view.h"
+
+#include <cmath>
+#include <new>
+
+namespace {
+bool read_finite_f32(BlobReader& r, float& out) {
+    return r.read_f32_le(out) && std::isfinite(out);
+}
+}  // namespace
+
+Paint::Paint(float h, float s, float v, float a)
+    : _mode(Mode::Solid), _solid(h, s, v, a), _constant(nullptr), _constant_count(0) {}
+
+Paint::Paint(hsva_t* constant, uint16_t count)
+    : _mode(Mode::Constant), _solid(), _constant(constant), _constant_count(count) {}
+
+Paint::~Paint() { delete[] _constant; }
+
+void Paint::render(PixelView& dst, float)
+{
+    if (_mode == Mode::Solid) {
+        for (uint16_t i = 0; i < dst.size(); i++) {
+            dst[i] = _solid;
+        }
+        return;
+    }
+
+    // Constant mode: the decoder pinned _constant_count == dst.size().
+    for (uint16_t i = 0; i < dst.size(); i++) {
+        dst[i] = _constant[i];
+    }
+}
+
+Animation* Paint::from_blob(const uint8_t* params, size_t params_size,
+                                 DecodeError* err_out)
+{
+    *err_out = DecodeError::InvalidField;
+    BlobReader r(params, params_size);
+
+    uint8_t mode = 0;
+    if (!r.read_u8(mode)) return nullptr;
+
+    if (mode == 0) {
+        float h, s, v, a;
+        if (!read_finite_f32(r, h)) return nullptr;
+        if (!read_finite_f32(r, s)) return nullptr;
+        if (!read_finite_f32(r, v)) return nullptr;
+        if (!read_finite_f32(r, a)) return nullptr;
+
+        Paint* anim = new (std::nothrow) Paint(h, s, v, a);
+        if (anim == nullptr) {
+            *err_out = DecodeError::OutOfMemory;
+            return nullptr;
+        }
+        *err_out = DecodeError::Ok;
+        return anim;
+    }
+
+    if (mode == 1) {
+        uint16_t count = 0;
+        if (!r.read_u16_le(count)) return nullptr;
+        if (count == 0) return nullptr;   // constant mode without a constant is malformed
+
+        // Reject before allocating: a malformed count must not force a large
+        // speculative allocation when the params block cannot hold it.
+        if (r.remaining() < static_cast<size_t>(count) * 4 * sizeof(float)) {
+            return nullptr;
+        }
+
+        hsva_t* constant = new (std::nothrow) hsva_t[count];
+        if (constant == nullptr) {
+            *err_out = DecodeError::OutOfMemory;
+            return nullptr;
+        }
+        for (uint16_t i = 0; i < count; i++) {
+            if (!read_finite_f32(r, constant[i].h) ||
+                !read_finite_f32(r, constant[i].s) ||
+                !read_finite_f32(r, constant[i].v) ||
+                !read_finite_f32(r, constant[i].a)) {
+                delete[] constant;
+                return nullptr;
+            }
+        }
+
+        Paint* anim = new (std::nothrow) Paint(constant, count);
+        if (anim == nullptr) {
+            delete[] constant;
+            *err_out = DecodeError::OutOfMemory;
+            return nullptr;
+        }
+        *err_out = DecodeError::Ok;
+        return anim;
+    }
+
+    return nullptr;  // unrecognized mode
+}

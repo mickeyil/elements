@@ -115,12 +115,12 @@ def _find_xtensa_gpp() -> Path | None:
 _XTENSA_GPP = _find_xtensa_gpp()
 
 _PROBE = """
-#include "program.h"
-#include "pixel_view.h"
-#include "animations/wave.h"
-#include "animations/shift.h"
-#include "animations/spark.h"
-#include "animations/paint.h"
+#include "core/program.h"
+#include "core/pixel_view.h"
+#include "core/animations/wave.h"
+#include "core/animations/shift.h"
+#include "core/animations/spark.h"
+#include "core/animations/paint.h"
 template <int N> struct ShowSize;
 ShowSize<(int)sizeof(hsva_t)>         s_hsva;
 ShowSize<(int)sizeof(PixelView)>      s_pixelview;

@@ -2,8 +2,8 @@
 
 #include <cstdint>
 
-#include "../src/device_status.h"
-#include "../src/link_protocol.h"
+#include "app/device_status.h"
+#include "app/link_protocol.h"
 
 TEST_CASE("DeviceMode wire values are stable", "[device_status]") {
     CHECK(static_cast<uint8_t>(DeviceMode::AttachedControlled) == 0);

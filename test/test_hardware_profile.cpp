@@ -1,6 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 
-#include "../src/hardware_profile.h"
+#include "core/hardware_profile.h"
 
 TEST_CASE("HardwareProfile: default constructed is invalid", "[hardware_profile]") {
     HardwareProfile profile;

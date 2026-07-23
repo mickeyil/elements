@@ -1,6 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
-#include "../src/gamma.h"
+#include "core/gamma.h"
 
 // ---------------------------------------------------------------------------
 // Identity
@@ -47,7 +47,7 @@ TEST_CASE("GammaCorrection: 2.8 darkens midpoint", "[gamma]") {
 
 TEST_CASE("GammaCorrection: 2.8 matches golden value at index 128", "[gamma]") {
     // powf(128/255, 2.8) * 255 + 0.5 = 37.55... -> 37 after truncation.
-    // Matches the pre-baked table that lived in src/colors.cpp.
+    // Matches the pre-baked table that lived in src/core/colors.cpp.
     GammaCorrection gc;
     gc.set_gamma(DEFAULT_GAMMA);
     CHECK(gc.correct(rgb_t(128, 128, 128)).r == 37);

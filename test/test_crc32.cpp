@@ -3,7 +3,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include "crc32.h"
+#include "app/crc32.h"
 
 TEST_CASE("crc32 ieee matches standard check vector", "[crc32]")
 {

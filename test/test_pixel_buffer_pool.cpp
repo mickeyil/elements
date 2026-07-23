@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-#include "../src/pixel_buffer_pool.h"
+#include "core/pixel_buffer_pool.h"
 
 // ---------------------------------------------------------------------------
 // Empty / invalid input

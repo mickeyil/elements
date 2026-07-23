@@ -2,8 +2,8 @@
 
 #include <cstdint>
 
-#include "../src/copy_ops.h"
-#include "../src/runtime_constants.h"
+#include "core/copy_ops.h"
+#include "core/runtime_constants.h"
 
 namespace {
 CopyOp make_op(float at, uint16_t src, uint16_t dst) {

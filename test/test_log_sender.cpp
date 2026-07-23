@@ -5,12 +5,12 @@
 #include <string>
 #include <vector>
 
-#include "device_identity.h"
-#include "discovery.h"
-#include "log_sender.h"
-#include "slog.h"
+#include "platform/device_identity.h"
+#include "app/discovery.h"
+#include "app/log_sender.h"
+#include "app/slog.h"
 #include "test_platform_clock.h"
-#include "udp_transport.h"
+#include "platform/udp_transport.h"
 
 namespace {
 

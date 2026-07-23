@@ -1,4 +1,4 @@
-#include "platform_clock.h"
+#include "platform/platform_clock.h"
 #include "test_platform_clock.h"
 
 namespace {

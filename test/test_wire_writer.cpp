@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <cstring>
 
-#include "../src/wire_writer.h"
+#include "app/wire_writer.h"
 
 TEST_CASE("WireWriter emits little-endian scalars", "[wire_writer]") {
     uint8_t buf[7] = {};

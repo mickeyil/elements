@@ -4,8 +4,8 @@
 #include <cstdint>
 #include <cstring>
 
-#include "../src/blob_limits.h"
-#include "../src/blob_reader.h"
+#include "core/blob_limits.h"
+#include "core/blob_reader.h"
 
 TEST_CASE("Blob limits expose v3 caps", "[blob_reader][blob_limits]") {
     CHECK(MAX_LAYER_COUNT == 32);

@@ -2,13 +2,13 @@
 
 #include <cstdint>
 
-#include "../src/animation.h"
-#include "../src/copy_ops.h"
-#include "../src/layer.h"
-#include "../src/pixel_buffer_pool.h"
-#include "../src/pixel_views.h"
-#include "../src/program.h"
-#include "../src/runtime_constants.h"
+#include "core/animation.h"
+#include "core/copy_ops.h"
+#include "core/layer.h"
+#include "core/pixel_buffer_pool.h"
+#include "core/pixel_views.h"
+#include "core/program.h"
+#include "core/runtime_constants.h"
 
 namespace {
 

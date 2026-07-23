@@ -6,10 +6,10 @@
 #include <limits>
 #include <vector>
 
-#include "../src/animation_types.h"
-#include "../src/playback.h"
-#include "../src/runtime_constants.h"
-#include "../src/synced_clock.h"
+#include "core/animation_types.h"
+#include "app/playback.h"
+#include "core/runtime_constants.h"
+#include "app/synced_clock.h"
 #include "test_platform_clock.h"
 
 namespace {

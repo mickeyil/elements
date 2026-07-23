@@ -2,10 +2,10 @@
 
 #include <cstdint>
 
-#include "../src/colors.h"
-#include "../src/compositor.h"
-#include "../src/pixel_view.h"
-#include "../src/strip.h"
+#include "core/colors.h"
+#include "core/compositor.h"
+#include "core/pixel_view.h"
+#include "core/strip.h"
 
 namespace {
 

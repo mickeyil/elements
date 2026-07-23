@@ -2,16 +2,16 @@
 
 #include <cstdint>
 
-#include "../src/animation.h"
-#include "../src/colors.h"
-#include "../src/copy_ops.h"
-#include "../src/engine.h"
-#include "../src/layer.h"
-#include "../src/pixel_buffer_pool.h"
-#include "../src/pixel_views.h"
-#include "../src/program.h"
-#include "../src/runtime_constants.h"
-#include "../src/strip.h"
+#include "core/animation.h"
+#include "core/colors.h"
+#include "core/copy_ops.h"
+#include "core/engine.h"
+#include "core/layer.h"
+#include "core/pixel_buffer_pool.h"
+#include "core/pixel_views.h"
+#include "core/program.h"
+#include "core/runtime_constants.h"
+#include "core/strip.h"
 
 namespace {
 

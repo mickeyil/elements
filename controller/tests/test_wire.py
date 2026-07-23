@@ -77,7 +77,7 @@ def _cpp_constants(relative_path: str) -> dict[str, int]:
 
 
 def test_link_protocol_constants_match_cpp():
-    cpp = _cpp_constants('src/link_protocol.h')
+    cpp = _cpp_constants('src/app/link_protocol.h')
     expected = {
         'PROTOCOL_VERSION': wire.PROTOCOL_VERSION,
         'CMD_REGISTER': wire.CMD_REGISTER,
@@ -115,19 +115,19 @@ def test_link_protocol_constants_match_cpp():
 
 
 def test_identity_and_store_sizes_match_cpp():
-    assert _cpp_constants('src/device_identity.h')['UID_SIZE'] == wire.UID_SIZE
-    assert _cpp_constants('src/animation_store.h')['ANIM_NAME_SIZE'] == wire.ANIM_NAME_SIZE
+    assert _cpp_constants('src/platform/device_identity.h')['UID_SIZE'] == wire.UID_SIZE
+    assert _cpp_constants('src/app/animation_store.h')['ANIM_NAME_SIZE'] == wire.ANIM_NAME_SIZE
 
 
 def test_discovery_constants_match_cpp():
-    cpp = _cpp_constants('src/discovery.cpp')
+    cpp = _cpp_constants('src/app/discovery.cpp')
     assert cpp['MAGIC'] == wire.DISCOVERY_MAGIC
     assert cpp['PKT_DISCOVER'] == wire.PKT_DISCOVER
     assert cpp['PKT_OFFER'] == wire.PKT_OFFER
 
 
 def test_sync_constants_match_cpp():
-    cpp = _cpp_constants('src/clock_sync_client.cpp')
+    cpp = _cpp_constants('src/app/clock_sync_client.cpp')
     assert cpp['PKT_PING'] == wire.SYNC_PKT_PING
     assert cpp['PKT_PONG'] == wire.SYNC_PKT_PONG
     assert cpp['PING_WIRE_SIZE'] == wire.SYNC_PING_WIRE_SIZE
@@ -136,7 +136,7 @@ def test_sync_constants_match_cpp():
 
 def test_log_constants_match_cpp():
     from elemctl.config import DEFAULT_LOG_PORT
-    cpp = _cpp_constants('src/log_sender.cpp')
+    cpp = _cpp_constants('src/app/log_sender.cpp')
     assert cpp['LOG_MAGIC'] == wire.LOG_MAGIC
     assert cpp['LOG_VERSION'] == wire.LOG_VERSION
     # The device's port is compile-time; the config default must match

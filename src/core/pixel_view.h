@@ -1,0 +1,103 @@
+#pragma once
+
+#include <cstdint>
+
+#include "core/colors.h"
+
+// PixelView is a logical view over an hsva_t underlying buffer.
+//
+// `storage_indices` remaps the buffer slot each view[i] uses (useful
+// for scattered access into the buffer). `physical_indices` gives the
+// strip LED that view[i] lights, and only matters for views the
+// compositor consumes -- keeping it on the view leaves the compositor
+// uniform. Either array may be omitted; the missing mapping defaults
+// to identity.
+//
+// The view borrows the underlying buffer (PixelBufferPool owns it) but
+// owns its indirection arrays. Bind via initialize(); release via
+// reset() or destruction.
+//
+//     PixelView v;                     // not usable until initialize() is called
+//     v.initialize(buffer, 8);         // 8 pixels of buffer; identity storage
+//     v[3] = hsva_t(120.0, 1.0, 0.5);  // writes to buffer[3]
+
+class PixelView {
+public:
+    ~PixelView();
+
+    // Bind the view to a buffer with optional indirection arrays.
+    //
+    // storage_indices == nullptr: identity storage (view[i] -> buffer[i]).
+    // Otherwise the array is copied and view[i] -> buffer[storage_indices[i]].
+    //
+    // has_physical_mapping == false: storage-only view; must not be passed
+    // to the compositor. The physical_* arguments are ignored.
+    // has_physical_mapping == true && physical_identity == true:
+    //     physical_index(i) == i.
+    // has_physical_mapping == true && physical_identity == false:
+    //     physical_indices must point to `size` entries (copied and owned).
+    //
+    // Returns false on allocation failure or invalid arguments (size > 0
+    // with buffer == nullptr, or non-identity physical mapping with
+    // physical_indices == nullptr).
+    bool initialize(
+        hsva_t* buffer,
+        uint16_t size,
+        const uint16_t* storage_indices = nullptr,
+        bool has_physical_mapping = false,
+        const uint16_t* physical_indices = nullptr,
+        bool physical_identity = false
+    );
+
+    // Release owned indirection state and clear the binding.
+    void reset();
+
+    // Zero every logical pixel reachable through the view.
+    void clear();
+
+    uint16_t size() const { return _size; }
+
+    bool empty() const { return _size == 0; }
+
+    // True when storage is identity (view[i] == buffer[i]).
+    bool is_storage_identity() const { return _storage_indices == nullptr; }
+
+    // True when the view carries a physical-LED mapping.
+    bool has_physical_mapping() const { return _has_physical_mapping; }
+
+    // True when physical mapping is identity (physical_index(i) == i).
+    bool is_physical_identity() const {
+        return _has_physical_mapping && _physical_identity;
+    }
+
+    // Logical pixel access.
+    hsva_t& operator[](uint16_t i) {
+        return _buffer[_storage_indices ? _storage_indices[i] : i];
+    }
+    const hsva_t& operator[](uint16_t i) const {
+        return _buffer[_storage_indices ? _storage_indices[i] : i];
+    }
+
+    // Physical LED index for logical pixel i. Only meaningful when
+    // has_physical_mapping() is true; returns 0 otherwise.
+    uint16_t physical_index(uint16_t i) const {
+        if (!_has_physical_mapping) return 0;
+        return _physical_identity ? i : _physical_indices[i];
+    }
+
+private:
+    // Non-owning pointer to the underlying hsva_t buffer.
+    hsva_t* _buffer = nullptr;
+
+    // Owned logical -> storage-slot mapping. nullptr means identity.
+    uint16_t* _storage_indices = nullptr;
+
+    // Owned logical -> physical-LED mapping. nullptr means either no
+    // physical mapping or identity physical mapping; the flags below
+    // distinguish.
+    uint16_t* _physical_indices = nullptr;
+
+    uint16_t _size = 0;
+    bool _has_physical_mapping = false;
+    bool _physical_identity = false;
+};

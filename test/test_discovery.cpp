@@ -5,9 +5,9 @@
 #include <deque>
 #include <vector>
 
-#include "../src/device_identity.h"
-#include "../src/discovery.h"
-#include "../src/udp_transport.h"
+#include "platform/device_identity.h"
+#include "app/discovery.h"
+#include "platform/udp_transport.h"
 #include "test_platform_clock.h"
 
 // What is and is not tested here.

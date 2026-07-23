@@ -1,6 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 
-#include "../src/sim/host_network_interface.h"
+#include "platform/sim/host_network_interface.h"
 
 TEST_CASE("HostNetworkInterface is always up", "[host_network_interface]") {
     HostNetworkInterface net;

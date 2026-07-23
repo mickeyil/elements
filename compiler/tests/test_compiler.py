@@ -448,7 +448,7 @@ class TestConfiguredStripLengths:
 
 
 # ---------------------------------------------------------------------------
-# Structural caps (mirror src/blob_limits.h)
+# Structural caps (mirror src/core/blob_limits.h)
 # ---------------------------------------------------------------------------
 
 class TestCaps:

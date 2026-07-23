@@ -3,10 +3,10 @@
 #include <cstring>
 #include <vector>
 
-#include "device_identity.h"
-#include "sim_frame_output.h"
-#include "strip.h"
-#include "udp_transport.h"
+#include "platform/device_identity.h"
+#include "platform/sim/sim_frame_output.h"
+#include "core/strip.h"
+#include "platform/udp_transport.h"
 
 namespace {
 

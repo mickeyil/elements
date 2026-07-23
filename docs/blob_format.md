@@ -122,7 +122,7 @@ Notes:
 - `dst_pixv_idx` is mandatory and must reference a view with
   `has_physical` set; that is what reaches real LEDs.
 - `params` layout is owned by each animation's `from_blob()` factory
-  (see `src/animations/*.h`). A factory may read fewer bytes than
+  (see `src/core/animations/*.h`). A factory may read fewer bytes than
   `params_size`; trailing bytes are reserved for forward-compatible
   extensions. Changes that alter meaning must bump the blob version.
 - Some animations add post-parse constraints (e.g. Shift requires both
@@ -132,7 +132,7 @@ Notes:
 ## Limits
 
 Structural caps the decoder enforces before allocating. Defined in
-`src/blob_limits.h` and mirrored by the compiler:
+`src/core/blob_limits.h` and mirrored by the compiler:
 
     constant                value    bounds
     MAX_LAYER_COUNT         32       header layer_count
@@ -147,7 +147,7 @@ Structural caps the decoder enforces before allocating. Defined in
 ## Rejection reasons
 
 `decode_program()` returns one `DecodeError` on failure (see
-`src/blob_reader.h`):
+`src/core/blob_reader.h`):
 
     BadMagic             first 4 bytes are not "ELEM"
     BadVersion           version byte is not 3

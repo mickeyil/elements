@@ -5,14 +5,14 @@
 #include <cstring>
 #include <vector>
 
-#include "../src/animation_types.h"
-#include "../src/animations/paint.h"
-#include "../src/blob_limits.h"
-#include "../src/blob_reader.h"
-#include "../src/colors.h"
-#include "../src/decoder.h"
-#include "../src/program.h"
-#include "../src/runtime_constants.h"
+#include "core/animation_types.h"
+#include "core/animations/paint.h"
+#include "core/blob_limits.h"
+#include "core/blob_reader.h"
+#include "core/colors.h"
+#include "core/decoder.h"
+#include "core/program.h"
+#include "core/runtime_constants.h"
 
 namespace {
 

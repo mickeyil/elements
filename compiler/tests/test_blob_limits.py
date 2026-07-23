@@ -33,8 +33,8 @@ def _parse_constexpr_ints(path: Path) -> dict[str, int]:
 
 
 def test_blob_limits_match_cpp():
-    cpp = _parse_constexpr_ints(REPO_ROOT / "src" / "blob_limits.h")
-    cpp.update(_parse_constexpr_ints(REPO_ROOT / "src" / "hardware_profile.h"))
+    cpp = _parse_constexpr_ints(REPO_ROOT / "src" / "core" / "blob_limits.h")
+    cpp.update(_parse_constexpr_ints(REPO_ROOT / "src" / "core" / "hardware_profile.h"))
 
     expected = {
         "MAX_LAYER_COUNT": limits.MAX_LAYER_COUNT,

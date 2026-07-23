@@ -18,42 +18,42 @@ FetchContent_MakeAvailable(nlohmann_json)
 # ---------------------------------------------------------------------------
 
 add_library(elements_core STATIC
-    src/animation_store.cpp
-    src/command_handler.cpp
-    src/local_animation.cpp
-    src/command_processor.cpp
-    src/controller_link.cpp
-    src/crc32.cpp
-    src/decoder.cpp
-    src/engine.cpp
-    src/compositor.cpp
-    src/colors.cpp
-    src/copy_ops.cpp
-    src/gamma.cpp
-    src/hardware_profile_store.cpp
-    src/wifi_cred_store.cpp
-    src/sim/file_key_value_store.cpp
-    src/sim/host_platform_clock.cpp
-    src/sim/posix_file_store.cpp
-    src/sim/posix_tcp_transport.cpp
-    src/sim/posix_udp_transport.cpp
-    src/sim/sim_storage.cpp
-    src/sim/sim_system_platform.cpp
-    src/pixel_buffer_pool.cpp
-    src/pixel_view.cpp
-    src/pixel_views.cpp
-    src/strip.cpp
-    src/layer.cpp
-    src/program.cpp
-    src/animations/wave.cpp
-    src/animations/spark.cpp
-    src/animations/paint.cpp
-    src/animations/shift.cpp
-    src/playback.cpp
-    src/clock_sync_client.cpp
-    src/discovery.cpp
-    src/slog.cpp
-    src/log_sender.cpp
+    src/app/animation_store.cpp
+    src/app/command_handler.cpp
+    src/app/local_animation.cpp
+    src/app/command_processor.cpp
+    src/app/controller_link.cpp
+    src/app/crc32.cpp
+    src/core/decoder.cpp
+    src/core/engine.cpp
+    src/core/compositor.cpp
+    src/core/colors.cpp
+    src/core/copy_ops.cpp
+    src/core/gamma.cpp
+    src/app/hardware_profile_store.cpp
+    src/app/wifi_cred_store.cpp
+    src/platform/sim/file_key_value_store.cpp
+    src/platform/sim/host_platform_clock.cpp
+    src/platform/sim/posix_file_store.cpp
+    src/platform/sim/posix_tcp_transport.cpp
+    src/platform/sim/posix_udp_transport.cpp
+    src/platform/sim/sim_storage.cpp
+    src/platform/sim/sim_system_platform.cpp
+    src/core/pixel_buffer_pool.cpp
+    src/core/pixel_view.cpp
+    src/core/pixel_views.cpp
+    src/core/strip.cpp
+    src/core/layer.cpp
+    src/core/program.cpp
+    src/core/animations/wave.cpp
+    src/core/animations/spark.cpp
+    src/core/animations/paint.cpp
+    src/core/animations/shift.cpp
+    src/app/playback.cpp
+    src/app/clock_sync_client.cpp
+    src/app/discovery.cpp
+    src/app/slog.cpp
+    src/app/log_sender.cpp
 )
 target_include_directories(elements_core PUBLIC src)
 target_link_libraries(elements_core PUBLIC nlohmann_json::nlohmann_json)
@@ -63,13 +63,13 @@ target_link_libraries(elements_core PUBLIC nlohmann_json::nlohmann_json)
 # ---------------------------------------------------------------------------
 
 add_executable(sim_device
-    src/sim/main.cpp
-    src/app.cpp
-    src/blob_reader.cpp
-    src/wire_reader.cpp
-    src/wire_writer.cpp
-    src/sim/sim_device_identity.cpp
-    src/sim/sim_frame_output.cpp
+    src/platform/sim/main.cpp
+    src/app/app.cpp
+    src/core/blob_reader.cpp
+    src/app/wire_reader.cpp
+    src/app/wire_writer.cpp
+    src/platform/sim/sim_device_identity.cpp
+    src/platform/sim/sim_frame_output.cpp
 )
 target_link_libraries(sim_device elements_core)
 
@@ -91,35 +91,35 @@ if(BUILD_TESTS)
 
     add_executable(test_decoder
         test/test_decoder.cpp
-        src/decoder.cpp
-        src/blob_reader.cpp
-        src/program.cpp
-        src/layer.cpp
-        src/pixel_buffer_pool.cpp
-        src/pixel_view.cpp
-        src/pixel_views.cpp
-        src/copy_ops.cpp
-        src/colors.cpp
-        src/animations/wave.cpp
-        src/animations/spark.cpp
-        src/animations/paint.cpp
-        src/animations/shift.cpp
+        src/core/decoder.cpp
+        src/core/blob_reader.cpp
+        src/core/program.cpp
+        src/core/layer.cpp
+        src/core/pixel_buffer_pool.cpp
+        src/core/pixel_view.cpp
+        src/core/pixel_views.cpp
+        src/core/copy_ops.cpp
+        src/core/colors.cpp
+        src/core/animations/wave.cpp
+        src/core/animations/spark.cpp
+        src/core/animations/paint.cpp
+        src/core/animations/shift.cpp
     )
     target_include_directories(test_decoder PRIVATE src)
     target_link_libraries(test_decoder Catch2::Catch2WithMain)
 
     add_executable(test_engine
         test/test_engine.cpp
-        src/engine.cpp
-        src/compositor.cpp
-        src/strip.cpp
-        src/program.cpp
-        src/layer.cpp
-        src/pixel_buffer_pool.cpp
-        src/pixel_view.cpp
-        src/pixel_views.cpp
-        src/copy_ops.cpp
-        src/colors.cpp
+        src/core/engine.cpp
+        src/core/compositor.cpp
+        src/core/strip.cpp
+        src/core/program.cpp
+        src/core/layer.cpp
+        src/core/pixel_buffer_pool.cpp
+        src/core/pixel_view.cpp
+        src/core/pixel_views.cpp
+        src/core/copy_ops.cpp
+        src/core/colors.cpp
     )
     target_include_directories(test_engine PRIVATE src)
     target_link_libraries(test_engine Catch2::Catch2WithMain)
@@ -127,11 +127,11 @@ if(BUILD_TESTS)
     # test_colors and test_gamma are standalone during the v3 migration:
     # elements_core compilation is broken until compositor is rewired in step
     # 13, so these targets link only their own module sources.
-    add_executable(test_colors test/test_colors.cpp src/colors.cpp)
+    add_executable(test_colors test/test_colors.cpp src/core/colors.cpp)
     target_include_directories(test_colors PRIVATE src)
     target_link_libraries(test_colors Catch2::Catch2WithMain)
 
-    add_executable(test_gamma test/test_gamma.cpp src/gamma.cpp)
+    add_executable(test_gamma test/test_gamma.cpp src/core/gamma.cpp)
     target_include_directories(test_gamma PRIVATE src)
     target_link_libraries(test_gamma Catch2::Catch2WithMain)
 
@@ -139,15 +139,15 @@ if(BUILD_TESTS)
     target_include_directories(test_hardware_profile PRIVATE src)
     target_link_libraries(test_hardware_profile Catch2::Catch2WithMain)
 
-    add_executable(test_blob_reader test/test_blob_reader.cpp src/blob_reader.cpp)
+    add_executable(test_blob_reader test/test_blob_reader.cpp src/core/blob_reader.cpp)
     target_include_directories(test_blob_reader PRIVATE src)
     target_link_libraries(test_blob_reader Catch2::Catch2WithMain)
 
-    add_executable(test_wire_reader test/test_wire_reader.cpp src/wire_reader.cpp)
+    add_executable(test_wire_reader test/test_wire_reader.cpp src/app/wire_reader.cpp)
     target_include_directories(test_wire_reader PRIVATE src)
     target_link_libraries(test_wire_reader Catch2::Catch2WithMain)
 
-    add_executable(test_wire_writer test/test_wire_writer.cpp src/wire_writer.cpp)
+    add_executable(test_wire_writer test/test_wire_writer.cpp src/app/wire_writer.cpp)
     target_include_directories(test_wire_writer PRIVATE src)
     target_link_libraries(test_wire_writer Catch2::Catch2WithMain)
 
@@ -161,7 +161,7 @@ if(BUILD_TESTS)
 
     add_executable(test_sim_system_platform
         test/test_sim_system_platform.cpp
-        src/sim/sim_system_platform.cpp)
+        src/platform/sim/sim_system_platform.cpp)
     target_include_directories(test_sim_system_platform PRIVATE src)
     target_link_libraries(test_sim_system_platform Catch2::Catch2WithMain)
 
@@ -171,14 +171,14 @@ if(BUILD_TESTS)
     # adjacency invariant inside an `#ifdef ARDUINO` block in the test.
     add_executable(test_pixel_buffer_pool
         test/test_pixel_buffer_pool.cpp
-        src/pixel_buffer_pool.cpp
+        src/core/pixel_buffer_pool.cpp
     )
     target_include_directories(test_pixel_buffer_pool PRIVATE src)
     target_link_libraries(test_pixel_buffer_pool Catch2::Catch2WithMain)
 
     add_executable(test_pixel_buffer_pool_pooled
         test/test_pixel_buffer_pool.cpp
-        src/pixel_buffer_pool.cpp
+        src/core/pixel_buffer_pool.cpp
     )
     target_include_directories(test_pixel_buffer_pool_pooled PRIVATE src)
     target_compile_definitions(test_pixel_buffer_pool_pooled PRIVATE ARDUINO=1)
@@ -186,96 +186,96 @@ if(BUILD_TESTS)
 
     add_executable(test_pixel_view
         test/test_pixel_view.cpp
-        src/pixel_view.cpp
+        src/core/pixel_view.cpp
     )
     target_include_directories(test_pixel_view PRIVATE src)
     target_link_libraries(test_pixel_view Catch2::Catch2WithMain)
 
     add_executable(test_pixel_views
         test/test_pixel_views.cpp
-        src/pixel_views.cpp
-        src/pixel_view.cpp
-        src/pixel_buffer_pool.cpp
+        src/core/pixel_views.cpp
+        src/core/pixel_view.cpp
+        src/core/pixel_buffer_pool.cpp
     )
     target_include_directories(test_pixel_views PRIVATE src)
     target_link_libraries(test_pixel_views Catch2::Catch2WithMain)
 
-    add_executable(test_copy_ops test/test_copy_ops.cpp src/copy_ops.cpp)
+    add_executable(test_copy_ops test/test_copy_ops.cpp src/core/copy_ops.cpp)
     target_include_directories(test_copy_ops PRIVATE src)
     target_link_libraries(test_copy_ops Catch2::Catch2WithMain)
 
     add_executable(test_strip
         test/test_strip.cpp
-        src/strip.cpp
-        src/gamma.cpp
+        src/core/strip.cpp
+        src/core/gamma.cpp
     )
     target_include_directories(test_strip PRIVATE src)
     target_link_libraries(test_strip Catch2::Catch2WithMain)
 
-    add_executable(test_layer test/test_layer.cpp src/layer.cpp)
+    add_executable(test_layer test/test_layer.cpp src/core/layer.cpp)
     target_include_directories(test_layer PRIVATE src)
     target_link_libraries(test_layer Catch2::Catch2WithMain)
 
     add_executable(test_program
         test/test_program.cpp
-        src/program.cpp
-        src/layer.cpp
-        src/pixel_buffer_pool.cpp
-        src/pixel_view.cpp
-        src/pixel_views.cpp
-        src/copy_ops.cpp
+        src/core/program.cpp
+        src/core/layer.cpp
+        src/core/pixel_buffer_pool.cpp
+        src/core/pixel_view.cpp
+        src/core/pixel_views.cpp
+        src/core/copy_ops.cpp
     )
     target_include_directories(test_program PRIVATE src)
     target_link_libraries(test_program Catch2::Catch2WithMain)
 
     add_executable(test_udp_transport
         test/test_udp_transport.cpp
-        src/sim/posix_udp_transport.cpp
+        src/platform/sim/posix_udp_transport.cpp
     )
     target_include_directories(test_udp_transport PRIVATE src)
     target_link_libraries(test_udp_transport Catch2::Catch2WithMain)
 
     add_executable(test_tcp_transport
         test/test_tcp_transport.cpp
-        src/sim/posix_tcp_transport.cpp
+        src/platform/sim/posix_tcp_transport.cpp
     )
     target_include_directories(test_tcp_transport PRIVATE src)
     target_link_libraries(test_tcp_transport Catch2::Catch2WithMain)
 
     add_executable(test_file_store
         test/test_file_store.cpp
-        src/sim/posix_file_store.cpp
-        src/sim/sim_storage.cpp
+        src/platform/sim/posix_file_store.cpp
+        src/platform/sim/sim_storage.cpp
     )
     target_include_directories(test_file_store PRIVATE src)
     target_link_libraries(test_file_store Catch2::Catch2WithMain)
 
     add_executable(test_animation_store
         test/test_animation_store.cpp
-        src/animation_store.cpp
-        src/crc32.cpp
-        src/blob_reader.cpp
-        src/decoder.cpp
-        src/program.cpp
-        src/layer.cpp
-        src/pixel_buffer_pool.cpp
-        src/pixel_view.cpp
-        src/pixel_views.cpp
-        src/copy_ops.cpp
-        src/colors.cpp
-        src/animations/wave.cpp
-        src/animations/spark.cpp
-        src/animations/paint.cpp
-        src/animations/shift.cpp
+        src/app/animation_store.cpp
+        src/app/crc32.cpp
+        src/core/blob_reader.cpp
+        src/core/decoder.cpp
+        src/core/program.cpp
+        src/core/layer.cpp
+        src/core/pixel_buffer_pool.cpp
+        src/core/pixel_view.cpp
+        src/core/pixel_views.cpp
+        src/core/copy_ops.cpp
+        src/core/colors.cpp
+        src/core/animations/wave.cpp
+        src/core/animations/spark.cpp
+        src/core/animations/paint.cpp
+        src/core/animations/shift.cpp
     )
     target_include_directories(test_animation_store PRIVATE src)
     target_link_libraries(test_animation_store Catch2::Catch2WithMain)
 
     add_executable(test_key_value_store
         test/test_key_value_store.cpp
-        src/hardware_profile_store.cpp
-        src/sim/file_key_value_store.cpp
-        src/sim/sim_storage.cpp
+        src/app/hardware_profile_store.cpp
+        src/platform/sim/file_key_value_store.cpp
+        src/platform/sim/sim_storage.cpp
     )
     target_include_directories(test_key_value_store PRIVATE src)
     target_link_libraries(test_key_value_store
@@ -285,9 +285,9 @@ if(BUILD_TESTS)
 
     add_executable(test_wifi_cred_store
         test/test_wifi_cred_store.cpp
-        src/wifi_cred_store.cpp
-        src/sim/file_key_value_store.cpp
-        src/sim/sim_storage.cpp
+        src/app/wifi_cred_store.cpp
+        src/platform/sim/file_key_value_store.cpp
+        src/platform/sim/sim_storage.cpp
     )
     target_include_directories(test_wifi_cred_store PRIVATE src)
     target_link_libraries(test_wifi_cred_store
@@ -312,7 +312,7 @@ if(BUILD_TESTS)
     add_executable(test_clock_sync_client
         test/test_clock_sync_client.cpp
         test/test_platform_clock.cpp
-        src/clock_sync_client.cpp
+        src/app/clock_sync_client.cpp
     )
     target_include_directories(test_clock_sync_client PRIVATE src test)
     target_link_libraries(test_clock_sync_client Catch2::Catch2WithMain)
@@ -322,30 +322,30 @@ if(BUILD_TESTS)
     add_executable(test_discovery
         test/test_discovery.cpp
         test/test_platform_clock.cpp
-        src/discovery.cpp
+        src/app/discovery.cpp
     )
     target_include_directories(test_discovery PRIVATE src test)
     target_link_libraries(test_discovery Catch2::Catch2WithMain)
 
     add_executable(test_compositor
         test/test_compositor.cpp
-        src/compositor.cpp
-        src/strip.cpp
-        src/pixel_view.cpp
-        src/colors.cpp
+        src/core/compositor.cpp
+        src/core/strip.cpp
+        src/core/pixel_view.cpp
+        src/core/colors.cpp
     )
     target_include_directories(test_compositor PRIVATE src)
     target_link_libraries(test_compositor Catch2::Catch2WithMain)
 
     add_executable(test_animations
         test/test_animations.cpp
-        src/animations/wave.cpp
-        src/animations/spark.cpp
-        src/animations/paint.cpp
-        src/animations/shift.cpp
-        src/blob_reader.cpp
-        src/pixel_view.cpp
-        src/colors.cpp
+        src/core/animations/wave.cpp
+        src/core/animations/spark.cpp
+        src/core/animations/paint.cpp
+        src/core/animations/shift.cpp
+        src/core/blob_reader.cpp
+        src/core/pixel_view.cpp
+        src/core/colors.cpp
     )
     target_include_directories(test_animations PRIVATE src)
     target_link_libraries(test_animations Catch2::Catch2WithMain)
@@ -356,24 +356,24 @@ if(BUILD_TESTS)
     add_executable(test_playback
         test/test_playback.cpp
         test/test_platform_clock.cpp
-        src/playback.cpp
-        src/decoder.cpp
-        src/engine.cpp
-        src/compositor.cpp
-        src/strip.cpp
-        src/gamma.cpp
-        src/blob_reader.cpp
-        src/program.cpp
-        src/layer.cpp
-        src/pixel_buffer_pool.cpp
-        src/pixel_view.cpp
-        src/pixel_views.cpp
-        src/copy_ops.cpp
-        src/colors.cpp
-        src/animations/wave.cpp
-        src/animations/spark.cpp
-        src/animations/paint.cpp
-        src/animations/shift.cpp
+        src/app/playback.cpp
+        src/core/decoder.cpp
+        src/core/engine.cpp
+        src/core/compositor.cpp
+        src/core/strip.cpp
+        src/core/gamma.cpp
+        src/core/blob_reader.cpp
+        src/core/program.cpp
+        src/core/layer.cpp
+        src/core/pixel_buffer_pool.cpp
+        src/core/pixel_view.cpp
+        src/core/pixel_views.cpp
+        src/core/copy_ops.cpp
+        src/core/colors.cpp
+        src/core/animations/wave.cpp
+        src/core/animations/spark.cpp
+        src/core/animations/paint.cpp
+        src/core/animations/shift.cpp
     )
     target_include_directories(test_playback PRIVATE src test)
     target_link_libraries(test_playback Catch2::Catch2WithMain)
@@ -381,32 +381,32 @@ if(BUILD_TESTS)
     add_executable(test_command_handler
         test/test_command_handler.cpp
         test/test_platform_clock.cpp
-        src/command_handler.cpp
-        src/slog.cpp
-        src/local_animation.cpp
-        src/animation_store.cpp
-        src/crc32.cpp
-        src/hardware_profile_store.cpp
-        src/wire_reader.cpp
-        src/wire_writer.cpp
-        src/playback.cpp
-        src/decoder.cpp
-        src/engine.cpp
-        src/compositor.cpp
-        src/strip.cpp
-        src/gamma.cpp
-        src/blob_reader.cpp
-        src/program.cpp
-        src/layer.cpp
-        src/pixel_buffer_pool.cpp
-        src/pixel_view.cpp
-        src/pixel_views.cpp
-        src/copy_ops.cpp
-        src/colors.cpp
-        src/animations/wave.cpp
-        src/animations/spark.cpp
-        src/animations/paint.cpp
-        src/animations/shift.cpp
+        src/app/command_handler.cpp
+        src/app/slog.cpp
+        src/app/local_animation.cpp
+        src/app/animation_store.cpp
+        src/app/crc32.cpp
+        src/app/hardware_profile_store.cpp
+        src/app/wire_reader.cpp
+        src/app/wire_writer.cpp
+        src/app/playback.cpp
+        src/core/decoder.cpp
+        src/core/engine.cpp
+        src/core/compositor.cpp
+        src/core/strip.cpp
+        src/core/gamma.cpp
+        src/core/blob_reader.cpp
+        src/core/program.cpp
+        src/core/layer.cpp
+        src/core/pixel_buffer_pool.cpp
+        src/core/pixel_view.cpp
+        src/core/pixel_views.cpp
+        src/core/copy_ops.cpp
+        src/core/colors.cpp
+        src/core/animations/wave.cpp
+        src/core/animations/spark.cpp
+        src/core/animations/paint.cpp
+        src/core/animations/shift.cpp
     )
     target_include_directories(test_command_handler PRIVATE src test)
     target_link_libraries(test_command_handler Catch2::Catch2WithMain)
@@ -414,33 +414,33 @@ if(BUILD_TESTS)
     add_executable(test_command_processor
         test/test_command_processor.cpp
         test/test_platform_clock.cpp
-        src/command_processor.cpp
-        src/command_handler.cpp
-        src/slog.cpp
-        src/local_animation.cpp
-        src/animation_store.cpp
-        src/crc32.cpp
-        src/hardware_profile_store.cpp
-        src/wire_reader.cpp
-        src/wire_writer.cpp
-        src/playback.cpp
-        src/decoder.cpp
-        src/engine.cpp
-        src/compositor.cpp
-        src/strip.cpp
-        src/gamma.cpp
-        src/blob_reader.cpp
-        src/program.cpp
-        src/layer.cpp
-        src/pixel_buffer_pool.cpp
-        src/pixel_view.cpp
-        src/pixel_views.cpp
-        src/copy_ops.cpp
-        src/colors.cpp
-        src/animations/wave.cpp
-        src/animations/spark.cpp
-        src/animations/paint.cpp
-        src/animations/shift.cpp
+        src/app/command_processor.cpp
+        src/app/command_handler.cpp
+        src/app/slog.cpp
+        src/app/local_animation.cpp
+        src/app/animation_store.cpp
+        src/app/crc32.cpp
+        src/app/hardware_profile_store.cpp
+        src/app/wire_reader.cpp
+        src/app/wire_writer.cpp
+        src/app/playback.cpp
+        src/core/decoder.cpp
+        src/core/engine.cpp
+        src/core/compositor.cpp
+        src/core/strip.cpp
+        src/core/gamma.cpp
+        src/core/blob_reader.cpp
+        src/core/program.cpp
+        src/core/layer.cpp
+        src/core/pixel_buffer_pool.cpp
+        src/core/pixel_view.cpp
+        src/core/pixel_views.cpp
+        src/core/copy_ops.cpp
+        src/core/colors.cpp
+        src/core/animations/wave.cpp
+        src/core/animations/spark.cpp
+        src/core/animations/paint.cpp
+        src/core/animations/shift.cpp
     )
     target_include_directories(test_command_processor PRIVATE src test)
     target_link_libraries(test_command_processor Catch2::Catch2WithMain)
@@ -448,35 +448,35 @@ if(BUILD_TESTS)
     add_executable(test_controller_link
         test/test_controller_link.cpp
         test/test_platform_clock.cpp
-        src/controller_link.cpp
-        src/discovery.cpp
-        src/command_processor.cpp
-        src/command_handler.cpp
-        src/slog.cpp
-        src/local_animation.cpp
-        src/animation_store.cpp
-        src/crc32.cpp
-        src/hardware_profile_store.cpp
-        src/wire_reader.cpp
-        src/wire_writer.cpp
-        src/playback.cpp
-        src/decoder.cpp
-        src/engine.cpp
-        src/compositor.cpp
-        src/strip.cpp
-        src/gamma.cpp
-        src/blob_reader.cpp
-        src/program.cpp
-        src/layer.cpp
-        src/pixel_buffer_pool.cpp
-        src/pixel_view.cpp
-        src/pixel_views.cpp
-        src/copy_ops.cpp
-        src/colors.cpp
-        src/animations/wave.cpp
-        src/animations/spark.cpp
-        src/animations/paint.cpp
-        src/animations/shift.cpp
+        src/app/controller_link.cpp
+        src/app/discovery.cpp
+        src/app/command_processor.cpp
+        src/app/command_handler.cpp
+        src/app/slog.cpp
+        src/app/local_animation.cpp
+        src/app/animation_store.cpp
+        src/app/crc32.cpp
+        src/app/hardware_profile_store.cpp
+        src/app/wire_reader.cpp
+        src/app/wire_writer.cpp
+        src/app/playback.cpp
+        src/core/decoder.cpp
+        src/core/engine.cpp
+        src/core/compositor.cpp
+        src/core/strip.cpp
+        src/core/gamma.cpp
+        src/core/blob_reader.cpp
+        src/core/program.cpp
+        src/core/layer.cpp
+        src/core/pixel_buffer_pool.cpp
+        src/core/pixel_view.cpp
+        src/core/pixel_views.cpp
+        src/core/copy_ops.cpp
+        src/core/colors.cpp
+        src/core/animations/wave.cpp
+        src/core/animations/spark.cpp
+        src/core/animations/paint.cpp
+        src/core/animations/shift.cpp
     )
     target_include_directories(test_controller_link PRIVATE src test)
     target_link_libraries(test_controller_link Catch2::Catch2WithMain)
@@ -484,38 +484,38 @@ if(BUILD_TESTS)
     add_executable(test_app
         test/test_app.cpp
         test/test_platform_clock.cpp
-        src/app.cpp
-        src/controller_link.cpp
-        src/clock_sync_client.cpp
-        src/discovery.cpp
-        src/command_processor.cpp
-        src/command_handler.cpp
-        src/slog.cpp
-        src/log_sender.cpp
-        src/local_animation.cpp
-        src/animation_store.cpp
-        src/crc32.cpp
-        src/hardware_profile_store.cpp
-        src/wire_reader.cpp
-        src/wire_writer.cpp
-        src/playback.cpp
-        src/decoder.cpp
-        src/engine.cpp
-        src/compositor.cpp
-        src/strip.cpp
-        src/gamma.cpp
-        src/blob_reader.cpp
-        src/program.cpp
-        src/layer.cpp
-        src/pixel_buffer_pool.cpp
-        src/pixel_view.cpp
-        src/pixel_views.cpp
-        src/copy_ops.cpp
-        src/colors.cpp
-        src/animations/wave.cpp
-        src/animations/spark.cpp
-        src/animations/paint.cpp
-        src/animations/shift.cpp
+        src/app/app.cpp
+        src/app/controller_link.cpp
+        src/app/clock_sync_client.cpp
+        src/app/discovery.cpp
+        src/app/command_processor.cpp
+        src/app/command_handler.cpp
+        src/app/slog.cpp
+        src/app/log_sender.cpp
+        src/app/local_animation.cpp
+        src/app/animation_store.cpp
+        src/app/crc32.cpp
+        src/app/hardware_profile_store.cpp
+        src/app/wire_reader.cpp
+        src/app/wire_writer.cpp
+        src/app/playback.cpp
+        src/core/decoder.cpp
+        src/core/engine.cpp
+        src/core/compositor.cpp
+        src/core/strip.cpp
+        src/core/gamma.cpp
+        src/core/blob_reader.cpp
+        src/core/program.cpp
+        src/core/layer.cpp
+        src/core/pixel_buffer_pool.cpp
+        src/core/pixel_view.cpp
+        src/core/pixel_views.cpp
+        src/core/copy_ops.cpp
+        src/core/colors.cpp
+        src/core/animations/wave.cpp
+        src/core/animations/spark.cpp
+        src/core/animations/paint.cpp
+        src/core/animations/shift.cpp
     )
     target_include_directories(test_app PRIVATE src test)
     target_link_libraries(test_app Catch2::Catch2WithMain)
@@ -525,7 +525,7 @@ if(BUILD_TESTS)
     add_executable(test_slog
         test/test_slog.cpp
         test/test_platform_clock.cpp
-        src/slog.cpp
+        src/app/slog.cpp
     )
     target_include_directories(test_slog PRIVATE src test)
     target_link_libraries(test_slog Catch2::Catch2WithMain)
@@ -533,10 +533,10 @@ if(BUILD_TESTS)
     add_executable(test_log_sender
         test/test_log_sender.cpp
         test/test_platform_clock.cpp
-        src/slog.cpp
-        src/log_sender.cpp
-        src/discovery.cpp
-        src/wire_writer.cpp
+        src/app/slog.cpp
+        src/app/log_sender.cpp
+        src/app/discovery.cpp
+        src/app/wire_writer.cpp
     )
     target_include_directories(test_log_sender PRIVATE src test)
     target_link_libraries(test_log_sender Catch2::Catch2WithMain)
@@ -546,19 +546,19 @@ if(BUILD_TESTS)
 
     add_executable(test_sim_device_identity
         test/test_sim_device_identity.cpp
-        src/sim/sim_device_identity.cpp
+        src/platform/sim/sim_device_identity.cpp
     )
     target_include_directories(test_sim_device_identity PRIVATE src)
     target_link_libraries(test_sim_device_identity Catch2::Catch2WithMain)
 
     add_executable(test_sim_frame_output
         test/test_sim_frame_output.cpp
-        src/sim/sim_frame_output.cpp
-        src/strip.cpp
-        src/gamma.cpp
-        src/wire_writer.cpp
+        src/platform/sim/sim_frame_output.cpp
+        src/core/strip.cpp
+        src/core/gamma.cpp
+        src/app/wire_writer.cpp
     )
-    target_include_directories(test_sim_frame_output PRIVATE src src/sim)
+    target_include_directories(test_sim_frame_output PRIVATE src)
     target_link_libraries(test_sim_frame_output Catch2::Catch2WithMain)
 
     # Auto-generate test fixtures if missing
@@ -614,22 +614,22 @@ if(BUILD_TESTS)
         # Cross-check that the Python v3 emitter's blobs decode and run in C++.
         add_executable(test_fixture_blobs
             test/test_fixture_blobs.cpp
-            src/decoder.cpp
-            src/blob_reader.cpp
-            src/program.cpp
-            src/layer.cpp
-            src/pixel_buffer_pool.cpp
-            src/pixel_view.cpp
-            src/pixel_views.cpp
-            src/copy_ops.cpp
-            src/colors.cpp
-            src/animations/wave.cpp
-            src/animations/spark.cpp
-            src/animations/paint.cpp
-            src/animations/shift.cpp
-            src/engine.cpp
-            src/compositor.cpp
-            src/strip.cpp
+            src/core/decoder.cpp
+            src/core/blob_reader.cpp
+            src/core/program.cpp
+            src/core/layer.cpp
+            src/core/pixel_buffer_pool.cpp
+            src/core/pixel_view.cpp
+            src/core/pixel_views.cpp
+            src/core/copy_ops.cpp
+            src/core/colors.cpp
+            src/core/animations/wave.cpp
+            src/core/animations/spark.cpp
+            src/core/animations/paint.cpp
+            src/core/animations/shift.cpp
+            src/core/engine.cpp
+            src/core/compositor.cpp
+            src/core/strip.cpp
         )
         target_include_directories(test_fixture_blobs PRIVATE src)
         target_compile_definitions(test_fixture_blobs PRIVATE

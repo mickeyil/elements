@@ -24,10 +24,12 @@ DSL (.py) -> compiler -> blob -> controller -> devices (ESP32 / sim) -> LEDs
 ```
 
 - **`compiler/`** — Python animation DSL and blob compiler.
-- **`src/`** — shared C++17 device runtime: discovery, controller link, clock
-  sync, blob decoder, playback engine, compositor. Two thin platform shells:
-  **`src/firmware/`** (ESP32, PlatformIO + FastLED) and **`src/sim/`** (the
-  `sim_device` host binary).
+- **`src/`** — shared C++17 device runtime, split into **`src/core/`** (the
+  deterministic render pipeline: blob decoder, playback engine, compositor)
+  and **`src/app/`** (device application services: discovery, controller link,
+  clock sync). Two thin platform shells: **`src/platform/esp32/`** (ESP32,
+  PlatformIO + FastLED) and **`src/platform/sim/`** (the `sim_device` host
+  binary).
 - **`controller/`** — Python controller service: owns session time, discovers
   devices, compiles and distributes programs, answers clock sync.
 - **`controller/web_ui/`** — Vue 3 web UI: live device preview and playback

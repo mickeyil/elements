@@ -6,19 +6,19 @@
 #include <string>
 #include <vector>
 
-#include "animation_store.h"
-#include "animation_types.h"
-#include "app_context.h"
-#include "command_handler.h"
-#include "crc32.h"
-#include "device_status.h"
-#include "hardware_profile_store.h"
-#include "link_protocol.h"
-#include "playback.h"
-#include "runtime_constants.h"
-#include "system_platform.h"
+#include "app/animation_store.h"
+#include "core/animation_types.h"
+#include "app/app_context.h"
+#include "app/command_handler.h"
+#include "app/crc32.h"
+#include "app/device_status.h"
+#include "app/hardware_profile_store.h"
+#include "app/link_protocol.h"
+#include "app/playback.h"
+#include "core/runtime_constants.h"
+#include "platform/system_platform.h"
 #include "test_platform_clock.h"
-#include "wire_writer.h"
+#include "app/wire_writer.h"
 
 namespace {
 

@@ -2,10 +2,10 @@
 
 #include <cstdint>
 
-#include "../src/pixel_buffer_pool.h"
-#include "../src/pixel_view.h"
-#include "../src/pixel_views.h"
-#include "../src/runtime_constants.h"
+#include "core/pixel_buffer_pool.h"
+#include "core/pixel_view.h"
+#include "core/pixel_views.h"
+#include "core/runtime_constants.h"
 
 namespace {
 hsva_t with_h(float h) { return hsva_t(h, 0.5f, 0.5f, 1.0f); }

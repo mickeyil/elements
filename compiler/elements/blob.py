@@ -1,6 +1,6 @@
 """Elements v3 binary blob serialization.
 
-The byte layout is docs/blob_format.md, enforced by src/decoder.cpp; this
+The byte layout is docs/blob_format.md, enforced by src/core/decoder.cpp; this
 module is the emitter side. It serializes a BlobProgram (the compiler's
 emit IR) into the exact bytes the device decoder accepts, and provides a
 matching decoder used to round-trip the emitter in tests.
@@ -8,7 +8,7 @@ matching decoder used to round-trip the emitter in tests.
 Section order (byte-packed, little-endian, no padding):
     header (20 B) | buffer sizes | pixel views | copy ops | layers + events
 
-Animation params are type-specific bytes laid out by each src/animations/
+Animation params are type-specific bytes laid out by each src/core/animations/
 factory; pack_params() produces them. The shift param block dropped v2's
 trailing buffer_id byte: the work buffer is now the event's work_pixv_idx.
 """
@@ -22,7 +22,7 @@ from .types import ANIM_TYPES
 BLOB_MAGIC = b"ELEM"
 BLOB_VERSION = 3
 
-# Sentinel for an absent pixel view index (matches src/runtime_constants.h).
+# Sentinel for an absent pixel view index (matches src/core/runtime_constants.h).
 PIXV_NONE = 0xFFFF
 
 # Header flag bits.

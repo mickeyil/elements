@@ -4,7 +4,7 @@ Core runtime abstractions in the firmware, and what each is for.
 
 ## PixelBufferPool
 
-`src/pixel_buffer_pool.h`, `src/pixel_buffer_pool.cpp`
+`src/core/pixel_buffer_pool.h`, `src/core/pixel_buffer_pool.cpp`
 
 A *pool buffer* is a block of working pixel memory the program draws into.
 Each buffer is an array of f32 HSVA pixels. Animations render their output
@@ -17,7 +17,7 @@ pixel memory once, as a single bounded block, at program-load time.
 
 ## PixelView
 
-`src/pixel_view.h`, `src/pixel_view.cpp`
+`src/core/pixel_view.h`, `src/core/pixel_view.cpp`
 
 A pool buffer is a row of hsva pixels; each is a hue, saturation, value,
 and alpha. An animation paints colors into them; they are the working

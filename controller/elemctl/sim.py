@@ -25,7 +25,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 BUILD_DIR = REPO_ROOT / 'build'
 SIM_DEVICE_BIN = BUILD_DIR / 'sim_device'
 
-# Mirrors SIM_REBOOT_EXIT_CODE in src/sim/sim_system_platform.h; Python
+# Mirrors SIM_REBOOT_EXIT_CODE in src/platform/sim/sim_system_platform.h; Python
 # cannot read the C++ constant.
 SIM_REBOOT_EXIT_CODE = 64
 
@@ -36,14 +36,14 @@ REBOOT_WINDOW_SEC = 30.0
 DEFAULT_CONTROLLER_HOST = '127.0.0.1'
 DEFAULT_FRAME_PORT = 6042
 
-# Wire slot size; see src/device_identity.h.
+# Wire slot size; see src/platform/device_identity.h.
 UID_MAX_BYTES = 16
 
 STORAGE_ROOT_ENV = 'ELEMENTS_SIM_STORAGE_ROOT'
 
 
 def validate_sim_uid(uid: str) -> str | None:
-    """Check uid against the wire policy (src/device_identity.h).
+    """Check uid against the wire policy (src/platform/device_identity.h).
 
     Returns an error message, or None when the uid is acceptable.
     """

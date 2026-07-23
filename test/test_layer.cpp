@@ -2,9 +2,9 @@
 
 #include <cstdint>
 
-#include "../src/animation.h"
-#include "../src/layer.h"
-#include "../src/runtime_constants.h"
+#include "core/animation.h"
+#include "core/layer.h"
+#include "core/runtime_constants.h"
 
 namespace {
 

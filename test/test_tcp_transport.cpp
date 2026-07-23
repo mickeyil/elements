@@ -12,7 +12,7 @@
 #include <mutex>
 #include <thread>
 
-#include "sim/posix_tcp_transport.h"
+#include "platform/sim/posix_tcp_transport.h"
 
 namespace {
 

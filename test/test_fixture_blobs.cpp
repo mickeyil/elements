@@ -6,12 +6,12 @@
 #include <string>
 #include <vector>
 
-#include "../src/blob_limits.h"
-#include "../src/decoder.h"
-#include "../src/engine.h"
-#include "../src/program.h"
-#include "../src/runtime_constants.h"
-#include "../src/strip.h"
+#include "core/blob_limits.h"
+#include "core/decoder.h"
+#include "core/engine.h"
+#include "core/program.h"
+#include "core/runtime_constants.h"
+#include "core/strip.h"
 
 // Cross-check that blobs emitted by the Python v3 compiler are accepted and
 // run by the device decoder/engine. The fixtures are generated from the

@@ -5,10 +5,10 @@
 #include <string>
 #include <vector>
 
-#include "animation_store.h"
-#include "crc32.h"
-#include "decoder.h"
-#include "link_protocol.h"
+#include "app/animation_store.h"
+#include "app/crc32.h"
+#include "core/decoder.h"
+#include "app/link_protocol.h"
 
 namespace {
 

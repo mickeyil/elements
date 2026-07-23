@@ -3,10 +3,10 @@
 #include <cstdint>
 #include <cstring>
 
-#include "../src/colors.h"
-#include "../src/gamma.h"
-#include "../src/hardware_profile.h"
-#include "../src/strip.h"
+#include "core/colors.h"
+#include "core/gamma.h"
+#include "core/hardware_profile.h"
+#include "core/strip.h"
 
 namespace {
 rgb_t pix(uint8_t r, uint8_t g, uint8_t b) { return rgb_t(r, g, b); }

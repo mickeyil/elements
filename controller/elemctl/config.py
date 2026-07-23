@@ -7,7 +7,7 @@ device entry is just
 `{device_uid, strip_id, length, label?}`. Devices connect in and are
 identified by UID alone, so the config stores no addresses and no
 numeric ids. The device type is implied by the UID prefix
-(src/device_identity.h).
+(src/platform/device_identity.h).
 """
 
 from __future__ import annotations
@@ -33,9 +33,9 @@ DEFAULT_FRAME_PORT = 6042
 DEFAULT_SYNC_PORT = 6043
 DEFAULT_LOG_PORT = 6044
 
-# Must match MAX_STRIP_PIXELS in src/hardware_profile.h
+# Must match MAX_STRIP_PIXELS in src/core/hardware_profile.h
 MAX_DEVICE_PIXELS = 300
-# Must match UID_SIZE in src/device_identity.h (wire slot).
+# Must match UID_SIZE in src/platform/device_identity.h (wire slot).
 MAX_UID_BYTES = 16
 
 DEFAULT_ANIMATIONS_PATH = str(REPO_ROOT / 'animations')
@@ -57,7 +57,7 @@ class ConfigError(ValueError):
 
 
 def validate_device_uid(device_uid: str) -> str | None:
-    """Check a UID against the wire policy (src/device_identity.h).
+    """Check a UID against the wire policy (src/platform/device_identity.h).
 
     Returns an error message, or None when the uid is acceptable.
     """

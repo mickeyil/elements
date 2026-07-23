@@ -3,7 +3,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include "../src/sim/sim_system_platform.h"
+#include "platform/sim/sim_system_platform.h"
 
 // reboot() must terminate the process with the reboot sentinel. The child
 // calls reboot(); if it wrongly returns, the _exit(99) fallback makes the
