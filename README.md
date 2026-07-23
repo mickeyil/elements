@@ -15,7 +15,7 @@ Current state of quality control over the AI output:
 - Most of the C++ parts were fully reviewed with multiple iterations done to design/implementation
   and comments until a satisfied result was achieved. There's still room for improvement.
 - Python: controller - partially reviewed, more work is needed.
-- Web parts: deemed not important enough for this stage. feel the vibe..
+- Web parts: minimal review
 
 ## Architecture
 
