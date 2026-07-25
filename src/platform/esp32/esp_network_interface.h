@@ -4,10 +4,10 @@
 
 class WifiManager;
 
-// NetworkInterface adapter over WifiManager. Keeps the App's polling
+// NetInterface adapter over WifiManager. Keeps the App's polling
 // surface platform-agnostic.
 
-class EspNetworkInterface : public NetworkInterface {
+class EspNetworkInterface : public NetInterface {
 public:
     explicit EspNetworkInterface(WifiManager& wifi);
 

@@ -15,7 +15,7 @@
 class DiscoveryClient;
 class FrameOutput;
 class KeyValueStore;
-class NetworkInterface;
+class NetInterface;
 class SystemPlatform;
 class UdpTransport;
 struct DeviceIdentity;
@@ -31,7 +31,7 @@ class App
 public:
     // The parameters are the platform-dependent pieces; everything
     // shared is owned inside.
-    App(NetworkInterface& network,
+    App(NetInterface& network,
         DiscoveryClient&  discovery,
         TcpTransport&     tcp,
         UdpTransport&     sync_udp,
@@ -74,7 +74,7 @@ private:
     // Write the current strip to the frame output.
     void write_frame_();
 
-    NetworkInterface& _network;
+    NetInterface& _network;
     FrameOutput&      _output;
 
     SyncedClock     _clock;

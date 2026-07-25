@@ -10,14 +10,17 @@ enum class NetworkTransition {
 // Platform-agnostic network connection handle. Implemented per platform;
 // the rest of the app uses only this interface.
 //
+// Named NetInterface because arduino-esp32 3.x defines its own global
+// NetworkInterface class, which wifi_manager.cpp pulls in via WiFi.h.
+//
 // Implementations:
 //   - EspNetworkInterface  (firmware, around WifiManager)
 //   - HostNetworkInterface (sim/host, always up)
 
-class NetworkInterface
+class NetInterface
 {
 public:
-    virtual ~NetworkInterface() = default;
+    virtual ~NetInterface() = default;
 
     // Initialize the network layer. Call once at startup before entering the poll loop. Non-blocking.
     virtual void begin() = 0;

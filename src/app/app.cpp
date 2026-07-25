@@ -17,7 +17,7 @@ constexpr int64_t REBOOT_ACK_DRAIN_TIMEOUT_MS = 500;
 
 }  // namespace
 
-App::App(NetworkInterface& network,
+App::App(NetInterface& network,
          DiscoveryClient&  discovery,
          TcpTransport&     tcp,
          UdpTransport&     sync_udp,

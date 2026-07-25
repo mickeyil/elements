@@ -33,7 +33,7 @@ constexpr uint16_t CONTROLLER_PORT = 6041;
 // Fakes
 // ---------------------------------------------------------------------------
 
-class FakeNetworkInterface : public NetworkInterface
+class FakeNetworkInterface : public NetInterface
 {
 public:
     void begin() override {}

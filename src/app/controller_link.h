@@ -6,7 +6,7 @@
 #include "app/link_protocol.h"
 #include "platform/tcp_transport.h"
 
-class NetworkInterface;
+class NetInterface;
 struct DeviceIdentity;
 class DiscoveryClient;
 class CommandHandler;
@@ -36,7 +36,7 @@ enum class LinkState : uint8_t {
 class ControllerLink
 {
 public:
-    ControllerLink(NetworkInterface& network,
+    ControllerLink(NetInterface& network,
                    DiscoveryClient&  discovery,
                    TcpTransport&     tcp,
                    const DeviceIdentity& identity,
@@ -73,7 +73,7 @@ private:
     // The one teardown path; safe to call in any state.
     void drop_link_();
 
-    NetworkInterface& _network;
+    NetInterface& _network;
     DiscoveryClient&  _discovery;  // passed in so the sim can use unicast
     TcpTransport&     _tcp;
     const DeviceIdentity& _identity;

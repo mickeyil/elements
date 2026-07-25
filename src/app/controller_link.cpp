@@ -19,7 +19,7 @@ constexpr size_t REGISTER_MSG_BYTES = 4 + 1 + REGISTER_PAYLOAD_BYTES;
 
 }  // namespace
 
-ControllerLink::ControllerLink(NetworkInterface& network,
+ControllerLink::ControllerLink(NetInterface& network,
                                DiscoveryClient&  discovery,
                                TcpTransport&     tcp,
                                const DeviceIdentity& identity,

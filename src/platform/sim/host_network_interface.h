@@ -2,11 +2,11 @@
 
 #include "platform/network_interface.h"
 
-// NetworkInterface for the sim/host build: the LAN is always usable, so
+// NetInterface for the sim/host build: the LAN is always usable, so
 // there is never a connection edge to report. The firmware counterpart is
 // EspNetworkInterface over WifiManager.
 
-class HostNetworkInterface : public NetworkInterface
+class HostNetworkInterface : public NetInterface
 {
 public:
     void begin() override {}
