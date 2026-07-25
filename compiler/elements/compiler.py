@@ -704,6 +704,19 @@ def _resolve_anim_params(event: dict) -> dict:
             else:
                 h, s, v, a = _convert_color_tuple(color, fmt)
                 return {"mode": 0, "color_h": h, "color_s": s, "color_v": v, "color_a": a}
+    elif anim_type == "pacifica":
+        speed = float(p.get("speed", 1.0))
+        brightness = float(p.get("brightness", 1.0))
+        hue_shift = float(p.get("hue_shift", 0.0))
+        if not math.isfinite(speed) or speed <= 0:
+            raise CompileError(f"pacifica speed must be > 0, got {speed}")
+        if not math.isfinite(brightness) or not (0.0 <= brightness <= 1.0):
+            raise CompileError(
+                f"pacifica brightness must be in [0, 1], got {brightness}"
+            )
+        if not math.isfinite(hue_shift):
+            raise CompileError("pacifica hue_shift must be finite")
+        return {"speed": speed, "brightness": brightness, "hue_shift": hue_shift}
     else:
         raise CompileError(f"unknown animation type '{anim_type}'")
 

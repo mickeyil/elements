@@ -121,6 +121,7 @@ _PROBE = """
 #include "core/animations/shift.h"
 #include "core/animations/spark.h"
 #include "core/animations/paint.h"
+#include "core/animations/pacifica.h"
 template <int N> struct ShowSize;
 ShowSize<(int)sizeof(hsva_t)>         s_hsva;
 ShowSize<(int)sizeof(PixelView)>      s_pixelview;
@@ -133,6 +134,7 @@ ShowSize<(int)sizeof(Wave)>           s_wave;
 ShowSize<(int)sizeof(Shift)>          s_shift;
 ShowSize<(int)sizeof(Spark)>          s_spark;
 ShowSize<(int)sizeof(Paint)>          s_paint;
+ShowSize<(int)sizeof(Pacifica)>       s_pacifica;
 """
 
 
@@ -168,3 +170,4 @@ def test_constants_match_esp32_sizeof(tmp_path):
     assert sizes["s_shift"] == me._ANIM_INSTANCE_BYTES[1]
     assert sizes["s_spark"] == me._ANIM_INSTANCE_BYTES[2]
     assert sizes["s_paint"] == me._ANIM_INSTANCE_BYTES[3]
+    assert sizes["s_pacifica"] == me._ANIM_INSTANCE_BYTES[4]

@@ -49,6 +49,8 @@ add_library(elements_core STATIC
     src/core/animations/spark.cpp
     src/core/animations/paint.cpp
     src/core/animations/shift.cpp
+    src/core/animations/pacifica.cpp
+    src/core/fx_math.cpp
     src/app/playback.cpp
     src/app/clock_sync_client.cpp
     src/app/discovery.cpp
@@ -104,6 +106,8 @@ if(BUILD_TESTS)
         src/core/animations/spark.cpp
         src/core/animations/paint.cpp
         src/core/animations/shift.cpp
+        src/core/animations/pacifica.cpp
+        src/core/fx_math.cpp
     )
     target_include_directories(test_decoder PRIVATE src)
     target_link_libraries(test_decoder Catch2::Catch2WithMain)
@@ -267,6 +271,8 @@ if(BUILD_TESTS)
         src/core/animations/spark.cpp
         src/core/animations/paint.cpp
         src/core/animations/shift.cpp
+        src/core/animations/pacifica.cpp
+        src/core/fx_math.cpp
     )
     target_include_directories(test_animation_store PRIVATE src)
     target_link_libraries(test_animation_store Catch2::Catch2WithMain)
@@ -343,12 +349,18 @@ if(BUILD_TESTS)
         src/core/animations/spark.cpp
         src/core/animations/paint.cpp
         src/core/animations/shift.cpp
+        src/core/animations/pacifica.cpp
+        src/core/fx_math.cpp
         src/core/blob_reader.cpp
         src/core/pixel_view.cpp
         src/core/colors.cpp
     )
     target_include_directories(test_animations PRIVATE src)
     target_link_libraries(test_animations Catch2::Catch2WithMain)
+
+    add_executable(test_fx_math test/test_fx_math.cpp src/core/fx_math.cpp)
+    target_include_directories(test_fx_math PRIVATE src)
+    target_link_libraries(test_fx_math Catch2::Catch2WithMain)
 
     # test_playback is standalone: it links the test platform_clock fake
     # (test/test_platform_clock.cpp) instead of the production impl, so
@@ -374,6 +386,8 @@ if(BUILD_TESTS)
         src/core/animations/spark.cpp
         src/core/animations/paint.cpp
         src/core/animations/shift.cpp
+        src/core/animations/pacifica.cpp
+        src/core/fx_math.cpp
     )
     target_include_directories(test_playback PRIVATE src test)
     target_link_libraries(test_playback Catch2::Catch2WithMain)
@@ -407,6 +421,8 @@ if(BUILD_TESTS)
         src/core/animations/spark.cpp
         src/core/animations/paint.cpp
         src/core/animations/shift.cpp
+        src/core/animations/pacifica.cpp
+        src/core/fx_math.cpp
     )
     target_include_directories(test_command_handler PRIVATE src test)
     target_link_libraries(test_command_handler Catch2::Catch2WithMain)
@@ -441,6 +457,8 @@ if(BUILD_TESTS)
         src/core/animations/spark.cpp
         src/core/animations/paint.cpp
         src/core/animations/shift.cpp
+        src/core/animations/pacifica.cpp
+        src/core/fx_math.cpp
     )
     target_include_directories(test_command_processor PRIVATE src test)
     target_link_libraries(test_command_processor Catch2::Catch2WithMain)
@@ -477,6 +495,8 @@ if(BUILD_TESTS)
         src/core/animations/spark.cpp
         src/core/animations/paint.cpp
         src/core/animations/shift.cpp
+        src/core/animations/pacifica.cpp
+        src/core/fx_math.cpp
     )
     target_include_directories(test_controller_link PRIVATE src test)
     target_link_libraries(test_controller_link Catch2::Catch2WithMain)
@@ -516,6 +536,8 @@ if(BUILD_TESTS)
         src/core/animations/spark.cpp
         src/core/animations/paint.cpp
         src/core/animations/shift.cpp
+        src/core/animations/pacifica.cpp
+        src/core/fx_math.cpp
     )
     target_include_directories(test_app PRIVATE src test)
     target_link_libraries(test_app Catch2::Catch2WithMain)
@@ -603,12 +625,20 @@ if(BUILD_TESTS)
             DEPENDS ${CMAKE_SOURCE_DIR}/test/fixtures/generate_full_paint.py ${COMPILER_SOURCES}
             COMMENT "Generating full-strip per-pixel paint fixture"
         )
+        add_custom_command(
+            OUTPUT ${FIXTURE_OUT_DIR}/test_pacifica.bin
+            COMMAND ${CMAKE_COMMAND} -E env PYTHONPATH=${CMAKE_SOURCE_DIR}/compiler
+                    ${PYTHON3} ${CMAKE_SOURCE_DIR}/test/fixtures/generate_pacifica.py ${FIXTURE_OUT_DIR}
+            DEPENDS ${CMAKE_SOURCE_DIR}/test/fixtures/generate_pacifica.py ${COMPILER_SOURCES}
+            COMMENT "Generating test fixture test_pacifica.bin"
+        )
         add_custom_target(test_fixtures
             DEPENDS ${FIXTURE_OUT_DIR}/test_animation.bin
                     ${FIXTURE_OUT_DIR}/test_shift.bin
                     ${FIXTURE_OUT_DIR}/test_dual_shift_left.bin
                     ${FIXTURE_OUT_DIR}/test_dual_shift_right.bin
                     ${FIXTURE_OUT_DIR}/test_full_paint.bin
+                    ${FIXTURE_OUT_DIR}/test_pacifica.bin
         )
 
         # Cross-check that the Python v3 emitter's blobs decode and run in C++.
@@ -627,6 +657,8 @@ if(BUILD_TESTS)
             src/core/animations/spark.cpp
             src/core/animations/paint.cpp
             src/core/animations/shift.cpp
+            src/core/animations/pacifica.cpp
+            src/core/fx_math.cpp
             src/core/engine.cpp
             src/core/compositor.cpp
             src/core/strip.cpp
@@ -697,6 +729,8 @@ if(BUILD_TESTS)
     add_test(NAME test_compositor COMMAND test_compositor
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_animations COMMAND test_animations
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    add_test(NAME test_fx_math COMMAND test_fx_math
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_playback COMMAND test_playback
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})

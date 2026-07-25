@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
+#include <cstdlib>
 #include "core/colors.h"
 
 // ---------------------------------------------------------------------------
@@ -122,4 +123,57 @@ TEST_CASE("rgb_alpha_blend: t>1 clamps to b", "[colors][alpha_blend]") {
     CHECK(c.r == b.r);
     CHECK(c.g == b.g);
     CHECK(c.b == b.b);
+}
+
+// ---------------------------------------------------------------------------
+// rgb_to_hsv
+// ---------------------------------------------------------------------------
+
+TEST_CASE("rgb_to_hsv: primaries", "[colors][rgb_to_hsv]") {
+    hsva_t red = rgb_to_hsv(rgb_t(255, 0, 0));
+    CHECK(red.h == Catch::Approx(0.0f).margin(1e-4));
+    CHECK(red.s == Catch::Approx(1.0f));
+    CHECK(red.v == Catch::Approx(1.0f));
+    CHECK(red.a == Catch::Approx(1.0f));
+
+    hsva_t green = rgb_to_hsv(rgb_t(0, 255, 0));
+    CHECK(green.h == Catch::Approx(120.0f));
+
+    hsva_t blue = rgb_to_hsv(rgb_t(0, 0, 255));
+    CHECK(blue.h == Catch::Approx(240.0f));
+}
+
+TEST_CASE("rgb_to_hsv: grays have s=0 and h=0", "[colors][rgb_to_hsv]") {
+    hsva_t black = rgb_to_hsv(rgb_t(0, 0, 0));
+    CHECK(black.h == 0.0f);
+    CHECK(black.s == 0.0f);
+    CHECK(black.v == 0.0f);
+
+    hsva_t white = rgb_to_hsv(rgb_t(255, 255, 255));
+    CHECK(white.h == 0.0f);
+    CHECK(white.s == 0.0f);
+    CHECK(white.v == Catch::Approx(1.0f));
+}
+
+TEST_CASE("rgb_to_hsv: hue stays in [0, 360)", "[colors][rgb_to_hsv]") {
+    // Magenta-ish input exercises the negative-hue branch (max == r, g < b).
+    hsva_t c = rgb_to_hsv(rgb_t(200, 10, 150));
+    CHECK(c.h >= 0.0f);
+    CHECK(c.h < 360.0f);
+    CHECK(c.h == Catch::Approx(315.789f).epsilon(1e-3));
+}
+
+TEST_CASE("rgb_to_hsv: round-trips through hsv_to_rgb", "[colors][rgb_to_hsv]") {
+    const rgb_t samples[] = {
+        rgb_t(2, 6, 10), rgb_t(20, 96, 80), rgb_t(16, 64, 191),
+        rgb_t(255, 128, 0), rgb_t(7, 5, 2),
+    };
+    for (const rgb_t& in : samples) {
+        hsva_t hsv = rgb_to_hsv(in);
+        rgb_t out = hsv_to_rgb(hsv.h, hsv.s, hsv.v);
+        // 8-bit quantization allows off-by-one.
+        CHECK(std::abs(int(out.r) - int(in.r)) <= 1);
+        CHECK(std::abs(int(out.g) - int(in.g)) <= 1);
+        CHECK(std::abs(int(out.b) - int(in.b)) <= 1);
+    }
 }

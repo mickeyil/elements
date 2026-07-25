@@ -16,7 +16,7 @@ from .types import PI, SecMarker, PixelGroup, StripDef, AnimDef, CompiledManifes
 from .compiler import compile_program, compile_manifest
 
 # Re-export for `from elements.dsl import *`
-__all__ = ["PI", "sec", "strip", "wave", "shift", "spark", "paint",
+__all__ = ["PI", "sec", "strip", "wave", "shift", "spark", "paint", "pacifica",
            "build", "build_manifest", "CompiledManifest"]
 
 
@@ -105,6 +105,10 @@ def spark(**params) -> AnimDef:
 
 def paint(**params) -> AnimDef:
     return _make_anim("paint", params)
+
+
+def pacifica(**params) -> AnimDef:
+    return _make_anim("pacifica", params)
 
 
 def build(beat: float, duration: float,

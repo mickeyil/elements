@@ -185,3 +185,33 @@ TEST_CASE("fixture strip-length mismatch is rejected")
     CHECK(err == DecodeError::StripLengthMismatch);
     CHECK(prog == nullptr);
 }
+
+TEST_CASE("test_pacifica fixture decodes and renders non-black ocean frames")
+{
+    DecodeError err = DecodeError::Ok;
+    Program* prog = decode_fixture("test_pacifica.bin", 10, err);
+    REQUIRE(err == DecodeError::Ok);
+    REQUIRE(prog != nullptr);
+
+    CHECK(prog->layer_count == 1);
+    CHECK(prog->duration == 4.0f);
+    REQUIRE(prog->layers != nullptr);
+    CHECK(prog->layers[0].count() == 1);
+
+    Engine* engine = Engine::create(prog);
+    REQUIRE(engine != nullptr);
+    Strip strip;
+    REQUIRE(strip.resize(10));
+    for (float t : {0.0f, 1.0f, 2.5f, 3.9f}) {
+        CAPTURE(t);
+        REQUIRE(engine->render_frame(t, strip));
+        // The deepen step floors every pixel above pure black, so a frame of
+        // zeros would mean the scratch was never composited.
+        bool any_lit = false;
+        for (uint16_t i = 0; i < 10; i++) {
+            if (strip[i].r || strip[i].g || strip[i].b) any_lit = true;
+        }
+        CHECK(any_lit);
+    }
+    delete engine;
+}

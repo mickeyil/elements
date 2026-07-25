@@ -37,6 +37,36 @@ rgb_t hsv_to_rgb(float h, float s, float v)
     return rgb_t(r8, g8, b8);
 }
 
+hsva_t rgb_to_hsv(const rgb_t& c)
+{
+    const float r = c.r / 255.0f;
+    const float g = c.g / 255.0f;
+    const float b = c.b / 255.0f;
+
+    float max = r; if (g > max) max = g; if (b > max) max = b;
+    float min = r; if (g < min) min = g; if (b < min) min = b;
+    const float delta = max - min;
+
+    const float v = max;
+    if (delta <= 0.0f || max <= 0.0f) {
+        return hsva_t(0.0f, 0.0f, v, 1.0f);
+    }
+
+    const float s = delta / max;
+
+    float h;
+    if (max == r) {
+        h = 60.0f * ((g - b) / delta);
+    } else if (max == g) {
+        h = 60.0f * (2.0f + (b - r) / delta);
+    } else {
+        h = 60.0f * (4.0f + (r - g) / delta);
+    }
+    if (h < 0.0f) h += 360.0f;
+
+    return hsva_t(h, s, v, 1.0f);
+}
+
 rgb_t rgb_alpha_blend(const rgb_t& bg, const rgb_t& fg, float alpha)
 {
     if (alpha <= 0.0f) return bg;

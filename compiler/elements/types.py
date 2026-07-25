@@ -11,13 +11,14 @@ PI = math.pi
 # Animation type constants
 # ---------------------------------------------------------------------------
 
-ANIM_TYPES = {"wave": 0, "shift": 1, "spark": 2, "paint": 3}
+ANIM_TYPES = {"wave": 0, "shift": 1, "spark": 2, "paint": 3, "pacifica": 4}
 
 # Which animation params are time-based (beats → seconds)
 TIME_PARAMS = {
     "wave":  ["period"],
     "spark": ["fade"],
     "shift": [],  # velocity is pixels/beat → pixels/sec, handled specially
+    "pacifica": [],  # speed is a plain multiplier, not a time value
 }
 
 # Required params per animation type
@@ -26,6 +27,7 @@ REQUIRED_PARAMS = {
     "spark": ["color", "fade"],
     "shift": ["direction", "velocity"],
     "paint": [],
+    "pacifica": [],
 }
 
 # Which animation types need work buffers

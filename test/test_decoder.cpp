@@ -781,3 +781,73 @@ TEST_CASE("decode_program: full program with copy ops decodes", "[decoder]") {
     CHECK(p->layers[0].count() == 1);
     free_program(p);
 }
+
+// ---------------------------------------------------------------------------
+// Pacifica events
+// ---------------------------------------------------------------------------
+
+namespace {
+
+std::vector<uint8_t> pacifica_params(float speed, float brightness,
+                                     float hue_shift) {
+    std::vector<uint8_t> p;
+    put_f32(p, speed);
+    put_f32(p, brightness);
+    put_f32(p, hue_shift);
+    return p;
+}
+
+std::vector<uint8_t> build_pacifica_blob(const std::vector<uint8_t>& params) {
+    std::vector<uint8_t> b;
+    HeaderBytes h;
+    h.layer_count = 1;
+    h.buffer_count = 1;
+    h.pixel_view_count = 1;
+    h.duration = 1.0f;
+    append_prefix_and_header(b, h);
+    append_buffer_sizes(b, { 4 });
+
+    ViewBytes v;
+    v.buffer_idx = 0; v.size = 4;
+    v.storage_identity = true;
+    v.has_physical = true;
+    v.physical_identity = true;
+    append_pixel_view(b, v);
+
+    put_u16(b, 1);  // 1 event on layer 0
+    EventBytes e;
+    e.anim_type = static_cast<uint8_t>(AnimType::Pacifica);
+    e.start = 0.0f; e.duration = 1.0f; e.dst = 0;
+    e.params = params;
+    append_event(b, e);
+    return b;
+}
+
+}  // namespace
+
+TEST_CASE("decode_program: pacifica event decodes", "[decoder][pacifica]") {
+    auto bytes = build_pacifica_blob(pacifica_params(1.0f, 1.0f, 0.0f));
+    DecodeError err = DecodeError::InvalidField;
+    Program* p = decode_program(bytes.data(), bytes.size(), 4, &err);
+    REQUIRE(p != nullptr);
+    CHECK(err == DecodeError::Ok);
+    free_program(p);
+}
+
+TEST_CASE("decode_program: pacifica rejects speed <= 0", "[decoder][pacifica]") {
+    auto bytes = build_pacifica_blob(pacifica_params(0.0f, 1.0f, 0.0f));
+    CHECK(run(bytes) == DecodeError::InvalidField);
+}
+
+TEST_CASE("decode_program: pacifica rejects brightness out of range",
+          "[decoder][pacifica]") {
+    auto bytes = build_pacifica_blob(pacifica_params(1.0f, 1.5f, 0.0f));
+    CHECK(run(bytes) == DecodeError::InvalidField);
+}
+
+TEST_CASE("decode_program: pacifica rejects truncated params", "[decoder][pacifica]") {
+    auto params = pacifica_params(1.0f, 1.0f, 0.0f);
+    params.pop_back();
+    auto bytes = build_pacifica_blob(params);
+    CHECK(run(bytes) == DecodeError::InvalidField);
+}

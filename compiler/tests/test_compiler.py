@@ -16,7 +16,7 @@ from elements.dsl import *
 from elements.dsl import _builder
 from elements.blob import (
     decode_blob, decode_params, PIXV_NONE,
-    ANIM_WAVE, ANIM_SHIFT, ANIM_SPARK, ANIM_PAINT,
+    ANIM_WAVE, ANIM_SHIFT, ANIM_SPARK, ANIM_PAINT, ANIM_PACIFICA,
 )
 from elements.compiler import CompileError
 
@@ -857,3 +857,75 @@ def test_layer_limit_contract():
 
     # Compositor uses uint32_t active_mask, implicitly limiting to 32 layers
     assert compiler_limit == limits.MAX_LAYER_COUNT == 32
+
+
+# ---------------------------------------------------------------------------
+# Pacifica
+# ---------------------------------------------------------------------------
+
+class TestPacifica:
+    @staticmethod
+    def _compile(**params):
+        strip1 = strip("test_pacifica", length=10, type="RGB")
+        px = strip1.pixels("0-9")
+        p = pacifica(**params)
+        p.schedule(px, at=0, duration=2)
+        return decode_blob(build(beat=1.0, duration=2.0)["test_pacifica"])
+
+    def test_defaults(self):
+        program = self._compile()
+        e = program.layers[0].events[0]
+        assert e.anim_type == ANIM_PACIFICA
+        assert e.src_pixv_idx == PIXV_NONE
+        assert e.work_pixv_idx == PIXV_NONE
+        p = decode_params(e.anim_type, e.params)
+        assert p["speed"] == pytest.approx(1.0)
+        assert p["brightness"] == pytest.approx(1.0)
+        assert p["hue_shift"] == pytest.approx(0.0)
+
+    def test_explicit_params_round_trip(self):
+        program = self._compile(speed=0.5, brightness=0.25, hue_shift=120)
+        e = program.layers[0].events[0]
+        p = decode_params(e.anim_type, e.params)
+        assert p["speed"] == pytest.approx(0.5)
+        assert p["brightness"] == pytest.approx(0.25)
+        assert p["hue_shift"] == pytest.approx(120.0)
+
+    def test_param_block_is_12_bytes(self):
+        program = self._compile()
+        assert len(program.layers[0].events[0].params) == 12
+
+    def test_zero_speed_rejected(self):
+        with pytest.raises(CompileError, match="speed must be > 0"):
+            self._compile(speed=0)
+
+    def test_brightness_out_of_range_rejected(self):
+        with pytest.raises(CompileError, match="brightness must be in"):
+            self._compile(brightness=1.5)
+
+    def test_brightness_zero_allowed(self):
+        program = self._compile(brightness=0)
+        p = decode_params(program.layers[0].events[0].anim_type,
+                          program.layers[0].events[0].params)
+        assert p["brightness"] == 0.0
+
+    def test_source_rejected(self):
+        strip1 = strip("test_pacifica_src", length=10, type="RGB")
+        px = strip1.pixels("0-9")
+        w = wave(channel="V", h=0, s=1.0, v=0.0, min_val=0.0, max_val=1.0,
+                 period=4, phase0=0, pixel_step=0)
+        w.schedule(px, at=0, duration=1)
+        p = pacifica()
+        p.schedule(px, at=1, duration=1, source=w)
+        with pytest.raises(CompileError, match="source= is only supported"):
+            build(beat=1.0, duration=2.0)
+
+    def test_memory_estimate_includes_scratch(self):
+        strip1 = strip("test_pacifica_mem", length=10, type="RGB")
+        px = strip1.pixels("0-9")
+        p = pacifica()
+        p.schedule(px, at=0, duration=2)
+        manifest = build_manifest(beat=1.0, duration=2.0)
+        mem = manifest.strips["test_pacifica_mem"].memory
+        # 24 B instance + 10 pixels * 3 B RGB scratch.
+        assert mem.anim_bytes == 24 + 10 * 3

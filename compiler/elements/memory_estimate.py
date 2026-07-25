@@ -14,7 +14,8 @@ asserts these stay in sync.
 from __future__ import annotations
 
 from .types import MemoryEstimate
-from .blob import BlobProgram, ANIM_WAVE, ANIM_SHIFT, ANIM_SPARK, ANIM_PAINT
+from .blob import (BlobProgram, ANIM_WAVE, ANIM_SHIFT, ANIM_SPARK, ANIM_PAINT,
+                   ANIM_PACIFICA)
 
 # esp32 sizeof, verified against the xtensa toolchain.
 _HSVA_BYTES = 16          # hsva_t (4 floats); also the pool element size
@@ -31,11 +32,15 @@ _ANIM_INSTANCE_BYTES = {
     ANIM_WAVE: 40,
     ANIM_SHIFT: 36,
     ANIM_SPARK: 20,
-    ANIM_PAINT: 32,   # plus count * _HSVA_BYTES for the owned constant array
+    ANIM_PAINT: 32,     # plus count * _HSVA_BYTES for the owned constant array
+    ANIM_PACIFICA: 24,  # plus dst size * _RGB_BYTES for the owned RGB scratch
 }
 
 # Per-pixel paint bakes a constant hsva_t array into the instance.
 _PAINT_CONSTANT_MODE = 1
+
+# Pacifica composites in an owned rgb_t scratch sized to its dst view.
+_RGB_BYTES = 3
 
 
 def estimate_memory(program: BlobProgram) -> MemoryEstimate:
@@ -65,6 +70,8 @@ def estimate_memory(program: BlobProgram) -> MemoryEstimate:
                     and e.params[0] == _PAINT_CONSTANT_MODE):
                 count = int.from_bytes(e.params[1:3], "little")  # u16
                 anim_bytes += count * _HSVA_BYTES
+            if e.anim_type == ANIM_PACIFICA:
+                anim_bytes += program.pixel_views[e.dst_pixv_idx].size * _RGB_BYTES
 
     overhead_bytes = _PROGRAM_BYTES
     total_bytes = (pool_bytes + view_bytes + copy_op_bytes + event_bytes

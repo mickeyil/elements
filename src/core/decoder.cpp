@@ -14,6 +14,7 @@
 #include "core/program.h"
 #include "core/runtime_constants.h"
 
+#include "core/animations/pacifica.h"
 #include "core/animations/paint.h"
 #include "core/animations/shift.h"
 #include "core/animations/spark.h"
@@ -317,6 +318,9 @@ DecodeError parse_event(BlobReader& r, const ParsedHeader& hdr,
         case AnimType::Shift: anim = Shift::from_blob(p, params_size, &perr); break;
         case AnimType::Spark: anim = Spark::from_blob(p, params_size, &perr); break;
         case AnimType::Paint: anim = Paint::from_blob(p, params_size, &perr); break;
+        case AnimType::Pacifica:
+            anim = Pacifica::from_blob(p, params_size, &perr);
+            break;
         default: return DecodeError::InvalidField;
     }
     if (anim == nullptr) return perr;
@@ -328,6 +332,14 @@ DecodeError parse_event(BlobReader& r, const ParsedHeader& hdr,
         if (k != 0 && k != prog.pixel_views.at(dst_pixv_idx).size()) {
             delete anim;
             return DecodeError::InvalidField;
+        }
+    }
+    if (type == AnimType::Pacifica) {
+        // The scratch is sized by the dst view, which from_blob can't see.
+        Pacifica* pacifica = static_cast<Pacifica*>(anim);
+        if (!pacifica->allocate_scratch(prog.pixel_views.at(dst_pixv_idx).size())) {
+            delete anim;
+            return DecodeError::OutOfMemory;
         }
     }
     if (type == AnimType::Shift) {

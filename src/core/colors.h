@@ -39,5 +39,8 @@ struct rgb_t {
 // Convert HSV (h: 0-360, s: 0-1, v: 0-1) to linear RGB
 rgb_t hsv_to_rgb(float h, float s, float v);
 
+// Convert linear RGB to HSV; alpha is set to 1. Gray inputs get h=0, s=0.
+hsva_t rgb_to_hsv(const rgb_t& c);
+
 // Blend `fg` over `bg` by `alpha` in [0,1]: bg*(1-alpha) + fg*alpha.
 rgb_t rgb_alpha_blend(const rgb_t& bg, const rgb_t& fg, float alpha);

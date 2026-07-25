@@ -38,6 +38,7 @@ ANIM_WAVE = ANIM_TYPES["wave"]
 ANIM_SHIFT = ANIM_TYPES["shift"]
 ANIM_SPARK = ANIM_TYPES["spark"]
 ANIM_PAINT = ANIM_TYPES["paint"]
+ANIM_PACIFICA = ANIM_TYPES["pacifica"]
 
 
 # ---------------------------------------------------------------------------
@@ -136,11 +137,18 @@ def _pack_paint_params(p: dict) -> bytes:
     return buf
 
 
+def _pack_pacifica_params(p: dict) -> bytes:
+    return struct.pack("<3f",
+        p["speed"], p["brightness"], p["hue_shift"],
+    )
+
+
 _PARAM_PACKERS = {
     "wave": _pack_wave_params,
     "shift": _pack_shift_params,
     "spark": _pack_spark_params,
     "paint": _pack_paint_params,
+    "pacifica": _pack_pacifica_params,
 }
 
 
@@ -335,4 +343,7 @@ def decode_params(anim_type: int, raw: bytes) -> dict:
             h, s, v, a = struct.unpack_from("<4f", raw, 3 + i * 16)
             pixels.append({"h": h, "s": s, "v": v, "a": a})
         return {"mode": 1, "pixel_count": count, "pixels": pixels}
+    if anim_type == ANIM_PACIFICA:
+        speed, brightness, hue_shift = struct.unpack_from("<3f", raw, 0)
+        return {"speed": speed, "brightness": brightness, "hue_shift": hue_shift}
     return {"raw": raw}

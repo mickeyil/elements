@@ -6,6 +6,7 @@
 #include <cstring>
 #include <vector>
 
+#include "core/animations/pacifica.h"
 #include "core/animations/paint.h"
 #include "core/animations/shift.h"
 #include "core/animations/spark.h"
@@ -93,6 +94,15 @@ std::vector<uint8_t> pack_shift(uint8_t direction, float velocity,
     append_f32(out, fill_s);
     append_f32(out, fill_v);
     append_f32(out, fill_a);
+    return out;
+}
+
+std::vector<uint8_t> pack_pacifica(float speed, float brightness,
+                                   float hue_shift) {
+    std::vector<uint8_t> out;
+    append_f32(out, speed);
+    append_f32(out, brightness);
+    append_f32(out, hue_shift);
     return out;
 }
 
@@ -563,4 +573,177 @@ TEST_CASE("Shift: from_blob rejects NaN velocity", "[anim][shift][from_blob]") {
     DecodeError err = DecodeError::Ok;
     CHECK(Shift::from_blob(bytes.data(), bytes.size(), &err) == nullptr);
     CHECK(err == DecodeError::InvalidField);
+}
+
+// ===========================================================================
+// Pacifica
+// ===========================================================================
+
+namespace {
+
+PacificaParams default_pacifica_params() {
+    PacificaParams p = {};
+    p.speed = 1.0f;
+    p.brightness = 1.0f;
+    p.hue_shift = 0.0f;
+    return p;
+}
+
+}  // namespace
+
+TEST_CASE("Pacifica: render is a pure function of t", "[anim][pacifica]") {
+    constexpr uint16_t N = 20;
+
+    // Instance A renders t=1.0 then t=5.0; instance B renders t=5.0 cold.
+    // Identical output proves no hidden frame-to-frame state.
+    Pacifica a(default_pacifica_params());
+    Pacifica b(default_pacifica_params());
+    REQUIRE(a.allocate_scratch(N));
+    REQUIRE(b.allocate_scratch(N));
+
+    hsva_t buf_a[N]; PixelView dst_a; init_view(dst_a, buf_a, N);
+    hsva_t buf_b[N]; PixelView dst_b; init_view(dst_b, buf_b, N);
+
+    a.render(dst_a, 1.0f);
+    a.render(dst_a, 5.0f);
+    b.render(dst_b, 5.0f);
+
+    for (uint16_t i = 0; i < N; i++) {
+        CHECK(buf_a[i].h == buf_b[i].h);
+        CHECK(buf_a[i].s == buf_b[i].s);
+        CHECK(buf_a[i].v == buf_b[i].v);
+        CHECK(buf_a[i].a == buf_b[i].a);
+    }
+}
+
+TEST_CASE("Pacifica: every pixel is written, in range", "[anim][pacifica]") {
+    constexpr uint16_t N = 16;
+    Pacifica anim(default_pacifica_params());
+    REQUIRE(anim.allocate_scratch(N));
+
+    hsva_t buf[N];
+    for (uint16_t i = 0; i < N; i++) buf[i] = hsva_t(-999, -999, -999, -999);
+    PixelView dst; init_view(dst, buf, N);
+    anim.render(dst, 2.5f);
+
+    for (uint16_t i = 0; i < N; i++) {
+        CHECK(buf[i].h >= 0.0f);
+        CHECK(buf[i].h < 360.0f);
+        CHECK(buf[i].s >= 0.0f);
+        CHECK(buf[i].s <= 1.0f);
+        CHECK(buf[i].v > 0.0f);   // deepen_colors floors every channel above 0
+        CHECK(buf[i].v <= 1.0f);
+        CHECK(buf[i].a == 1.0f);
+    }
+}
+
+TEST_CASE("Pacifica: output evolves over time", "[anim][pacifica]") {
+    constexpr uint16_t N = 16;
+    Pacifica anim(default_pacifica_params());
+    REQUIRE(anim.allocate_scratch(N));
+
+    hsva_t buf1[N]; PixelView dst1; init_view(dst1, buf1, N);
+    hsva_t buf2[N]; PixelView dst2; init_view(dst2, buf2, N);
+    anim.render(dst1, 0.0f);
+    anim.render(dst2, 3.0f);
+
+    bool any_diff = false;
+    for (uint16_t i = 0; i < N; i++) {
+        if (buf1[i].h != buf2[i].h || buf1[i].v != buf2[i].v) any_diff = true;
+    }
+    CHECK(any_diff);
+}
+
+TEST_CASE("Pacifica: brightness 0 blacks out V", "[anim][pacifica]") {
+    constexpr uint16_t N = 8;
+    PacificaParams p = default_pacifica_params();
+    p.brightness = 0.0f;
+    Pacifica anim(p);
+    REQUIRE(anim.allocate_scratch(N));
+
+    hsva_t buf[N]; PixelView dst; init_view(dst, buf, N);
+    anim.render(dst, 1.0f);
+    for (uint16_t i = 0; i < N; i++) {
+        CHECK(buf[i].v == 0.0f);
+    }
+}
+
+TEST_CASE("Pacifica: hue_shift rotates hue", "[anim][pacifica]") {
+    constexpr uint16_t N = 8;
+    Pacifica plain(default_pacifica_params());
+    PacificaParams shifted_params = default_pacifica_params();
+    shifted_params.hue_shift = 180.0f;
+    Pacifica shifted(shifted_params);
+    REQUIRE(plain.allocate_scratch(N));
+    REQUIRE(shifted.allocate_scratch(N));
+
+    hsva_t buf1[N]; PixelView dst1; init_view(dst1, buf1, N);
+    hsva_t buf2[N]; PixelView dst2; init_view(dst2, buf2, N);
+    plain.render(dst1, 1.0f);
+    shifted.render(dst2, 1.0f);
+
+    for (uint16_t i = 0; i < N; i++) {
+        if (buf1[i].s == 0.0f) continue;  // hue is meaningless on grays
+        const float expected = std::fmod(buf1[i].h + 180.0f, 360.0f);
+        CHECK(buf2[i].h == Approx(expected).margin(1e-3));
+        CHECK(buf2[i].s == buf1[i].s);
+        CHECK(buf2[i].v == buf1[i].v);
+    }
+}
+
+TEST_CASE("Pacifica: render without scratch leaves dst untouched",
+          "[anim][pacifica]") {
+    Pacifica anim(default_pacifica_params());
+    hsva_t buf[4];
+    for (uint16_t i = 0; i < 4; i++) buf[i] = hsva_t(77, 1, 1, 1);
+    PixelView dst; init_view(dst, buf, 4);
+    anim.render(dst, 1.0f);
+    for (uint16_t i = 0; i < 4; i++) {
+        CHECK(buf[i].h == 77.0f);
+    }
+}
+
+TEST_CASE("Pacifica: from_blob round-trip", "[anim][pacifica][from_blob]") {
+    auto bytes = pack_pacifica(1.0f, 0.5f, 90.0f);
+    DecodeError err = DecodeError::OutOfMemory;
+    Animation* anim = Pacifica::from_blob(bytes.data(), bytes.size(), &err);
+    REQUIRE(anim != nullptr);
+    REQUIRE(err == DecodeError::Ok);
+
+    REQUIRE(static_cast<Pacifica*>(anim)->allocate_scratch(4));
+    hsva_t buf[4]; PixelView dst; init_view(dst, buf, 4);
+    anim->render(dst, 0.5f);
+    CHECK(buf[0].a == 1.0f);
+    delete anim;
+}
+
+TEST_CASE("Pacifica: from_blob rejects bad params", "[anim][pacifica][from_blob]") {
+    DecodeError err = DecodeError::Ok;
+
+    SECTION("speed <= 0") {
+        auto bytes = pack_pacifica(0.0f, 1.0f, 0.0f);
+        CHECK(Pacifica::from_blob(bytes.data(), bytes.size(), &err) == nullptr);
+        CHECK(err == DecodeError::InvalidField);
+    }
+    SECTION("brightness > 1") {
+        auto bytes = pack_pacifica(1.0f, 1.5f, 0.0f);
+        CHECK(Pacifica::from_blob(bytes.data(), bytes.size(), &err) == nullptr);
+        CHECK(err == DecodeError::InvalidField);
+    }
+    SECTION("brightness < 0") {
+        auto bytes = pack_pacifica(1.0f, -0.1f, 0.0f);
+        CHECK(Pacifica::from_blob(bytes.data(), bytes.size(), &err) == nullptr);
+        CHECK(err == DecodeError::InvalidField);
+    }
+    SECTION("NaN hue_shift") {
+        auto bytes = pack_pacifica(1.0f, 1.0f, std::nanf(""));
+        CHECK(Pacifica::from_blob(bytes.data(), bytes.size(), &err) == nullptr);
+        CHECK(err == DecodeError::InvalidField);
+    }
+    SECTION("truncated") {
+        auto bytes = pack_pacifica(1.0f, 1.0f, 0.0f);
+        bytes.pop_back();
+        CHECK(Pacifica::from_blob(bytes.data(), bytes.size(), &err) == nullptr);
+        CHECK(err == DecodeError::InvalidField);
+    }
 }
