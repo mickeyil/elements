@@ -19,6 +19,7 @@
 #include "core/animations/paint.h"
 #include "core/animations/wave.h"
 #include "core/colors.h"
+#include "core/gamma.h"
 #include "core/pixel_view.h"
 
 namespace {
@@ -31,9 +32,9 @@ constexpr uint8_t PIN_VRX = 34;
 constexpr uint8_t PIN_VRY = 35;
 constexpr uint8_t PIN_SW = 25;  // wired but unused for now
 
-// Which ADC direction is up/right is unverified; flip on hardware if wrong.
+// Signs verified on the assembled lamp: Y comes out inverted.
 constexpr float X_SIGN = 1.0f;
-constexpr float Y_SIGN = 1.0f;
+constexpr float Y_SIGN = -1.0f;
 
 constexpr uint32_t FRAME_MS = 20;  // ~50 fps
 constexpr uint16_t ADC_MAX = 4095;
@@ -41,6 +42,7 @@ constexpr uint16_t ADC_MAX = 4095;
 CRGB g_leds[NUM_LEDS];
 hsva_t g_frame[NUM_LEDS];
 PixelView g_view;
+GammaCorrection g_gamma;
 
 JoystickGestures g_gestures;
 LampState g_lamp;
@@ -153,9 +155,9 @@ void setup()
     FastLED.addLeds<WS2812B, LED_PIN, GRB>(g_leds, NUM_LEDS)
         .setCorrection(TypicalLEDStrip);
     FastLED.setBrightness(255);
-    // Testing off a bus-powered USB3 hub: ~900 mA shared budget, minus the
-    // ESP32 board itself. Restore 1800 for the rig's 2 A supply.
-    FastLED.setMaxPowerInVoltsAndMilliamps(5, 500);
+    // Headroom under the lamp's 2.1 A battery, including the ESP32 itself
+    // and Wi-Fi TX bursts.
+    FastLED.setMaxPowerInVoltsAndMilliamps(5, 1800);
 
     pinMode(PIN_SW, INPUT_PULLUP);
     make_hostname(g_host, sizeof(g_host));
@@ -176,6 +178,9 @@ void setup()
 
     g_view.initialize(g_frame, NUM_LEDS);
     g_pacifica.allocate_scratch(NUM_LEDS);
+    // Gamma disabled after a hardware look test: 2.6 crushed the animations.
+    // The identity LUT stays in the pipeline; set_gamma() here re-enables.
+    g_gamma.set_identity();
 
     // Wi-Fi comes up in the background; the lamp never waits for it.
     g_wifi.begin();
@@ -290,8 +295,8 @@ void loop()
         const float intensity = g_lamp.intensity();
         for (uint16_t i = 0; i < NUM_LEDS; i++) {
             const hsva_t& p = g_frame[i];
-            const rgb_t c =
-                hsv_to_rgb(wrap360(p.h + hue), p.s, p.v * intensity);
+            const rgb_t c = g_gamma.correct(
+                hsv_to_rgb(wrap360(p.h + hue), p.s, p.v * intensity));
             g_leds[i] = CRGB(c.r, c.g, c.b);
         }
     } else {
