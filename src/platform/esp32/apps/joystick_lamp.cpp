@@ -6,9 +6,15 @@
 // only reads the ADC and pushes frames.
 
 #include <Arduino.h>
+#include <ArduinoOTA.h>
 #include <FastLED.h>
+#include <WiFi.h>
 
 #include "app/joystick_gestures.h"
+#include "app/wifi_cred_store.h"
+#include "platform/esp32/nvs_key_value_store.h"
+#include "platform/esp32/wifi_manager.h"
+#include "platform/esp32/wifi_provisioning.h"
 #include "core/animations/pacifica.h"
 #include "core/animations/paint.h"
 #include "core/animations/wave.h"
@@ -38,6 +44,14 @@ PixelView g_view;
 
 JoystickGestures g_gestures;
 LampState g_lamp;
+
+// Wi-Fi is optional: the lamp lamps regardless. Credentials come from the
+// portal (stick button held ~1 s at boot) or a compiled-in secrets.h.
+NvsKeyValueStore g_wifi_kv("wifi");
+WifiCredStore g_wifi_creds(g_wifi_kv);
+WifiManager g_wifi(g_wifi_creds);
+char g_host[16];  // "lamp-xxxxxx", also the provisioning AP SSID
+bool g_ota_listening = false;
 
 uint16_t g_center_x = ADC_MAX / 2;
 uint16_t g_center_y = ADC_MAX / 2;
@@ -85,6 +99,33 @@ float normalize(uint16_t raw, uint16_t center)
     return v;
 }
 
+// "lamp-xxxxxx" from the last three eFuse MAC octets, lowercase.
+void make_hostname(char* out, size_t cap)
+{
+    const uint64_t mac = ESP.getEfuseMac();
+    snprintf(out, cap, "lamp-%02x%02x%02x", uint8_t(mac >> 24),
+             uint8_t(mac >> 32), uint8_t(mac >> 40));
+}
+
+// Paint alternating pixels in two colors and leave them showing. Colors
+// are passed pre-dimmed; status patterns sit at ~25% intensity.
+void show_status_pattern(const CRGB& even, const CRGB& odd)
+{
+    for (uint16_t i = 0; i < NUM_LEDS; i++) g_leds[i] = (i & 1) ? odd : even;
+    FastLED.show();
+}
+
+// True if the stick button is held through the first second of boot.
+bool button_held_at_boot()
+{
+    const uint32_t start = millis();
+    while (millis() - start < 1000) {
+        if (digitalRead(PIN_SW) == HIGH) return false;
+        delay(10);
+    }
+    return true;
+}
+
 // Assume the stick is at rest during boot and call that the center.
 void calibrate_center()
 {
@@ -117,6 +158,17 @@ void setup()
     FastLED.setMaxPowerInVoltsAndMilliamps(5, 500);
 
     pinMode(PIN_SW, INPUT_PULLUP);
+    make_hostname(g_host, sizeof(g_host));
+    Serial.printf("[init] host=%s\n", g_host);
+
+    // Stick button held through boot: serve the credentials portal instead
+    // of the lamp. Saving reboots into normal mode; power cycle abandons.
+    if (button_held_at_boot()) {
+        Serial.printf("[wifi] provisioning portal up: ssid=%s\n", g_host);
+        show_status_pattern(CRGB(0, 0, 64), CRGB(32, 0, 32));
+        run_wifi_provisioning_portal(g_host, g_wifi_creds);
+    }
+
     analogReadResolution(12);
     calibrate_center();
     Serial.printf("[init] center x=%u y=%u (stick must be at rest during boot)\n",
@@ -124,6 +176,18 @@ void setup()
 
     g_view.initialize(g_frame, NUM_LEDS);
     g_pacifica.allocate_scratch(NUM_LEDS);
+
+    // Wi-Fi comes up in the background; the lamp never waits for it.
+    g_wifi.begin();
+    ArduinoOTA.setHostname(g_host);
+    ArduinoOTA.onStart([] {
+        Serial.println("[ota] start");
+        show_status_pattern(CRGB(64, 0, 0), CRGB(32, 0, 32));
+    });
+    ArduinoOTA.onEnd([] { Serial.println("[ota] done, rebooting"); });
+    ArduinoOTA.onError([](ota_error_t e) {
+        Serial.printf("[ota] error %u\n", unsigned(e));
+    });
 }
 
 void loop()
@@ -140,6 +204,19 @@ void loop()
         Serial.println("[loop] start");
     }
 
+    const NetworkTransition net = g_wifi.poll();
+    if (net == NetworkTransition::link_up) {
+        Serial.printf("[wifi] up %s\n", WiFi.localIP().toString().c_str());
+        // Restart the listener so mDNS re-registers after a reconnect.
+        if (g_ota_listening) ArduinoOTA.end();
+        ArduinoOTA.begin();
+        g_ota_listening = true;
+        Serial.printf("[ota] listening as %s.local\n", g_host);
+    } else if (net == NetworkTransition::link_down) {
+        Serial.println("[wifi] down");
+    }
+    if (g_wifi.is_up()) ArduinoOTA.handle();
+
     const uint16_t raw_x = read_adc_median(PIN_VRX);
     const uint16_t raw_y = read_adc_median(PIN_VRY);
     const float x = X_SIGN * normalize(raw_x, g_center_x);
@@ -152,6 +229,21 @@ void loop()
         s_last_stick_log = now;
         Serial.printf("[stick] x=%+.2f y=%+.2f raw=%u/%u\n", x, y, raw_x,
                       raw_y);
+    }
+
+    // Life-sign log for the stick button; not used for control yet.
+    static bool s_sw_pressed = false;
+    static uint32_t s_sw_change_ms = 0;
+    const bool sw_now = digitalRead(PIN_SW) == LOW;  // pullup: LOW = pressed
+    if (sw_now != s_sw_pressed && now - s_sw_change_ms >= 30) {
+        s_sw_pressed = sw_now;
+        if (sw_now) {
+            Serial.println("[button] press");
+        } else {
+            Serial.printf("[button] release after %lums\n",
+                          (unsigned long)(now - s_sw_change_ms));
+        }
+        s_sw_change_ms = now;
     }
 
     const GestureResult g = g_gestures.update(x, y, now);
