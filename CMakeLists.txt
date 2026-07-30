@@ -362,6 +362,13 @@ if(BUILD_TESTS)
     target_include_directories(test_fx_math PRIVATE src)
     target_link_libraries(test_fx_math Catch2::Catch2WithMain)
 
+    add_executable(test_joystick_gestures
+        test/test_joystick_gestures.cpp
+        src/app/joystick_gestures.cpp
+    )
+    target_include_directories(test_joystick_gestures PRIVATE src)
+    target_link_libraries(test_joystick_gestures Catch2::Catch2WithMain)
+
     # test_playback is standalone: it links the test platform_clock fake
     # (test/test_platform_clock.cpp) instead of the production impl, so
     # SyncedClock advances under test control.
@@ -731,6 +738,8 @@ if(BUILD_TESTS)
     add_test(NAME test_animations COMMAND test_animations
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_fx_math COMMAND test_fx_math
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    add_test(NAME test_joystick_gestures COMMAND test_joystick_gestures
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_playback COMMAND test_playback
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
