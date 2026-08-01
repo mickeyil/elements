@@ -1,19 +1,19 @@
-#include "app/command_handler.h"
+#include "controller/command_handler.h"
 
 #include <cstring>
 #include <new>
 
-#include "app/animation_store.h"
-#include "app/app_context.h"
+#include "controller/animation_store.h"
+#include "controller/app_context.h"
 #include "core/blob_reader.h"
-#include "app/device_status.h"
-#include "app/hardware_profile_store.h"
-#include "app/link_protocol.h"
-#include "app/local_animation.h"
-#include "app/playback.h"
-#include "app/slog.h"
-#include "app/wire_reader.h"
-#include "app/wire_writer.h"
+#include "controller/device_status.h"
+#include "controller/hardware_profile_store.h"
+#include "controller/link_protocol.h"
+#include "controller/local_animation.h"
+#include "controller/playback.h"
+#include "controller/slog.h"
+#include "controller/wire_reader.h"
+#include "controller/wire_writer.h"
 
 namespace {
 

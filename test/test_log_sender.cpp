@@ -6,9 +6,9 @@
 #include <vector>
 
 #include "platform/device_identity.h"
-#include "app/discovery.h"
-#include "app/log_sender.h"
-#include "app/slog.h"
+#include "controller/discovery.h"
+#include "controller/log_sender.h"
+#include "controller/slog.h"
 #include "test_platform_clock.h"
 #include "platform/udp_transport.h"
 

@@ -7,10 +7,10 @@
 #include <cstdlib>
 #include <cstring>
 
-#include "app/app.h"
+#include "controller/app.h"
 #include "platform/device_identity.h"
-#include "app/discovery.h"
-#include "app/hardware_profile_store.h"
+#include "controller/discovery.h"
+#include "controller/hardware_profile_store.h"
 #include "platform/sim/file_key_value_store.h"
 #include "platform/sim/host_network_interface.h"
 #include "platform/sim/posix_file_store.h"
@@ -19,7 +19,7 @@
 #include "platform/sim/sim_device_identity.h"
 #include "platform/sim/sim_frame_output.h"
 #include "platform/sim/sim_system_platform.h"
-#include "app/slog.h"
+#include "controller/slog.h"
 
 // The sim device entry point: constructs the POSIX platform pieces,
 // hands them to the shared App, and ticks it until a signal arrives.

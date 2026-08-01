@@ -1,11 +1,11 @@
-#include "app/command_processor.h"
+#include "controller/command_processor.h"
 
 #include <cstring>
 
-#include "app/animation_store.h"
-#include "app/command_handler.h"
+#include "controller/animation_store.h"
+#include "controller/command_handler.h"
 #include "platform/tcp_transport.h"
-#include "app/wire_writer.h"
+#include "controller/wire_writer.h"
 
 // Largest reply payload: QueryLocalAnimations at full store capacity.
 static_assert(REPLY_PAYLOAD_MAX >=

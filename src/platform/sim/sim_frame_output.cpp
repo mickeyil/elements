@@ -4,7 +4,7 @@
 #include <cstring>
 
 #include "core/strip.h"
-#include "app/wire_writer.h"
+#include "controller/wire_writer.h"
 
 SimFrameOutput::SimFrameOutput(UdpTransport& udp,
                                const DeviceIdentity& identity,

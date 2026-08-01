@@ -18,20 +18,20 @@ FetchContent_MakeAvailable(nlohmann_json)
 # ---------------------------------------------------------------------------
 
 add_library(elements_core STATIC
-    src/app/animation_store.cpp
-    src/app/command_handler.cpp
-    src/app/local_animation.cpp
-    src/app/command_processor.cpp
-    src/app/controller_link.cpp
-    src/app/crc32.cpp
+    src/controller/animation_store.cpp
+    src/controller/command_handler.cpp
+    src/controller/local_animation.cpp
+    src/controller/command_processor.cpp
+    src/controller/controller_link.cpp
+    src/controller/crc32.cpp
     src/core/decoder.cpp
     src/core/engine.cpp
     src/core/compositor.cpp
     src/core/colors.cpp
     src/core/copy_ops.cpp
     src/core/gamma.cpp
-    src/app/hardware_profile_store.cpp
-    src/app/wifi_cred_store.cpp
+    src/controller/hardware_profile_store.cpp
+    src/platform/wifi_cred_store.cpp
     src/platform/sim/file_key_value_store.cpp
     src/platform/sim/host_platform_clock.cpp
     src/platform/sim/posix_file_store.cpp
@@ -51,11 +51,11 @@ add_library(elements_core STATIC
     src/core/animations/shift.cpp
     src/core/animations/pacifica.cpp
     src/core/fx_math.cpp
-    src/app/playback.cpp
-    src/app/clock_sync_client.cpp
-    src/app/discovery.cpp
-    src/app/slog.cpp
-    src/app/log_sender.cpp
+    src/controller/playback.cpp
+    src/controller/clock_sync_client.cpp
+    src/controller/discovery.cpp
+    src/controller/slog.cpp
+    src/controller/log_sender.cpp
 )
 target_include_directories(elements_core PUBLIC src)
 target_link_libraries(elements_core PUBLIC nlohmann_json::nlohmann_json)
@@ -66,10 +66,10 @@ target_link_libraries(elements_core PUBLIC nlohmann_json::nlohmann_json)
 
 add_executable(sim_device
     src/platform/sim/main.cpp
-    src/app/app.cpp
+    src/controller/app.cpp
     src/core/blob_reader.cpp
-    src/app/wire_reader.cpp
-    src/app/wire_writer.cpp
+    src/controller/wire_reader.cpp
+    src/controller/wire_writer.cpp
     src/platform/sim/sim_device_identity.cpp
     src/platform/sim/sim_frame_output.cpp
 )
@@ -147,11 +147,11 @@ if(BUILD_TESTS)
     target_include_directories(test_blob_reader PRIVATE src)
     target_link_libraries(test_blob_reader Catch2::Catch2WithMain)
 
-    add_executable(test_wire_reader test/test_wire_reader.cpp src/app/wire_reader.cpp)
+    add_executable(test_wire_reader test/test_wire_reader.cpp src/controller/wire_reader.cpp)
     target_include_directories(test_wire_reader PRIVATE src)
     target_link_libraries(test_wire_reader Catch2::Catch2WithMain)
 
-    add_executable(test_wire_writer test/test_wire_writer.cpp src/app/wire_writer.cpp)
+    add_executable(test_wire_writer test/test_wire_writer.cpp src/controller/wire_writer.cpp)
     target_include_directories(test_wire_writer PRIVATE src)
     target_link_libraries(test_wire_writer Catch2::Catch2WithMain)
 
@@ -256,8 +256,8 @@ if(BUILD_TESTS)
 
     add_executable(test_animation_store
         test/test_animation_store.cpp
-        src/app/animation_store.cpp
-        src/app/crc32.cpp
+        src/controller/animation_store.cpp
+        src/controller/crc32.cpp
         src/core/blob_reader.cpp
         src/core/decoder.cpp
         src/core/program.cpp
@@ -279,7 +279,7 @@ if(BUILD_TESTS)
 
     add_executable(test_key_value_store
         test/test_key_value_store.cpp
-        src/app/hardware_profile_store.cpp
+        src/controller/hardware_profile_store.cpp
         src/platform/sim/file_key_value_store.cpp
         src/platform/sim/sim_storage.cpp
     )
@@ -291,7 +291,7 @@ if(BUILD_TESTS)
 
     add_executable(test_wifi_cred_store
         test/test_wifi_cred_store.cpp
-        src/app/wifi_cred_store.cpp
+        src/platform/wifi_cred_store.cpp
         src/platform/sim/file_key_value_store.cpp
         src/platform/sim/sim_storage.cpp
     )
@@ -318,7 +318,7 @@ if(BUILD_TESTS)
     add_executable(test_clock_sync_client
         test/test_clock_sync_client.cpp
         test/test_platform_clock.cpp
-        src/app/clock_sync_client.cpp
+        src/controller/clock_sync_client.cpp
     )
     target_include_directories(test_clock_sync_client PRIVATE src test)
     target_link_libraries(test_clock_sync_client Catch2::Catch2WithMain)
@@ -328,7 +328,7 @@ if(BUILD_TESTS)
     add_executable(test_discovery
         test/test_discovery.cpp
         test/test_platform_clock.cpp
-        src/app/discovery.cpp
+        src/controller/discovery.cpp
     )
     target_include_directories(test_discovery PRIVATE src test)
     target_link_libraries(test_discovery Catch2::Catch2WithMain)
@@ -362,15 +362,14 @@ if(BUILD_TESTS)
     target_include_directories(test_fx_math PRIVATE src)
     target_link_libraries(test_fx_math Catch2::Catch2WithMain)
 
-    add_executable(test_joystick_gestures
-        test/test_joystick_gestures.cpp
-        src/app/joystick_gestures.cpp
-        src/app/police.cpp
+    add_executable(test_joystick_lamp
+        test/test_joystick_lamp.cpp
+        src/apps/joystick_lamp/lamp_logic.cpp
         src/core/pixel_view.cpp
         src/core/colors.cpp
     )
-    target_include_directories(test_joystick_gestures PRIVATE src)
-    target_link_libraries(test_joystick_gestures Catch2::Catch2WithMain)
+    target_include_directories(test_joystick_lamp PRIVATE src)
+    target_link_libraries(test_joystick_lamp Catch2::Catch2WithMain)
 
     # test_playback is standalone: it links the test platform_clock fake
     # (test/test_platform_clock.cpp) instead of the production impl, so
@@ -378,7 +377,7 @@ if(BUILD_TESTS)
     add_executable(test_playback
         test/test_playback.cpp
         test/test_platform_clock.cpp
-        src/app/playback.cpp
+        src/controller/playback.cpp
         src/core/decoder.cpp
         src/core/engine.cpp
         src/core/compositor.cpp
@@ -405,15 +404,15 @@ if(BUILD_TESTS)
     add_executable(test_command_handler
         test/test_command_handler.cpp
         test/test_platform_clock.cpp
-        src/app/command_handler.cpp
-        src/app/slog.cpp
-        src/app/local_animation.cpp
-        src/app/animation_store.cpp
-        src/app/crc32.cpp
-        src/app/hardware_profile_store.cpp
-        src/app/wire_reader.cpp
-        src/app/wire_writer.cpp
-        src/app/playback.cpp
+        src/controller/command_handler.cpp
+        src/controller/slog.cpp
+        src/controller/local_animation.cpp
+        src/controller/animation_store.cpp
+        src/controller/crc32.cpp
+        src/controller/hardware_profile_store.cpp
+        src/controller/wire_reader.cpp
+        src/controller/wire_writer.cpp
+        src/controller/playback.cpp
         src/core/decoder.cpp
         src/core/engine.cpp
         src/core/compositor.cpp
@@ -440,16 +439,16 @@ if(BUILD_TESTS)
     add_executable(test_command_processor
         test/test_command_processor.cpp
         test/test_platform_clock.cpp
-        src/app/command_processor.cpp
-        src/app/command_handler.cpp
-        src/app/slog.cpp
-        src/app/local_animation.cpp
-        src/app/animation_store.cpp
-        src/app/crc32.cpp
-        src/app/hardware_profile_store.cpp
-        src/app/wire_reader.cpp
-        src/app/wire_writer.cpp
-        src/app/playback.cpp
+        src/controller/command_processor.cpp
+        src/controller/command_handler.cpp
+        src/controller/slog.cpp
+        src/controller/local_animation.cpp
+        src/controller/animation_store.cpp
+        src/controller/crc32.cpp
+        src/controller/hardware_profile_store.cpp
+        src/controller/wire_reader.cpp
+        src/controller/wire_writer.cpp
+        src/controller/playback.cpp
         src/core/decoder.cpp
         src/core/engine.cpp
         src/core/compositor.cpp
@@ -476,18 +475,18 @@ if(BUILD_TESTS)
     add_executable(test_controller_link
         test/test_controller_link.cpp
         test/test_platform_clock.cpp
-        src/app/controller_link.cpp
-        src/app/discovery.cpp
-        src/app/command_processor.cpp
-        src/app/command_handler.cpp
-        src/app/slog.cpp
-        src/app/local_animation.cpp
-        src/app/animation_store.cpp
-        src/app/crc32.cpp
-        src/app/hardware_profile_store.cpp
-        src/app/wire_reader.cpp
-        src/app/wire_writer.cpp
-        src/app/playback.cpp
+        src/controller/controller_link.cpp
+        src/controller/discovery.cpp
+        src/controller/command_processor.cpp
+        src/controller/command_handler.cpp
+        src/controller/slog.cpp
+        src/controller/local_animation.cpp
+        src/controller/animation_store.cpp
+        src/controller/crc32.cpp
+        src/controller/hardware_profile_store.cpp
+        src/controller/wire_reader.cpp
+        src/controller/wire_writer.cpp
+        src/controller/playback.cpp
         src/core/decoder.cpp
         src/core/engine.cpp
         src/core/compositor.cpp
@@ -514,21 +513,21 @@ if(BUILD_TESTS)
     add_executable(test_app
         test/test_app.cpp
         test/test_platform_clock.cpp
-        src/app/app.cpp
-        src/app/controller_link.cpp
-        src/app/clock_sync_client.cpp
-        src/app/discovery.cpp
-        src/app/command_processor.cpp
-        src/app/command_handler.cpp
-        src/app/slog.cpp
-        src/app/log_sender.cpp
-        src/app/local_animation.cpp
-        src/app/animation_store.cpp
-        src/app/crc32.cpp
-        src/app/hardware_profile_store.cpp
-        src/app/wire_reader.cpp
-        src/app/wire_writer.cpp
-        src/app/playback.cpp
+        src/controller/app.cpp
+        src/controller/controller_link.cpp
+        src/controller/clock_sync_client.cpp
+        src/controller/discovery.cpp
+        src/controller/command_processor.cpp
+        src/controller/command_handler.cpp
+        src/controller/slog.cpp
+        src/controller/log_sender.cpp
+        src/controller/local_animation.cpp
+        src/controller/animation_store.cpp
+        src/controller/crc32.cpp
+        src/controller/hardware_profile_store.cpp
+        src/controller/wire_reader.cpp
+        src/controller/wire_writer.cpp
+        src/controller/playback.cpp
         src/core/decoder.cpp
         src/core/engine.cpp
         src/core/compositor.cpp
@@ -557,7 +556,7 @@ if(BUILD_TESTS)
     add_executable(test_slog
         test/test_slog.cpp
         test/test_platform_clock.cpp
-        src/app/slog.cpp
+        src/controller/slog.cpp
     )
     target_include_directories(test_slog PRIVATE src test)
     target_link_libraries(test_slog Catch2::Catch2WithMain)
@@ -565,10 +564,10 @@ if(BUILD_TESTS)
     add_executable(test_log_sender
         test/test_log_sender.cpp
         test/test_platform_clock.cpp
-        src/app/slog.cpp
-        src/app/log_sender.cpp
-        src/app/discovery.cpp
-        src/app/wire_writer.cpp
+        src/controller/slog.cpp
+        src/controller/log_sender.cpp
+        src/controller/discovery.cpp
+        src/controller/wire_writer.cpp
     )
     target_include_directories(test_log_sender PRIVATE src test)
     target_link_libraries(test_log_sender Catch2::Catch2WithMain)
@@ -588,7 +587,7 @@ if(BUILD_TESTS)
         src/platform/sim/sim_frame_output.cpp
         src/core/strip.cpp
         src/core/gamma.cpp
-        src/app/wire_writer.cpp
+        src/controller/wire_writer.cpp
     )
     target_include_directories(test_sim_frame_output PRIVATE src)
     target_link_libraries(test_sim_frame_output Catch2::Catch2WithMain)
@@ -742,7 +741,7 @@ if(BUILD_TESTS)
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_fx_math COMMAND test_fx_math
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
-    add_test(NAME test_joystick_gestures COMMAND test_joystick_gestures
+    add_test(NAME test_joystick_lamp COMMAND test_joystick_lamp
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     add_test(NAME test_playback COMMAND test_playback
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})

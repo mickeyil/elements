@@ -9,7 +9,7 @@
 #include <utility>
 
 #include "platform/sim/file_key_value_store.h"
-#include "app/wifi_cred_store.h"
+#include "platform/wifi_cred_store.h"
 
 namespace {
 

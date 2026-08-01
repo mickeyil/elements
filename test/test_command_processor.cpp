@@ -6,14 +6,14 @@
 #include <string>
 #include <vector>
 
-#include "app/animation_store.h"
-#include "app/app_context.h"
-#include "app/command_handler.h"
-#include "app/command_processor.h"
-#include "app/device_status.h"
+#include "controller/animation_store.h"
+#include "controller/app_context.h"
+#include "controller/command_handler.h"
+#include "controller/command_processor.h"
+#include "controller/device_status.h"
 #include "platform/key_value_store.h"
-#include "app/link_protocol.h"
-#include "app/playback.h"
+#include "controller/link_protocol.h"
+#include "controller/playback.h"
 #include "platform/system_platform.h"
 #include "platform/tcp_transport.h"
 #include "test_platform_clock.h"

@@ -6,16 +6,16 @@
 #include <string>
 #include <vector>
 
-#include "app/animation_store.h"
+#include "controller/animation_store.h"
 #include "core/animation_types.h"
-#include "app/app.h"
+#include "controller/app.h"
 #include "platform/device_identity.h"
-#include "app/discovery.h"
+#include "controller/discovery.h"
 #include "platform/file_store.h"
 #include "platform/frame_output.h"
-#include "app/hardware_profile_store.h"
+#include "controller/hardware_profile_store.h"
 #include "platform/key_value_store.h"
-#include "app/link_protocol.h"
+#include "controller/link_protocol.h"
 #include "platform/network_interface.h"
 #include "platform/platform_clock.h"
 #include "core/runtime_constants.h"

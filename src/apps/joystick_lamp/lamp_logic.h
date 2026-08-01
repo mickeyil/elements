@@ -2,14 +2,17 @@
 
 #include <cstdint>
 
-// Control layer for the joystick lamp. LampState holds the user-facing
-// state (intensity, current animation, per-animation hue) and treats the
-// stick as a proportional rate control: horizontal deflection rotates the
-// current animation's hue, vertical ramps intensity, both at a rate that
-// scales with how far the stick is pushed. The stick button cycles
-// animations via next_anim(); power is handled by the wall cord, not here.
-// Platform-free so the logic runs under host tests; the sketch feeds
-// update() once per frame and reads the accessors.
+#include "core/animation.h"
+
+// Platform-free logic for the joystick lamp, host-tested; the sketch feeds
+// LampState::update() once per frame and reads the accessors.
+//
+// LampState holds the user-facing state (intensity, current animation,
+// per-animation hue) and treats the stick as a proportional rate control:
+// horizontal deflection rotates the current animation's hue, vertical
+// ramps intensity, both at a rate that scales with how far the stick is
+// pushed. The stick button cycles animations via next_anim(); power is
+// handled by the wall cord, not here.
 
 // Wrap a hue into [0, 360).
 float wrap360(float degrees);
@@ -42,4 +45,15 @@ private:
     float _intensity = 1.0f;
     float _hue[NUM_ANIMS] = {};
     int _anim = 0;
+};
+
+// Police strobe: the whole ring flashes one color at 50% duty, five
+// flashes per half second, alternating blue and red each phase.
+class Police : public Animation {
+public:
+    static constexpr float COLOR_PHASE_S = 0.5f;  // one color's flash burst
+    static constexpr int FLASHES_PER_PHASE = 5;
+    static constexpr float FLASH_PERIOD_S = COLOR_PHASE_S / FLASHES_PER_PHASE;
+
+    void render(PixelView& dst, float t_animation) override;
 };

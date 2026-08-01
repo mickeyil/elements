@@ -1,4 +1,4 @@
-#include "app/discovery.h"
+#include "controller/discovery.h"
 
 #include <algorithm>
 #include <cstring>

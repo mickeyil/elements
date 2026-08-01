@@ -4,7 +4,7 @@
 #include <cstdint>
 
 #include "platform/network_interface.h"
-#include "app/wifi_cred_store.h"
+#include "platform/wifi_cred_store.h"
 
 // Wi-Fi connection state machine for ESP32. Non-blocking; advances
 // one step per poll() call through scan, rank, and connect phases.

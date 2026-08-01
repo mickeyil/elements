@@ -1,4 +1,4 @@
-#include "app/hardware_profile_store.h"
+#include "controller/hardware_profile_store.h"
 
 #include "core/gamma.h"
 

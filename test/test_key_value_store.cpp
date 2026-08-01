@@ -8,7 +8,7 @@
 #include <string>
 #include <utility>
 
-#include "app/hardware_profile_store.h"
+#include "controller/hardware_profile_store.h"
 #include "platform/sim/file_key_value_store.h"
 
 namespace {

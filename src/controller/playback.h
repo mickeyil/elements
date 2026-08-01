@@ -8,7 +8,7 @@
 #include "core/engine.h"
 #include "core/hardware_profile.h"
 #include "core/strip.h"
-#include "app/synced_clock.h"
+#include "controller/synced_clock.h"
 
 // Playback is the synchronous render core. It owns the program lifecycle,
 // the engine, the canonical RGB Strip, and a single program-time cursor.

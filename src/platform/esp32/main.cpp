@@ -1,9 +1,9 @@
 #include <Arduino.h>
 #include <FastLED.h>
 
-#include "app/app.h"
+#include "controller/app.h"
 #include "platform/device_identity.h"
-#include "app/discovery.h"
+#include "controller/discovery.h"
 #include "platform/esp32/esp_device_identity.h"
 #include "platform/esp32/esp_file_store.h"
 #include "platform/esp32/esp_frame_output.h"
@@ -11,10 +11,10 @@
 #include "platform/esp32/esp_system_platform.h"
 #include "platform/esp32/esp_tcp_transport.h"
 #include "platform/esp32/esp_udp_transport.h"
-#include "app/hardware_profile_store.h"
+#include "controller/hardware_profile_store.h"
 #include "platform/esp32/nvs_key_value_store.h"
-#include "app/slog.h"
-#include "app/wifi_cred_store.h"
+#include "controller/slog.h"
+#include "platform/wifi_cred_store.h"
 #include "platform/esp32/wifi_manager.h"
 #include "platform/esp32/wifi_provisioning.h"
 

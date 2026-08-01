@@ -5,7 +5,7 @@
 
 #include <cstring>
 
-#include "app/wifi_cred_store.h"
+#include "platform/wifi_cred_store.h"
 
 #if __has_include("secrets.h")
 #include "secrets.h"

@@ -3,7 +3,7 @@
 #include <cstring>
 #include <string>
 
-#include "app/slog.h"
+#include "controller/slog.h"
 #include "test_platform_clock.h"
 
 namespace {

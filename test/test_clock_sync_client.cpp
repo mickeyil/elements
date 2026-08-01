@@ -5,9 +5,9 @@
 #include <deque>
 #include <vector>
 
-#include "app/clock_sync_client.h"
+#include "controller/clock_sync_client.h"
 #include "platform/device_identity.h"
-#include "app/synced_clock.h"
+#include "controller/synced_clock.h"
 #include "platform/udp_transport.h"
 #include "test_platform_clock.h"
 

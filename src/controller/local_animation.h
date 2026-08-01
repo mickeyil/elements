@@ -3,7 +3,7 @@
 #include <cstdint>
 
 #include "core/blob_reader.h"   // DecodeError
-#include "app/playback.h"      // PlaybackResult
+#include "controller/playback.h"      // PlaybackResult
 
 struct AppContext;
 

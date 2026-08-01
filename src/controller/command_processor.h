@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "app/link_protocol.h"
+#include "controller/link_protocol.h"
 
 class TcpTransport;
 class CommandHandler;

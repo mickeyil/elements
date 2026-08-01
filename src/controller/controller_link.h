@@ -2,8 +2,8 @@
 
 #include <cstdint>
 
-#include "app/command_processor.h"
-#include "app/link_protocol.h"
+#include "controller/command_processor.h"
+#include "controller/link_protocol.h"
 #include "platform/tcp_transport.h"
 
 class NetInterface;

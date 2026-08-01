@@ -1,12 +1,12 @@
-#include "app/log_sender.h"
+#include "controller/log_sender.h"
 
 #include <cstring>
 
 #include "platform/device_identity.h"
-#include "app/discovery.h"
-#include "app/slog.h"
+#include "controller/discovery.h"
+#include "controller/slog.h"
 #include "platform/udp_transport.h"
-#include "app/wire_writer.h"
+#include "controller/wire_writer.h"
 
 namespace {
 

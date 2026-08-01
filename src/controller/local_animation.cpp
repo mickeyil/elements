@@ -1,10 +1,10 @@
-#include "app/local_animation.h"
+#include "controller/local_animation.h"
 
 #include <new>
 
-#include "app/animation_store.h"
-#include "app/app_context.h"
-#include "app/playback.h"
+#include "controller/animation_store.h"
+#include "controller/app_context.h"
+#include "controller/playback.h"
 
 LocalPlayOutcome play_stored_animation(AppContext& ctx, uint16_t order_index)
 {

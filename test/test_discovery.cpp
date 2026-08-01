@@ -6,7 +6,7 @@
 #include <vector>
 
 #include "platform/device_identity.h"
-#include "app/discovery.h"
+#include "controller/discovery.h"
 #include "platform/udp_transport.h"
 #include "test_platform_clock.h"
 

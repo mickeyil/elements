@@ -1,19 +1,18 @@
 // Standalone joystick lamp: 16 WS2812B pixels cycling through four
 // animations (Pacifica, red alert wave, police strobe, solid soft color),
-// controlled by a KY-023 stick. The stick button switches animations; horizontal deflection
-// rotates hue and vertical ramps intensity, both at a rate proportional to
-// displacement. Power is the wall cord's job. Lamp logic lives in
-// app/joystick_gestures for host testing; this file only reads the ADC and
-// pushes frames.
+// controlled by a KY-023 stick. The stick button switches animations;
+// horizontal deflection rotates hue and vertical ramps intensity, both at
+// a rate proportional to displacement. Power is the wall cord's job. Lamp
+// logic lives in lamp_logic for host testing; this file only reads the
+// ADC and pushes frames.
 
 #include <Arduino.h>
 #include <ArduinoOTA.h>
 #include <FastLED.h>
 #include <WiFi.h>
 
-#include "app/joystick_gestures.h"
-#include "app/police.h"
-#include "app/wifi_cred_store.h"
+#include "apps/joystick_lamp/lamp_logic.h"
+#include "platform/wifi_cred_store.h"
 #include "platform/esp32/nvs_key_value_store.h"
 #include "platform/esp32/wifi_manager.h"
 #include "platform/esp32/wifi_provisioning.h"

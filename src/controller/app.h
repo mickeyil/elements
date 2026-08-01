@@ -2,15 +2,15 @@
 
 #include <cstdint>
 
-#include "app/animation_store.h"
-#include "app/app_context.h"
-#include "app/clock_sync_client.h"
-#include "app/command_handler.h"
-#include "app/controller_link.h"
-#include "app/device_status.h"
-#include "app/log_sender.h"
-#include "app/playback.h"
-#include "app/synced_clock.h"
+#include "controller/animation_store.h"
+#include "controller/app_context.h"
+#include "controller/clock_sync_client.h"
+#include "controller/command_handler.h"
+#include "controller/controller_link.h"
+#include "controller/device_status.h"
+#include "controller/log_sender.h"
+#include "controller/playback.h"
+#include "controller/synced_clock.h"
 
 class DiscoveryClient;
 class FrameOutput;

@@ -1,6 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 
-#include "app/synced_clock.h"
+#include "controller/synced_clock.h"
 #include "test_platform_clock.h"
 
 // ---------------------------------------------------------------------------

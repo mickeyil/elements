@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <cstring>
 
-#include "app/wire_reader.h"
+#include "controller/wire_reader.h"
 
 TEST_CASE("WireReader reads little-endian scalars", "[wire_reader]") {
     const uint8_t data[] = {

@@ -1,11 +1,11 @@
-#include "app/app.h"
+#include "controller/app.h"
 
 #include "platform/frame_output.h"
-#include "app/hardware_profile_store.h"
-#include "app/local_animation.h"
+#include "controller/hardware_profile_store.h"
+#include "controller/local_animation.h"
 #include "platform/network_interface.h"
 #include "platform/platform_clock.h"
-#include "app/slog.h"
+#include "controller/slog.h"
 #include "platform/system_platform.h"
 
 namespace {

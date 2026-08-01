@@ -1,15 +1,15 @@
-#include "app/controller_link.h"
+#include "controller/controller_link.h"
 
 #include <algorithm>
 #include <cstring>
 
 #include "platform/device_identity.h"
-#include "app/discovery.h"
-#include "app/link_protocol.h"
+#include "controller/discovery.h"
+#include "controller/link_protocol.h"
 #include "platform/network_interface.h"
 #include "platform/platform_clock.h"
 #include "platform/tcp_transport.h"
-#include "app/wire_writer.h"
+#include "controller/wire_writer.h"
 
 namespace {
 

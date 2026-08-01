@@ -1,11 +1,11 @@
-#include "app/clock_sync_client.h"
+#include "controller/clock_sync_client.h"
 
 #include <algorithm>
 #include <cstring>
 
 #include "platform/device_identity.h"
 #include "platform/platform_clock.h"
-#include "app/synced_clock.h"
+#include "controller/synced_clock.h"
 #include "platform/udp_transport.h"
 
 namespace {

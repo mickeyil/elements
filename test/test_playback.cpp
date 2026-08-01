@@ -7,9 +7,9 @@
 #include <vector>
 
 #include "core/animation_types.h"
-#include "app/playback.h"
+#include "controller/playback.h"
 #include "core/runtime_constants.h"
-#include "app/synced_clock.h"
+#include "controller/synced_clock.h"
 #include "test_platform_clock.h"
 
 namespace {
