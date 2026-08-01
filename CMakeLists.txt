@@ -365,6 +365,9 @@ if(BUILD_TESTS)
     add_executable(test_joystick_gestures
         test/test_joystick_gestures.cpp
         src/app/joystick_gestures.cpp
+        src/app/police.cpp
+        src/core/pixel_view.cpp
+        src/core/colors.cpp
     )
     target_include_directories(test_joystick_gestures PRIVATE src)
     target_link_libraries(test_joystick_gestures Catch2::Catch2WithMain)

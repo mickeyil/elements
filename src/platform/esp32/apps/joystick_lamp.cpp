@@ -1,9 +1,10 @@
-// Standalone joystick lamp: 16 WS2812B pixels cycling through three core
-// animations (Pacifica, red alert wave, solid soft color), controlled by a
-// KY-023 stick. Vertical taps toggle power, vertical holds ramp intensity,
-// horizontal taps switch animations, horizontal holds rotate hue. Gesture
-// and lamp logic live in app/joystick_gestures for host testing; this file
-// only reads the ADC and pushes frames.
+// Standalone joystick lamp: 16 WS2812B pixels cycling through four
+// animations (Pacifica, red alert wave, police strobe, solid soft color),
+// controlled by a KY-023 stick. The stick button switches animations; horizontal deflection
+// rotates hue and vertical ramps intensity, both at a rate proportional to
+// displacement. Power is the wall cord's job. Lamp logic lives in
+// app/joystick_gestures for host testing; this file only reads the ADC and
+// pushes frames.
 
 #include <Arduino.h>
 #include <ArduinoOTA.h>
@@ -11,6 +12,7 @@
 #include <WiFi.h>
 
 #include "app/joystick_gestures.h"
+#include "app/police.h"
 #include "app/wifi_cred_store.h"
 #include "platform/esp32/nvs_key_value_store.h"
 #include "platform/esp32/wifi_manager.h"
@@ -30,7 +32,7 @@ constexpr uint16_t NUM_LEDS = 16;
 // KY-023 on 3V3: both axes on ADC1 so WiFi can never steal the pins.
 constexpr uint8_t PIN_VRX = 34;
 constexpr uint8_t PIN_VRY = 35;
-constexpr uint8_t PIN_SW = 25;  // wired but unused for now
+constexpr uint8_t PIN_SW = 25;  // press cycles animations
 
 // Signs verified on the assembled lamp: Y comes out inverted.
 constexpr float X_SIGN = 1.0f;
@@ -44,7 +46,6 @@ hsva_t g_frame[NUM_LEDS];
 PixelView g_view;
 GammaCorrection g_gamma;
 
-JoystickGestures g_gestures;
 LampState g_lamp;
 
 // Wi-Fi is optional: the lamp lamps regardless. Credentials come from the
@@ -62,18 +63,16 @@ Pacifica g_pacifica(PacificaParams{1.0f, 1.0f, 0.0f});
 // Mirrors animations/ring35_red_alert.py: V swings 0..1 once per second.
 Wave g_red_alert(WaveParams{2, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f,
                             float(HALF_PI), 0.0f});
-// Mid saturation so the hue hold reads as a visible tint change.
+Police g_police;
+// Mid saturation so the hue slide reads as a visible tint change.
 Paint g_soft(0.0f, 0.6f, 1.0f, 1.0f);
 
-Animation* g_anims[LampState::NUM_ANIMS] = {&g_pacifica, &g_red_alert, &g_soft};
+// Order must match LampState::HUE_LOCKED.
+Animation* g_anims[LampState::NUM_ANIMS] = {&g_pacifica, &g_red_alert,
+                                            &g_police, &g_soft};
 
 const char* g_anim_names[LampState::NUM_ANIMS] = {"pacifica", "red_alert",
-                                                  "soft"};
-
-const char* axis_name(GestureAxis a)
-{
-    return a == GestureAxis::Horizontal ? "H" : "V";
-}
+                                                  "police", "soft"};
 
 // Median of 5 reads; kills the single-sample spikes these pots produce.
 uint16_t read_adc_median(uint8_t pin)
@@ -198,12 +197,12 @@ void setup()
 void loop()
 {
     static bool s_first = true;
+    static uint32_t s_prev_ms = 0;
     static uint32_t s_last_stick_log = 0;
-    static bool s_was_hold = false;
-    static uint32_t s_hold_ms = 0;
-    static uint32_t s_last_hold_log = 0;
 
     const uint32_t now = millis();
+    const uint32_t dt = s_first ? 0 : now - s_prev_ms;
+    s_prev_ms = now;
     if (s_first) {
         s_first = false;
         Serial.println("[loop] start");
@@ -227,80 +226,41 @@ void loop()
     const float x = X_SIGN * normalize(raw_x, g_center_x);
     const float y = Y_SIGN * normalize(raw_y, g_center_y);
 
-    // Trace deflections above half the engage threshold so wrong signs and
-    // off-center calibration are visible without spamming at rest.
-    if ((fabsf(x) > 0.10f || fabsf(y) > 0.10f) &&
-        now - s_last_stick_log >= 200) {
-        s_last_stick_log = now;
-        Serial.printf("[stick] x=%+.2f y=%+.2f raw=%u/%u\n", x, y, raw_x,
-                      raw_y);
-    }
-
-    // Life-sign log for the stick button; not used for control yet.
+    // Button press cycles animations; the 30 ms guard debounces both edges.
     static bool s_sw_pressed = false;
     static uint32_t s_sw_change_ms = 0;
     const bool sw_now = digitalRead(PIN_SW) == LOW;  // pullup: LOW = pressed
     if (sw_now != s_sw_pressed && now - s_sw_change_ms >= 30) {
         s_sw_pressed = sw_now;
-        if (sw_now) {
-            Serial.println("[button] press");
-        } else {
-            Serial.printf("[button] release after %lums\n",
-                          (unsigned long)(now - s_sw_change_ms));
-        }
         s_sw_change_ms = now;
-    }
-
-    const GestureResult g = g_gestures.update(x, y, now);
-    const bool prev_on = g_lamp.on();
-    const int prev_anim = g_lamp.anim_index();
-    g_lamp.apply(g);
-
-    if (g.short_press) {
-        Serial.printf("[gesture] short %s%c\n", axis_name(g.axis),
-                      g.sign > 0 ? '+' : '-');
-    }
-    if (g.hold) {
-        if (!s_was_hold) {
-            s_hold_ms = 0;
-            s_last_hold_log = now;
-            Serial.printf("[gesture] hold start %s%c\n", axis_name(g.axis),
-                          g.sign > 0 ? '+' : '-');
+        if (sw_now) {
+            g_lamp.next_anim();
+            Serial.printf("[lamp] anim -> %d (%s)\n", g_lamp.anim_index(),
+                          g_anim_names[g_lamp.anim_index()]);
         }
-        s_hold_ms += g.hold_dt_ms;
-        if (now - s_last_hold_log >= 300) {
-            s_last_hold_log = now;
-            Serial.printf("[hold] %lums intensity=%.2f hue=%.0f\n",
-                          (unsigned long)s_hold_ms, g_lamp.intensity(),
-                          g_lamp.hue_for_current());
-        }
-    } else if (s_was_hold) {
-        Serial.printf("[gesture] hold end %lums intensity=%.2f hue=%.0f\n",
-                      (unsigned long)s_hold_ms, g_lamp.intensity(),
-                      g_lamp.hue_for_current());
-    }
-    s_was_hold = g.hold;
-
-    if (g_lamp.on() != prev_on) {
-        Serial.printf("[lamp] power %s\n", g_lamp.on() ? "ON" : "OFF");
-    }
-    if (g_lamp.anim_index() != prev_anim) {
-        Serial.printf("[lamp] anim -> %d (%s)\n", g_lamp.anim_index(),
-                      g_anim_names[g_lamp.anim_index()]);
     }
 
-    if (g_lamp.on()) {
-        g_anims[g_lamp.anim_index()]->render(g_view, now / 1000.0f);
-        const float hue = g_lamp.hue_for_current();
-        const float intensity = g_lamp.intensity();
-        for (uint16_t i = 0; i < NUM_LEDS; i++) {
-            const hsva_t& p = g_frame[i];
-            const rgb_t c = g_gamma.correct(
-                hsv_to_rgb(wrap360(p.h + hue), p.s, p.v * intensity));
-            g_leds[i] = CRGB(c.r, c.g, c.b);
-        }
-    } else {
-        fill_solid(g_leds, NUM_LEDS, CRGB::Black);
+    g_lamp.update(x, y, dt);
+
+    // Trace deflections above half the deadzone so wrong signs and
+    // off-center calibration are visible without spamming at rest.
+    if ((fabsf(x) > 0.10f || fabsf(y) > 0.10f) &&
+        now - s_last_stick_log >= 200) {
+        s_last_stick_log = now;
+        Serial.printf("[stick] x=%+.2f y=%+.2f raw=%u/%u hue=%.0f "
+                      "intensity=%.2f\n",
+                      x, y, raw_x, raw_y, g_lamp.hue_for_current(),
+                      g_lamp.intensity());
+    }
+
+    g_anims[g_lamp.anim_index()]->render(g_view, now / 1000.0f);
+    const float hue = g_lamp.hue_for_current();
+    const float intensity = g_lamp.intensity();
+    for (uint16_t i = 0; i < NUM_LEDS; i++) {
+        const hsva_t& p = g_frame[i];
+        const rgb_t c = g_gamma.correct(
+            hsv_to_rgb(wrap360(p.h + hue), p.s, p.v * intensity));
+        g_leds[i] = CRGB(c.r, c.g, c.b);
     }
     FastLED.show();
 
