@@ -11,6 +11,27 @@ float wrap360(float degrees)
     return degrees < 0.0f ? degrees + 360.0f : degrees;
 }
 
+uint16_t median5(uint16_t s[5])
+{
+    for (int i = 1; i < 5; i++) {
+        uint16_t v = s[i];
+        int j = i - 1;
+        while (j >= 0 && s[j] > v) { s[j + 1] = s[j]; j--; }
+        s[j + 1] = v;
+    }
+    return s[2];
+}
+
+float normalize_stick(uint16_t raw, uint16_t center, uint16_t adc_max)
+{
+    const float span = raw >= center ? float(adc_max - center) : float(center);
+    if (span < 1.0f) return 0.0f;
+    float v = (float(raw) - float(center)) / span;
+    if (v < -1.0f) v = -1.0f;
+    if (v > 1.0f) v = 1.0f;
+    return v;
+}
+
 namespace {
 
 // Signed response in [-1, 1]: zero inside the deadzone, then linear up to

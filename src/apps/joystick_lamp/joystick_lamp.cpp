@@ -78,25 +78,7 @@ uint16_t read_adc_median(uint8_t pin)
 {
     uint16_t s[5];
     for (int i = 0; i < 5; i++) s[i] = analogRead(pin);
-    for (int i = 1; i < 5; i++) {
-        uint16_t v = s[i];
-        int j = i - 1;
-        while (j >= 0 && s[j] > v) { s[j + 1] = s[j]; j--; }
-        s[j + 1] = v;
-    }
-    return s[2];
-}
-
-// Map a raw reading to [-1, 1] around the boot-time center. The two sides
-// scale independently because the pot rarely rests at exactly half scale.
-float normalize(uint16_t raw, uint16_t center)
-{
-    const float span = raw >= center ? float(ADC_MAX - center) : float(center);
-    if (span < 1.0f) return 0.0f;
-    float v = (float(raw) - float(center)) / span;
-    if (v < -1.0f) v = -1.0f;
-    if (v > 1.0f) v = 1.0f;
-    return v;
+    return median5(s);
 }
 
 // "lamp-xxxxxx" from the last three eFuse MAC octets, lowercase.
@@ -222,8 +204,8 @@ void loop()
 
     const uint16_t raw_x = read_adc_median(PIN_VRX);
     const uint16_t raw_y = read_adc_median(PIN_VRY);
-    const float x = X_SIGN * normalize(raw_x, g_center_x);
-    const float y = Y_SIGN * normalize(raw_y, g_center_y);
+    const float x = X_SIGN * normalize_stick(raw_x, g_center_x, ADC_MAX);
+    const float y = Y_SIGN * normalize_stick(raw_y, g_center_y, ADC_MAX);
 
     // Button press cycles animations; the 30 ms guard debounces both edges.
     static bool s_sw_pressed = false;

@@ -141,6 +141,34 @@ TEST_CASE("police strobe alternates blue and red phases at 50% duty") {
     REQUIRE(buf[0].h == 240.0f);
 }
 
+TEST_CASE("median5 picks the middle sample in any order") {
+    uint16_t a[5] = {2000, 2010, 4095, 1990, 2005};  // one spike
+    REQUIRE(median5(a) == 2005);
+
+    uint16_t b[5] = {5, 4, 3, 2, 1};
+    REQUIRE(median5(b) == 3);
+
+    uint16_t c[5] = {7, 7, 0, 7, 7};
+    REQUIRE(median5(c) == 7);
+}
+
+TEST_CASE("normalize_stick maps around an off-center rest point") {
+    // Centered: full scale both ways.
+    REQUIRE(normalize_stick(2048, 2048, 4095) == 0.0f);
+    REQUIRE(normalize_stick(4095, 2048, 4095) == 1.0f);
+    REQUIRE(normalize_stick(0, 2048, 4095) == -1.0f);
+
+    // Off-center: each side scales by its own span.
+    REQUIRE(normalize_stick(500, 1000, 4095) == Approx(-0.5f));
+    REQUIRE(normalize_stick(4095, 1000, 4095) == 1.0f);
+    REQUIRE(normalize_stick(1000 + 3095 / 5, 1000, 4095) ==
+            Approx(0.2f).margin(0.001f));
+
+    // Degenerate centers: a zero-width span reads as centered, not a crash.
+    REQUIRE(normalize_stick(0, 0, 4095) == 0.0f);
+    REQUIRE(normalize_stick(4095, 4095, 4095) == 0.0f);
+}
+
 TEST_CASE("police strobe flashes five times per color phase") {
     Police anim;
     hsva_t buf[1];

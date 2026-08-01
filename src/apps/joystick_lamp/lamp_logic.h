@@ -17,6 +17,14 @@
 // Wrap a hue into [0, 360).
 float wrap360(float degrees);
 
+// Median of five samples; reorders s.
+uint16_t median5(uint16_t s[5]);
+
+// Map a raw ADC reading to [-1, 1] around the resting center. The two
+// sides scale independently because the pot rarely rests at exactly half
+// scale.
+float normalize_stick(uint16_t raw, uint16_t center, uint16_t adc_max);
+
 class LampState {
 public:
     static constexpr int NUM_ANIMS = 4;
