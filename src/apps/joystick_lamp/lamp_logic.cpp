@@ -49,19 +49,45 @@ float response(float v)
 
 void LampState::update(float x, float y, uint32_t dt_ms)
 {
-    const float dt = float(dt_ms);
-    if (!HUE_LOCKED[_anim]) {
-        _hue[_anim] =
-            wrap360(_hue[_anim] + response(x) * MAX_HUE_DEG_PER_MS * dt);
-    }
-    _intensity += response(y) * MAX_INTENSITY_PER_MS * dt;
+    _intensity += response(y) * MAX_INTENSITY_PER_MS * float(dt_ms);
     if (_intensity < 0.0f) _intensity = 0.0f;
     if (_intensity > 1.0f) _intensity = 1.0f;
+
+    if (!_h_engaged) {
+        if (std::fabs(x) >= DEADZONE) {
+            _h_engaged = true;
+            _h_sign = x > 0.0f ? 1 : -1;
+            _h_held_ms = 0;
+        }
+        return;
+    }
+
+    if (std::fabs(x) < RELEASE) {
+        if (_h_held_ms < LONG_MS) {
+            if (_h_sign > 0) next_anim(); else prev_anim();
+        }
+        _h_engaged = false;
+        return;
+    }
+
+    const uint32_t prev_held = _h_held_ms;
+    _h_held_ms += dt_ms;
+    if (_h_held_ms > LONG_MS && !HUE_LOCKED[_anim]) {
+        // Rotation starts at the threshold, not at engagement.
+        const uint32_t from = prev_held > LONG_MS ? prev_held : LONG_MS;
+        _hue[_anim] = wrap360(_hue[_anim] + float(_h_sign) *
+                              float(_h_held_ms - from) * HUE_DEG_PER_MS);
+    }
 }
 
 void LampState::next_anim()
 {
     _anim = (_anim + 1) % NUM_ANIMS;
+}
+
+void LampState::prev_anim()
+{
+    _anim = (_anim + NUM_ANIMS - 1) % NUM_ANIMS;
 }
 
 void Police::render(PixelView& dst, float t_animation)

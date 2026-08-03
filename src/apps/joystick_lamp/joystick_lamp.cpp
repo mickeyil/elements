@@ -1,10 +1,10 @@
 // Standalone joystick lamp: 16 WS2812B pixels cycling through four
 // animations (Pacifica, red alert wave, police strobe, solid soft color),
-// controlled by a KY-023 stick. The stick button switches animations;
-// horizontal deflection rotates hue and vertical ramps intensity, both at
-// a rate proportional to displacement. Power is the wall cord's job. Lamp
-// logic lives in lamp_logic for host testing; this file only reads the
-// ADC and pushes frames.
+// controlled by a KY-023 stick. Horizontal taps switch animations and a
+// horizontal hold rotates hue (where the animation allows); vertical
+// deflection ramps intensity proportional to displacement. Power is the
+// wall cord's job. Lamp logic lives in lamp_logic for host testing; this
+// file only reads the ADC and pushes frames.
 
 #include <Arduino.h>
 #include <ArduinoOTA.h>
@@ -31,7 +31,7 @@ constexpr uint16_t NUM_LEDS = 16;
 // KY-023 on 3V3: both axes on ADC1 so WiFi can never steal the pins.
 constexpr uint8_t PIN_VRX = 34;
 constexpr uint8_t PIN_VRY = 35;
-constexpr uint8_t PIN_SW = 25;  // press cycles animations
+constexpr uint8_t PIN_SW = 25;  // held at boot = provisioning portal
 
 // Signs verified on the assembled lamp: Y comes out inverted.
 constexpr float X_SIGN = 1.0f;
@@ -207,21 +207,22 @@ void loop()
     const float x = X_SIGN * normalize_stick(raw_x, g_center_x, ADC_MAX);
     const float y = Y_SIGN * normalize_stick(raw_y, g_center_y, ADC_MAX);
 
-    // Button press cycles animations; the 30 ms guard debounces both edges.
+    // Life-sign log for the stick button; only used for control at boot.
     static bool s_sw_pressed = false;
     static uint32_t s_sw_change_ms = 0;
     const bool sw_now = digitalRead(PIN_SW) == LOW;  // pullup: LOW = pressed
     if (sw_now != s_sw_pressed && now - s_sw_change_ms >= 30) {
         s_sw_pressed = sw_now;
         s_sw_change_ms = now;
-        if (sw_now) {
-            g_lamp.next_anim();
-            Serial.printf("[lamp] anim -> %d (%s)\n", g_lamp.anim_index(),
-                          g_anim_names[g_lamp.anim_index()]);
-        }
+        Serial.printf("[button] %s\n", sw_now ? "press" : "release");
     }
 
+    const int prev_anim = g_lamp.anim_index();
     g_lamp.update(x, y, dt);
+    if (g_lamp.anim_index() != prev_anim) {
+        Serial.printf("[lamp] anim -> %d (%s)\n", g_lamp.anim_index(),
+                      g_anim_names[g_lamp.anim_index()]);
+    }
 
     // Trace deflections above half the deadzone so wrong signs and
     // off-center calibration are visible without spamming at rest.
