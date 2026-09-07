@@ -27,9 +27,9 @@ public:
 
     ~Engine();
 
-    // Render the frame at program time `t_program` into `out`. Returns false
-    // if `t_program` is outside [0, program duration).
-    bool render_frame(float t_program, Strip& out);
+    // Render the frame at `t_program` into `out`. Returns false once
+    // `t_program` reaches the program duration.
+    bool render_frame(ProgramTime t_program, Strip& out);
 
     // Rewind every layer to its first event, clear per-layer init flags,
     // rewind the copy-op cursor, and zero every pool buffer.
@@ -48,7 +48,7 @@ private:
     bool initialize_();
 
     // Run every copy op with at <= t_program that hasn't run yet.
-    void run_copy_ops_until(float t_program);
+    void run_copy_ops_until(ProgramTime t_program);
 
     static void copy_view(const PixelView& src, PixelView& dst);
 

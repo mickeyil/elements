@@ -1,6 +1,5 @@
 #include "core/decoder.h"
 
-#include <cmath>
 #include <cstring>
 #include <new>
 
@@ -30,7 +29,7 @@ struct ParsedHeader {
     uint16_t buffer_count;
     uint16_t pixel_view_count;
     uint16_t copy_op_count;
-    float    duration;
+    uint32_t duration_ms;
 };
 
 DecodeError validate_prefix(BlobReader& r)
@@ -54,7 +53,7 @@ DecodeError parse_header(BlobReader& r, ParsedHeader& hdr)
     if (!r.read_u16_le(hdr.buffer_count))     return DecodeError::Truncated;
     if (!r.read_u16_le(hdr.pixel_view_count)) return DecodeError::Truncated;
     if (!r.read_u16_le(hdr.copy_op_count))    return DecodeError::Truncated;
-    if (!r.read_f32_le(hdr.duration))         return DecodeError::Truncated;
+    if (!r.read_u32_le(hdr.duration_ms))      return DecodeError::Truncated;
     return DecodeError::Ok;
 }
 
@@ -72,9 +71,7 @@ DecodeError validate_header(const ParsedHeader& hdr)
     if (hdr.pixel_view_count > MAX_PIXEL_VIEW_COUNT)   return DecodeError::OverCap;
     if (hdr.copy_op_count    > MAX_COPY_OP_COUNT)      return DecodeError::OverCap;
 
-    if (!std::isfinite(hdr.duration) || hdr.duration <= 0.0f) {
-        return DecodeError::InvalidField;
-    }
+    if (hdr.duration_ms == 0)                          return DecodeError::InvalidField;
     return DecodeError::Ok;
 }
 
@@ -212,22 +209,23 @@ DecodeError parse_copy_ops(BlobReader& r, const ParsedHeader& hdr, Program& prog
     CopyOp* ops = new (std::nothrow) CopyOp[hdr.copy_op_count];
     if (ops == nullptr) return DecodeError::OutOfMemory;
 
-    float prev_at = 0.0f;
+    uint32_t prev_at = 0;
     uint16_t same_at_group_start = 0;
 
     for (uint16_t i = 0; i < hdr.copy_op_count; i++) {
-        if (!r.read_f32_le(ops[i].at) ||
+        uint32_t at = 0;
+        if (!r.read_u32_le(at) ||
             !r.read_u16_le(ops[i].src_pixv_idx) ||
             !r.read_u16_le(ops[i].dst_pixv_idx)) {
             delete[] ops;
             return DecodeError::Truncated;
         }
 
-        const float    at  = ops[i].at;
+        ops[i].at = ProgramTime{at};
         const uint16_t src = ops[i].src_pixv_idx;
         const uint16_t dst = ops[i].dst_pixv_idx;
 
-        if (!std::isfinite(at) || at < 0.0f || at >= hdr.duration) {
+        if (at >= hdr.duration_ms) {
             delete[] ops;
             return DecodeError::InvalidField;
         }
@@ -273,16 +271,16 @@ DecodeError parse_event(BlobReader& r, const ParsedHeader& hdr,
                         const Program& prog, AnimationEvent& event)
 {
     uint8_t  anim_type     = 0;
-    float    start         = 0.0f;
-    float    duration      = 0.0f;
+    uint32_t start         = 0;
+    uint32_t duration      = 0;
     uint16_t src_pixv_idx  = PIXV_NONE;
     uint16_t dst_pixv_idx  = PIXV_NONE;
     uint16_t work_pixv_idx = PIXV_NONE;
     uint16_t params_size   = 0;
 
     if (!r.read_u8(anim_type) ||
-        !r.read_f32_le(start) ||
-        !r.read_f32_le(duration) ||
+        !r.read_u32_le(start) ||
+        !r.read_u32_le(duration) ||
         !r.read_u16_le(src_pixv_idx) ||
         !r.read_u16_le(dst_pixv_idx) ||
         !r.read_u16_le(work_pixv_idx) ||
@@ -290,9 +288,10 @@ DecodeError parse_event(BlobReader& r, const ParsedHeader& hdr,
         return DecodeError::Truncated;
     }
 
-    if (!std::isfinite(start) || start < 0.0f)               return DecodeError::InvalidField;
-    if (!std::isfinite(duration) || duration <= 0.0f)        return DecodeError::InvalidField;
-    if (start + duration > hdr.duration)                     return DecodeError::InvalidField;
+    if (duration == 0)                                       return DecodeError::InvalidField;
+    // Two checks so start + duration cannot wrap around.
+    if (start >= hdr.duration_ms)                            return DecodeError::InvalidField;
+    if (duration > hdr.duration_ms - start)                  return DecodeError::InvalidField;
     if (params_size > MAX_EVENT_PARAMS_BYTES)                return DecodeError::OverCap;
 
     if (dst_pixv_idx == PIXV_NONE)                           return DecodeError::InvalidField;
@@ -356,8 +355,8 @@ DecodeError parse_event(BlobReader& r, const ParsedHeader& hdr,
     }
 
     event.animation     = anim;
-    event.start         = start;
-    event.duration      = duration;
+    event.start         = ProgramTime{start};
+    event.duration      = ProgramDuration{duration};
     event.src_pixv_idx  = src_pixv_idx;
     event.dst_pixv_idx  = dst_pixv_idx;
     event.work_pixv_idx = work_pixv_idx;
@@ -383,7 +382,7 @@ DecodeError parse_layers(BlobReader& r, const ParsedHeader& hdr, Program& prog)
         AnimationEvent* events = new (std::nothrow) AnimationEvent[event_count];
         if (events == nullptr) return DecodeError::OutOfMemory;
 
-        float prev_end = 0.0f;
+        ProgramTime prev_end;
         for (uint16_t ei = 0; ei < event_count; ei++) {
             const DecodeError err = parse_event(r, hdr, prog, events[ei]);
             if (err != DecodeError::Ok) {
@@ -454,7 +453,7 @@ Program* decode_program(
     Program* prog = new (std::nothrow) Program();
     if (prog == nullptr) return report(DecodeError::OutOfMemory);
 
-    prog->duration      = hdr.duration;
+    prog->duration      = ProgramDuration{hdr.duration_ms};
     prog->target_fps    = hdr.target_fps;
     prog->requires_sync = (hdr.flags & 0x01) != 0;
     prog->layer_count   = hdr.layer_count;

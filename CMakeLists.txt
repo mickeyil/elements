@@ -641,6 +641,13 @@ if(BUILD_TESTS)
             DEPENDS ${CMAKE_SOURCE_DIR}/test/fixtures/generate_pacifica.py ${COMPILER_SOURCES}
             COMMENT "Generating test fixture test_pacifica.bin"
         )
+        add_custom_command(
+            OUTPUT ${FIXTURE_OUT_DIR}/test_decimal_timeline.bin
+            COMMAND ${CMAKE_COMMAND} -E env PYTHONPATH=${CMAKE_SOURCE_DIR}/compiler
+                    ${PYTHON3} ${CMAKE_SOURCE_DIR}/test/fixtures/generate_decimal_timeline.py ${FIXTURE_OUT_DIR}
+            DEPENDS ${CMAKE_SOURCE_DIR}/test/fixtures/generate_decimal_timeline.py ${COMPILER_SOURCES}
+            COMMENT "Generating test fixture test_decimal_timeline.bin"
+        )
         add_custom_target(test_fixtures
             DEPENDS ${FIXTURE_OUT_DIR}/test_animation.bin
                     ${FIXTURE_OUT_DIR}/test_shift.bin
@@ -648,9 +655,10 @@ if(BUILD_TESTS)
                     ${FIXTURE_OUT_DIR}/test_dual_shift_right.bin
                     ${FIXTURE_OUT_DIR}/test_full_paint.bin
                     ${FIXTURE_OUT_DIR}/test_pacifica.bin
+                    ${FIXTURE_OUT_DIR}/test_decimal_timeline.bin
         )
 
-        # Cross-check that the Python v3 emitter's blobs decode and run in C++.
+        # Cross-check that the Python v4 emitter's blobs decode and run in C++.
         add_executable(test_fixture_blobs
             test/test_fixture_blobs.cpp
             src/core/decoder.cpp

@@ -24,7 +24,7 @@ void Layer::reset()
     _count = 0;
 }
 
-const AnimationEvent* Layer::active_at(float t) const
+const AnimationEvent* Layer::active_at(ProgramTime t) const
 {
     for (uint16_t i = 0; i < _count; i++) {
         const AnimationEvent& e = _events[i];

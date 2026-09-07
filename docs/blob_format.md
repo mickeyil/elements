@@ -29,7 +29,7 @@ leftover bytes at the end are an error (`TrailingBytes`).
 
     type      field             description
     char[4]   magic             always "ELEM" (0x45 4C 45 4D)
-    u8        version           format version, currently 3
+    u8        version           format version, currently 4
     u8        flags             bit0 = requires_sync; other bits reserved (0)
     u8        target_fps        intended frame rate, Hz
     u8        layer_count       number of layers in the layers section
@@ -37,7 +37,18 @@ leftover bytes at the end are an error (`TrailingBytes`).
     u16       buffer_count      number of entries in the buffer-sizes section
     u16       pixel_view_count  number of descriptors in the pixel-views section
     u16       copy_op_count     number of records in the copy-ops section
-    f32       duration          total program length, seconds; must be > 0
+    u32       duration          total program length, milliseconds; must be > 0
+
+## Time
+
+Every timeline value (program duration, event start and duration, copy-op
+`at`) is a u32 count of whole milliseconds. The compiler rounds each
+authored boundary once, half up, and derives an event's duration from its
+rounded start and end. Adjacent events and the copy ops that sit on their
+shared boundary therefore compare exactly on the device instead of
+drifting apart by a float rounding error. Animation parameters that are
+times (periods, fades, velocities) stay float seconds; they are never
+compared for ordering.
 
 ## Buffer sizes
 
@@ -88,7 +99,7 @@ Rules:
 from one view to another at a scheduled time:
 
     type  field         description
-    f32   at            when to run, seconds; in [0, duration)
+    u32   at            when to run, milliseconds; in [0, duration)
     u16   src_pixv_idx  source view; must be valid, not PIXV_NONE
     u16   dst_pixv_idx  destination view; must be valid, not PIXV_NONE
 
@@ -105,12 +116,13 @@ then that many events:
     u16   event_count  number of events on this layer
 
 Events on a layer must be sorted ascending by `start` and must not
-overlap in time. Each event:
+overlap in time; an event may start exactly where the previous one ends.
+Each event:
 
     type     field          description
     u8       anim_type      AnimType enum (Wave=0, Shift=1, Spark=2, Paint=3)
-    f32      start          program-relative start, seconds; >= 0
-    f32      duration       length, seconds; > 0; start+duration <= program duration
+    u32      start          program-relative start, milliseconds; < program duration
+    u32      duration       length, milliseconds; > 0; start+duration <= program duration
     u16      src_pixv_idx   source view, or PIXV_NONE if unused
     u16      dst_pixv_idx   destination view; required, must have has_physical
     u16      work_pixv_idx  scratch view, or PIXV_NONE if unused
@@ -150,10 +162,10 @@ Structural caps the decoder enforces before allocating. Defined in
 `src/core/blob_reader.h`):
 
     BadMagic             first 4 bytes are not "ELEM"
-    BadVersion           version byte is not 3
+    BadVersion           version byte is not 4
     Truncated            a read ran past the end of the buffer
     TrailingBytes        bytes remained after the last section was read
-    InvalidField         out-of-range index, bad flags, unsorted/overlapping records, NaN/Inf
+    InvalidField         out-of-range index, bad flags, unsorted/overlapping records, zero duration
     OverCap              a limit above was exceeded
     StripLengthMismatch  header strip_length != active profile strip length
     OutOfMemory          an allocation failed during decode

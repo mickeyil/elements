@@ -20,8 +20,8 @@ from .blob import (BlobProgram, ANIM_WAVE, ANIM_SHIFT, ANIM_SPARK, ANIM_PAINT,
 # esp32 sizeof, verified against the xtensa toolchain.
 _HSVA_BYTES = 16          # hsva_t (4 floats); also the pool element size
 _PIXEL_VIEW_BYTES = 16    # PixelView record (buffer + 2 index ptrs + size + flags)
-_COPY_OP_BYTES = 8        # CopyOp (f32 at + 2 u16 view indices)
-_ANIM_EVENT_BYTES = 20    # AnimationEvent (Animation* + 2 f32 + 3 u16)
+_COPY_OP_BYTES = 8        # CopyOp (u32 at + 2 u16 view indices)
+_ANIM_EVENT_BYTES = 20    # AnimationEvent (Animation* + 2 u32 + 3 u16)
 _LAYER_BYTES = 8          # Layer (AnimationEvent* + count)
 _PROGRAM_BYTES = 44       # Program shell (owns pool/views/copy-ops by value)
 _PTR_BYTES = 4            # pointer width on the 32-bit target

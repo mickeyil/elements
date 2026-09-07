@@ -42,12 +42,12 @@ Engine::~Engine()
     free_program(_program);
 }
 
-bool Engine::render_frame(float t_program, Strip& out)
+bool Engine::render_frame(ProgramTime t_program, Strip& out)
 {
     if (_program == nullptr) {
         return false;
     }
-    if (t_program < 0.0f || t_program >= _program->duration) {
+    if (t_program.ms >= _program->duration.ms) {
         return false;
     }
 
@@ -63,7 +63,7 @@ bool Engine::render_frame(float t_program, Strip& out)
 
         while (state.cursor < layer.count()) {
             AnimationEvent& e = layer.at(state.cursor);
-            const float end = e.start + e.duration;
+            const ProgramTime end = e.start + e.duration;
 
             if (t_program < e.start) {
                 // Sorted: nothing later on this layer can start sooner.
@@ -85,8 +85,7 @@ bool Engine::render_frame(float t_program, Strip& out)
                     state.initialized = true;
                 }
 
-                const float t_animation = t_program - e.start;
-                e.animation->render(dst, t_animation);
+                e.animation->render(dst, seconds(t_program - e.start));
 
                 _active_dst_views[li] = &dst;
                 break;
@@ -122,7 +121,7 @@ void Engine::reset()
     }
 }
 
-void Engine::run_copy_ops_until(float t_program)
+void Engine::run_copy_ops_until(ProgramTime t_program)
 {
     while (_copy_cursor < _program->copy_ops.count()) {
         const CopyOp& op = _program->copy_ops.at(_copy_cursor);

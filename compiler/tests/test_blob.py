@@ -18,7 +18,7 @@ from elements.blob import (
 
 
 def _sample_program() -> BlobProgram:
-    """A program exercising every section, with f32-exact float values."""
+    """A program exercising every section; times are whole milliseconds."""
     wave_params = pack_params("wave", {
         "channel": 2, "h": 220.0, "s": 1.0, "v": 0.0,
         "min_val": 0.0, "max_val": 0.5,
@@ -30,7 +30,7 @@ def _sample_program() -> BlobProgram:
     })
     return BlobProgram(
         strip_length=10,
-        duration=4.0,
+        duration=4000,
         target_fps=30,
         requires_sync=True,
         buffer_sizes=[10, 4],
@@ -48,18 +48,18 @@ def _sample_program() -> BlobProgram:
                           storage_indices=[7, 8, 9]),
         ],
         copy_ops=[
-            CopyOpSpec(at=2.0, src_pixv_idx=0, dst_pixv_idx=2),
+            CopyOpSpec(at=2000, src_pixv_idx=0, dst_pixv_idx=2),
         ],
         layers=[
             BlobLayer(events=[
-                BlobEvent(anim_type=ANIM_WAVE, start=0.0, duration=2.0,
+                BlobEvent(anim_type=ANIM_WAVE, start=0, duration=2000,
                           dst_pixv_idx=0, params=wave_params),
-                BlobEvent(anim_type=ANIM_SHIFT, start=2.0, duration=2.0,
+                BlobEvent(anim_type=ANIM_SHIFT, start=2000, duration=2000,
                           dst_pixv_idx=0, src_pixv_idx=0, work_pixv_idx=2,
                           params=shift_params),
             ]),
             BlobLayer(events=[
-                BlobEvent(anim_type=ANIM_SPARK, start=1.0, duration=0.5,
+                BlobEvent(anim_type=ANIM_SPARK, start=1000, duration=500,
                           dst_pixv_idx=1,
                           params=pack_params("spark", {
                               "color_h": 0.0, "color_s": 0.0, "color_v": 1.0,
@@ -75,7 +75,7 @@ class TestRoundTrip:
         assert decode_blob(emit_blob(p)) == p
 
     def test_empty_layers_round_trip(self):
-        p = BlobProgram(strip_length=5, duration=1.0)
+        p = BlobProgram(strip_length=5, duration=1000)
         p.layers = [BlobLayer(), BlobLayer()]
         assert decode_blob(emit_blob(p)) == p
 
@@ -84,14 +84,14 @@ class TestHeader:
     def test_magic_and_version(self):
         blob = emit_blob(_sample_program())
         assert blob[:4] == BLOB_MAGIC == b"ELEM"
-        assert blob[4] == BLOB_VERSION == 3
+        assert blob[4] == BLOB_VERSION == 4
 
     def test_header_fields(self):
         blob = emit_blob(_sample_program())
         version, flags, target_fps, layer_count = struct.unpack_from("<BBBB", blob, 4)
         strip_length, buffer_count, view_count, copy_count = \
             struct.unpack_from("<HHHH", blob, 8)
-        duration = struct.unpack_from("<f", blob, 16)[0]
+        duration = struct.unpack_from("<I", blob, 16)[0]
         assert flags == 0x01            # requires_sync bit
         assert target_fps == 30
         assert layer_count == 2
@@ -99,7 +99,7 @@ class TestHeader:
         assert buffer_count == 2
         assert view_count == 3
         assert copy_count == 1
-        assert duration == 4.0
+        assert duration == 4000
 
     def test_header_is_20_bytes(self):
         # First buffer size (u16=10) sits immediately after the 20-byte header.
@@ -136,20 +136,20 @@ class TestPixelViewFlags:
         bad = PixelViewSpec(buffer_idx=0, size=2, has_physical=False,
                             physical_identity=True)
         with pytest.raises(ValueError, match="physical_identity set without"):
-            emit_blob(BlobProgram(strip_length=2, duration=1.0,
+            emit_blob(BlobProgram(strip_length=2, duration=1000,
                                   buffer_sizes=[2], pixel_views=[bad]))
 
     def test_storage_index_length_mismatch_rejected(self):
         bad = PixelViewSpec(buffer_idx=0, size=3, storage_identity=False,
                             storage_indices=[0, 1])
         with pytest.raises(ValueError, match="storage_indices"):
-            emit_blob(BlobProgram(strip_length=3, duration=1.0,
+            emit_blob(BlobProgram(strip_length=3, duration=1000,
                                   buffer_sizes=[3], pixel_views=[bad]))
 
 
 class TestEvents:
     def test_pixv_none_default(self):
-        e = BlobEvent(anim_type=ANIM_WAVE, start=0.0, duration=1.0, dst_pixv_idx=0)
+        e = BlobEvent(anim_type=ANIM_WAVE, start=0, duration=1000, dst_pixv_idx=0)
         assert e.src_pixv_idx == PIXV_NONE and e.work_pixv_idx == PIXV_NONE
 
     def test_event_view_indices_round_trip(self):
@@ -169,12 +169,21 @@ class TestEvents:
         assert len(params) == 22
 
 
+class TestTimes:
+    def test_float_time_rejected_by_packer(self):
+        # Timeline fields are u32 ms; a stray float seconds value must not
+        # silently serialize.
+        p = BlobProgram(strip_length=5, duration=1.5)
+        with pytest.raises(struct.error):
+            emit_blob(p)
+
+
 class TestCopyOps:
     def test_copy_op_round_trip(self):
         p = decode_blob(emit_blob(_sample_program()))
         assert len(p.copy_ops) == 1
         op = p.copy_ops[0]
-        assert op.at == 2.0 and op.src_pixv_idx == 0 and op.dst_pixv_idx == 2
+        assert op.at == 2000 and op.src_pixv_idx == 0 and op.dst_pixv_idx == 2
 
 
 class TestParams:

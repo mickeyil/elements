@@ -28,7 +28,7 @@ private:
 Program* make_populated_program(uint8_t layer_count, uint16_t events_per_layer,
                                 int* live) {
     Program* p = new Program();
-    p->duration = 10.0f;
+    p->duration = ProgramDuration{10000};
     p->layer_count = layer_count;
     p->layers = new Layer[layer_count];
 
@@ -36,8 +36,8 @@ Program* make_populated_program(uint8_t layer_count, uint16_t events_per_layer,
         AnimationEvent* events = new AnimationEvent[events_per_layer];
         for (uint16_t ei = 0; ei < events_per_layer; ei++) {
             events[ei].animation = new FakeAnim(live);
-            events[ei].start = static_cast<float>(ei);
-            events[ei].duration = 0.5f;
+            events[ei].start = ProgramTime{static_cast<uint32_t>(ei) * 1000u};
+            events[ei].duration = ProgramDuration{500};
         }
         p->layers[li].initialize(events, events_per_layer);
     }
@@ -52,7 +52,7 @@ Program* make_populated_program(uint8_t layer_count, uint16_t events_per_layer,
 
 TEST_CASE("Program: default-constructed is empty", "[program]") {
     Program p;
-    CHECK(p.duration == 0.0f);
+    CHECK(p.duration.ms == 0);
     CHECK(p.target_fps == 50);
     CHECK(p.requires_sync == false);
     CHECK(p.layer_count == 0);
@@ -120,7 +120,7 @@ TEST_CASE("Program: embedded pool / views / copy_ops tear down cleanly",
     REQUIRE(p.pixel_views.initialize(p.pixel_buffer_pool, &spec, 1));
 
     CopyOp op;
-    op.at = 0.5f;
+    op.at = ProgramTime{500};
     op.src_pixv_idx = 0;
     op.dst_pixv_idx = 0;
     REQUIRE(p.copy_ops.initialize(&op, 1));
@@ -147,7 +147,7 @@ TEST_CASE("Program: full Program (layers + embedded containers) destructs cleanl
         spec.has_physical_mapping = true;
         spec.physical_identity = true;
         REQUIRE(p->pixel_views.initialize(p->pixel_buffer_pool, &spec, 1));
-        CopyOp op = { 0.0f, 0, 0 };
+        CopyOp op = { ProgramTime{0}, 0, 0 };
         REQUIRE(p->copy_ops.initialize(&op, 1));
 
         free_program(p);

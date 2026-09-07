@@ -23,11 +23,17 @@ void put_u16(std::vector<uint8_t>& b, uint16_t v) {
     b.push_back(v & 0xFF);
     b.push_back((v >> 8) & 0xFF);
 }
+void put_u32(std::vector<uint8_t>& b, uint32_t v) {
+    for (int i = 0; i < 4; i++) b.push_back((v >> (8 * i)) & 0xFF);
+}
 void put_f32(std::vector<uint8_t>& b, float f) {
     uint8_t bytes[4];
     std::memcpy(bytes, &f, 4);
     b.insert(b.end(), bytes, bytes + 4);
 }
+// Blob times are whole milliseconds; the builders take seconds for
+// readability.
+uint32_t ms_from_seconds(float s) { return static_cast<uint32_t>(s * 1000.0f + 0.5f); }
 
 // Solid-red paint event covering [0, duration). Strip length = 1.
 std::vector<uint8_t> build_paint_blob(float duration, bool requires_sync,
@@ -36,7 +42,7 @@ std::vector<uint8_t> build_paint_blob(float duration, bool requires_sync,
 
     // Header.
     b.insert(b.end(), { 'E', 'L', 'E', 'M' });
-    put_u8(b, 3);                                     // BLOB_VERSION
+    put_u8(b, 4);                                     // BLOB_VERSION
     put_u8(b, requires_sync ? 0x01 : 0x00);           // flags
     put_u8(b, target_fps);
     put_u8(b, 1);                                     // layer_count
@@ -44,7 +50,7 @@ std::vector<uint8_t> build_paint_blob(float duration, bool requires_sync,
     put_u16(b, 1);                                    // buffer_count
     put_u16(b, 1);                                    // pixel_view_count
     put_u16(b, 0);                                    // copy_op_count
-    put_f32(b, duration);
+    put_u32(b, ms_from_seconds(duration));
 
     // Buffer sizes: one buffer of 1 pixel.
     put_u16(b, 1);
@@ -57,8 +63,8 @@ std::vector<uint8_t> build_paint_blob(float duration, bool requires_sync,
     // Layer 0: one paint event.
     put_u16(b, 1);                                    // event_count
     put_u8(b, static_cast<uint8_t>(AnimType::Paint));
-    put_f32(b, 0.0f);                                 // start
-    put_f32(b, duration);                             // duration
+    put_u32(b, 0);                                    // start
+    put_u32(b, ms_from_seconds(duration));            // duration
     put_u16(b, PIXV_NONE);                            // src
     put_u16(b, 0);                                    // dst
     put_u16(b, PIXV_NONE);                            // work

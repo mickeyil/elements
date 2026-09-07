@@ -750,7 +750,8 @@ class Session:
         return self._clock_us() - self.program_start_us >= cursor_us
 
     def _duration_us(self):
-        return int(self.manifest.duration * _US_PER_S)
+        # Devices end on the blob's millisecond grid, not the authored float.
+        return self.manifest.duration_ms * 1000
 
     def _check_end(self):
         """Natural end of program. The device transitions PLAYING -> ENDED when

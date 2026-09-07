@@ -220,6 +220,13 @@ def test_encode_jump_vector_and_finite_check():
         encode_jump(math.inf)
 
 
+def test_encode_jump_normalizes_to_the_ms_grid():
+    # The device rounds the float32 to the nearest ms. Raw 0.1255 arrives as
+    # 0.12549999 and lands on 125; the compiler places that instant at 126.
+    f = struct.unpack('<f', encode_jump(0.1255)[5:])[0]
+    assert math.floor(f * 1000 + 0.5) == 126
+
+
 def test_empty_payload_commands():
     assert encode_pause() == b'\x01\x00\x00\x00\x13'
     assert encode_stop() == b'\x01\x00\x00\x00\x15'

@@ -1,4 +1,4 @@
-"""Elements v3 binary blob serialization.
+"""Elements v4 binary blob serialization.
 
 The byte layout is docs/blob_format.md, enforced by src/core/decoder.cpp; this
 module is the emitter side. It serializes a BlobProgram (the compiler's
@@ -7,6 +7,9 @@ matching decoder used to round-trip the emitter in tests.
 
 Section order (byte-packed, little-endian, no padding):
     header (20 B) | buffer sizes | pixel views | copy ops | layers + events
+
+Every timeline value (program duration, event start and duration, copy-op
+at) is a u32 count of whole milliseconds; see types.ms_from_seconds.
 
 Animation params are type-specific bytes laid out by each src/core/animations/
 factory; pack_params() produces them. The shift param block dropped v2's
@@ -20,7 +23,7 @@ from dataclasses import dataclass, field
 from .types import ANIM_TYPES
 
 BLOB_MAGIC = b"ELEM"
-BLOB_VERSION = 3
+BLOB_VERSION = 4
 
 # Sentinel for an absent pixel view index (matches src/core/runtime_constants.h).
 PIXV_NONE = 0xFFFF
@@ -64,7 +67,7 @@ class PixelViewSpec:
 
 @dataclass
 class CopyOpSpec:
-    at: float            # program-relative seconds
+    at: int              # program-relative ms
     src_pixv_idx: int
     dst_pixv_idx: int
 
@@ -72,8 +75,8 @@ class CopyOpSpec:
 @dataclass
 class BlobEvent:
     anim_type: int       # AnimType enum value
-    start: float         # program-relative seconds
-    duration: float      # seconds
+    start: int           # program-relative ms
+    duration: int        # ms; > 0
     dst_pixv_idx: int    # required; must reference a has_physical view
     src_pixv_idx: int = PIXV_NONE
     work_pixv_idx: int = PIXV_NONE
@@ -88,7 +91,7 @@ class BlobLayer:
 @dataclass
 class BlobProgram:
     strip_length: int
-    duration: float
+    duration: int        # ms
     target_fps: int = 50
     requires_sync: bool = False
     buffer_sizes: list[int] = field(default_factory=list)
@@ -194,7 +197,7 @@ def _view_flags(v: PixelViewSpec) -> int:
 
 
 def emit_blob(program: BlobProgram) -> bytes:
-    """Serialize a BlobProgram into the v3 binary blob."""
+    """Serialize a BlobProgram into the v4 binary blob."""
     buf = bytearray()
 
     # Header (20 bytes)
@@ -204,7 +207,7 @@ def emit_blob(program: BlobProgram) -> bytes:
                        len(program.layers))
     buf += struct.pack("<HHHH", program.strip_length, len(program.buffer_sizes),
                        len(program.pixel_views), len(program.copy_ops))
-    buf += struct.pack("<f", program.duration)
+    buf += struct.pack("<I", program.duration)
 
     # Buffer sizes
     for size in program.buffer_sizes:
@@ -220,13 +223,13 @@ def emit_blob(program: BlobProgram) -> bytes:
 
     # Copy ops
     for op in program.copy_ops:
-        buf += struct.pack("<fHH", op.at, op.src_pixv_idx, op.dst_pixv_idx)
+        buf += struct.pack("<IHH", op.at, op.src_pixv_idx, op.dst_pixv_idx)
 
     # Layers and events
     for layer in program.layers:
         buf += struct.pack("<H", len(layer.events))
         for e in layer.events:
-            buf += struct.pack("<Bff", e.anim_type, e.start, e.duration)
+            buf += struct.pack("<BII", e.anim_type, e.start, e.duration)
             buf += struct.pack("<HHH", e.src_pixv_idx, e.dst_pixv_idx, e.work_pixv_idx)
             buf += struct.pack("<H", len(e.params))
             buf += e.params
@@ -240,7 +243,7 @@ def emit_blob(program: BlobProgram) -> bytes:
 # ---------------------------------------------------------------------------
 
 def decode_blob(data: bytes) -> BlobProgram:
-    """Decode a v3 blob back into a BlobProgram. Raises on malformed input."""
+    """Decode a v4 blob back into a BlobProgram. Raises on malformed input."""
     if data[0:4] != BLOB_MAGIC:
         raise ValueError("bad magic")
     version, flags, target_fps, layer_count = struct.unpack_from("<BBBB", data, 4)
@@ -248,7 +251,7 @@ def decode_blob(data: bytes) -> BlobProgram:
         raise ValueError(f"bad version {version}")
     strip_length, buffer_count, pixel_view_count, copy_op_count = \
         struct.unpack_from("<HHHH", data, 8)
-    duration = struct.unpack_from("<f", data, 16)[0]
+    duration = struct.unpack_from("<I", data, 16)[0]
     pos = 20
 
     buffer_sizes = list(struct.unpack_from(f"<{buffer_count}H", data, pos))
@@ -278,7 +281,7 @@ def decode_blob(data: bytes) -> BlobProgram:
 
     copy_ops = []
     for _ in range(copy_op_count):
-        at, src, dst = struct.unpack_from("<fHH", data, pos)
+        at, src, dst = struct.unpack_from("<IHH", data, pos)
         pos += 8
         copy_ops.append(CopyOpSpec(at=at, src_pixv_idx=src, dst_pixv_idx=dst))
 
@@ -288,7 +291,7 @@ def decode_blob(data: bytes) -> BlobProgram:
         pos += 2
         events = []
         for _ in range(event_count):
-            anim_type, start, dur = struct.unpack_from("<Bff", data, pos)
+            anim_type, start, dur = struct.unpack_from("<BII", data, pos)
             pos += 9
             src, dst, work = struct.unpack_from("<HHH", data, pos)
             pos += 6

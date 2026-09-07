@@ -64,13 +64,13 @@ class TestHeader:
         assert test_blob[:4] == b"ELEM"
 
     def test_version(self, test_blob):
-        assert test_blob[4] == 3
+        assert test_blob[4] == 4
 
     def test_layer_count(self, decoded):
         assert len(decoded.layers) == 2
 
     def test_duration(self, decoded):
-        assert abs(decoded.duration - 2.0) < 1e-6
+        assert decoded.duration == 2000
 
     def test_program_config_defaults(self, decoded):
         assert decoded.target_fps == 50
@@ -135,18 +135,18 @@ class TestViews:
 class TestTimeResolution:
     def test_wave_timing(self, decoded):
         wave_evt = decoded.layers[0].events[0]
-        assert abs(wave_evt.start - 0.0) < 1e-6
-        assert abs(wave_evt.duration - 1.0) < 1e-6
+        assert wave_evt.start == 0
+        assert wave_evt.duration == 1000
 
     def test_shift_timing(self, decoded):
         shift_evt = decoded.layers[0].events[1]
-        assert abs(shift_evt.start - 1.0) < 1e-6
-        assert abs(shift_evt.duration - 1.0) < 1e-6
+        assert shift_evt.start == 1000
+        assert shift_evt.duration == 1000
 
     def test_first_spark_timing(self, decoded):
         first = min(decoded.layers[1].events, key=lambda e: e.start)
-        assert abs(first.start - 0.0) < 1e-6
-        assert abs(first.duration - 0.1) < 1e-6
+        assert first.start == 0
+        assert first.duration == 100
 
     def test_wave_period_converted(self, decoded):
         """period=8 beats -> 4.0 seconds."""
@@ -212,7 +212,7 @@ class TestSourceResolution:
         z.schedule(s.pixels("0-4"), at=2, duration=1, source=x)
         p = decode_blob(build(beat=1.0, duration=4.0)["overwrite"])
         assert len(p.copy_ops) == 1
-        assert abs(p.copy_ops[0].at - 1.0) < 1e-6   # at source end
+        assert p.copy_ops[0].at == 1000   # at source end
         z_evt = p.layers[0].events[2]
         assert not decoded_view(p, z_evt.src_pixv_idx).has_physical
         assert z_evt.src_pixv_idx != z_evt.dst_pixv_idx
@@ -240,7 +240,7 @@ class TestSourceResolution:
         z.schedule(s.pixels("0-4"), at=2, duration=1, source=x)
         m = build_manifest(beat=1.0, duration=4.0)
         # x,y,z all chain back to 0 -> unsafe [0,3); safe (0,0) + [3,4).
-        assert m.safe_intervals == [(0.0, 0.0), (3.0, 4.0)]
+        assert m.safe_intervals == [(0, 0), (3000, 4000)]
 
     def test_source_on_non_shift_rejected(self):
         s = strip("src_nonshift", length=5)
@@ -664,7 +664,7 @@ class TestSafeIntervals:
         w = self._wave()
         w.schedule(s.pixels("0-4"), at=0, duration=4)
         m = build_manifest(beat=1.0, duration=4.0)
-        assert m.safe_intervals == [(0.0, 0.0)]
+        assert m.safe_intervals == [(0, 0)]
 
     def test_gap_between_events(self):
         s = strip("si_gap", length=5)
@@ -673,7 +673,7 @@ class TestSafeIntervals:
         w1.schedule(s.pixels("0-4"), at=0, duration=1)
         w2.schedule(s.pixels("0-4"), at=3, duration=1)
         m = build_manifest(beat=1.0, duration=5.0)
-        assert m.safe_intervals == [(0.0, 0.0), (1.0, 3.0), (4.0, 5.0)]
+        assert m.safe_intervals == [(0, 0), (1000, 3000), (4000, 5000)]
 
     def test_source_dependent_removes_gap(self):
         s = strip("si_dep", length=5)
@@ -682,7 +682,7 @@ class TestSafeIntervals:
         p.schedule(s.pixels("0-4"), at=0, duration=1)
         sh.schedule(s.pixels("0-4"), at=sec(2.0), duration=sec(2.0), source=p)
         m = build_manifest(beat=1.0, duration=5.0)
-        assert m.safe_intervals == [(0.0, 0.0), (4.0, 5.0)]
+        assert m.safe_intervals == [(0, 0), (4000, 5000)]
 
     def test_transitive_source_chain(self):
         s = strip("si_trans", length=5)
@@ -694,7 +694,7 @@ class TestSafeIntervals:
         c = shift(direction="right", velocity=1, circular=False, fill="transparent")
         c.schedule(px, at=sec(4.0), duration=sec(1.0), source=b)
         m = build_manifest(beat=1.0, duration=6.0)
-        assert m.safe_intervals == [(0.0, 0.0), (5.0, 6.0)]
+        assert m.safe_intervals == [(0, 0), (5000, 6000)]
 
     def test_overlapping_unsafe_spans_merge(self):
         s = strip("si_merge", length=5)
@@ -705,7 +705,7 @@ class TestSafeIntervals:
         w2.schedule(s.pixels("0-4"), at=1, duration=3)
         sp.schedule(s.pixels("0-4"), at=0, duration=sec(0.5))
         m = build_manifest(beat=1.0, duration=5.0)
-        assert m.safe_intervals == [(0.0, 0.0), (4.0, 5.0)]
+        assert m.safe_intervals == [(0, 0), (4000, 5000)]
 
     def test_multi_strip_global_intersection(self):
         sa = strip("si_ms_a", length=5)
@@ -715,7 +715,7 @@ class TestSafeIntervals:
         wa.schedule(sa.pixels("0-4"), at=0, duration=1)
         wb.schedule(sb.pixels("0-4"), at=2, duration=1)
         m = build_manifest(beat=1.0, duration=4.0)
-        assert m.safe_intervals == [(0.0, 0.0), (1.0, 2.0), (3.0, 4.0)]
+        assert m.safe_intervals == [(0, 0), (1000, 2000), (3000, 4000)]
 
     def test_event_clamped_at_duration(self):
         s = strip("si_clamp", length=5)
@@ -725,7 +725,7 @@ class TestSafeIntervals:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             m = build_manifest(beat=1.0, duration=3.0)
-        assert m.safe_intervals == [(0.0, 0.0)]
+        assert m.safe_intervals == [(0, 0)]
 
     def test_adjacent_events_no_gap(self):
         s = strip("si_adj", length=5)
@@ -734,7 +734,7 @@ class TestSafeIntervals:
         w1.schedule(s.pixels("0-4"), at=0, duration=2)
         w2.schedule(s.pixels("0-4"), at=2, duration=2)
         m = build_manifest(beat=1.0, duration=4.0)
-        assert m.safe_intervals == [(0.0, 0.0)]
+        assert m.safe_intervals == [(0, 0)]
 
     def test_subframe_gap_dropped_by_width_filter(self):
         """A safe gap narrower than one frame period is dropped."""
@@ -744,7 +744,7 @@ class TestSafeIntervals:
         w1.schedule(s.pixels("0-4"), at=0, duration=1)
         w2.schedule(s.pixels("0-4"), at=1.01, duration=0.99)  # gap (1.0, 1.01) = 0.01s
         m = build_manifest(beat=1.0, duration=2.0, target_fps=50)  # frame = 0.02s
-        assert m.safe_intervals == [(0.0, 0.0)]
+        assert m.safe_intervals == [(0, 0)]
 
     def test_manifest_strip_order_follows_declaration(self):
         sc = strip("si_ord_c", length=5)
@@ -929,3 +929,120 @@ class TestPacifica:
         mem = manifest.strips["test_pacifica_mem"].memory
         # 24 B instance + 10 pixels * 3 B RGB scratch.
         assert mem.anim_bytes == 24 + 10 * 3
+
+
+# ---------------------------------------------------------------------------
+# Millisecond grid
+# ---------------------------------------------------------------------------
+
+class TestMillisecondGrid:
+    """Boundaries are rounded once, so decimal times meet exactly (blob v4)."""
+
+    def _paint(self, v=1.0):
+        return paint(colors=[(0, 0, v)] * 4, format="hsv")
+
+    def test_adjacent_decimal_paints_share_a_layer(self):
+        # 0.1 + 0.2 is a hair above 0.3 in double; on the ms grid both are 300.
+        s = strip("ms_adj", length=4)
+        self._paint(0.5).schedule(s.pixels("0-3"), at=sec(0.1), duration=sec(0.2))
+        self._paint(1.0).schedule(s.pixels("0-3"), at=sec(0.3), duration=sec(0.2))
+        p = decode_blob(build(beat=1.0, duration=1.0)["ms_adj"])
+        assert len(p.layers) == 1
+        a, b = p.layers[0].events
+        assert (a.start, a.duration) == (100, 200)
+        assert (b.start, b.duration) == (300, 200)
+
+    def test_shift_sourced_from_adjacent_decimal_paint(self):
+        s = strip("ms_src", length=4)
+        src = self._paint(0.5)
+        src.schedule(s.pixels("0-3"), at=sec(0.1), duration=sec(0.2))
+        sh = shift(direction="right", velocity=0, circular=True, fill="transparent")
+        sh.schedule(s.pixels("0-3"), at=sec(0.3), duration=sec(0.2), source=src)
+        p = decode_blob(build(beat=1.0, duration=1.0)["ms_src"])
+        assert len(p.layers) == 1
+        assert p.layers[0].events[1].start == 300
+        assert p.copy_ops == []   # source still intact: read in place
+
+    def test_event_ending_at_decimal_program_end(self):
+        s = strip("ms_end", length=4)
+        self._paint().schedule(s.pixels("0-3"), at=sec(0.1), duration=sec(0.6))
+        p = decode_blob(build(beat=1.0, duration=0.7)["ms_end"])
+        e = p.layers[0].events[0]
+        assert p.duration == 700
+        assert e.start + e.duration == p.duration
+
+    def test_non_binary_beat(self):
+        s = strip("ms_beat", length=4)
+        self._paint(0.5).schedule(s.pixels("0-3"), at=0, duration=2)
+        self._paint(1.0).schedule(s.pixels("0-3"), at=2, duration=1)
+        p = decode_blob(build(beat=0.3, duration=0.9)["ms_beat"])
+        a, b = p.layers[0].events
+        assert (a.start, a.duration, b.start, b.duration) == (0, 600, 600, 300)
+        assert p.duration == 900
+
+    def test_halfway_rounds_up(self):
+        # An eighth of a 0.1 s beat is 12.5 ms; half up gives 13, unlike
+        # Python's round(). The end boundary is rounded on its own.
+        s = strip("ms_tie", length=4)
+        self._paint().schedule(s.pixels("0-3"), at=0.125, duration=0.125)
+        p = decode_blob(build(beat=0.1, duration=1.0)["ms_tie"])
+        e = p.layers[0].events[0]
+        assert (e.start, e.start + e.duration) == (13, 25)
+
+    def test_float32_style_near_tie_uses_the_double(self):
+        s = strip("ms_near", length=4)
+        self._paint().schedule(s.pixels("0-3"), at=sec(0.1255), duration=sec(0.5))
+        p = decode_blob(build(beat=1.0, duration=1.0)["ms_near"])
+        assert p.layers[0].events[0].start == 126
+
+    def test_sub_millisecond_event_rejected(self):
+        s = strip("ms_zero", length=4)
+        self._paint().schedule(s.pixels("0-3"), at=0, duration=sec(0.0004))
+        with pytest.raises(CompileError, match="shorter than 1 ms"):
+            build(beat=1.0, duration=1.0)
+
+    def test_sub_millisecond_program_rejected(self):
+        s = strip("ms_prog", length=4)
+        self._paint().schedule(s.pixels("0-3"), at=0, duration=1)
+        with pytest.raises(CompileError, match="rounds to 0 ms"):
+            build(beat=1.0, duration=0.0004)
+
+    def test_manifest_carries_ms_and_seconds(self):
+        s = strip("ms_man", length=4)
+        self._paint().schedule(s.pixels("0-3"), at=0, duration=sec(0.5))
+        m = build_manifest(beat=1.0, duration=0.7)
+        assert m.duration == 0.7
+        assert m.duration_ms == 700
+        assert m.safe_intervals == [(0, 0), (500, 700)]
+
+    def test_sec_adjacency_at_half_millisecond_tie(self):
+        # The Paint's end and the Shift's start are the same authored
+        # instant reached through different arithmetic. Taking sec() values
+        # as written keeps them the same double, so both round alike.
+        s = strip("ms_tie_adj", length=4)
+        src = self._paint(0.5)
+        src.schedule(s.pixels("0-3"), at=sec(0.125), duration=sec(0.3755))
+        sh = shift(direction="right", velocity=0, circular=True, fill="transparent")
+        sh.schedule(s.pixels("0-3"), at=sec(0.5005), duration=sec(0.2), source=src)
+        p = decode_blob(build(beat=0.1, duration=1.0)["ms_tie_adj"])
+        a, b = p.layers[0].events
+        assert a.start + a.duration == b.start
+
+    def test_sec_values_do_not_depend_on_beat(self):
+        starts = []
+        for beat in (1.0, 0.7, 0.3):
+            s = strip("ms_beatfree", length=4)
+            self._paint().schedule(s.pixels("0-3"), at=sec(0.1005), duration=sec(0.5))
+            blob = build(beat=beat, duration=1.0)["ms_beatfree"]
+            starts.append(decode_blob(blob).layers[0].events[0].start)
+        assert starts == [starts[0]] * 3
+
+    def test_beat_authored_adjacency_sums_in_beats(self):
+        # 1 + 2 beats is summed before scaling, so it equals 3 beats scaled.
+        s = strip("ms_beatadj", length=4)
+        self._paint(0.5).schedule(s.pixels("0-3"), at=1, duration=2)
+        self._paint(1.0).schedule(s.pixels("0-3"), at=3, duration=1)
+        p = decode_blob(build(beat=0.3, duration=1.5)["ms_beatadj"])
+        assert len(p.layers) == 1
+        a, b = p.layers[0].events
+        assert a.start + a.duration == b.start

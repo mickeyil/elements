@@ -33,6 +33,8 @@ import socket
 import struct
 from dataclasses import dataclass
 
+from elements.types import ms_from_seconds
+
 # ---- Constants mirroring src/app/link_protocol.h --------------------------------
 
 PROTOCOL_VERSION = 3
@@ -244,7 +246,11 @@ def encode_start(program_start_us):
 # JUMP repositions playback onto a compiler-marked safe interval. Retained for
 # future seek and live rejoin; the v3 session does not issue it.
 def encode_jump(t_program):
-    return encode_message(CMD_JUMP, _F32.pack(_require_finite(t_program, 't_program')))
+    # The device rounds the float32 it receives to the nearest ms. Sending a
+    # value already on the compiler's grid makes that round trip exact for
+    # any program under a few hours; a raw float can land one ms early.
+    t_program = _require_finite(t_program, 't_program')
+    return encode_message(CMD_JUMP, _F32.pack(ms_from_seconds(t_program) / 1000))
 
 
 def encode_pause():

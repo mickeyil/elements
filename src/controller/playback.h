@@ -7,6 +7,7 @@
 #include "core/blob_reader.h"
 #include "core/engine.h"
 #include "core/hardware_profile.h"
+#include "core/program_time.h"
 #include "core/strip.h"
 #include "controller/synced_clock.h"
 
@@ -72,10 +73,11 @@ public:
     // (anchor = now_local_us(), cursor = 0).
     PlaybackResult handle_start(int64_t program_start_us);
 
-    // Re-anchor the program-time cursor to t_program. Valid from LOADED or
-    // PAUSED. Target must be strictly ahead of the current cursor and
-    // strictly inside [0, duration), else BadTime. Resets the engine, sets
-    // cursor to the target, transitions to PAUSED. Does not render.
+    // Re-anchor the program-time cursor to t_program (seconds, rounded to
+    // the nearest millisecond). Valid from LOADED or PAUSED. Target must be
+    // strictly ahead of the current cursor and strictly inside
+    // [0, duration), else BadTime. Resets the engine, sets cursor to the
+    // target, transitions to PAUSED. Does not render.
     PlaybackResult handle_jump(float t_program);
 
     void handle_pause();
@@ -102,6 +104,7 @@ public:
     RenderFrameResult render_next_frame();
 
     DeviceState state() const;
+    // Program length in seconds; 0 when no program is loaded.
     float duration() const;
     // Returns 0 when no program is loaded.
     uint8_t target_fps() const;
@@ -125,7 +128,7 @@ private:
     HardwareProfile _profile{};
 
     DeviceState _state = DeviceState::IDLE;
-    float _duration = 0.0f;
+    ProgramDuration _duration;
     uint8_t _target_fps = 0;
     int64_t _program_start_us = 0;
     int64_t _t_program_cursor_us = 0;

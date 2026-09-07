@@ -7,15 +7,16 @@
 namespace {
 
 constexpr float US_PER_SECOND = 1'000'000.0f;
-
-int64_t t_program_to_us(float t_program)
-{
-    return static_cast<int64_t>(t_program * US_PER_SECOND);
-}
+constexpr int64_t US_PER_MS = 1000;
 
 float t_program_from_us(int64_t t_program_us)
 {
     return float(t_program_us) / US_PER_SECOND;
+}
+
+int64_t us_from_ms(uint32_t ms)
+{
+    return static_cast<int64_t>(ms) * US_PER_MS;
 }
 
 }  // namespace
@@ -75,7 +76,7 @@ bool Playback::handle_load(const uint8_t* blob, size_t blob_len,
     if (program == nullptr) {
         return false;
     }
-    const float duration = program->duration;
+    const ProgramDuration duration = program->duration;
     const uint8_t target_fps = program->target_fps;
     const bool requires_sync = program->requires_sync;
 
@@ -125,15 +126,18 @@ PlaybackResult Playback::handle_jump(float t_program)
     if (_requires_sync && !_clock.is_synced()) {
         return PlaybackResult::Unsynced;
     }
-    // Reject non-finite before the float->int cast below (UB on NaN/Inf).
-    if (!std::isfinite(t_program)) {
+    // The target arrives as float seconds. Round it half up to the
+    // millisecond grid, the same rule the compiler applies to authored
+    // times. Non-finite is rejected before the cast (UB on NaN/Inf).
+    if (!std::isfinite(t_program) || t_program < 0.0f) {
         return PlaybackResult::BadTime;
     }
-    if (t_program < 0.0f || t_program >= _duration) {
+    const double target_ms = std::floor(double(t_program) * 1000.0 + 0.5);
+    if (target_ms >= double(_duration.ms)) {
         return PlaybackResult::BadTime;
     }
 
-    const int64_t target_us = t_program_to_us(t_program);
+    const int64_t target_us = us_from_ms(static_cast<uint32_t>(target_ms));
     if (target_us <= _t_program_cursor_us) {
         return PlaybackResult::BadTime;
     }
@@ -215,9 +219,14 @@ RenderFrameResult Playback::render_next_frame()
     }
     _t_program_cursor_us = t_program_us;
 
-    if (!_engine->render_frame(t_program_from_us(t_program_us), _strip)) {
+    // Floor onto the millisecond grid so no boundary renders before the
+    // clock reaches it.
+    const int64_t t_ms = t_program_us / US_PER_MS;
+    const bool rendered = t_ms < int64_t(_duration.ms)
+        && _engine->render_frame(ProgramTime{static_cast<uint32_t>(t_ms)}, _strip);
+    if (!rendered) {
         clear_render_buffer_();
-        _t_program_cursor_us = t_program_to_us(_duration);
+        _t_program_cursor_us = us_from_ms(_duration.ms);
         _state = DeviceState::ENDED;
         return RenderFrameResult::Ended;
     }
@@ -231,7 +240,7 @@ DeviceState Playback::state() const
 
 float Playback::duration() const
 {
-    return _duration;
+    return seconds(_duration);
 }
 
 uint8_t Playback::target_fps() const
@@ -248,13 +257,13 @@ float Playback::current_t_program() const
         case DeviceState::PAUSED:
         case DeviceState::PLAYING: {
             const float t_program = t_program_from_us(_t_program_cursor_us);
-            if (t_program > _duration) {
-                return _duration;
+            if (t_program > seconds(_duration)) {
+                return seconds(_duration);
             }
             return t_program;
         }
         case DeviceState::ENDED:
-            return _duration;
+            return seconds(_duration);
     }
     return 0.0f;
 }
@@ -293,7 +302,7 @@ void Playback::unload_program_()
 void Playback::reset_program_state_()
 {
     _state = DeviceState::IDLE;
-    _duration = 0.0f;
+    _duration = ProgramDuration{};
     _target_fps = 0;
     _requires_sync = false;
     reset_timing_state_();

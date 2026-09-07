@@ -113,7 +113,7 @@ def make_manifest(*strips, duration=10.0):
             sid: CompiledStripArtifact(strip_id=sid, length=length, blob=blob)
             for sid, length, blob in strips
         },
-        safe_intervals=[(0.0, duration)],
+        safe_intervals=[(0, int(duration * 1000))],
     )
 
 
@@ -1070,6 +1070,14 @@ def test_reboot_between_set_profile_and_load():
 # End of program (B2-end): the controller ends the session by the clock the
 # devices follow, since there is no end event or query.
 # ---------------------------------------------------------------------------
+
+def test_program_end_follows_the_ms_grid():
+    # A 0.7006 s program is 701 ms on the devices; the controller must not
+    # call it ended at 700.6 ms.
+    session, _hub = make_session(SINGLE)
+    session.load(make_manifest(('main', 30, b'blob'), duration=0.7006))
+    assert session._duration_us() == 701_000
+
 
 def test_program_ends_by_clock():
     session, hub = make_session(SINGLE)

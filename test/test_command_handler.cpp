@@ -151,6 +151,10 @@ void put_name_slot(std::vector<uint8_t>& b, const char* name)
     b.insert(b.end(), slot, slot + sizeof(slot));
 }
 
+// Blob times are whole milliseconds; the builders take seconds for
+// readability.
+uint32_t ms_from_seconds(float s) { return static_cast<uint32_t>(s * 1000.0f + 0.5f); }
+
 // Solid-red paint program covering [0, duration); decodes for the
 // given strip length. Same shape as test_playback's builder.
 std::vector<uint8_t> build_paint_blob(uint16_t strip_length, float duration,
@@ -158,7 +162,7 @@ std::vector<uint8_t> build_paint_blob(uint16_t strip_length, float duration,
 {
     std::vector<uint8_t> b;
     b.insert(b.end(), { 'E', 'L', 'E', 'M' });
-    put_u8(b, 3);                                     // BLOB_VERSION
+    put_u8(b, 4);                                     // BLOB_VERSION
     put_u8(b, requires_sync ? 0x01 : 0x00);           // flags
     put_u8(b, 50);                                    // target_fps
     put_u8(b, 1);                                     // layer_count
@@ -166,7 +170,7 @@ std::vector<uint8_t> build_paint_blob(uint16_t strip_length, float duration,
     put_u16(b, 1);                                    // buffer_count
     put_u16(b, 1);                                    // pixel_view_count
     put_u16(b, 0);                                    // copy_op_count
-    put_f32(b, duration);
+    put_u32(b, ms_from_seconds(duration));
 
     put_u16(b, strip_length);                         // buffer 0 size
 
@@ -176,8 +180,8 @@ std::vector<uint8_t> build_paint_blob(uint16_t strip_length, float duration,
 
     put_u16(b, 1);                                    // layer 0: event_count
     put_u8(b, static_cast<uint8_t>(AnimType::Paint));
-    put_f32(b, 0.0f);                                 // start
-    put_f32(b, duration);
+    put_u32(b, 0);                                    // start
+    put_u32(b, ms_from_seconds(duration));
     put_u16(b, PIXV_NONE);                            // src
     put_u16(b, 0);                                    // dst
     put_u16(b, PIXV_NONE);                            // work

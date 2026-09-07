@@ -2,12 +2,12 @@
 
 #include <cstdint>
 
+#include "core/program_time.h"
 #include "core/runtime_constants.h"
 
 // CopyOps is an ordered table of scheduled view-to-view copies. Each
-// CopyOp says "at time `at`, copy view A into view B" -- this lets
-// one animation pick up data prepared by another at the right
-// moment.
+// CopyOp says "at time `at`, copy view A into view B"; this lets one
+// animation pick up data prepared by another at the right moment.
 //
 // CopyOps owns the underlying array. Bind via initialize(); release
 // via reset() or destruction. Order is significant: same-`at` ops
@@ -15,7 +15,7 @@
 
 // The decoder validates records.
 struct CopyOp {
-    float at = 0.0f;  // program-relative seconds
+    ProgramTime at;
     uint16_t src_pixv_idx = PIXV_NONE;
     uint16_t dst_pixv_idx = PIXV_NONE;
 };

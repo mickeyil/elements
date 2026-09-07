@@ -6,6 +6,7 @@
 #include "core/layer.h"
 #include "core/pixel_buffer_pool.h"
 #include "core/pixel_views.h"
+#include "core/program_time.h"
 
 // Program holds a decoded blob in memory: pixel storage, views, copy ops,
 // and the layer timeline. The decoder builds one and hands it to Engine,
@@ -14,8 +15,8 @@
 struct Program {
     ~Program();
 
-    // How long the program plays, in seconds.
-    float duration = 0.0f;
+    // How long the program plays; render_frame() rejects t >= duration.
+    ProgramDuration duration;
 
     // Frames per second the program was authored for. The runtime uses this
     // to pace playback.

@@ -8,7 +8,7 @@
 
 struct Program;
 
-static constexpr uint8_t BLOB_VERSION = 3;
+static constexpr uint8_t BLOB_VERSION = 4;
 static constexpr char    BLOB_MAGIC[4] = { 'E', 'L', 'E', 'M' };
 
 // Fixed blob prefix + header, the part peek_blob_header reads:

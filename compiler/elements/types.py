@@ -113,6 +113,21 @@ class AnimDef:
 
 
 # ---------------------------------------------------------------------------
+# Timeline grid
+# ---------------------------------------------------------------------------
+
+def ms_from_seconds(seconds: float) -> int:
+    """Round a timeline position or length to whole milliseconds, half up.
+
+    The compiler applies this once to each absolute boundary (event start,
+    event end, program end) and then plans, serializes and compares only the
+    integers, so every component agrees on where a boundary sits. Callers
+    round positions, never lengths: an event's duration is end_ms - start_ms.
+    """
+    return int(math.floor(seconds * 1000.0 + 0.5))
+
+
+# ---------------------------------------------------------------------------
 # Compiler output types
 # ---------------------------------------------------------------------------
 
@@ -146,11 +161,16 @@ class CompiledStripArtifact:
 
 @dataclass
 class CompiledManifest:
-    duration: float
+    duration: float               # authored length, seconds; duration_ms is what blobs carry
     strips: dict[str, CompiledStripArtifact]   # keyed by strip_id; unique
-    safe_intervals: list[tuple[float, float]]
+    safe_intervals: list[tuple[int, int]]      # [lo_ms, hi_ms) windows safe to seek into
     target_fps: int = 50          # program-level pacing hint, Hz; mirrored in every blob header
     requires_sync: bool = False   # program-level; mirrored in every blob header
+
+    @property
+    def duration_ms(self) -> int:
+        """Program length as written into every strip blob header."""
+        return ms_from_seconds(self.duration)
 
     @property
     def peak_memory_bytes(self) -> int:

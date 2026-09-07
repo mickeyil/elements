@@ -3,6 +3,7 @@
 #include <cstdint>
 
 #include "core/animation.h"
+#include "core/program_time.h"
 #include "core/runtime_constants.h"
 
 // Layer is one bottom-to-top visual timeline. It owns its event array and the
@@ -15,9 +16,8 @@
 struct AnimationEvent {
     Animation* animation = nullptr;
 
-    // Program-relative seconds.
-    float start = 0.0f;
-    float duration = 0.0f;
+    ProgramTime start;
+    ProgramDuration duration;
 
     // PixelView indices. dst is required and must carry a physical mapping
     // (the compositor consumes it). src and work are optional.
@@ -43,9 +43,8 @@ public:
     AnimationEvent& at(uint16_t idx) { return _events[idx]; }
     const AnimationEvent& at(uint16_t idx) const { return _events[idx]; }
 
-    // Find the event active at program-relative time `t`. Returns nullptr if
-    // no event covers `t`. Half-open interval: start <= t < start + duration.
-    const AnimationEvent* active_at(float t) const;
+    // The event covering `t` (start <= t < start + duration), or nullptr.
+    const AnimationEvent* active_at(ProgramTime t) const;
 
 private:
     AnimationEvent* _events = nullptr;

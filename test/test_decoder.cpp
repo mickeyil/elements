@@ -22,6 +22,7 @@ namespace {
 
 void put_u8(std::vector<uint8_t>& b, uint8_t v) { b.push_back(v); }
 void put_u16(std::vector<uint8_t>& b, uint16_t v) { b.push_back(v & 0xFF); b.push_back((v >> 8) & 0xFF); }
+void put_u32(std::vector<uint8_t>& b, uint32_t v) { for (int i = 0; i < 4; i++) b.push_back((v >> (8 * i)) & 0xFF); }
 void put_f32(std::vector<uint8_t>& b, float f) {
     uint8_t bytes[4]; std::memcpy(bytes, &f, 4);
     b.insert(b.end(), bytes, bytes + 4);
@@ -36,13 +37,13 @@ struct HeaderBytes {
     uint16_t buffer_count     = 0;
     uint16_t pixel_view_count = 0;
     uint16_t copy_op_count    = 0;
-    float    duration         = 1.0f;
+    uint32_t duration         = 1000;   // ms
 };
 
 // Append magic + version + header to `b`.
 void append_prefix_and_header(std::vector<uint8_t>& b, const HeaderBytes& h) {
     b.insert(b.end(), { 'E', 'L', 'E', 'M' });
-    put_u8(b, 3);                 // BLOB_VERSION
+    put_u8(b, 4);                 // BLOB_VERSION
     put_u8(b, h.flags);
     put_u8(b, h.target_fps);
     put_u8(b, h.layer_count);
@@ -50,7 +51,7 @@ void append_prefix_and_header(std::vector<uint8_t>& b, const HeaderBytes& h) {
     put_u16(b, h.buffer_count);
     put_u16(b, h.pixel_view_count);
     put_u16(b, h.copy_op_count);
-    put_f32(b, h.duration);
+    put_u32(b, h.duration);
 }
 
 // Append a buffer-size table.
@@ -87,23 +88,23 @@ void append_pixel_view(std::vector<uint8_t>& b, const ViewBytes& v) {
 }
 
 struct CopyOpBytes {
-    float at;
+    uint32_t at;   // ms
     uint16_t src;
     uint16_t dst;
 };
 
 void append_copy_op(std::vector<uint8_t>& b, const CopyOpBytes& op) {
-    put_f32(b, op.at);
+    put_u32(b, op.at);
     put_u16(b, op.src);
     put_u16(b, op.dst);
 }
 
-// Event byte layout: u8 anim_type, f32 start, f32 duration, u16 src, u16 dst,
+// Event byte layout: u8 anim_type, u32 start, u32 duration (both ms), u16 src, u16 dst,
 // u16 work, u16 params_size, then params bytes.
 struct EventBytes {
     uint8_t anim_type;
-    float start;
-    float duration;
+    uint32_t start;
+    uint32_t duration;
     uint16_t src = PIXV_NONE;
     uint16_t dst;
     uint16_t work = PIXV_NONE;
@@ -112,8 +113,8 @@ struct EventBytes {
 
 void append_event(std::vector<uint8_t>& b, const EventBytes& e) {
     put_u8(b, e.anim_type);
-    put_f32(b, e.start);
-    put_f32(b, e.duration);
+    put_u32(b, e.start);
+    put_u32(b, e.duration);
     put_u16(b, e.src);
     put_u16(b, e.dst);
     put_u16(b, e.work);
@@ -174,7 +175,7 @@ std::vector<uint8_t> build_minimal_valid_blob() {
     h.layer_count = 1;
     h.buffer_count = 1;
     h.pixel_view_count = 1;
-    h.duration = 1.0f;
+    h.duration = 1000;
     append_prefix_and_header(b, h);
     append_buffer_sizes(b, { 4 });
 
@@ -189,7 +190,7 @@ std::vector<uint8_t> build_minimal_valid_blob() {
     put_u16(b, 1);
     EventBytes e;
     e.anim_type = static_cast<uint8_t>(AnimType::Wave);
-    e.start = 0.0f; e.duration = 1.0f; e.dst = 0;
+    e.start = 0; e.duration = 1000; e.dst = 0;
     e.params = wave_params(2, 0, 0, 0, 0, 1, 1.0f, 0, 0);
     append_event(b, e);
     return b;
@@ -269,16 +270,9 @@ TEST_CASE("decode_program: strip_length mismatch rejected", "[decoder]") {
     CHECK(run(bytes, /*profile*/ 8) == DecodeError::StripLengthMismatch);
 }
 
-TEST_CASE("decode_program: duration NaN rejected", "[decoder]") {
+TEST_CASE("decode_program: duration 0 rejected", "[decoder]") {
     std::vector<uint8_t> b;
-    HeaderBytes h; h.duration = std::nanf("");
-    append_prefix_and_header(b, h);
-    CHECK(run(b) == DecodeError::InvalidField);
-}
-
-TEST_CASE("decode_program: duration <= 0 rejected", "[decoder]") {
-    std::vector<uint8_t> b;
-    HeaderBytes h; h.duration = 0.0f;
+    HeaderBytes h; h.duration = 0;
     append_prefix_and_header(b, h);
     CHECK(run(b) == DecodeError::InvalidField);
 }
@@ -400,7 +394,7 @@ TEST_CASE("decode_program: physical_indices entry out of range", "[decoder]") {
 // Copy ops
 // ---------------------------------------------------------------------------
 
-TEST_CASE("decode_program: copy op at NaN rejected", "[decoder]") {
+TEST_CASE("decode_program: copy op at >= program duration rejected", "[decoder]") {
     std::vector<uint8_t> b;
     HeaderBytes h; h.buffer_count = 1; h.pixel_view_count = 2; h.copy_op_count = 1;
     append_prefix_and_header(b, h);
@@ -411,7 +405,7 @@ TEST_CASE("decode_program: copy op at NaN rejected", "[decoder]") {
         v.has_physical = (i == 0); v.physical_identity = (i == 0);
         append_pixel_view(b, v);
     }
-    append_copy_op(b, { std::nanf(""), 1, 0 });
+    append_copy_op(b, { 1000, 1, 0 });   // == duration
     CHECK(run(b) == DecodeError::InvalidField);
 }
 
@@ -426,8 +420,8 @@ TEST_CASE("decode_program: copy op out-of-order at rejected", "[decoder]") {
         v.has_physical = (i == 0); v.physical_identity = (i == 0);
         append_pixel_view(b, v);
     }
-    append_copy_op(b, { 0.5f, 1, 0 });
-    append_copy_op(b, { 0.2f, 1, 0 });   // earlier than previous
+    append_copy_op(b, { 500, 1, 0 });
+    append_copy_op(b, { 200, 1, 0 });   // earlier than previous
     CHECK(run(b) == DecodeError::InvalidField);
 }
 
@@ -444,7 +438,7 @@ TEST_CASE("decode_program: copy op src/dst size mismatch rejected", "[decoder]")
     v1.storage_identity = true;
     v1.has_physical = false; v1.physical_identity = false;
     append_pixel_view(b, v1);
-    append_copy_op(b, { 0.5f, 1, 0 });   // size 8 -> size 4
+    append_copy_op(b, { 500, 1, 0 });   // size 8 -> size 4
     CHECK(run(b) == DecodeError::InvalidField);
 }
 
@@ -457,7 +451,7 @@ TEST_CASE("decode_program: copy op src == PIXV_NONE rejected", "[decoder]") {
     v.storage_identity = true;
     v.has_physical = true; v.physical_identity = true;
     append_pixel_view(b, v);
-    append_copy_op(b, { 0.5f, PIXV_NONE, 0 });
+    append_copy_op(b, { 500, PIXV_NONE, 0 });
     CHECK(run(b) == DecodeError::InvalidField);
 }
 
@@ -472,8 +466,8 @@ TEST_CASE("decode_program: same-`at` copy ops with duplicate dst rejected", "[de
         v.has_physical = (i == 0); v.physical_identity = (i == 0);
         append_pixel_view(b, v);
     }
-    append_copy_op(b, { 0.5f, 1, 0 });
-    append_copy_op(b, { 0.5f, 2, 0 });   // same at, same dst
+    append_copy_op(b, { 500, 1, 0 });
+    append_copy_op(b, { 500, 2, 0 });   // same at, same dst
     CHECK(run(b) == DecodeError::InvalidField);
 }
 
@@ -484,7 +478,7 @@ TEST_CASE("decode_program: same-`at` copy ops with duplicate dst rejected", "[de
 TEST_CASE("decode_program: event start + duration > program duration rejected", "[decoder]") {
     std::vector<uint8_t> b;
     HeaderBytes h; h.buffer_count = 1; h.pixel_view_count = 1; h.layer_count = 1;
-    h.duration = 1.0f;
+    h.duration = 1000;
     append_prefix_and_header(b, h);
     append_buffer_sizes(b, { 4 });
     ViewBytes v; v.buffer_idx = 0; v.size = 4;
@@ -493,7 +487,7 @@ TEST_CASE("decode_program: event start + duration > program duration rejected", 
     append_pixel_view(b, v);
     put_u16(b, 1);
     EventBytes e; e.anim_type = static_cast<uint8_t>(AnimType::Wave);
-    e.start = 0.5f; e.duration = 1.0f;   // 1.5 > 1.0
+    e.start = 500; e.duration = 1000;   // 1500 > 1000
     e.dst = 0;
     e.params = wave_params(2, 0, 0, 0, 0, 1, 1.0f, 0, 0);
     append_event(b, e);
@@ -503,7 +497,7 @@ TEST_CASE("decode_program: event start + duration > program duration rejected", 
 TEST_CASE("decode_program: event dst view without physical mapping rejected", "[decoder]") {
     std::vector<uint8_t> b;
     HeaderBytes h; h.buffer_count = 1; h.pixel_view_count = 1; h.layer_count = 1;
-    h.duration = 1.0f;
+    h.duration = 1000;
     append_prefix_and_header(b, h);
     append_buffer_sizes(b, { 4 });
     ViewBytes v; v.buffer_idx = 0; v.size = 4;
@@ -512,7 +506,7 @@ TEST_CASE("decode_program: event dst view without physical mapping rejected", "[
     append_pixel_view(b, v);
     put_u16(b, 1);
     EventBytes e; e.anim_type = static_cast<uint8_t>(AnimType::Wave);
-    e.start = 0.0f; e.duration = 1.0f; e.dst = 0;
+    e.start = 0; e.duration = 1000; e.dst = 0;
     e.params = wave_params(2, 0, 0, 0, 0, 1, 1.0f, 0, 0);
     append_event(b, e);
     CHECK(run(b) == DecodeError::InvalidField);
@@ -528,7 +522,7 @@ TEST_CASE("decode_program: unknown anim type rejected", "[decoder]") {
     v.has_physical = true; v.physical_identity = true;
     append_pixel_view(b, v);
     put_u16(b, 1);
-    EventBytes e; e.anim_type = 99; e.start = 0.0f; e.duration = 1.0f; e.dst = 0;
+    EventBytes e; e.anim_type = 99; e.start = 0; e.duration = 1000; e.dst = 0;
     append_event(b, e);
     CHECK(run(b) == DecodeError::InvalidField);
 }
@@ -544,7 +538,7 @@ TEST_CASE("decode_program: paint constant size mismatch rejected", "[decoder]") 
     append_pixel_view(b, v);
     put_u16(b, 1);
     EventBytes e; e.anim_type = static_cast<uint8_t>(AnimType::Paint);
-    e.start = 0.0f; e.duration = 1.0f; e.dst = 0;
+    e.start = 0; e.duration = 1000; e.dst = 0;
     // Only 2 pixels but dst view is 4 -- decoder must reject.
     e.params = paint_constant_params({ hsva_t(0,1,1,1), hsva_t(0,1,1,1) });
     append_event(b, e);
@@ -562,7 +556,7 @@ TEST_CASE("decode_program: shift event without source rejected", "[decoder]") {
     append_pixel_view(b, v);
     put_u16(b, 1);
     EventBytes e; e.anim_type = static_cast<uint8_t>(AnimType::Shift);
-    e.start = 0.0f; e.duration = 1.0f; e.dst = 0; e.src = PIXV_NONE;
+    e.start = 0; e.duration = 1000; e.dst = 0; e.src = PIXV_NONE;
     e.params = shift_params(1, 1.0f, 1, 0, 0, 0, 0);
     append_event(b, e);
     CHECK(run(b) == DecodeError::InvalidField);
@@ -583,7 +577,7 @@ TEST_CASE("decode_program: shift event without work view rejected", "[decoder]")
     append_pixel_view(b, v1);
     put_u16(b, 1);
     EventBytes e; e.anim_type = static_cast<uint8_t>(AnimType::Shift);
-    e.start = 0.0f; e.duration = 1.0f;
+    e.start = 0; e.duration = 1000;
     e.dst = 0; e.src = 1; e.work = PIXV_NONE;
     e.params = shift_params(1, 1.0f, 1, 0, 0, 0, 0);
     append_event(b, e);
@@ -609,7 +603,7 @@ TEST_CASE("decode_program: shift event with zero-size work view rejected", "[dec
     append_pixel_view(b, v2);
     put_u16(b, 1);
     EventBytes e; e.anim_type = static_cast<uint8_t>(AnimType::Shift);
-    e.start = 0.0f; e.duration = 1.0f;
+    e.start = 0; e.duration = 1000;
     e.dst = 0; e.src = 1; e.work = 2;
     e.params = shift_params(1, 1.0f, 1, 0, 0, 0, 0);
     append_event(b, e);
@@ -635,7 +629,7 @@ TEST_CASE("decode_program: shift event with mismatched src/work sizes rejected",
     append_pixel_view(b, v2);
     put_u16(b, 1);
     EventBytes e; e.anim_type = static_cast<uint8_t>(AnimType::Shift);
-    e.start = 0.0f; e.duration = 1.0f;
+    e.start = 0; e.duration = 1000;
     e.dst = 0; e.src = 1; e.work = 2;
     e.params = shift_params(1, 1.0f, 1, 0, 0, 0, 0);
     append_event(b, e);
@@ -653,7 +647,7 @@ TEST_CASE("decode_program: paint constant mode with count 0 rejected", "[decoder
     append_pixel_view(b, v);
     put_u16(b, 1);
     EventBytes e; e.anim_type = static_cast<uint8_t>(AnimType::Paint);
-    e.start = 0.0f; e.duration = 1.0f; e.dst = 0;
+    e.start = 0; e.duration = 1000; e.dst = 0;
     e.params = paint_constant_params({});   // mode 1, count 0
     append_event(b, e);
     CHECK(run(b) == DecodeError::InvalidField);
@@ -670,7 +664,7 @@ TEST_CASE("decode_program: animation factory rejection propagates", "[decoder]")
     append_pixel_view(b, v);
     put_u16(b, 1);
     EventBytes e; e.anim_type = static_cast<uint8_t>(AnimType::Wave);
-    e.start = 0.0f; e.duration = 1.0f; e.dst = 0;
+    e.start = 0; e.duration = 1000; e.dst = 0;
     e.params = wave_params(99, 0, 0, 0, 0, 1, 1.0f, 0, 0);   // channel > 2
     append_event(b, e);
     CHECK(run(b) == DecodeError::InvalidField);
@@ -693,9 +687,9 @@ TEST_CASE("decode_program: events out of order on a layer rejected", "[decoder]"
     EventBytes e; e.anim_type = static_cast<uint8_t>(AnimType::Wave);
     e.dst = 0;
     e.params = wave_params(2, 0, 0, 0, 0, 1, 1.0f, 0, 0);
-    e.start = 0.5f; e.duration = 0.4f;
+    e.start = 500; e.duration = 400;
     append_event(b, e);
-    e.start = 0.4f; e.duration = 0.4f;   // overlaps prior event
+    e.start = 400; e.duration = 400;   // overlaps prior event
     append_event(b, e);
     CHECK(run(b) == DecodeError::InvalidField);
 }
@@ -720,7 +714,7 @@ TEST_CASE("decode_program: minimal valid blob decodes", "[decoder]") {
     Program* p = decode_program(bytes.data(), bytes.size(), 4, &err);
     REQUIRE(p != nullptr);
     REQUIRE(err == DecodeError::Ok);
-    CHECK(p->duration == 1.0f);
+    CHECK(p->duration.ms == 1000);
     CHECK(p->target_fps == 50);
     CHECK(p->requires_sync == false);
     CHECK(p->layer_count == 1);
@@ -747,7 +741,7 @@ TEST_CASE("decode_program: full program with copy ops decodes", "[decoder]") {
     h.pixel_view_count = 2;
     h.copy_op_count = 1;
     h.layer_count = 1;
-    h.duration = 1.0f;
+    h.duration = 1000;
     append_prefix_and_header(b, h);
     append_buffer_sizes(b, { 4, 4 });
 
@@ -764,12 +758,12 @@ TEST_CASE("decode_program: full program with copy ops decodes", "[decoder]") {
     v1.has_physical = false; v1.physical_identity = false;
     append_pixel_view(b, v1);
 
-    append_copy_op(b, { 0.5f, 1, 1 });   // self-copy is OK as long as sizes match
+    append_copy_op(b, { 500, 1, 1 });   // self-copy is OK as long as sizes match
 
     put_u16(b, 1);   // events on layer 0
     EventBytes e;
     e.anim_type = static_cast<uint8_t>(AnimType::Spark);
-    e.start = 0.0f; e.duration = 1.0f; e.dst = 0;
+    e.start = 0; e.duration = 1000; e.dst = 0;
     e.params = spark_params(60, 1, 1, 0.5f);
     append_event(b, e);
 
@@ -803,7 +797,7 @@ std::vector<uint8_t> build_pacifica_blob(const std::vector<uint8_t>& params) {
     h.layer_count = 1;
     h.buffer_count = 1;
     h.pixel_view_count = 1;
-    h.duration = 1.0f;
+    h.duration = 1000;
     append_prefix_and_header(b, h);
     append_buffer_sizes(b, { 4 });
 
@@ -817,7 +811,7 @@ std::vector<uint8_t> build_pacifica_blob(const std::vector<uint8_t>& params) {
     put_u16(b, 1);  // 1 event on layer 0
     EventBytes e;
     e.anim_type = static_cast<uint8_t>(AnimType::Pacifica);
-    e.start = 0.0f; e.duration = 1.0f; e.dst = 0;
+    e.start = 0; e.duration = 1000; e.dst = 0;
     e.params = params;
     append_event(b, e);
     return b;
@@ -850,4 +844,54 @@ TEST_CASE("decode_program: pacifica rejects truncated params", "[decoder][pacifi
     params.pop_back();
     auto bytes = build_pacifica_blob(params);
     CHECK(run(bytes) == DecodeError::InvalidField);
+}
+
+// ---------------------------------------------------------------------------
+// Millisecond boundaries
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// One 4-pixel physical view and one layer holding `events` as
+// {start_ms, duration_ms} pairs, under header `h`.
+std::vector<uint8_t> build_timeline_blob(HeaderBytes h,
+                                         const std::vector<std::pair<uint32_t, uint32_t>>& events) {
+    std::vector<uint8_t> b;
+    h.buffer_count = 1; h.pixel_view_count = 1; h.layer_count = 1;
+    append_prefix_and_header(b, h);
+    append_buffer_sizes(b, { 4 });
+    ViewBytes v; v.buffer_idx = 0; v.size = 4;
+    v.storage_identity = true;
+    v.has_physical = true; v.physical_identity = true;
+    append_pixel_view(b, v);
+    put_u16(b, static_cast<uint16_t>(events.size()));
+    for (const auto& se : events) {
+        EventBytes e; e.anim_type = static_cast<uint8_t>(AnimType::Wave);
+        e.start = se.first; e.duration = se.second; e.dst = 0;
+        e.params = wave_params(2, 0, 0, 0, 0, 1, 1.0f, 0, 0);
+        append_event(b, e);
+    }
+    return b;
+}
+
+}  // namespace
+
+TEST_CASE("decode_program: event ending exactly at program duration accepted", "[decoder]") {
+    // 0.1 s + 0.6 s in a 0.7 s program: the float32 sum overshot the
+    // duration and the blob was rejected. Integer ms compare exactly.
+    HeaderBytes h; h.duration = 700;
+    auto b = build_timeline_blob(h, { {100, 600} });
+    CHECK(run(b) == DecodeError::Ok);
+}
+
+TEST_CASE("decode_program: adjacent events on one layer accepted", "[decoder]") {
+    HeaderBytes h; h.duration = 1000;
+    auto b = build_timeline_blob(h, { {100, 600}, {700, 100} });
+    CHECK(run(b) == DecodeError::Ok);
+}
+
+TEST_CASE("decode_program: events overlapping by one millisecond rejected", "[decoder]") {
+    HeaderBytes h; h.duration = 1000;
+    auto b = build_timeline_blob(h, { {100, 600}, {699, 100} });
+    CHECK(run(b) == DecodeError::InvalidField);
 }
