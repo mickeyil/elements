@@ -648,6 +648,21 @@ if(BUILD_TESTS)
             DEPENDS ${CMAKE_SOURCE_DIR}/test/fixtures/generate_decimal_timeline.py ${COMPILER_SOURCES}
             COMMENT "Generating test fixture test_decimal_timeline.bin"
         )
+        set(HANDOFF_FIXTURES
+            ${FIXTURE_OUT_DIR}/test_handoff_skipped_direct.bin
+            ${FIXTURE_OUT_DIR}/test_handoff_skipped_copy.bin
+            ${FIXTURE_OUT_DIR}/test_handoff_wave_endpoint.bin
+            ${FIXTURE_OUT_DIR}/test_handoff_shift_chain.bin
+            ${FIXTURE_OUT_DIR}/test_handoff_self_source.bin
+            ${FIXTURE_OUT_DIR}/test_handoff_slot_reuse.bin
+        )
+        add_custom_command(
+            OUTPUT ${HANDOFF_FIXTURES}
+            COMMAND ${CMAKE_COMMAND} -E env PYTHONPATH=${CMAKE_SOURCE_DIR}/compiler
+                    ${PYTHON3} ${CMAKE_SOURCE_DIR}/test/fixtures/generate_handoff.py ${FIXTURE_OUT_DIR}
+            DEPENDS ${CMAKE_SOURCE_DIR}/test/fixtures/generate_handoff.py ${COMPILER_SOURCES}
+            COMMENT "Generating source handoff test fixtures"
+        )
         add_custom_target(test_fixtures
             DEPENDS ${FIXTURE_OUT_DIR}/test_animation.bin
                     ${FIXTURE_OUT_DIR}/test_shift.bin
@@ -656,6 +671,7 @@ if(BUILD_TESTS)
                     ${FIXTURE_OUT_DIR}/test_full_paint.bin
                     ${FIXTURE_OUT_DIR}/test_pacifica.bin
                     ${FIXTURE_OUT_DIR}/test_decimal_timeline.bin
+                    ${HANDOFF_FIXTURES}
         )
 
         # Cross-check that the Python v4 emitter's blobs decode and run in C++.

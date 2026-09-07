@@ -80,6 +80,71 @@ std::vector<uint8_t> build_paint_blob(float duration, bool requires_sync,
     return b;
 }
 
+// White paint on [120,180) ms, then a zero-velocity shift on [200,800) that
+// holds the paint's pixels. Strip length = 1. Two buffers: the layer's dst
+// and the shift's work snapshot.
+std::vector<uint8_t> build_paint_then_shift_blob() {
+    std::vector<uint8_t> b;
+
+    // Header.
+    b.insert(b.end(), { 'E', 'L', 'E', 'M' });
+    put_u8(b, 4);                                     // BLOB_VERSION
+    put_u8(b, 0x00);                                  // flags: unsynced
+    put_u8(b, 50);                                    // target_fps
+    put_u8(b, 1);                                     // layer_count
+    put_u16(b, 1);                                    // strip_length
+    put_u16(b, 2);                                    // buffer_count
+    put_u16(b, 2);                                    // pixel_view_count
+    put_u16(b, 0);                                    // copy_op_count
+    put_u32(b, 800);                                  // duration ms
+
+    // Buffer sizes: dst, then work.
+    put_u16(b, 1);
+    put_u16(b, 1);
+
+    // View 0: dst in buffer 0, identity storage and physical mapping.
+    put_u16(b, 0);
+    put_u16(b, 1);
+    put_u8(b, 0x01 | 0x02 | 0x04);
+    // View 1: work in buffer 1, identity storage, no physical mapping.
+    put_u16(b, 1);
+    put_u16(b, 1);
+    put_u8(b, 0x01);
+
+    // Layer 0: paint, then shift.
+    put_u16(b, 2);                                    // event_count
+
+    put_u8(b, static_cast<uint8_t>(AnimType::Paint));
+    put_u32(b, 120);                                  // start
+    put_u32(b, 60);                                   // duration
+    put_u16(b, PIXV_NONE);                            // src
+    put_u16(b, 0);                                    // dst
+    put_u16(b, PIXV_NONE);                            // work
+    put_u16(b, 1 + 4 * 4);                            // params_size
+    put_u8(b, 0);                                     // solid mode
+    put_f32(b, 0.0f);                                 // h
+    put_f32(b, 0.0f);                                 // s: white
+    put_f32(b, 1.0f);                                 // v
+    put_f32(b, 1.0f);                                 // a
+
+    put_u8(b, static_cast<uint8_t>(AnimType::Shift));
+    put_u32(b, 200);                                  // start
+    put_u32(b, 600);                                  // duration
+    put_u16(b, 0);                                    // src: the paint's dst
+    put_u16(b, 0);                                    // dst
+    put_u16(b, 1);                                    // work
+    put_u16(b, 1 + 4 + 1 + 4 * 4);                    // params_size
+    put_u8(b, 1);                                     // direction: right
+    put_f32(b, 0.0f);                                 // velocity
+    put_u8(b, 1);                                     // circular
+    put_f32(b, 0.0f);                                 // fill h
+    put_f32(b, 0.0f);                                 // fill s
+    put_f32(b, 0.0f);                                 // fill v
+    put_f32(b, 0.0f);                                 // fill a: transparent
+
+    return b;
+}
+
 // ---------------------------------------------------------------------------
 // Test harness
 // ---------------------------------------------------------------------------
@@ -92,6 +157,12 @@ bool strip_is_red(const Playback& pb) {
     if (pb.strip().size() == 0) return false;
     const rgb_t& p = pb.strip()[0];
     return p.r == 255 && p.g == 0 && p.b == 0;
+}
+
+bool strip_is_white(const Playback& pb) {
+    if (pb.strip().size() == 0) return false;
+    const rgb_t& p = pb.strip()[0];
+    return p.r == 255 && p.g == 255 && p.b == 255;
 }
 
 bool strip_is_black(const Playback& pb) {
@@ -796,4 +867,27 @@ TEST_CASE("Playback: current_t_program follows the cursor in PLAYING", "[playbac
     set_clock_us(int64_t(0.75 * 1e6));
     REQUIRE(pb.render_next_frame() == RenderFrameResult::Rendered);
     CHECK(pb.current_t_program() == 0.75f);
+}
+
+// ---------------------------------------------------------------------------
+// Missed frames
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Playback: a stall over a short source still hands its pixels to the shift",
+          "[playback]") {
+    set_clock_us(0);
+    SyncedClock clock;
+    Playback pb(1, clock);
+    auto blob = build_paint_then_shift_blob();
+    REQUIRE(pb.handle_load(blob.data(), blob.size()));
+    REQUIRE(pb.handle_start(0) == PlaybackResult::Ok);
+
+    REQUIRE(pb.render_next_frame() == RenderFrameResult::Rendered);   // t = 0
+    CHECK(strip_is_black(pb));
+
+    // The device stalls through the whole paint [120,180) and wakes up
+    // inside the shift, which must still hold the paint's white.
+    set_clock_us(300'000);
+    REQUIRE(pb.render_next_frame() == RenderFrameResult::Rendered);
+    CHECK(strip_is_white(pb));
 }

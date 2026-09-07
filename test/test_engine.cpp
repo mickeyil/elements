@@ -1,6 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstdint>
+#include <string>
+#include <vector>
 
 #include "core/animation.h"
 #include "core/colors.h"
@@ -186,7 +188,8 @@ TEST_CASE("Engine: initialize fires once on first activation, render every frame
 
     REQUIRE(eng->render_frame(ProgramTime{1600}, strip));   // past event end
     CHECK(anim->init_count() == 1);
-    CHECK(anim->render_count() == 2);
+    CHECK(anim->render_count() == 3);          // retired with its endpoint render
+    CHECK(anim->last_t() == 1.0f);
     CHECK(strip[0].r == 0);                    // no active layer
 
     delete eng;
@@ -211,7 +214,8 @@ TEST_CASE("Engine: cursor advances to the next event on the same layer", "[engin
     CHECK(a2->init_count() == 0);
 
     REQUIRE(eng->render_frame(ProgramTime{750}, strip));
-    CHECK(a1->render_count() == 1);   // first event no longer active
+    CHECK(a1->render_count() == 2);   // retired with its endpoint render
+    CHECK(a1->last_t() == 0.5f);
     CHECK(a2->init_count() == 1);     // second event activated
     CHECK(a2->render_count() == 1);
     CHECK(a2->last_t() == 0.25f);
@@ -296,9 +300,10 @@ TEST_CASE("Engine: layers track their own active events independently", "[engine
     CHECK(strip[0].b == red.b);
     CHECK(strip[1].r == 0);
 
-    // t=1.5: only layer 1 active
+    // t=1.5: only layer 1 active; layer 0's event was retired with its
+    // endpoint render on the way.
     REQUIRE(eng->render_frame(ProgramTime{1500}, strip));
-    CHECK(a0->render_count() == 1);
+    CHECK(a0->render_count() == 2);
     CHECK(a1->render_count() == 1);
     rgb_t green = hsv_to_rgb(120.0f, 1.0f, 1.0f);
     CHECK(strip[0].r == 0);
@@ -573,6 +578,215 @@ TEST_CASE("Engine: top layer wins on a shared physical LED", "[engine]") {
     CHECK(strip[0].r == green.r);
     CHECK(strip[0].g == green.g);
     CHECK(strip[0].b == green.b);
+
+    delete eng;
+}
+
+// ---------------------------------------------------------------------------
+// Timeline order: endings, then copies, then starts, then drawing
+// ---------------------------------------------------------------------------
+
+namespace {
+
+using Log = std::vector<std::string>;
+
+// Animation that appends every call to a shared log as "name.init" or
+// "name.render(t_ms)". render() writes its time into every dst pixel's hue,
+// so a snapshot of its output tells which render produced it; initialize()
+// remembers the hue it saw in src.
+class LogAnim : public Animation
+{
+public:
+    LogAnim(Log& log, const char* name) : _log(log), _name(name) {}
+
+    void initialize(const PixelView* src, PixelView*) override {
+        _log.push_back(_name + ".init");
+        if (src != nullptr && src->size() > 0) {
+            _seen_src_h = (*src)[0].h;
+        }
+    }
+    void render(PixelView& dst, float t_animation) override {
+        const int t_ms = static_cast<int>(t_animation * 1000.0f + 0.5f);
+        _log.push_back(_name + ".render(" + std::to_string(t_ms) + ")");
+        for (uint16_t i = 0; i < dst.size(); i++) {
+            dst[i] = hsva_t(t_animation, 1.0f, 1.0f, 1.0f);
+        }
+    }
+
+    float seen_src_h() const { return _seen_src_h; }
+
+private:
+    Log& _log;
+    std::string _name;
+    float _seen_src_h = -1.0f;   // -1 = initialize() saw no src
+};
+
+// One layer with A on [0,100) and B on [100,200), both drawing view 0.
+Program* adjacent_pair(Log& log, LogAnim*& a, LogAnim*& b) {
+    Program* prog = basic_program(1000);
+    give_layers(prog, 1);
+    a = new LogAnim(log, "A");
+    b = new LogAnim(log, "B");
+    AnimationEvent* events = new AnimationEvent[2];
+    events[0] = make_event(a, 0, 100, 0);
+    events[1] = make_event(b, 100, 100, 0);
+    prog->layers[0].initialize(events, 2);
+    return prog;
+}
+
+// Layer 0: A on [0,100) draws view 0. A copy op at 100 moves view 0 into
+// view 1. Layer 1: B on [100,200) reads view 1 in initialize() and draws
+// view 0. Only the order endpoint, copy, start hands B the hue A wrote at
+// its end (0.1): running the copy first hands it A's frame-0 hue (0), and
+// starting B first hands it the untouched buffer (0).
+Program* copy_handoff(Log& log, LogAnim*& a, LogAnim*& b) {
+    Program* prog = new Program();
+    prog->duration = ProgramDuration{1000};
+    const uint16_t sizes[] = { 1, 1 };
+    REQUIRE(prog->pixel_buffer_pool.initialize(sizes, 2));
+    PixelViewSpec specs[2];
+    for (int i = 0; i < 2; i++) {
+        specs[i].buffer_idx = static_cast<uint16_t>(i);
+        specs[i].size = 1;
+        specs[i].storage_identity = true;
+        specs[i].has_physical_mapping = (i == 0);
+        specs[i].physical_identity = (i == 0);
+    }
+    REQUIRE(prog->pixel_views.initialize(prog->pixel_buffer_pool, specs, 2));
+
+    CopyOp op;
+    op.at = ProgramTime{100};
+    op.src_pixv_idx = 0;
+    op.dst_pixv_idx = 1;
+    REQUIRE(prog->copy_ops.initialize(&op, 1));
+
+    give_layers(prog, 2);
+    a = new LogAnim(log, "A");
+    b = new LogAnim(log, "B");
+    install_event(prog->layers[0], make_event(a, 0, 100, /*dst*/ 0));
+    install_event(prog->layers[1], make_event(b, 100, 100, /*dst*/ 0, /*src*/ 1));
+    return prog;
+}
+
+}  // namespace
+
+TEST_CASE("Engine: at one boundary every ending renders its endpoint before any start initializes",
+          "[engine]") {
+    Program* prog = basic_program(1000);
+    give_layers(prog, 2);
+    Log log;
+    auto* a = new LogAnim(log, "A");
+    auto* b = new LogAnim(log, "B");
+    auto* c = new LogAnim(log, "C");
+    auto* d = new LogAnim(log, "D");
+    AnimationEvent* l0 = new AnimationEvent[2];
+    l0[0] = make_event(a, 0, 100, 0);
+    l0[1] = make_event(c, 100, 100, 0);
+    prog->layers[0].initialize(l0, 2);
+    AnimationEvent* l1 = new AnimationEvent[2];
+    l1[0] = make_event(b, 0, 100, 0);
+    l1[1] = make_event(d, 100, 100, 0);
+    prog->layers[1].initialize(l1, 2);
+
+    Engine* eng = Engine::create(prog);
+    Strip strip; REQUIRE(strip.resize(1));
+
+    REQUIRE(eng->render_frame(ProgramTime{0}, strip));
+    CHECK(log == Log{"A.init", "B.init", "A.render(0)", "B.render(0)"});
+
+    log.clear();
+    REQUIRE(eng->render_frame(ProgramTime{100}, strip));
+    CHECK(log == Log{"A.render(100)", "B.render(100)",
+                     "C.init", "D.init",
+                     "C.render(0)", "D.render(0)"});
+
+    delete eng;
+}
+
+TEST_CASE("Engine: a copy at a boundary carries the endpoint to the event starting there",
+          "[engine]") {
+    Log log;
+    LogAnim* a = nullptr;
+    LogAnim* b = nullptr;
+    Program* prog = copy_handoff(log, a, b);
+    Engine* eng = Engine::create(prog);
+    Strip strip; REQUIRE(strip.resize(1));
+
+    SECTION("frames on both sides of the boundary") {
+        REQUIRE(eng->render_frame(ProgramTime{0}, strip));
+        log.clear();
+        REQUIRE(eng->render_frame(ProgramTime{150}, strip));
+        CHECK(log == Log{"A.render(100)", "B.init", "B.render(50)"});
+        CHECK(b->seen_src_h() == 0.1f);
+    }
+
+    SECTION("late first frame") {
+        REQUIRE(eng->render_frame(ProgramTime{150}, strip));
+        CHECK(log == Log{"A.init", "A.render(100)", "B.init", "B.render(50)"});
+        CHECK(b->seen_src_h() == 0.1f);
+    }
+
+    SECTION("reset, then a late first frame") {
+        REQUIRE(eng->render_frame(ProgramTime{0}, strip));
+        REQUIRE(eng->render_frame(ProgramTime{150}, strip));
+        eng->reset();
+        log.clear();
+        REQUIRE(eng->render_frame(ProgramTime{150}, strip));
+        CHECK(log == Log{"A.init", "A.render(100)", "B.init", "B.render(50)"});
+        CHECK(b->seen_src_h() == 0.1f);
+    }
+
+    delete eng;
+}
+
+TEST_CASE("Engine: an event no frame shows still gets initialize and its endpoint render",
+          "[engine]") {
+    Program* prog = basic_program(1000);
+    give_layers(prog, 1);
+    Log log;
+    auto* a = new LogAnim(log, "A");
+    install_event(prog->layers[0], make_event(a, 100, 100, 0));
+
+    Engine* eng = Engine::create(prog);
+    Strip strip; REQUIRE(strip.resize(1));
+
+    REQUIRE(eng->render_frame(ProgramTime{0}, strip));
+    REQUIRE(eng->render_frame(ProgramTime{200}, strip));   // exactly at A's end
+    CHECK(log == Log{"A.init", "A.render(100)"});
+
+    // The endpoint render lands in the buffer but is never shown.
+    CHECK(prog->pixel_views.at(0)[0].a == 1.0f);
+    CHECK(strip[0].r == 0);
+    CHECK(strip[0].g == 0);
+    CHECK(strip[0].b == 0);
+
+    delete eng;
+}
+
+TEST_CASE("Engine: frames at T-1, T, T again and T+1 around a shared boundary",
+          "[engine]") {
+    Log log;
+    LogAnim* a = nullptr;
+    LogAnim* b = nullptr;
+    Program* prog = adjacent_pair(log, a, b);
+    Engine* eng = Engine::create(prog);
+    Strip strip; REQUIRE(strip.resize(1));
+
+    REQUIRE(eng->render_frame(ProgramTime{99}, strip));
+    CHECK(log == Log{"A.init", "A.render(99)"});
+
+    log.clear();
+    REQUIRE(eng->render_frame(ProgramTime{100}, strip));
+    CHECK(log == Log{"A.render(100)", "B.init", "B.render(0)"});
+
+    // A repeated time applies no transition twice.
+    log.clear();
+    REQUIRE(eng->render_frame(ProgramTime{100}, strip));
+    CHECK(log == Log{"B.render(0)"});
+
+    log.clear();
+    REQUIRE(eng->render_frame(ProgramTime{101}, strip));
+    CHECK(log == Log{"B.render(1)"});
 
     delete eng;
 }

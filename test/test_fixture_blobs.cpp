@@ -51,6 +51,62 @@ void check_grayscale_frame(Engine& engine, uint32_t t_ms,
     }
 }
 
+// A frame schedule: the times one device happens to render at, in order.
+using Schedule = std::vector<uint32_t>;
+
+// What the strip must show at one of the schedule's frames.
+struct Expected
+{
+    uint32_t t_ms;
+    std::vector<rgb_t> pixels;
+};
+
+Schedule dense(uint32_t last_ms, uint32_t step_ms = 10)
+{
+    Schedule s;
+    for (uint32_t t = 0; t <= last_ms; t += step_ms) {
+        s.push_back(t);
+    }
+    return s;
+}
+
+rgb_t gray(uint8_t v) { return rgb_t(v, v, v); }
+
+// Play `fixture` through a fresh engine at exactly the frames in `schedule`,
+// checking every frame that has an entry in `expected`. Frames between
+// entries are rendered and ignored; leaving frames out is how a schedule
+// stalls or starts late.
+void run_schedule(const char* fixture, uint16_t len, const Schedule& schedule,
+                  const std::vector<Expected>& expected)
+{
+    DecodeError err = DecodeError::Ok;
+    Program* prog = decode_fixture(fixture, len, err);
+    REQUIRE(err == DecodeError::Ok);
+    REQUIRE(prog != nullptr);
+    Engine* engine = Engine::create(prog);
+    REQUIRE(engine != nullptr);
+    Strip strip;
+    REQUIRE(strip.resize(len));
+
+    for (uint32_t t_ms : schedule) {
+        CAPTURE(fixture, t_ms);
+        REQUIRE(engine->render_frame(ProgramTime{t_ms}, strip));
+        for (const Expected& e : expected) {
+            if (e.t_ms != t_ms) {
+                continue;
+            }
+            REQUIRE(e.pixels.size() == len);
+            for (uint16_t i = 0; i < len; i++) {
+                CAPTURE(i);
+                CHECK(strip[i].r == e.pixels[i].r);
+                CHECK(strip[i].g == e.pixels[i].g);
+                CHECK(strip[i].b == e.pixels[i].b);
+            }
+        }
+    }
+    delete engine;
+}
+
 }  // namespace
 
 TEST_CASE("test_shift fixture decodes and plays the documented frames")
@@ -249,4 +305,162 @@ TEST_CASE("test_decimal_timeline fixture: decimal boundaries meet on the ms grid
     check_grayscale_frame(*engine, 600, {102, 102, 102, 102});
     check_grayscale_frame(*engine, 899, {102, 102, 102, 102});
     delete engine;
+}
+
+// ---------------------------------------------------------------------------
+// Source handoffs under different frame schedules (generate_handoff.py)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("handoff fixtures: a source no frame rendered still feeds the shift")
+{
+    // White paint [120,180); the shift holds it over [200,600).
+    const std::vector<Expected> direct = {
+        {0, {gray(0)}}, {150, {gray(255)}}, {300, {gray(255)}},
+        {400, {gray(255)}}, {600, {gray(0)}},
+    };
+    SECTION("direct read, dense frames") {
+        run_schedule("test_handoff_skipped_direct.bin", 1, dense(600), direct);
+    }
+    SECTION("direct read, 5 fps skips the paint") {
+        run_schedule("test_handoff_skipped_direct.bin", 1, {0, 200, 400, 600}, direct);
+    }
+    SECTION("direct read, late first frame") {
+        run_schedule("test_handoff_skipped_direct.bin", 1, {300}, direct);
+    }
+    SECTION("direct read, stall over the paint") {
+        run_schedule("test_handoff_skipped_direct.bin", 1, {0, 100, 400, 600}, direct);
+    }
+
+    // A dim paint [180,200) overwrites the buffer, so a copy op at 180
+    // preserves white for the shift.
+    const std::vector<Expected> copied = {
+        {0, {gray(0)}}, {150, {gray(255)}}, {190, {gray(102)}},
+        {300, {gray(255)}}, {400, {gray(255)}}, {600, {gray(0)}},
+    };
+    SECTION("preserve copy, dense frames") {
+        run_schedule("test_handoff_skipped_copy.bin", 1, dense(600), copied);
+    }
+    SECTION("preserve copy, 5 fps skips both paints") {
+        run_schedule("test_handoff_skipped_copy.bin", 1, {0, 200, 400, 600}, copied);
+    }
+    SECTION("preserve copy, late first frame") {
+        run_schedule("test_handoff_skipped_copy.bin", 1, {300}, copied);
+    }
+    SECTION("preserve copy, stall over both paints") {
+        run_schedule("test_handoff_skipped_copy.bin", 1, {0, 100, 400, 600}, copied);
+    }
+}
+
+TEST_CASE("handoff fixtures: the shift captures the wave's value at its end")
+{
+    // The wave runs 255 -> 0 -> 255 over [0,400); the shift holds 255.
+    const std::vector<Expected> expected = {
+        {0, {gray(255)}}, {200, {gray(0)}},
+        {500, {gray(255)}}, {600, {gray(255)}}, {700, {gray(255)}},
+    };
+    SECTION("dense frames") {
+        run_schedule("test_handoff_wave_endpoint.bin", 1, dense(700), expected);
+    }
+    SECTION("5 fps on the grid") {
+        run_schedule("test_handoff_wave_endpoint.bin", 1, {0, 200, 400, 600}, expected);
+    }
+    SECTION("5 fps offset by 100 ms") {
+        run_schedule("test_handoff_wave_endpoint.bin", 1, {100, 300, 500, 700}, expected);
+    }
+    SECTION("late first frame") {
+        run_schedule("test_handoff_wave_endpoint.bin", 1, {600}, expected);
+    }
+}
+
+TEST_CASE("handoff fixtures: a stall across a moving shift chain rebuilds every link")
+{
+    // Ramp [0,100); shift A moves it 1 px per 100 ms over [100,300); shift B
+    // holds A's endpoint on pixels 1-2 over [300,600).
+    const std::vector<Expected> expected = {
+        {0,   {gray(51), gray(102), gray(153), gray(204)}},
+        {200, {gray(204), gray(51), gray(102), gray(153)}},
+        {450, {gray(0), gray(204), gray(51), gray(0)}},
+        {550, {gray(0), gray(204), gray(51), gray(0)}},
+    };
+    SECTION("dense frames") {
+        run_schedule("test_handoff_shift_chain.bin", 4, dense(550), expected);
+    }
+    SECTION("one stall across both handoffs") {
+        run_schedule("test_handoff_shift_chain.bin", 4, {0, 450}, expected);
+    }
+    SECTION("late first frame") {
+        run_schedule("test_handoff_shift_chain.bin", 4, {450}, expected);
+    }
+    SECTION("sparse frames off every boundary") {
+        run_schedule("test_handoff_shift_chain.bin", 4, {50, 250, 350, 550}, expected);
+    }
+}
+
+TEST_CASE("handoff fixtures: a shift with no source= holds its layer's previous event")
+{
+    // White paint [0,100); the shift reads its own layer buffer over [100,300).
+    const std::vector<Expected> expected = {
+        {0, {gray(255)}}, {150, {gray(255)}}, {200, {gray(255)}}, {300, {gray(0)}},
+    };
+    SECTION("dense frames") {
+        run_schedule("test_handoff_self_source.bin", 1, dense(300), expected);
+    }
+    SECTION("late first frame") {
+        run_schedule("test_handoff_self_source.bin", 1, {200}, expected);
+    }
+    SECTION("stall over the paint") {
+        run_schedule("test_handoff_self_source.bin", 1, {0, 200, 300}, expected);
+    }
+    SECTION("reset, then a late first frame") {
+        DecodeError err = DecodeError::Ok;
+        Program* prog = decode_fixture("test_handoff_self_source.bin", 1, err);
+        REQUIRE(err == DecodeError::Ok);
+        Engine* engine = Engine::create(prog);
+        REQUIRE(engine != nullptr);
+        Strip strip;
+        REQUIRE(strip.resize(1));
+
+        REQUIRE(engine->render_frame(ProgramTime{250}, strip));
+        engine->reset();
+        REQUIRE(engine->render_frame(ProgramTime{200}, strip));
+        CHECK(strip[0].r == 255);
+        CHECK(strip[0].g == 255);
+        CHECK(strip[0].b == 255);
+        delete engine;
+    }
+}
+
+TEST_CASE("handoff fixtures: a shift snapshots before a later copy reuses its preserve slot")
+{
+    // L0: red, blue, then shift 1 holding red from 200. L1: green, yellow,
+    // then shift 2 holding green over [400,600). Both preserve copies share
+    // one pool slot; shift 1 must have taken red before copy 2 lands at 300.
+    const rgb_t red(255, 0, 0);
+    const rgb_t green(0, 255, 0);
+    const rgb_t yellow(255, 255, 0);
+    const std::vector<Expected> expected = {
+        {350, {yellow}}, {450, {green}}, {650, {red}},
+    };
+    SECTION("the fixture really shares one slot between both preserve copies") {
+        DecodeError err = DecodeError::Ok;
+        Program* prog = decode_fixture("test_handoff_slot_reuse.bin", 1, err);
+        REQUIRE(err == DecodeError::Ok);
+        REQUIRE(prog->copy_ops.count() == 2);
+        const CopyOp& first = prog->copy_ops.at(0);
+        const CopyOp& second = prog->copy_ops.at(1);
+        CHECK(first.at.ms == 100);
+        CHECK(second.at.ms == 300);
+        CHECK(&prog->pixel_views.at(first.dst_pixv_idx)[0]
+              == &prog->pixel_views.at(second.dst_pixv_idx)[0]);
+        free_program(prog);
+    }
+    SECTION("dense frames") {
+        run_schedule("test_handoff_slot_reuse.bin", 1, dense(650), expected);
+    }
+    SECTION("stall from 150 to 350") {
+        run_schedule("test_handoff_slot_reuse.bin", 1, {0, 150, 350, 450, 650}, expected);
+    }
+    SECTION("late first frame") {
+        run_schedule("test_handoff_slot_reuse.bin", 1, {650}, expected);
+    }
 }

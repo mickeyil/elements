@@ -51,51 +51,8 @@ bool Engine::render_frame(ProgramTime t_program, Strip& out)
         return false;
     }
 
-    run_copy_ops_until(t_program);
-
-    for (uint8_t li = 0; li < _program->layer_count; li++) {
-        _active_dst_views[li] = nullptr;
-    }
-
-    for (uint8_t li = 0; li < _program->layer_count; li++) {
-        Layer& layer = _program->layers[li];
-        LayerPlaybackState& state = _layer_states[li];
-
-        while (state.cursor < layer.count()) {
-            AnimationEvent& e = layer.at(state.cursor);
-            const ProgramTime end = e.start + e.duration;
-
-            if (t_program < e.start) {
-                // Sorted: nothing later on this layer can start sooner.
-                break;
-            }
-
-            if (t_program < end) {
-                PixelView& dst = _program->pixel_views.at(e.dst_pixv_idx);
-
-                if (!state.initialized) {
-                    PixelView* src = (e.src_pixv_idx != PIXV_NONE)
-                        ? &_program->pixel_views.at(e.src_pixv_idx)
-                        : nullptr;
-                    PixelView* work = (e.work_pixv_idx != PIXV_NONE)
-                        ? &_program->pixel_views.at(e.work_pixv_idx)
-                        : nullptr;
-
-                    e.animation->initialize(src, work);
-                    state.initialized = true;
-                }
-
-                e.animation->render(dst, seconds(t_program - e.start));
-
-                _active_dst_views[li] = &dst;
-                break;
-            }
-
-            state.cursor++;
-            state.initialized = false;
-        }
-    }
-
+    advance_to(t_program);
+    render_active(t_program);
     _compositor.composite(out, _active_dst_views, _program->layer_count);
     return true;
 }
@@ -108,7 +65,7 @@ void Engine::reset()
 
     for (uint8_t li = 0; li < _program->layer_count; li++) {
         _layer_states[li].cursor = 0;
-        _layer_states[li].initialized = false;
+        _layer_states[li].started = false;
     }
     _copy_cursor = 0;
 
@@ -121,18 +78,113 @@ void Engine::reset()
     }
 }
 
-void Engine::run_copy_ops_until(ProgramTime t_program)
+void Engine::advance_to(ProgramTime t)
+{
+    // Each step retires an ending, a copy op, or a start, so the loop
+    // always makes progress.
+    ProgramTime next;
+    while (next_boundary(next) && next <= t) {
+        finish_events_ending_at(next);
+        run_copy_ops_at(next);
+        start_events_starting_at(next);
+    }
+}
+
+bool Engine::next_boundary(ProgramTime& out) const
+{
+    bool found = false;
+    for (uint8_t li = 0; li < _program->layer_count; li++) {
+        const Layer& layer = _program->layers[li];
+        const LayerPlaybackState& state = _layer_states[li];
+        if (state.cursor >= layer.count()) {
+            continue;
+        }
+        const AnimationEvent& e = layer.at(state.cursor);
+        const ProgramTime b = state.started ? e.start + e.duration : e.start;
+        if (!found || b < out) {
+            out = b;
+            found = true;
+        }
+    }
+    if (_copy_cursor < _program->copy_ops.count()) {
+        const ProgramTime b = _program->copy_ops.at(_copy_cursor).at;
+        if (!found || b < out) {
+            out = b;
+            found = true;
+        }
+    }
+    return found;
+}
+
+void Engine::finish_events_ending_at(ProgramTime t)
+{
+    for (uint8_t li = 0; li < _program->layer_count; li++) {
+        LayerPlaybackState& state = _layer_states[li];
+        if (!state.started) {
+            continue;
+        }
+        AnimationEvent& e = _program->layers[li].at(state.cursor);
+        if (e.start + e.duration != t) {
+            continue;
+        }
+        e.animation->render(_program->pixel_views.at(e.dst_pixv_idx),
+                            seconds(e.duration));
+        state.cursor++;
+        state.started = false;
+    }
+}
+
+void Engine::run_copy_ops_at(ProgramTime t)
 {
     while (_copy_cursor < _program->copy_ops.count()) {
         const CopyOp& op = _program->copy_ops.at(_copy_cursor);
-        if (op.at > t_program) {
+        if (op.at != t) {
             break;
         }
-
-        PixelView& src = _program->pixel_views.at(op.src_pixv_idx);
-        PixelView& dst = _program->pixel_views.at(op.dst_pixv_idx);
-        copy_view(src, dst);
+        copy_view(_program->pixel_views.at(op.src_pixv_idx),
+                  _program->pixel_views.at(op.dst_pixv_idx));
         _copy_cursor++;
+    }
+}
+
+void Engine::start_events_starting_at(ProgramTime t)
+{
+    for (uint8_t li = 0; li < _program->layer_count; li++) {
+        Layer& layer = _program->layers[li];
+        LayerPlaybackState& state = _layer_states[li];
+        if (state.started || state.cursor >= layer.count()) {
+            continue;
+        }
+        AnimationEvent& e = layer.at(state.cursor);
+        if (e.start != t) {
+            continue;
+        }
+        PixelView* src = (e.src_pixv_idx != PIXV_NONE)
+            ? &_program->pixel_views.at(e.src_pixv_idx)
+            : nullptr;
+        PixelView* work = (e.work_pixv_idx != PIXV_NONE)
+            ? &_program->pixel_views.at(e.work_pixv_idx)
+            : nullptr;
+        e.animation->initialize(src, work);
+        state.started = true;
+    }
+}
+
+void Engine::render_active(ProgramTime t)
+{
+    for (uint8_t li = 0; li < _program->layer_count; li++) {
+        _active_dst_views[li] = nullptr;
+
+        const LayerPlaybackState& state = _layer_states[li];
+        if (!state.started) {
+            continue;
+        }
+        // Started and not retired, so it runs past t: advance_to(t) has
+        // already finished everything ending at or before t.
+        AnimationEvent& e = _program->layers[li].at(state.cursor);
+        PixelView& dst = _program->pixel_views.at(e.dst_pixv_idx);
+        e.animation->render(dst, seconds(t - e.start));
+        _active_dst_views[li] = &dst;
     }
 }
 

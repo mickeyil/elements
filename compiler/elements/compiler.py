@@ -419,8 +419,9 @@ def _plan_source_copies(ordered: list[dict]) -> list[dict]:
     Walks events in time order, tracking the last event to write each dst
     buffer slot. A shift reads its source in place when every slot it needs
     still holds the source's output; otherwise that output would be
-    overwritten before the read, so a copy op preserves it first. Returns the
-    list of planned copy ops.
+    overwritten before the read, so a copy op preserves it first. The copy is
+    scheduled at the source's end, where the runtime has just rendered the
+    source's endpoint sample. Returns the list of planned copy ops.
     """
     last_writer: dict[BufferPixelPos, dict] = {}
     copy_plan: list[dict] = []
@@ -470,8 +471,9 @@ def _compute_required_starts(ordered: list[dict], copy_plan: list[dict]):
     data_start[pos] is the earliest start time the data now at pos depends on.
     An event writing its dst stamps its own required start; a copy op carries
     the stamp from source to preserve buffer; a shift inherits the earliest
-    stamp across the positions it reads. Copies are processed before events at
-    the same time, matching the runtime's per-frame order.
+    stamp across the positions it reads. Copies are processed before event
+    starts at the same time, matching the runtime, which samples ending events
+    first, then runs that time's copies, then starts events.
     """
     data_start: dict[BufferPixelPos, float] = {}
     timeline = [("copy", c["at"], 0, c) for c in copy_plan]

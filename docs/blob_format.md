@@ -107,6 +107,12 @@ Both views must have equal `size`. Ops with the same `at` run in blob
 order; the compiler emits them in a dependency-respecting topological
 order and forbids two same-time ops writing to the same destination.
 
+The engine runs an op after every event ending at `at` has rendered its
+endpoint sample (its value at its own end) and before any event starting
+at `at` initializes. An op at a source's end therefore captures the
+source's final pixels whether or not a frame was rendered anywhere near
+that time.
+
 ## Layers and events
 
 `layer_count` layers, in order. Each layer starts with its event count,
