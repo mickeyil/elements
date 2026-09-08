@@ -40,7 +40,8 @@ void Strip::clear()
     std::memset(_pixels, 0, byte_size());
 }
 
-void Strip::copy_to(uint8_t* dst, uint16_t dst_pixels, ColorOrder order) const
+void Strip::copy_to(uint8_t* dst, uint16_t dst_pixels, ColorOrder order,
+                    const GammaCorrection& gamma) const
 {
     if (dst == nullptr) {
         return;
@@ -49,7 +50,7 @@ void Strip::copy_to(uint8_t* dst, uint16_t dst_pixels, ColorOrder order) const
     const uint16_t copy_count = _size < dst_pixels ? _size : dst_pixels;
 
     for (uint16_t i = 0; i < copy_count; i++) {
-        const rgb_t& src = _pixels[i];
+        const rgb_t src = gamma.correct(_pixels[i]);
 
         if (order == ColorOrder::BGR) {
             dst[i * 3 + 0] = src.b;
@@ -64,12 +65,5 @@ void Strip::copy_to(uint8_t* dst, uint16_t dst_pixels, ColorOrder order) const
 
     if (dst_pixels > copy_count) {
         std::memset(dst + copy_count * 3, 0, (dst_pixels - copy_count) * 3);
-    }
-}
-
-void apply_gamma(Strip& strip, const GammaCorrection& gamma)
-{
-    for (uint16_t i = 0; i < strip.size(); i++) {
-        strip[i] = gamma.correct(strip[i]);
     }
 }

@@ -44,14 +44,27 @@ class CompileError(Exception):
     pass
 
 
-def _ensure_finite_positive(value: Any, field: str, *, allow_zero: bool = False) -> float:
-    """Validate and normalize user-facing timing inputs."""
+def _check_finite(value: Any, field: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise CompileError(f"{field} must be a number")
 
     value_f = float(value)
     if not math.isfinite(value_f):
         raise CompileError(f"{field} must be finite")
+
+    return value_f
+
+
+def _check_range(value: Any, field: str, lo: float, hi: float) -> float:
+    value_f = _check_finite(value, field)
+    if not lo <= value_f <= hi:
+        raise CompileError(f"{field} must be in [{lo:g}, {hi:g}], got {value_f:g}")
+    return value_f
+
+
+def _ensure_finite_positive(value: Any, field: str, *, allow_zero: bool = False) -> float:
+    """Validate and normalize user-facing timing inputs."""
+    value_f = _check_finite(value, field)
 
     if value_f < 0 or (not allow_zero and value_f == 0.0):
         raise CompileError(f"{field} must be > 0")
@@ -652,15 +665,20 @@ def _plan_buffers_and_views(layers: list[list[dict]], events: list[dict],
 # 8. Resolve animation params to binary-ready values
 # ---------------------------------------------------------------------------
 
-def _convert_color_tuple(t: tuple, fmt: str) -> tuple[float, float, float, float]:
+def _convert_color_tuple(t: tuple, fmt: str, field: str) -> tuple[float, float, float, float]:
     """Convert a 3- or 4-tuple to (H, S, V, A) in HSV. H is 0-360."""
-    a = float(t[3]) if len(t) == 4 else 1.0
+    if not isinstance(t, (list, tuple)) or len(t) not in (3, 4):
+        raise CompileError(f"{field} must be a 3- or 4-tuple")
+    a = _check_range(t[3], f"{field} alpha", 0.0, 1.0) if len(t) == 4 else 1.0
     if fmt == "rgb":
-        r, g, b = float(t[0]) / 255.0, float(t[1]) / 255.0, float(t[2]) / 255.0
+        r, g, b = (_check_range(c, f"{field} {name}", 0.0, 255.0) / 255.0
+                   for c, name in zip(t, "rgb"))
         h, s, v = colorsys.rgb_to_hsv(r, g, b)
         return (h * 360.0, s, v, a)
-    else:  # hsv
-        return (float(t[0]), float(t[1]), float(t[2]), a)
+    h = _check_finite(t[0], f"{field} hue")
+    s = _check_range(t[1], f"{field} saturation", 0.0, 1.0)
+    v = _check_range(t[2], f"{field} value", 0.0, 1.0)
+    return (h, s, v, a)
 
 
 def _resolve_color(name: str) -> tuple[float, float, float]:
@@ -676,23 +694,30 @@ def _resolve_anim_params(event: dict) -> dict:
     p = dict(event["resolved_params"])
 
     if anim_type == "wave":
+        if p["channel"] == "H":
+            min_val = _check_finite(p["min_val"], "wave min_val")
+            max_val = _check_finite(p["max_val"], "wave max_val")
+        else:
+            min_val = _check_range(p["min_val"], "wave min_val", 0.0, 1.0)
+            max_val = _check_range(p["max_val"], "wave max_val", 0.0, 1.0)
         return {
             "channel": CHANNELS[p["channel"]],
-            "h": float(p["h"]),
-            "s": float(p["s"]),
-            "v": float(p["v"]),
-            "min_val": float(p["min_val"]),
-            "max_val": float(p["max_val"]),
-            "period": float(p["period"]),
-            "phase0": float(p["phase0"]),
-            "pixel_step": float(p["pixel_step"]),
+            "h": _check_finite(p["h"], "wave h"),
+            "s": _check_range(p["s"], "wave s", 0.0, 1.0),
+            "v": _check_range(p["v"], "wave v", 0.0, 1.0),
+            "min_val": min_val,
+            "max_val": max_val,
+            "period": _ensure_finite_positive(p["period"], "wave period"),
+            "phase0": _check_finite(p["phase0"], "wave phase0"),
+            "pixel_step": _check_finite(p["pixel_step"], "wave pixel_step"),
         }
     elif anim_type == "spark":
         color = p["color"]
         if isinstance(color, str):
             color_h, color_s, color_v = _resolve_color(color)
         else:
-            color_h, color_s, color_v, _color_a = _convert_color_tuple(color, p.get("format", "hsv"))
+            color_h, color_s, color_v, _color_a = _convert_color_tuple(
+                color, p.get("format", "hsv"), "spark color")
         return {
             "color_h": color_h,
             "color_s": color_s,
@@ -714,7 +739,8 @@ def _resolve_anim_params(event: dict) -> dict:
     elif anim_type == "paint":
         fmt = p.get("format", "hsv")
         if "colors" in p:
-            pixels = [_convert_color_tuple(c, fmt) for c in p["colors"]]
+            pixels = [_convert_color_tuple(c, fmt, f"paint colors[{i}]")
+                      for i, c in enumerate(p["colors"])]
             return {"mode": 1, "pixels": pixels}
         else:
             color = p["color"]
@@ -722,7 +748,7 @@ def _resolve_anim_params(event: dict) -> dict:
                 h, s, v = _resolve_color(color)
                 return {"mode": 0, "color_h": h, "color_s": s, "color_v": v, "color_a": 1.0}
             else:
-                h, s, v, a = _convert_color_tuple(color, fmt)
+                h, s, v, a = _convert_color_tuple(color, fmt, "paint color")
                 return {"mode": 0, "color_h": h, "color_s": s, "color_v": v, "color_a": a}
     elif anim_type == "pacifica":
         speed = float(p.get("speed", 1.0))

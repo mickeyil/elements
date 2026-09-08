@@ -43,15 +43,13 @@ public:
     uint8_t* bytes() { return reinterpret_cast<uint8_t*>(_pixels); }
     const uint8_t* bytes() const { return reinterpret_cast<const uint8_t*>(_pixels); }
 
-    // Copy the frame into `dst` using `order` for channel layout. Writes
-    // exactly `dst_pixels * 3` bytes -- the tail past size() is zeroed.
-    void copy_to(uint8_t* dst, uint16_t dst_pixels, ColorOrder order) const;
+    // Copy the frame into `dst` as LED bytes: each pixel gamma-corrected,
+    // then laid out in `order`. Writes exactly `dst_pixels * 3` bytes; the
+    // tail past size() is zeroed. This is the firmware output transform.
+    void copy_to(uint8_t* dst, uint16_t dst_pixels, ColorOrder order,
+                 const GammaCorrection& gamma) const;
 
 private:
     rgb_t* _pixels = nullptr;
     uint16_t _size = 0;
 };
-
-// Apply gamma in place. Default-constructed GammaCorrection is identity,
-// so the call is safe on sim/test/debug paths without a guard.
-void apply_gamma(Strip& strip, const GammaCorrection& gamma);

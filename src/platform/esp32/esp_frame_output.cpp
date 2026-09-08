@@ -1,8 +1,9 @@
 #include "platform/esp32/esp_frame_output.h"
 
-#include <cstring>
-
 #include "core/strip.h"
+
+// copy_to() writes packed r,g,b triples straight into the CRGB array.
+static_assert(sizeof(CRGB) == 3, "CRGB must be a packed 3-byte pixel");
 
 void EspFrameOutput::apply_profile(const HardwareProfile& profile)
 {
@@ -12,16 +13,9 @@ void EspFrameOutput::apply_profile(const HardwareProfile& profile)
 
 void EspFrameOutput::write(const Strip& strip, float)
 {
-    const uint16_t n = strip.size();
-    for (uint16_t i = 0; i < n; ++i) {
-        const rgb_t c = _gamma.correct(strip[i]);
-        _leds[i] = (_order == ColorOrder::BGR) ? CRGB(c.b, c.g, c.r)
-                                               : CRGB(c.r, c.g, c.b);
-    }
     // A physical strip longer than the profile shows black past the
-    // program's pixels.
-    if (n < MAX_STRIP_PIXELS) {
-        std::memset(_leds + n, 0, (MAX_STRIP_PIXELS - n) * sizeof(CRGB));
-    }
+    // program's pixels: copy_to() zeroes that tail.
+    strip.copy_to(reinterpret_cast<uint8_t*>(_leds), MAX_STRIP_PIXELS,
+                  _order, _gamma);
     FastLED.show();
 }

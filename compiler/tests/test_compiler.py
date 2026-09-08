@@ -1046,3 +1046,76 @@ class TestMillisecondGrid:
         assert len(p.layers) == 1
         a, b = p.layers[0].events
         assert a.start + a.duration == b.start
+
+
+# ---------------------------------------------------------------------------
+# Color channel ranges
+# ---------------------------------------------------------------------------
+
+class TestColorRanges:
+    """Out-of-range channels used to reach an undefined float-to-byte cast on
+    the device; the compiler now rejects them."""
+
+    def _one(self, anim, name):
+        s = strip(name, length=4)
+        anim.schedule(s.pixels("0-3"), at=0, duration=1)
+        return build(beat=1.0, duration=1.0)
+
+    def _wave(self, **overrides):
+        params = dict(channel="V", h=0, s=1.0, v=0.0, min_val=0.0, max_val=1.0,
+                      period=1, phase0=0, pixel_step=0)
+        params.update(overrides)
+        return wave(**params)
+
+    def test_paint_value_above_one_rejected(self):
+        with pytest.raises(CompileError, match=r"paint color value must be in \[0, 1\]"):
+            self._one(paint(color=(0, 1, 1.2)), "color_v")
+
+    def test_paint_byte_style_hsv_rejected(self):
+        with pytest.raises(CompileError, match="paint color saturation"):
+            self._one(paint(color=(0, 255, 255)), "color_bytes")
+
+    def test_paint_rgb_channel_above_255_rejected(self):
+        with pytest.raises(CompileError, match=r"paint color r must be in \[0, 255\]"):
+            self._one(paint(color=(300, 0, 0), format="rgb"), "color_rgb")
+
+    def test_paint_alpha_out_of_range_rejected(self):
+        with pytest.raises(CompileError, match="paint color alpha"):
+            self._one(paint(color=(0, 1, 1, 5)), "color_a")
+
+    def test_paint_colors_entry_reports_index(self):
+        bad = [(0, 1, 1), (0, 1, 1), (0, 1, 2), (0, 1, 1)]
+        with pytest.raises(CompileError, match=r"paint colors\[2\] value"):
+            self._one(paint(colors=bad), "colors_idx")
+
+    def test_paint_short_tuple_rejected(self):
+        with pytest.raises(CompileError, match="3- or 4-tuple"):
+            self._one(paint(color=(0, 1)), "color_short")
+
+    def test_spark_value_above_one_rejected(self):
+        with pytest.raises(CompileError, match="spark color value"):
+            self._one(spark(color=(0, 1, 3), fade=0.1), "spark_v")
+
+    def test_wave_value_range_above_one_rejected(self):
+        with pytest.raises(CompileError, match=r"wave max_val must be in \[0, 1\]"):
+            self._one(self._wave(max_val=2), "wave_v")
+
+    def test_wave_saturation_range_below_zero_rejected(self):
+        with pytest.raises(CompileError, match="wave min_val"):
+            self._one(self._wave(channel="S", min_val=-1), "wave_s")
+
+    def test_wave_fixed_saturation_above_one_rejected(self):
+        with pytest.raises(CompileError, match="wave s must be in"):
+            self._one(self._wave(channel="H", s=1.5, max_val=10), "wave_fixed_s")
+
+    def test_wave_hue_range_may_be_negative(self):
+        blobs = self._one(self._wave(channel="H", v=1.0, min_val=-10, max_val=10), "wave_h")
+        assert len(blobs) == 1
+
+    def test_wave_period_zero_rejected(self):
+        with pytest.raises(CompileError, match="wave period must be > 0"):
+            self._one(self._wave(period=0), "wave_p0")
+
+    def test_wave_nan_hue_rejected(self):
+        with pytest.raises(CompileError, match="wave h must be finite"):
+            self._one(self._wave(h=float("nan")), "wave_nan")

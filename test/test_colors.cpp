@@ -1,6 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
+#include <cmath>
 #include <cstdlib>
+#include <initializer_list>
 #include "core/colors.h"
 
 // ---------------------------------------------------------------------------
@@ -64,6 +66,47 @@ TEST_CASE("hsv_to_rgb: negative hue wraps", "[colors]") {
     CHECK(a.r == b.r);
     CHECK(a.g == b.g);
     CHECK(a.b == b.b);
+}
+
+TEST_CASE("hsv_to_rgb: hue just below zero is red, not magenta", "[colors]") {
+    // -5.96e-7 is what a hue Wave spanning -10..10 produces at its
+    // half-period endpoint. Adding 360 to it rounds to exactly 360.
+    for (float h : {-5.96e-7f, -1e-6f, -1e-5f, -1.5e-5f}) {
+        CAPTURE(h);
+        rgb_t c = hsv_to_rgb(h, 1.0f, 1.0f);
+        CHECK(c.r == 255);
+        CHECK(c.g == 0);
+        CHECK(c.b == 0);
+    }
+}
+
+TEST_CASE("hsv_to_rgb: out-of-range s and v clamp instead of overflowing", "[colors]") {
+    rgb_t bright = hsv_to_rgb(0.0f, 1.0f, 1.2f);
+    CHECK(bright.r == 255);
+    CHECK(bright.g == 0);
+    CHECK(bright.b == 0);
+
+    rgb_t oversat = hsv_to_rgb(0.0f, 2.0f, 1.0f);
+    CHECK(oversat.r == 255);
+    CHECK(oversat.g == 0);
+    CHECK(oversat.b == 0);
+
+    rgb_t negative = hsv_to_rgb(0.0f, -1.0f, -0.5f);
+    CHECK(negative.r == 0);
+    CHECK(negative.g == 0);
+    CHECK(negative.b == 0);
+}
+
+TEST_CASE("hsv_to_rgb: NaN channels count as zero", "[colors]") {
+    rgb_t nan_v = hsv_to_rgb(0.0f, 1.0f, NAN);
+    CHECK(nan_v.r == 0);
+    CHECK(nan_v.g == 0);
+    CHECK(nan_v.b == 0);
+
+    rgb_t nan_h = hsv_to_rgb(NAN, 1.0f, 1.0f);
+    CHECK(nan_h.r == 255);
+    CHECK(nan_h.g == 0);
+    CHECK(nan_h.b == 0);
 }
 
 TEST_CASE("hsv_to_rgb: grayscale at various V", "[colors]") {

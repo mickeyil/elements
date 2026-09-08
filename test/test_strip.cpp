@@ -10,6 +10,7 @@
 
 namespace {
 rgb_t pix(uint8_t r, uint8_t g, uint8_t b) { return rgb_t(r, g, b); }
+const GammaCorrection IDENTITY;  // default-constructed LUT passes bytes through
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -139,27 +140,10 @@ TEST_CASE("Strip: clear on empty strip is a no-op", "[strip]") {
 }
 
 // ---------------------------------------------------------------------------
-// apply_gamma
+// copy_to: gamma
 // ---------------------------------------------------------------------------
 
-TEST_CASE("Strip: apply_gamma identity leaves pixels unchanged", "[strip][gamma]") {
-    Strip s;
-    REQUIRE(s.resize(2));
-    s[0] = pix(10, 128, 200);
-    s[1] = pix(0, 255, 64);
-
-    GammaCorrection identity;  // default-constructed is identity
-    apply_gamma(s, identity);
-
-    CHECK(s[0].r == 10);
-    CHECK(s[0].g == 128);
-    CHECK(s[0].b == 200);
-    CHECK(s[1].r == 0);
-    CHECK(s[1].g == 255);
-    CHECK(s[1].b == 64);
-}
-
-TEST_CASE("Strip: apply_gamma matches per-pixel correct()", "[strip][gamma]") {
+TEST_CASE("Strip: copy_to applies the gamma LUT to every channel", "[strip][copy_to][gamma]") {
     Strip s;
     REQUIRE(s.resize(3));
     const rgb_t input[] = { pix(10, 50, 200), pix(0, 128, 255), pix(33, 77, 144) };
@@ -168,22 +152,64 @@ TEST_CASE("Strip: apply_gamma matches per-pixel correct()", "[strip][gamma]") {
     GammaCorrection g;
     g.set_gamma(2.0f);
 
-    apply_gamma(s, g);
+    uint8_t dst[9] = {};
+    s.copy_to(dst, 3, ColorOrder::RGB, g);
 
     for (uint16_t i = 0; i < 3; i++) {
         const rgb_t expected = g.correct(input[i]);
-        CHECK(s[i].r == expected.r);
-        CHECK(s[i].g == expected.g);
-        CHECK(s[i].b == expected.b);
+        CHECK(dst[i * 3 + 0] == expected.r);
+        CHECK(dst[i * 3 + 1] == expected.g);
+        CHECK(dst[i * 3 + 2] == expected.b);
     }
+    // Gamma is applied on the way out; the strip keeps program-space values.
+    CHECK(s[0].r == 10);
+    CHECK(s[0].g == 50);
+    CHECK(s[0].b == 200);
 }
 
-TEST_CASE("Strip: apply_gamma on empty strip is a no-op", "[strip][gamma]") {
+TEST_CASE("Strip: copy_to applies gamma before channel order", "[strip][copy_to][gamma]") {
     Strip s;
+    REQUIRE(s.resize(1));
+    s[0] = pix(10, 128, 200);
+
     GammaCorrection g;
-    g.set_gamma(2.0f);
-    apply_gamma(s, g);  // must not crash
-    CHECK(s.empty());
+    g.set_gamma(DEFAULT_GAMMA);
+    const rgb_t expected = g.correct(s[0]);
+
+    uint8_t dst[3] = {};
+    s.copy_to(dst, 1, ColorOrder::BGR, g);
+
+    CHECK(dst[0] == expected.b);
+    CHECK(dst[1] == expected.g);
+    CHECK(dst[2] == expected.r);
+}
+
+TEST_CASE("Strip: copy_to fills a full LED buffer the way the firmware writes it",
+          "[strip][copy_to][gamma]") {
+    // EspFrameOutput::write() copies into a MAX_STRIP_PIXELS buffer with the
+    // profile's gamma and order; LEDs past the strip must go black.
+    Strip s;
+    REQUIRE(s.resize(2));
+    s[0] = pix(255, 128, 0);
+    s[1] = pix(0, 64, 255);
+
+    GammaCorrection g;
+    g.set_gamma(DEFAULT_GAMMA);
+
+    uint8_t leds[MAX_STRIP_PIXELS * 3];
+    std::memset(leds, 0xAA, sizeof(leds));
+    s.copy_to(leds, MAX_STRIP_PIXELS, ColorOrder::BGR, g);
+
+    const rgb_t p0 = g.correct(s[0]);
+    const rgb_t p1 = g.correct(s[1]);
+    CHECK(leds[0] == p0.b); CHECK(leds[1] == p0.g); CHECK(leds[2] == p0.r);
+    CHECK(leds[3] == p1.b); CHECK(leds[4] == p1.g); CHECK(leds[5] == p1.r);
+
+    bool tail_black = true;
+    for (size_t i = 6; i < sizeof(leds); i++) {
+        if (leds[i] != 0) tail_black = false;
+    }
+    CHECK(tail_black);
 }
 
 // ---------------------------------------------------------------------------
@@ -197,7 +223,7 @@ TEST_CASE("Strip: copy_to RGB lays out r,g,b per pixel", "[strip][copy_to]") {
     s[1] = pix(40, 50, 60);
 
     uint8_t dst[6] = {};
-    s.copy_to(dst, 2, ColorOrder::RGB);
+    s.copy_to(dst, 2, ColorOrder::RGB, IDENTITY);
 
     CHECK(dst[0] == 10); CHECK(dst[1] == 20); CHECK(dst[2] == 30);
     CHECK(dst[3] == 40); CHECK(dst[4] == 50); CHECK(dst[5] == 60);
@@ -210,7 +236,7 @@ TEST_CASE("Strip: copy_to BGR lays out b,g,r per pixel", "[strip][copy_to]") {
     s[1] = pix(40, 50, 60);
 
     uint8_t dst[6] = {};
-    s.copy_to(dst, 2, ColorOrder::BGR);
+    s.copy_to(dst, 2, ColorOrder::BGR, IDENTITY);
 
     CHECK(dst[0] == 30); CHECK(dst[1] == 20); CHECK(dst[2] == 10);
     CHECK(dst[3] == 60); CHECK(dst[4] == 50); CHECK(dst[5] == 40);
@@ -227,7 +253,7 @@ TEST_CASE("Strip: copy_to truncates when dst_pixels < size", "[strip][copy_to]")
     uint8_t dst[12];
     std::memset(dst, 0xAA, sizeof(dst));  // sentinel
 
-    s.copy_to(dst, 2, ColorOrder::RGB);
+    s.copy_to(dst, 2, ColorOrder::RGB, IDENTITY);
 
     CHECK(dst[0] == 1); CHECK(dst[1] == 2); CHECK(dst[2] == 3);
     CHECK(dst[3] == 4); CHECK(dst[4] == 5); CHECK(dst[5] == 6);
@@ -246,7 +272,7 @@ TEST_CASE("Strip: copy_to zero-pads when dst_pixels > size", "[strip][copy_to]")
     uint8_t dst[15];
     std::memset(dst, 0xAA, sizeof(dst));  // sentinel
 
-    s.copy_to(dst, 5, ColorOrder::RGB);
+    s.copy_to(dst, 5, ColorOrder::RGB, IDENTITY);
 
     CHECK(dst[0] == 1); CHECK(dst[1] == 2); CHECK(dst[2] == 3);
     CHECK(dst[3] == 4); CHECK(dst[4] == 5); CHECK(dst[5] == 6);
@@ -262,7 +288,7 @@ TEST_CASE("Strip: copy_to on empty strip zeroes the destination", "[strip][copy_
     uint8_t dst[9];
     std::memset(dst, 0xAA, sizeof(dst));
 
-    s.copy_to(dst, 3, ColorOrder::RGB);
+    s.copy_to(dst, 3, ColorOrder::RGB, IDENTITY);
 
     for (size_t i = 0; i < sizeof(dst); i++) {
         CHECK(dst[i] == 0);
@@ -277,7 +303,7 @@ TEST_CASE("Strip: copy_to with dst_pixels == 0 writes nothing", "[strip][copy_to
     uint8_t dst[6];
     std::memset(dst, 0xAA, sizeof(dst));
 
-    s.copy_to(dst, 0, ColorOrder::RGB);
+    s.copy_to(dst, 0, ColorOrder::RGB, IDENTITY);
 
     for (size_t i = 0; i < sizeof(dst); i++) {
         CHECK(dst[i] == 0xAA);
@@ -288,5 +314,5 @@ TEST_CASE("Strip: copy_to with null dst is a no-op", "[strip][copy_to]") {
     Strip s;
     REQUIRE(s.resize(2));
     s[0] = pix(1, 2, 3);
-    s.copy_to(nullptr, 2, ColorOrder::RGB);  // must not crash
+    s.copy_to(nullptr, 2, ColorOrder::RGB, IDENTITY);  // must not crash
 }

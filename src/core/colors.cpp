@@ -3,9 +3,17 @@
 
 rgb_t hsv_to_rgb(float h, float s, float v)
 {
-    // Normalize hue to 0-360
-    h = fmod(h, 360.0f);
-    if (h < 0) h += 360.0f;
+    // Normalize hue to [0, 360). Adding 360 to a tiny negative hue rounds
+    // to exactly 360, which would pick a sixth sector; fold it back to 0.
+    // NaN lands there too.
+    h = fmodf(h, 360.0f);
+    if (h < 0.0f) h += 360.0f;
+    if (!(h < 360.0f)) h = 0.0f;
+
+    // Clamp s and v so the byte conversion below cannot leave 0-255.
+    // NaN clamps to 0.
+    if (!(s > 0.0f)) s = 0.0f; else if (s > 1.0f) s = 1.0f;
+    if (!(v > 0.0f)) v = 0.0f; else if (v > 1.0f) v = 1.0f;
 
     float r, g, b;
 

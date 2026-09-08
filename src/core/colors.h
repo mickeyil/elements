@@ -36,7 +36,8 @@ struct rgb_t {
     rgb_t(uint8_t r, uint8_t g, uint8_t b) : r(r), g(g), b(b) {}
 };
 
-// Convert HSV (h: 0-360, s: 0-1, v: 0-1) to linear RGB
+// Convert HSV (h: 0-360, s: 0-1, v: 0-1) to linear RGB. Hue wraps; s and
+// v are clamped to 0-1, and NaN in any channel counts as 0.
 rgb_t hsv_to_rgb(float h, float s, float v);
 
 // Convert linear RGB to HSV; alpha is set to 1. Gray inputs get h=0, s=0.

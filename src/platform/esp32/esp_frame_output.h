@@ -8,9 +8,9 @@
 
 // FrameOutput for the firmware build: turns the program-space strip
 // into LED output. apply_profile() builds the gamma LUT and latches
-// the channel order; write() corrects each pixel into the FastLED
-// buffer, zero-pads the tail, and latches with FastLED.show(). The
-// sim counterpart is SimFrameOutput.
+// the channel order; write() runs Strip::copy_to() into the FastLED
+// buffer (gamma, channel order, zeroed tail) and latches with
+// FastLED.show(). The sim counterpart is SimFrameOutput.
 //
 // The CRGB buffer lives here, sized to the system maximum. The entry
 // point registers it with FastLED.addLeds() at boot; the LED pin is a
