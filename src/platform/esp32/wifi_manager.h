@@ -19,7 +19,13 @@ public:
     
     explicit WifiManager(WifiCredStore& creds);
 
-    // Merge compiled credentials from secrets.h into the store and start the first scan.
+    // Merge compiled credentials from secrets.h into the store (added if
+    // missing, updated if the password changed). Call before deciding
+    // whether the store is empty, so a compiled-in network keeps a fresh
+    // board out of the provisioning portal.
+    void merge_dev_credentials();
+
+    // Start the first scan for known networks.
     void begin();
 
     // Advance the Wi-Fi state machine one step. Non-blocking.

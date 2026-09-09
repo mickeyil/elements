@@ -163,6 +163,7 @@ void setup()
     g_gamma.set_identity();
 
     // Wi-Fi comes up in the background; the lamp never waits for it.
+    g_wifi.merge_dev_credentials();
     g_wifi.begin();
     ArduinoOTA.setHostname(g_host);
     ArduinoOTA.onStart([] {

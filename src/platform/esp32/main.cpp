@@ -62,6 +62,11 @@ void setup()
 
     g_identity = make_esp_device_identity();
 
+    // Compiled-in credentials (secrets.h) land in the store first, so the
+    // emptiness check below sees them and a fresh board with a known
+    // network skips the portal.
+    g_wifi.merge_dev_credentials();
+
     // Wi-Fi provisioning: an installed boot jumper or an empty credential
     // store diverts into the captive portal before the App starts. A
     // faulted NVS store also reads as empty here, so it lands in the

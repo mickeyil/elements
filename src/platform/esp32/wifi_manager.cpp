@@ -46,12 +46,15 @@ size_t find_saved_index_(const char saved[][WIFI_SSID_BUF_SIZE],
 
 WifiManager::WifiManager(WifiCredStore& creds) : _creds(creds) {}
 
-void WifiManager::begin()
+void WifiManager::merge_dev_credentials()
 {
     if (DEV_WIFI_CREDENTIAL_COUNT > 0) {
         _creds.merge_from(DEV_WIFI_CREDENTIALS, DEV_WIFI_CREDENTIAL_COUNT);
     }
+}
 
+void WifiManager::begin()
+{
     configure_wifi_runtime_();
     try_known_networks_();
 }
