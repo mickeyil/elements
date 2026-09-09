@@ -111,6 +111,7 @@ class DiscoveryServer:
         self._sock = _udp_listener(port)
         self._link_port = link_port
         self._last_seen = {}   # uid -> us of its last DISCOVER, valid UIDs only
+        log.info('discovery: listening on %s:%d', *self._sock.getsockname())
 
     @property
     def port(self):
@@ -126,8 +127,20 @@ class DiscoveryServer:
                 log.warning('discovery: recv failed: %s', e)
                 return
             uid = wire.parse_discover(datagram)
-            if uid is None or validate_device_uid(uid) is not None:
+            if uid is None:
+                log.debug('discovery: rejected packet from %s:%d (%d bytes, prefix=%s)',
+                          *src, len(datagram), datagram[:19].hex())
                 continue
+            error = validate_device_uid(uid)
+            if error is not None:
+                log.debug('discovery: rejected UID %r from %s:%d: %s', uid, *src, error)
+                continue
+            previous = self._last_seen.get(uid)
+            if previous is None or now_us - previous > DISCOVERED_TTL_US:
+                log.info('discovery: found %s at %s:%d (configured=%s)',
+                         uid, *src, uid in wanted_uids)
+            log.debug('discovery: DISCOVER %s from %s:%d; %s', uid, *src,
+                      'sending OFFER' if uid in wanted_uids else 'unconfigured; no OFFER')
             self._last_seen[uid] = now_us
             if uid not in wanted_uids:
                 continue
@@ -137,6 +150,8 @@ class DiscoveryServer:
                 continue
             try:
                 self._sock.sendto(wire.encode_offer(advertised, self._link_port), src)
+                log.debug('discovery: OFFER to %s at %s:%d advertises %s:%d',
+                          uid, *src, advertised, self._link_port)
             except OSError as e:
                 log.debug('discovery: OFFER to %s failed: %s', src, e)
 
