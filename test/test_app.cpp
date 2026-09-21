@@ -408,6 +408,7 @@ struct Harness
         app.tick();
         REQUIRE(app.is_attached());
         tcp.sent.clear();
+        output.frames.clear();   // attach presents a blank; count from here
     }
 
     // Queue one command message and run the tick that serves it.
@@ -558,7 +559,7 @@ TEST_CASE("frames are paced by the program's target fps")
     h.attach();
 
     h.command(CMD_LOAD, build_paint_blob(2.0f, /*target_fps=*/50));
-    CHECK(h.frames() == 0);
+    h.output.frames.clear();   // LOAD's blank frame is covered under Presentation
 
     std::vector<uint8_t> start;
     put_i64(start, 0);
@@ -593,6 +594,7 @@ TEST_CASE("a live program presents its end frame and does not loop")
     h.attach();
 
     h.command(CMD_LOAD, build_paint_blob(0.1f));
+    h.output.frames.clear();   // LOAD's blank frame is covered under Presentation
     std::vector<uint8_t> start;
     put_i64(start, 0);
     h.command(CMD_START, start);
@@ -632,6 +634,8 @@ TEST_CASE("a local animation restarts on Ended")
     h.app.tick();
     REQUIRE(h.frames() == 2);
     CHECK(is_black(h.last_frame()));
+    // Presented before the restart, so it carries the program's end time.
+    CHECK(h.last_frame().t_program == 0.1f);
 
     // The restarted program renders again.
     h.advance(20'000);
@@ -737,4 +741,198 @@ TEST_CASE("boot resumes the stored background from the persisted store")
     app2.tick();
     REQUIRE_FALSE(output2.frames.empty());
     CHECK(is_red(output2.frames.back()));
+}
+
+// ---------------------------------------------------------------------------
+// Presentation: the LEDs follow the strip, not only the frame loop
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Load a 2 s red program and start it; leaves exactly one red frame recorded.
+void load_and_start(Harness& h)
+{
+    h.command(CMD_LOAD, build_paint_blob(2.0f));
+    h.output.frames.clear();
+    std::vector<uint8_t> start;
+    put_i64(start, 0);
+    h.command(CMD_START, start);
+    REQUIRE(h.frames() == 1);
+    REQUIRE(is_red(h.last_frame()));
+}
+
+}  // namespace
+
+TEST_CASE("boot and attach each present the cleared strip once")
+{
+    Harness h;
+
+    // First tick after begin(): the reset strip goes out black.
+    h.app.tick();
+    REQUIRE(h.frames() == 1);
+    CHECK(is_black(h.last_frame()));
+
+    // Nothing changed: nothing more is presented.
+    h.app.tick();
+    CHECK(h.frames() == 1);
+
+    // Attach resets playback again, and that clear is presented too.
+    h.discovery_udp.inbox.push_back(make_offer(CONTROLLER_IP, CONTROLLER_PORT));
+    h.app.tick();
+    REQUIRE(h.app.is_attached());
+    REQUIRE(h.frames() == 2);
+    CHECK(is_black(h.last_frame()));
+}
+
+TEST_CASE("without a profile nothing is presented")
+{
+    Harness h(/*with_profile=*/false);
+
+    h.app.tick();   // boot
+    CHECK(h.frames() == 0);
+
+    // Attach by hand: the helper clears recorded frames, which would hide a
+    // wrongful write here.
+    h.discovery_udp.inbox.push_back(make_offer(CONTROLLER_IP, CONTROLLER_PORT));
+    h.app.tick();
+    REQUIRE(h.app.is_attached());
+    CHECK(h.frames() == 0);
+
+    h.advance(1'000'000);
+    h.app.tick();
+    CHECK(h.frames() == 0);
+}
+
+TEST_CASE("replacing a playing program presents the cleared strip at once")
+{
+    Harness h;
+    h.attach();
+
+    // Two stored animations. The first runs at 1 fps, so once it has drawn a
+    // frame the next deadline is a full second away.
+    std::vector<uint8_t> slow = name_slot("slow");
+    const std::vector<uint8_t> slow_blob = build_paint_blob(10.0f, /*target_fps=*/1);
+    slow.insert(slow.end(), slow_blob.begin(), slow_blob.end());
+    h.command(CMD_STORE_ANIMATION, slow);   // play order 0
+    install_background(h, "next");          // play order 1
+
+    std::vector<uint8_t> play;
+    put_u16(play, 0);
+    h.command(CMD_PLAY_LOCAL_ANIMATION, play);
+    REQUIRE(h.frames() == 1);
+    REQUIRE(is_red(h.last_frame()));
+
+    // Replace it well before that deadline. Playback never leaves PLAYING,
+    // so no frame is due, yet the reload's clear must reach the LEDs now.
+    h.advance(5'000);
+    play.clear();
+    put_u16(play, 1);
+    h.command(CMD_PLAY_LOCAL_ANIMATION, play);
+    REQUIRE(h.frames() == 2);
+    CHECK(is_black(h.last_frame()));
+
+    // Exactly once: nothing more until the inherited deadline passes, then
+    // the new program's first frame. (Resetting that deadline on a program
+    // start is a separate change; this test pins presentation only.)
+    h.advance(5'000);
+    h.app.tick();
+    CHECK(h.frames() == 2);
+
+    h.advance(1'000'000);
+    h.app.tick();
+    REQUIRE(h.frames() == 3);
+    CHECK(is_red(h.last_frame()));
+}
+
+TEST_CASE("STOP blanks the LEDs in the same tick")
+{
+    Harness h;
+    h.attach();
+    load_and_start(h);
+
+    // Well before the next frame deadline, STOP still presents black now.
+    h.advance(5'000);
+    h.command(CMD_STOP);
+    REQUIRE(h.frames() == 2);
+    CHECK(is_black(h.last_frame()));
+
+    // Stopped: later ticks present nothing.
+    h.advance(100'000);
+    h.app.tick();
+    CHECK(h.frames() == 2);
+}
+
+TEST_CASE("STOP from PAUSED blanks the LEDs")
+{
+    Harness h;
+    h.attach();
+    load_and_start(h);
+
+    h.command(CMD_PAUSE);
+    REQUIRE(h.frames() == 1);
+
+    h.command(CMD_STOP);
+    REQUIRE(h.frames() == 2);
+    CHECK(is_black(h.last_frame()));
+}
+
+TEST_CASE("PAUSE leaves the last frame lit")
+{
+    Harness h;
+    h.attach();
+    load_and_start(h);
+
+    h.advance(5'000);
+    h.command(CMD_PAUSE);
+    CHECK(h.frames() == 1);
+
+    // Paused across several frame intervals: still nothing new.
+    h.advance(100'000);
+    h.app.tick();
+    CHECK(h.frames() == 1);
+    CHECK(is_red(h.last_frame()));
+}
+
+TEST_CASE("LOAD over a paused program blanks the LEDs")
+{
+    Harness h;
+    h.attach();
+    load_and_start(h);
+    h.command(CMD_PAUSE);
+
+    h.command(CMD_LOAD, build_paint_blob(2.0f));
+    REQUIRE(h.frames() == 2);
+    CHECK(is_black(h.last_frame()));
+}
+
+TEST_CASE("a failed LOAD blanks the LEDs")
+{
+    Harness h;
+    h.attach();
+    load_and_start(h);
+
+    h.command(CMD_LOAD, {0x00, 0x01, 0x02, 0x03});   // not a blob
+    REQUIRE(h.frames() == 2);
+    CHECK(is_black(h.last_frame()));
+}
+
+TEST_CASE("re-attaching blanks the running background")
+{
+    Harness h;
+    h.attach();
+    install_background(h);
+
+    h.advance(PING_TIMEOUT_MS * 1000 + 1);
+    h.app.tick();
+    REQUIRE(h.app.status().mode == DeviceMode::DetachedBackground);
+    REQUIRE(is_red(h.last_frame()));
+
+    // The controller comes back: playback is reset and the LEDs go dark in
+    // the same tick, not whenever the controller next loads something.
+    const size_t before = h.frames();
+    h.discovery_udp.inbox.push_back(make_offer(CONTROLLER_IP, CONTROLLER_PORT));
+    h.app.tick();
+    REQUIRE(h.app.is_attached());
+    REQUIRE(h.frames() == before + 1);
+    CHECK(is_black(h.last_frame()));
 }

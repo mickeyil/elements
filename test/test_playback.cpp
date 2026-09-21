@@ -891,3 +891,96 @@ TEST_CASE("Playback: a stall over a short source still hands its pixels to the s
     REQUIRE(pb.render_next_frame() == RenderFrameResult::Rendered);
     CHECK(strip_is_white(pb));
 }
+
+// ---------------------------------------------------------------------------
+// take_present_request
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Playback: a fresh strip has nothing to present", "[playback]") {
+    set_clock_us(0);
+    SyncedClock clock;
+    Playback pb(1, clock);
+    CHECK_FALSE(pb.take_present_request());
+}
+
+TEST_CASE("Playback: clears and rendered frames each request presentation once",
+          "[playback]") {
+    set_clock_us(0);
+    SyncedClock clock;
+    Playback pb(1, clock);
+    auto blob = build_paint_blob(1.0f, false);
+
+    // LOAD clears the strip.
+    REQUIRE(pb.handle_load(blob.data(), blob.size()));
+    CHECK(pb.take_present_request());
+    CHECK_FALSE(pb.take_present_request());   // consumed
+
+    // A rendered frame.
+    pb.handle_start(0);
+    REQUIRE(pb.render_next_frame() == RenderFrameResult::Rendered);
+    CHECK(pb.take_present_request());
+    CHECK_FALSE(pb.take_present_request());
+
+    // PAUSE leaves the strip alone.
+    pb.handle_pause();
+    CHECK_FALSE(pb.take_present_request());
+
+    // STOP clears it.
+    REQUIRE(pb.handle_stop() == RenderFrameResult::Rendered);
+    CHECK(pb.take_present_request());
+
+    // So does the end of the program.
+    pb.handle_start(0);
+    REQUIRE(pb.render_next_frame() == RenderFrameResult::Rendered);
+    REQUIRE(pb.take_present_request());
+    set_clock_us(int64_t(1.0 * 1e6));
+    REQUIRE(pb.render_next_frame() == RenderFrameResult::Ended);
+    CHECK(pb.take_present_request());
+}
+
+TEST_CASE("Playback: STOP from IDLE requests nothing", "[playback]") {
+    set_clock_us(0);
+    SyncedClock clock;
+    Playback pb(1, clock);
+    CHECK(pb.handle_stop() == RenderFrameResult::Unchanged);
+    CHECK_FALSE(pb.take_present_request());
+}
+
+TEST_CASE("Playback: a frame that did not render requests nothing",
+          "[playback][sync]") {
+    set_clock_us(0);
+    SyncedClock clock;
+    clock.apply_sync_offset(0, 60'000'000);
+    Playback pb(1, clock);
+    auto blob = build_paint_blob(1.0f, /*requires_sync=*/true);
+    REQUIRE(pb.handle_load(blob.data(), blob.size()));
+    REQUIRE(pb.take_present_request());
+
+    // Anchor in the future: nothing renders, nothing to present.
+    pb.handle_start(1'000'000);
+    CHECK(pb.render_next_frame() == RenderFrameResult::Unchanged);
+    CHECK_FALSE(pb.take_present_request());
+}
+
+TEST_CASE("Playback: a failed load and reset_for_detach request presentation",
+          "[playback]") {
+    set_clock_us(0);
+    SyncedClock clock;
+    Playback pb(1, clock);
+    auto blob = build_paint_blob(1.0f, false);
+    REQUIRE(pb.handle_load(blob.data(), blob.size()));
+    pb.handle_start(0);
+    REQUIRE(pb.render_next_frame() == RenderFrameResult::Rendered);
+    REQUIRE(pb.take_present_request());
+
+    const uint8_t junk[4] = {0x00, 0x01, 0x02, 0x03};
+    CHECK_FALSE(pb.handle_load(junk, sizeof(junk)));
+    CHECK(pb.state() == DeviceState::IDLE);
+    CHECK(strip_is_black(pb));
+    CHECK(pb.take_present_request());
+
+    REQUIRE(pb.handle_load(blob.data(), blob.size()));
+    REQUIRE(pb.take_present_request());
+    pb.reset_for_detach();
+    CHECK(pb.take_present_request());
+}

@@ -53,7 +53,8 @@ void App::begin()
     // Boot detached: a device that powers up with no controller resumes its
     // installed background, so it shows something on its own. A controller
     // attaching later takes over (update_mode_). With no background installed
-    // this leaves the strip as-is (DetachedBlank) until a controller arrives.
+    // the cleared strip is presented on the first tick, so the LEDs start
+    // dark (DetachedBlank) until a controller arrives.
     try_start_background_();
 }
 
@@ -108,14 +109,11 @@ void App::update_mode_()
         return;
     }
 
-    // No background to fall back to: go dark. With no profile nothing was ever
-    // shown and the output is not set up. (try_start_background_ already reset
+    // No background to fall back to: go dark. The cleared strip is presented
+    // by this tick's drive_playback_. (try_start_background_ already reset
     // playback and cleared the local flag.)
     _status.mode = DeviceMode::DetachedBlank;
-    if (_playback.has_hardware_profile()) {
-        _playback.render_black_frame();
-        write_frame_();
-    }
+    _playback.render_black_frame();
 }
 
 bool App::try_start_background_()
@@ -131,20 +129,37 @@ bool App::try_start_background_()
 
 void App::drive_playback_()
 {
+    const RenderFrameResult result = render_if_due_();
+
+    // Present after rendering, so a frame goes out the tick it is drawn and
+    // a clear followed by a render in the same tick sends only the frame;
+    // and before the local-loop restart, so the end frame is stamped with
+    // the program's end rather than the restarted cursor.
+    present_if_pending_();
+
+    if (result == RenderFrameResult::Ended && _ctx.local_program_loaded) {
+        // Local animations loop. Restarting is valid from ENDED, and
+        // stored blobs are unsynced, so the anchor value is ignored.
+        _playback.handle_start(0);
+    }
+}
+
+RenderFrameResult App::render_if_due_()
+{
     if (_playback.state() != DeviceState::PLAYING) {
         _next_frame_due_us = 0;
-        return;
+        return RenderFrameResult::Unchanged;
     }
 
     const uint8_t fps = _playback.target_fps();
-    if (fps == 0) return;
+    if (fps == 0) return RenderFrameResult::Unchanged;
     const int64_t frame_interval_us = 1'000'000 / fps;
 
     const int64_t now = now_us();
     if (_next_frame_due_us == 0) {
         _next_frame_due_us = now;
     }
-    if (now < _next_frame_due_us) return;
+    if (now < _next_frame_due_us) return RenderFrameResult::Unchanged;
 
     const RenderFrameResult result = _playback.render_next_frame();
 
@@ -154,19 +169,15 @@ void App::drive_playback_()
     if (_next_frame_due_us <= now) {
         _next_frame_due_us = now + frame_interval_us;
     }
-
-    if (result == RenderFrameResult::Unchanged) return;
-
-    write_frame_();
-
-    if (result == RenderFrameResult::Ended && _ctx.local_program_loaded) {
-        // Local animations loop. Restarting is valid from ENDED, and
-        // stored blobs are unsynced, so the anchor value is ignored.
-        _playback.handle_start(0);
-    }
+    return result;
 }
 
-void App::write_frame_()
+void App::present_if_pending_()
 {
+    if (!_playback.take_present_request()) return;
+
+    // With no profile nothing was ever shown and the output is not set up.
+    if (!_playback.has_hardware_profile()) return;
+
     _output.write(_playback.strip(), _playback.current_t_program());
 }

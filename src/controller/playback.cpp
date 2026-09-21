@@ -230,7 +230,15 @@ RenderFrameResult Playback::render_next_frame()
         _state = DeviceState::ENDED;
         return RenderFrameResult::Ended;
     }
+    _present_pending = true;
     return RenderFrameResult::Rendered;
+}
+
+bool Playback::take_present_request()
+{
+    const bool pending = _present_pending;
+    _present_pending = false;
+    return pending;
 }
 
 DeviceState Playback::state() const
@@ -317,4 +325,5 @@ void Playback::reset_timing_state_()
 void Playback::clear_render_buffer_()
 {
     _strip.clear();
+    _present_pending = true;
 }

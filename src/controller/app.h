@@ -67,12 +67,18 @@ private:
     // whether to blank). Shared by boot (begin) and detach.
     bool try_start_background_();
 
-    // Render frames at the loaded program's fps and write them to the
-    // frame output; restart local animations on Ended.
+    // Render a frame if one is due, present whatever the strip holds, and
+    // restart local animations on Ended.
     void drive_playback_();
 
-    // Write the current strip to the frame output.
-    void write_frame_();
+    // Render the next frame when playback is PLAYING and the fps deadline
+    // has passed. Unchanged otherwise.
+    RenderFrameResult render_if_due_();
+
+    // The one path to the frame output. Presents the strip when playback
+    // reports unpresented output (a rendered frame or a clear), in any
+    // playback state, provided a hardware profile has set the output up.
+    void present_if_pending_();
 
     NetInterface& _network;
     FrameOutput&      _output;

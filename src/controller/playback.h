@@ -15,6 +15,13 @@
 // the engine, the canonical RGB Strip, and a single program-time cursor.
 // Owners drive it with command handlers and sample frames via render_*().
 //
+// The strip changes outside the frame loop too: STOP, LOAD, detach and the
+// end of a program all clear it. Every such clear and every rendered frame
+// raises a presentation request that the owner reads with
+// take_present_request() and answers by writing the strip to its output,
+// whatever the playback state. That is what keeps the LEDs equal to the
+// strip: a STOP blanks them even though no frame is due.
+//
 // Clock domain is selected per loaded program: requires_sync=true reads
 // SyncedClock::now_remote_us(); requires_sync=false reads now_local_us().
 
@@ -92,16 +99,21 @@ public:
     // Stop and return to LOADED. Engine reset, strip cleared.
     RenderFrameResult handle_stop();
 
-    // Drop the loaded program and timing; transition to IDLE. Strip is
-    // cleared but no presentation result is returned.
+    // Drop the loaded program and timing; transition to IDLE. The strip is
+    // cleared, which raises a presentation request like any other clear.
     void reset_for_detach();
 
-    // Clear the strip and report Rendered so the owner can present black.
+    // Clear the strip (raising a presentation request) and report Rendered.
     RenderFrameResult render_black_frame();
 
     // Render the next frame from the current state and selected clock.
     // The only path that samples the clock and the engine.
     RenderFrameResult render_next_frame();
+
+    // Does the strip hold output not yet presented? True once after every
+    // buffer clear and every rendered frame; this call consumes it. PAUSE
+    // and JUMP leave the strip alone and raise nothing.
+    bool take_present_request();
 
     DeviceState state() const;
     // Program length in seconds; 0 when no program is loaded.
@@ -133,4 +145,5 @@ private:
     int64_t _program_start_us = 0;
     int64_t _t_program_cursor_us = 0;
     bool _requires_sync = false;
+    bool _present_pending = false;
 };
