@@ -5,6 +5,7 @@ import { RouterLink } from 'vue-router';
 import DeviceModal from '../components/DeviceModal.vue';
 import RemoveDeviceModal from '../components/RemoveDeviceModal.vue';
 import { useInjectedServerState, type SnapshotDevice } from '../composables/useServerState';
+import { clockLabel } from '../lib/deviceClock';
 
 type DeviceStatus = 'online' | 'offline' | 'discovered';
 
@@ -275,6 +276,13 @@ onBeforeUnmount(() => {
             >
               {{ device.isSim ? 'SIM' : 'ESP' }}
             </span>
+            <span
+              v-if="device.cardStatus === 'online'"
+              class="device-clock mono"
+              title="Clock skew at the device's last sync round"
+            >
+              {{ clockLabel(device.clock_synced, device.clock_skew_ms) }}
+            </span>
             <span class="device-status" :class="statusClass(device.cardStatus)" :title="statusLabel(device.cardStatus)">
               <span class="device-status-dot" />
               {{ statusLabel(device.cardStatus) }}
@@ -469,6 +477,14 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
+}
+
+.device-clock {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 0.64rem;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
 }
 
 .device-type-badge {

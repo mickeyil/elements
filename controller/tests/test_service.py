@@ -6,10 +6,12 @@ compiles a real (tiny) program against the configured topology.
 """
 
 import json
+import struct
 
 from elemctl.config import Config, DeviceConfig, load_config_obj
 from elemctl.controller_protocol import KIND_FRAME, KIND_JSON, parse_json_payload
-from elemctl.hub import DeviceConnected, HubPoll
+from elemctl.device_status import STATUS_QUERY_INTERVAL_US
+from elemctl.hub import DeviceConnected, DeviceDisconnected, HubPoll
 from elemctl.library import ProgramLibrary
 from elemctl.service import ControllerService
 from elemctl import wire
@@ -41,6 +43,7 @@ class FakeHub:
         self.pending_events = []
         self.frames = []
         self.sent = []
+        self.status_queries = []   # (uid, on_ack) per status poll
         self.discovered = set()
         self.connected = set()
         self.disconnected = []
@@ -64,7 +67,12 @@ class FakeHub:
         return HubPoll(events=events, frames=frames)
 
     def send(self, uid, encoded, on_ack=None):
-        self.sent.append((uid, encoded, on_ack))
+        # Status polls run beside the session's commands; keep them apart so
+        # sent / last_send() stay the reconciler's commands.
+        if encoded[4] == wire.CMD_QUERY_DEVICE_STATUS:
+            self.status_queries.append((uid, on_ack))
+        else:
+            self.sent.append((uid, encoded, on_ack))
         return True
 
     def last_send(self, uid=None):
@@ -285,6 +293,103 @@ def test_configured_device_status_tracks_attachment(tmp_path):
     service.tick_once()
     device = _by_type(_json(service.snapshot_messages()), 'state')[0]['devices'][0]
     assert device['status'] == 'online'
+
+
+def _device_state(service, uid='sim-a'):
+    devices = _by_type(_json(service.snapshot_messages()), 'state')[0]['devices']
+    return next(d for d in devices if d['uid'] == uid)
+
+
+def _status_reply(synced, skew_us):
+    flags = wire.STATUS_FLAG_CLOCK_SYNCED if synced else 0
+    return AckMsg(status=wire.ACK_OK,
+                  payload=struct.pack('<BBi', 0,  # mode: attached_controlled
+                                      flags, skew_us))
+
+
+def test_device_clock_is_null_until_the_status_reply(tmp_path):
+    service, hub = make_service(tmp_path)
+    assert _device_state(service)['clock_synced'] is None
+    assert _device_state(service)['clock_skew_ms'] is None
+
+    hub.emit(DeviceConnected(uid='sim-a', boot_token=1, rebooted=False))
+    service.tick_once()
+    assert [uid for uid, _ in hub.status_queries] == ['sim-a']
+    assert _device_state(service)['clock_synced'] is None
+
+    _, on_ack = hub.status_queries[-1]
+    on_ack(_status_reply(synced=True, skew_us=-420))
+    device = _device_state(service)
+    assert device['clock_synced'] is True
+    assert device['clock_skew_ms'] == pytest.approx(-0.42)
+
+
+def test_device_status_is_polled_on_an_interval(tmp_path):
+    service, hub = make_service(tmp_path)
+    hub.emit(DeviceConnected(uid='sim-a', boot_token=1, rebooted=False))
+    service.tick_once()
+    hub.status_queries[-1][1](_status_reply(synced=False, skew_us=0))
+    assert _device_state(service)['clock_synced'] is False
+
+    service._clock_us.now_us += STATUS_QUERY_INTERVAL_US - 1
+    service.tick_once()
+    assert len(hub.status_queries) == 1          # not yet due
+
+    service._clock_us.now_us += 1
+    service.tick_once()
+    assert len(hub.status_queries) == 2
+    hub.status_queries[-1][1](_status_reply(synced=True, skew_us=150))
+    assert _device_state(service)['clock_skew_ms'] == pytest.approx(0.15)
+
+
+def test_unanswered_status_query_is_not_repeated(tmp_path):
+    service, hub = make_service(tmp_path)
+    hub.emit(DeviceConnected(uid='sim-a', boot_token=1, rebooted=False))
+    service.tick_once()
+    service._clock_us.now_us += 3 * STATUS_QUERY_INTERVAL_US
+    service.tick_once()
+    assert len(hub.status_queries) == 1          # one in flight at a time
+
+
+def test_device_clock_clears_on_detach_and_ignores_the_old_link(tmp_path):
+    service, hub = make_service(tmp_path)
+    hub.emit(DeviceConnected(uid='sim-a', boot_token=1, rebooted=False))
+    service.tick_once()
+    hub.status_queries[-1][1](_status_reply(synced=True, skew_us=100))
+
+    service._clock_us.now_us += STATUS_QUERY_INTERVAL_US
+    service.tick_once()
+    _, stale_on_ack = hub.status_queries[-1]     # in flight when the link drops
+
+    hub.emit(DeviceDisconnected(uid='sim-a', reason='eof'))
+    service.tick_once()
+    assert _device_state(service)['clock_synced'] is None
+    assert _device_state(service)['clock_skew_ms'] is None
+
+    # A reconnect queries afresh; a late reply from the old link is dropped.
+    hub.emit(DeviceConnected(uid='sim-a', boot_token=2, rebooted=True))
+    service.tick_once()
+    stale_on_ack(_status_reply(synced=True, skew_us=999))
+    assert _device_state(service)['clock_skew_ms'] is None
+    hub.status_queries[-1][1](_status_reply(synced=True, skew_us=0))
+    assert _device_state(service)['clock_skew_ms'] == 0
+
+
+def test_bad_status_reply_keeps_the_last_report(tmp_path):
+    service, hub = make_service(tmp_path)
+    hub.emit(DeviceConnected(uid='sim-a', boot_token=1, rebooted=False))
+    service.tick_once()
+    hub.status_queries[-1][1](_status_reply(synced=True, skew_us=200))
+
+    service._clock_us.now_us += STATUS_QUERY_INTERVAL_US
+    service.tick_once()
+    hub.status_queries[-1][1](AckMsg(status=wire.ACK_OK, payload=b'\x00'))
+    assert _device_state(service)['clock_skew_ms'] == pytest.approx(0.2)
+
+    # And the poll continues after it.
+    service._clock_us.now_us += STATUS_QUERY_INTERVAL_US
+    service.tick_once()
+    assert len(hub.status_queries) == 3
 
 
 def test_discovered_device_surfaced_as_stub(tmp_path):

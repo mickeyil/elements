@@ -80,6 +80,7 @@ void App::tick()
 
     _sync.set_controller(_link.controller_ip_addr());
     _sync.poll();
+    update_clock_status_();
 
     update_mode_();
     drive_playback_();
@@ -114,6 +115,16 @@ void App::update_mode_()
     // playback and cleared the local flag.)
     _status.mode = DeviceMode::DetachedBlank;
     _playback.render_black_frame();
+}
+
+void App::update_clock_status_()
+{
+    if (_clock.is_synced()) {
+        _status.flags |= STATUS_FLAG_CLOCK_SYNCED;
+    } else {
+        _status.flags &= static_cast<uint8_t>(~STATUS_FLAG_CLOCK_SYNCED);
+    }
+    _status.clock_skew_us = _sync.last_skew_us();
 }
 
 bool App::try_start_background_()

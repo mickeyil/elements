@@ -542,6 +542,121 @@ TEST_CASE("three accepted rounds apply a lease with the correct sign",
 }
 
 // ---------------------------------------------------------------------------
+// Skew: change of the applied offset
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Three burst rounds with the controller `ahead_us` ahead: the first
+// offset applies and the burst exits.
+void sync_up(ClockSyncClient& client, FakeUdpTransport& udp,
+             uint32_t controller_token, int64_t ahead_us)
+{
+    for (int i = 0; i < 3; ++i) {
+        exchange_round(client, udp, CONTROLLER_IP_A, controller_token,
+                       ahead_us, /*rtt*/ 1000);
+        advance_test_us(BURST_INTERVAL_US);
+    }
+}
+
+// One steady-cadence round. A lower RTT than sync_up's ranks the sample
+// ahead of those in the best-by-RTT filter.
+void steady_round(ClockSyncClient& client, FakeUdpTransport& udp,
+                  uint32_t controller_token, int64_t ahead_us)
+{
+    advance_test_us(STEADY_INTERVAL_US);
+    exchange_round(client, udp, CONTROLLER_IP_A, controller_token,
+                   ahead_us, /*rtt*/ 500);
+}
+
+}  // namespace
+
+TEST_CASE("skew is 0 until a second offset is applied",
+          "[clock_sync_client]") {
+    set_test_now_us(1'000'000);
+
+    SyncedClock      clock;
+    DeviceIdentity   id  = make_identity();
+    FakeUdpTransport udp;
+    ClockSyncClient  client(udp, clock, id);
+
+    CHECK(client.last_skew_us() == 0);
+
+    client.set_controller(CONTROLLER_IP_A);
+    sync_up(client, udp, 0xAAAAU, 1'000'000);
+    REQUIRE(clock.is_synced());
+    CHECK(client.last_skew_us() == 0);
+}
+
+TEST_CASE("skew is the new applied offset minus the one it replaced",
+          "[clock_sync_client]") {
+    set_test_now_us(1'000'000);
+
+    SyncedClock      clock;
+    DeviceIdentity   id  = make_identity();
+    FakeUdpTransport udp;
+    ClockSyncClient  client(udp, clock, id);
+
+    client.set_controller(CONTROLLER_IP_A);
+    sync_up(client, udp, 0xAAAAU, 1'000'000);
+    const int64_t first_offset = clock.offset_us();
+
+    // The controller pulls 300 us further ahead: the device clock fell
+    // behind, so its controller-time estimate was running late.
+    // One new sample is outvoted by the median of the best three.
+    steady_round(client, udp, 0xAAAAU, 1'000'300);
+    CHECK(clock.offset_us() == first_offset);
+    CHECK(client.last_skew_us() == 0);
+
+    // A second one carries the median over.
+    steady_round(client, udp, 0xAAAAU, 1'000'300);
+    CHECK(clock.offset_us() == first_offset - 300);
+    CHECK(client.last_skew_us() == -300);
+
+    // No further drift: the next apply changes nothing.
+    steady_round(client, udp, 0xAAAAU, 1'000'300);
+    CHECK(client.last_skew_us() == 0);
+}
+
+TEST_CASE("controller reboot resets skew to 0",
+          "[clock_sync_client]") {
+    set_test_now_us(1'000'000);
+
+    SyncedClock      clock;
+    DeviceIdentity   id  = make_identity();
+    FakeUdpTransport udp;
+    ClockSyncClient  client(udp, clock, id);
+
+    client.set_controller(CONTROLLER_IP_A);
+    sync_up(client, udp, 0xAAAAU, 1'000'000);
+    steady_round(client, udp, 0xAAAAU, 1'000'300);
+    steady_round(client, udp, 0xAAAAU, 1'000'300);
+    REQUIRE(client.last_skew_us() == -300);
+
+    // A PONG with a new controller token restarts the timeline. Its
+    // burst ping is already out; answer it and two more.
+    advance_test_us(STEADY_INTERVAL_US);
+    exchange_round(client, udp, CONTROLLER_IP_A, 0xBBBBU, 5'000'000);
+    CHECK_FALSE(clock.is_synced());
+    CHECK(client.last_skew_us() == 0);
+
+    // The first apply on the new timeline compares against nothing, so
+    // the jump to the new controller clock is not reported as skew.
+    for (int i = 0; i < 3; ++i) {
+        const ParsedPing ping = parse_ping(udp.sent.back().bytes);
+        advance_test_us(1000);
+        udp.inject(CONTROLLER_IP_A,
+                   build_pong(0xBBBBU, ping.seq, ping.t1,
+                              ping.t1 + 5'000'500, ping.t1 + 5'000'510));
+        client.poll();
+        advance_test_us(BURST_INTERVAL_US);
+        client.poll();
+    }
+    REQUIRE(clock.is_synced());
+    CHECK(client.last_skew_us() == 0);
+}
+
+// ---------------------------------------------------------------------------
 // Burst lifecycle
 // ---------------------------------------------------------------------------
 

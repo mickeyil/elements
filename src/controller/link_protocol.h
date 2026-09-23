@@ -7,7 +7,7 @@
 // Opcode behavior lives with the handlers in src/command_handler.cpp.
 
 // Bumped on every breaking wire change. Sent in REGISTER.
-constexpr uint8_t PROTOCOL_VERSION = 3;
+constexpr uint8_t PROTOCOL_VERSION = 4;
 
 // ---- Session / configuration ----------------------------------------------
 

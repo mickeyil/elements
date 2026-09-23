@@ -256,7 +256,7 @@ AckStatus CommandHandler::handle_query_device_status_(WireReader& r, WireWriter&
     }
     w.write_u8(static_cast<uint8_t>(_ctx.status.mode));
     w.write_u8(_ctx.status.flags);
-    w.write_u16(static_cast<uint16_t>(_ctx.animations.count()));
+    w.write_u32(static_cast<uint32_t>(_ctx.status.clock_skew_us));
     return w.ok() ? AckStatus::Ok : AckStatus::Error;
 }
 

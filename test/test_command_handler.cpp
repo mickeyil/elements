@@ -506,19 +506,20 @@ TEST_CASE("play_local_animation rejects bad indices and mismatched blobs")
 // Queries
 // ---------------------------------------------------------------------------
 
-TEST_CASE("query_device_status reports mode, flags, and animation count")
+TEST_CASE("query_device_status reports mode, flags, and clock skew")
 {
     Harness h;
     h.status.mode = DeviceMode::DetachedBackground;
-    h.status.flags = 0x01;
-    REQUIRE(h.store_anim("glow", build_paint_blob(1, 1.0f)) == AckStatus::Ok);
+    h.status.flags = STATUS_FLAG_PROFILE_PRESENT | STATUS_FLAG_CLOCK_SYNCED;
+    h.status.clock_skew_us = -1234;
 
     REQUIRE(h.run(CMD_QUERY_DEVICE_STATUS) == AckStatus::Ok);
-    REQUIRE(h.reply_len == 4);
+    REQUIRE(h.reply_len == 6);
     CHECK(h.reply[0] == MODE_DETACHED_BACKGROUND);
-    CHECK(h.reply[1] == 0x01);
-    CHECK(h.reply[2] == 1);  // animation_count u16 LE
-    CHECK(h.reply[3] == 0);
+    CHECK(h.reply[1] == 0x03);
+    int32_t skew = 0;
+    std::memcpy(&skew, h.reply + 2, 4);  // i32 LE
+    CHECK(skew == -1234);
 }
 
 TEST_CASE("query_local_animations lists records in play order")

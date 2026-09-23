@@ -119,6 +119,12 @@ def test_identity_and_store_sizes_match_cpp():
     assert _cpp_constants('src/controller/animation_store.h')['ANIM_NAME_SIZE'] == wire.ANIM_NAME_SIZE
 
 
+def test_device_status_flags_match_cpp():
+    cpp = _cpp_constants('src/controller/device_status.h')
+    assert cpp['STATUS_FLAG_PROFILE_PRESENT'] == wire.STATUS_FLAG_PROFILE_PRESENT
+    assert cpp['STATUS_FLAG_CLOCK_SYNCED'] == wire.STATUS_FLAG_CLOCK_SYNCED
+
+
 def test_discovery_constants_match_cpp():
     cpp = _cpp_constants('src/controller/discovery.cpp')
     assert cpp['MAGIC'] == wire.DISCOVERY_MAGIC
@@ -306,13 +312,17 @@ def test_parse_ack():
 
 
 def test_parse_device_status():
-    report = parse_device_status(struct.pack('<BBH', 0, 0x01, 7))
+    report = parse_device_status(struct.pack('<BBi', 0, 0x03, -1234))
     assert report.mode == 0
     assert wire.DEVICE_MODE_NAMES[report.mode] == 'attached_controlled'
     assert report.profile_present is True
-    assert report.animation_count == 7
+    assert report.clock_synced is True
+    assert report.clock_skew_us == -1234
+    report = parse_device_status(struct.pack('<BBi', 2, 0x00, 0))
+    assert report.profile_present is False
+    assert report.clock_synced is False
     with pytest.raises(WireError):
-        parse_device_status(b'\x00\x00')
+        parse_device_status(b'\x00\x00\x00\x00')
 
 
 def test_parse_local_animations():

@@ -61,6 +61,10 @@ private:
     // playable, otherwise blank the strip. Grace hold is an open design item.
     void update_mode_();
 
+    // Mirror the clock sync state into status (synced flag and skew) for
+    // the QueryDeviceStatus reply.
+    void update_clock_status_();
+
     // Reset playback and try to start stored animation order 0 as the local
     // background. Sets DetachedBackground and returns true on success; on
     // failure leaves playback reset and returns false (the caller decides

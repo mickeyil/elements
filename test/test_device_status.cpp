@@ -19,8 +19,9 @@ TEST_CASE("DeviceMode matches the link_protocol mirror", "[device_status]") {
     CHECK(static_cast<uint8_t>(DeviceMode::DetachedBackground) == MODE_DETACHED_BACKGROUND);
 }
 
-TEST_CASE("DeviceStatus defaults to detached, no profile", "[device_status]") {
+TEST_CASE("DeviceStatus defaults to detached, no profile, no skew", "[device_status]") {
     DeviceStatus s;
     CHECK(s.mode == DeviceMode::DetachedBlank);
     CHECK(s.flags == 0);
+    CHECK(s.clock_skew_us == 0);
 }

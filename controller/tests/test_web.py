@@ -47,7 +47,8 @@ def test_make_disconnected_snapshot_offlines_configured_and_drops_discovered():
         'session': {'state': 'playing'},
         'devices': [
             {'uid': 'sim-a', 'configured': True, 'status': 'online',
-             'attached': True, 'serving': True},
+             'attached': True, 'serving': True,
+             'clock_synced': True, 'clock_skew_ms': 0.3},
             {'uid': 'sim-x', 'configured': False, 'status': 'discovered'},
         ],
     }
@@ -62,6 +63,7 @@ def test_make_disconnected_snapshot_offlines_configured_and_drops_discovered():
     dev = out['devices'][0]
     assert dev['status'] == 'offline'
     assert dev['attached'] is False and dev['serving'] is False
+    assert dev['clock_synced'] is None and dev['clock_skew_ms'] is None
 
 
 def test_empty_snapshot_includes_programs_after_disconnect():

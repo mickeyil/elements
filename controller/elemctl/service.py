@@ -25,6 +25,7 @@ from . import config as config_mod
 from . import config_edit
 from . import wire
 from .controller_protocol import encode_frame, encode_json
+from .device_status import DeviceStatusPoller
 from .hub import DeviceHub
 from .library import ArtifactCache, ProgramLibrary
 from .session import (
@@ -75,6 +76,7 @@ class ControllerService:
                             clock_us=clock_us)
         self._hub = hub
         self._session = Session(hub, config.devices, clock_us)
+        self._device_status = DeviceStatusPoller(hub, clock_us)
         self._library = library if library is not None else ProgramLibrary(
             config.animations_dir or config_mod.DEFAULT_ANIMATIONS_PATH)
         self._artifact_cache = ArtifactCache()
@@ -114,8 +116,12 @@ class ControllerService:
         events, the full state when it changed, the catalog when it changed,
         and any assembled preview frames. Returns (json_msgs, frame_msgs), both
         lists of encoded bytes."""
-        json_msgs = [encode_json(self._event_dict(ev))
-                     for ev in self._session.tick()]
+        events = self._session.tick()
+        for ev in events:
+            if isinstance(ev, (MemberAttached, MemberDetached)):
+                self._device_status.forget(ev.uid)
+        self._device_status.tick(self._session.attached_uids())
+        json_msgs = [encode_json(self._event_dict(ev)) for ev in events]
         self._reap_orphaned_background()
 
         state = self._state_dict()
@@ -448,6 +454,7 @@ class ControllerService:
         for dc in self._config.devices:
             configured.add(dc.device_uid)
             m = s.member(dc.device_uid)
+            report = self._device_status.report(dc.device_uid)
             devices.append({
                 'uid': dc.device_uid,
                 'configured': True,
@@ -471,6 +478,11 @@ class ControllerService:
                 'background': (dict(push)
                                if (push := self._bg_pushes.get(dc.device_uid)) is not None
                                else None),
+                # From the device's latest status reply; None until it answers
+                # after attaching. Skew is how far the device clock had wandered
+                # at its last sync round (0 until its second round).
+                'clock_synced': report.clock_synced if report else None,
+                'clock_skew_ms': report.clock_skew_us / 1000 if report else None,
             })
         # Devices broadcasting DISCOVER but not in the config: a UID stub the
         # operator can configure. Configured devices win, so none appears twice.

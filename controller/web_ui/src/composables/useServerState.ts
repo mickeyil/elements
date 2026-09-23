@@ -26,6 +26,8 @@ export interface SnapshotDevice {
   label?: string | null;
   phase?: string;
   target_intent?: string;
+  clock_synced?: boolean | null;
+  clock_skew_ms?: number | null;
 }
 
 interface SessionStrip {

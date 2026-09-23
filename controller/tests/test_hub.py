@@ -193,7 +193,7 @@ def test_command_reaches_device_and_ack_reaches_callback(hub):
     opcode, payload = dev.recv_messages(1)[0]
     assert opcode == wire.CMD_QUERY_DEVICE_STATUS
 
-    dev.ack(wire.ACK_OK, struct.pack('<BBH', 2, 0, 0))
+    dev.ack(wire.ACK_OK, struct.pack('<BBi', 2, 0, 0))
     poll_until(hub, lambda e, f: bool(acks))
     assert acks[0].status == wire.ACK_OK
     report = wire.parse_device_status(acks[0].payload)

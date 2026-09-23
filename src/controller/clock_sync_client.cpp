@@ -141,6 +141,7 @@ void ClockSyncClient::on_remote_epoch_change_()
     // App drops the controller's program on detach, and the re-attach
     // window is covered by the note in set_controller().
     _clock.clear_sync();
+    _last_skew_us = 0;
     reset_filter_();
     start_burst_();
 }
@@ -307,6 +308,14 @@ void ClockSyncClient::apply_filter_()
     }
     std::sort(offsets, offsets + k);
     const int64_t median_offset = offsets[k / 2];
+
+    // Skew is measured against the offset being replaced, so the first
+    // apply on a timeline leaves it at 0. Clamped to the reported i32.
+    if (_clock.has_offset()) {
+        const int64_t skew = median_offset - _clock.offset_us();
+        _last_skew_us = static_cast<int32_t>(
+            std::clamp<int64_t>(skew, INT32_MIN, INT32_MAX));
+    }
 
     _clock.apply_sync_offset(median_offset, LEASE_SEC * 1'000'000);
 

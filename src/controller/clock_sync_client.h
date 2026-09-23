@@ -32,6 +32,13 @@ public:
     // Per-tick entry: schedule, send, drain replies.
     void poll();
 
+    // How far the clock had wandered when the latest offset was applied:
+    // new offset minus the one it replaced, in microseconds. Positive
+    // means the device's controller-time estimate was running ahead.
+    // 0 until a second offset is applied on the current controller
+    // timeline, since the first apply has nothing to compare against.
+    int32_t last_skew_us() const { return _last_skew_us; }
+
     // Filter window size.
     static constexpr size_t WINDOW_N = 5;
 
@@ -99,4 +106,7 @@ private:
     // _last_sent_seq.
     bool    _ping_in_flight = false;
     int64_t _ping_t1_us     = 0;
+
+    // See last_skew_us().
+    int32_t _last_skew_us = 0;
 };

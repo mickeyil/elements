@@ -37,7 +37,7 @@ from elements.types import ms_from_seconds
 
 # ---- Constants mirroring src/app/link_protocol.h --------------------------------
 
-PROTOCOL_VERSION = 3
+PROTOCOL_VERSION = 4
 
 CMD_REGISTER             = 0x00
 CMD_SET_PROFILE          = 0x01
@@ -92,6 +92,7 @@ DEVICE_MODE_NAMES = {
     3: 'detached_background',
 }
 STATUS_FLAG_PROFILE_PRESENT = 0x01
+STATUS_FLAG_CLOCK_SYNCED = 0x02
 
 # ---- Constants mirroring src/app/discovery.cpp ----------------------------------
 
@@ -133,7 +134,7 @@ _U16 = struct.Struct('<H')
 _I64 = struct.Struct('<q')
 _F32 = struct.Struct('<f')
 _REGISTER = struct.Struct(f'<{UID_SIZE}sIB')        # uid + boot_token + version
-_DEVICE_STATUS = struct.Struct('<BBH')              # mode + flags + animation_count
+_DEVICE_STATUS = struct.Struct('<BBi')              # mode + flags + clock_skew_us
 _ANIM_RECORD = struct.Struct(f'<{ANIM_NAME_SIZE}sHI')  # name + strip_length + crc32
 _DISCOVER = struct.Struct(f'<HB{UID_SIZE}s')        # magic + type + uid
 _OFFER_PREFIX = struct.Struct('<HB')                # magic + type; then ipv4 + port
@@ -327,7 +328,8 @@ class AckMsg:
 class DeviceStatusReport:
     mode: int                # raw byte; DEVICE_MODE_NAMES maps known values
     profile_present: bool
-    animation_count: int
+    clock_synced: bool       # the device holds a valid clock lease
+    clock_skew_us: int       # applied offset change at the last sync; 0 until the second
 
 
 @dataclass(frozen=True)
@@ -368,11 +370,12 @@ def parse_device_status(payload):
     if len(payload) != _DEVICE_STATUS.size:
         raise WireError(f'device status payload must be {_DEVICE_STATUS.size} '
                         f'bytes, got {len(payload)}')
-    mode, flags, animation_count = _DEVICE_STATUS.unpack(payload)
+    mode, flags, clock_skew_us = _DEVICE_STATUS.unpack(payload)
     return DeviceStatusReport(
         mode=mode,
         profile_present=bool(flags & STATUS_FLAG_PROFILE_PRESENT),
-        animation_count=animation_count,
+        clock_synced=bool(flags & STATUS_FLAG_CLOCK_SYNCED),
+        clock_skew_us=clock_skew_us,
     )
 
 

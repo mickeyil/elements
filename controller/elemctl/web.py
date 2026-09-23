@@ -121,6 +121,8 @@ def _make_disconnected_snapshot(snapshot: dict | None) -> dict:
                 dev['status'] = 'offline'
                 dev['attached'] = False
                 dev['serving'] = False
+                dev['clock_synced'] = None
+                dev['clock_skew_ms'] = None
                 configured.append(dev)
         out['devices'] = configured
         out['online_count'] = 0

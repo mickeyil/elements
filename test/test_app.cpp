@@ -301,6 +301,27 @@ std::vector<uint8_t> make_msg(uint8_t opcode,
     return msg;
 }
 
+// Sync PONG answering `ping` (layout from clock_sync_client.cpp): the
+// controller stamps t2 half a round trip after t1, then t3 10 us later.
+std::vector<uint8_t> make_pong(const std::vector<uint8_t>& ping,
+                               uint32_t controller_token, int64_t rtt_us)
+{
+    REQUIRE(ping.size() == 33);
+    uint32_t seq = 0;
+    int64_t  t1  = 0;
+    std::memcpy(&seq, ping.data() + 21, 4);
+    std::memcpy(&t1,  ping.data() + 25, 8);
+
+    std::vector<uint8_t> pkt;
+    put_u8(pkt, 0x02);  // PKT_PONG
+    put_u32(pkt, controller_token);
+    put_u32(pkt, seq);
+    put_i64(pkt, t1);
+    put_i64(pkt, t1 + rtt_us / 2);
+    put_i64(pkt, t1 + rtt_us / 2 + 10);
+    return pkt;
+}
+
 // Outbound ACK with status Ok and no reply payload.
 std::vector<uint8_t> ack_ok()
 {
@@ -472,6 +493,41 @@ TEST_CASE("attaching points the sync client at the controller")
 
     h.attach();
     CHECK_FALSE(h.sync_udp.sent.empty());  // burst PING fired this tick
+}
+
+TEST_CASE("the status reply carries the clock sync state")
+{
+    Harness h;
+    h.attach();
+
+    // Before any PONG: unsynced, no skew.
+    h.command(CMD_QUERY_DEVICE_STATUS);
+    REQUIRE(h.tcp.sent.size() == 4 + 1 + 1 + 6);
+    CHECK((h.tcp.sent[7] & STATUS_FLAG_CLOCK_SYNCED) == 0);
+    h.tcp.sent.clear();
+
+    // Three burst rounds apply the first offset (MIN_SAMPLES_TO_APPLY).
+    for (int i = 0; i < 3; ++i) {
+        REQUIRE_FALSE(h.sync_udp.sent.empty());
+        h.sync_udp.inbox.push_back(
+            make_pong(h.sync_udp.sent.back(), 0xC0FFEE, /*rtt_us=*/1000));
+        h.sync_udp.sent.clear();
+        h.advance(1000);
+        h.app.tick();
+        h.advance(500'000);  // next burst ping falls due
+        h.app.tick();
+    }
+    CHECK((h.app.status().flags & STATUS_FLAG_CLOCK_SYNCED) != 0);
+
+    h.command(CMD_QUERY_DEVICE_STATUS);
+    REQUIRE(h.tcp.sent.size() == 4 + 1 + 1 + 6);
+    CHECK(h.tcp.sent[4] == CMD_ACK);
+    CHECK(h.tcp.sent[5] == ACK_OK);
+    CHECK(h.tcp.sent[6] == MODE_ATTACHED_CONTROLLED);
+    CHECK(h.tcp.sent[7] == (STATUS_FLAG_PROFILE_PRESENT | STATUS_FLAG_CLOCK_SYNCED));
+    int32_t skew = -1;
+    std::memcpy(&skew, h.tcp.sent.data() + 8, 4);
+    CHECK(skew == 0);  // one apply so far: nothing to compare against
 }
 
 TEST_CASE("link silence detaches, blanks the strip, and flips the mode")

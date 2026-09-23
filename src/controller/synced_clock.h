@@ -42,6 +42,18 @@ public:
         return now_us();
     }
 
+    // Whether an offset has been applied since the last clear_sync(),
+    // regardless of lease expiry.
+    bool has_offset() const {
+        return _has_offset;
+    }
+
+    // Last applied offset (local minus remote, microseconds); 0 when
+    // has_offset() is false.
+    int64_t offset_us() const {
+        return _offset_us;
+    }
+
     // Apply a new sync offset with a validity window.
     //
     // offset_us    : local clock minus remote clock, in microseconds
