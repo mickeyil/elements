@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  availableImageLabel,
+  isUpdateOffered,
   isUpdateRunning,
   updateAvailability,
+  updateOfferLabel,
   updateForDevice,
   updateProgressLabel,
-  versionLabel,
   type FirmwareState,
 } from './firmwareModel';
 
@@ -15,33 +15,6 @@ const ESP = 'esp-aabbccddeeff';
 function firmware(overrides: Partial<FirmwareState> = {}): FirmwareState {
   return { available_version: '0.55', image_present: true, update: null, ...overrides };
 }
-
-describe('versionLabel', () => {
-  it('shows the reported version', () => {
-    expect(versionLabel('0.54+d')).toBe('0.54+d');
-  });
-
-  it('shows unknown before discovery and for legacy firmware', () => {
-    expect(versionLabel(null)).toBe('unknown');
-    expect(versionLabel(undefined)).toBe('unknown');
-    expect(versionLabel('')).toBe('unknown');
-  });
-});
-
-describe('availableImageLabel', () => {
-  it('says nothing while the controller is offline', () => {
-    expect(availableImageLabel(null)).toBeNull();
-  });
-
-  it('notes a missing image', () => {
-    expect(availableImageLabel(firmware({ image_present: false }))).toBe('No firmware image built');
-  });
-
-  it('shows the image version, or unknown without a sidecar', () => {
-    expect(availableImageLabel(firmware())).toBe('Firmware image 0.55');
-    expect(availableImageLabel(firmware({ available_version: null }))).toBe('Firmware image unknown');
-  });
-});
 
 describe('isUpdateRunning / updateForDevice', () => {
   it('treats inviting and sending as running', () => {
@@ -80,26 +53,67 @@ describe('updateProgressLabel', () => {
   });
 });
 
-describe('updateAvailability', () => {
-  const esp = { isSim: false, ip: '10.0.0.9' };
+describe('isUpdateOffered', () => {
+  it('follows the controller verdict only', () => {
+    expect(isUpdateOffered({ update_available: true })).toBe(true);
+    expect(isUpdateOffered({ update_available: false })).toBe(false);
+    // An older controller (or a disconnected snapshot) that says nothing
+    // offers nothing.
+    expect(isUpdateOffered({})).toBe(false);
+  });
+});
 
-  it('is enabled for an addressable ESP with an image and nothing running', () => {
-    expect(updateAvailability(esp, firmware(), true)).toEqual({ enabled: true, reason: '' });
+describe('updateAvailability', () => {
+  const due = { update_available: true };
+
+  it('is enabled when the controller offers one and nothing is running', () => {
+    expect(updateAvailability(due, firmware(), true)).toEqual({ enabled: true, reason: '' });
   });
 
   it('allows retrying after a finished or failed transfer', () => {
-    expect(updateAvailability(esp, firmware({ update: { uid: ESP, phase: 'failed' } }), true).enabled)
+    expect(updateAvailability(due, firmware({ update: { uid: ESP, phase: 'failed' } }), true).enabled)
+      .toBe(true);
+    expect(updateAvailability(due, firmware({ update: { uid: ESP, phase: 'done' } }), true).enabled)
       .toBe(true);
   });
 
-  it('is disabled with a reason otherwise', () => {
-    expect(updateAvailability(esp, firmware(), false).reason).toBe('Controller offline');
-    expect(updateAvailability(esp, null, true).reason).toBe('Controller offline');
-    expect(updateAvailability({ isSim: true, ip: '127.0.0.1' }, firmware(), true).enabled).toBe(false);
-    expect(updateAvailability(esp, firmware({ image_present: false }), true).reason)
-      .toBe('No firmware image built');
-    expect(updateAvailability({ isSim: false, ip: null }, firmware(), true).enabled).toBe(false);
-    expect(updateAvailability(esp, firmware({ update: { uid: ESP, phase: 'sending' } }), true).reason)
-      .toBe('A firmware update is already running');
+  it('is disabled while any transfer runs', () => {
+    for (const phase of ['inviting', 'sending']) {
+      expect(updateAvailability(due, firmware({ update: { uid: ESP, phase } }), true))
+        .toEqual({ enabled: false, reason: 'A firmware update is already running' });
+    }
+    // Aimed at another device still blocks: the controller runs one at a time.
+    expect(updateAvailability(due, firmware({ update: { uid: 'esp-000000000001', phase: 'sending' } }), true)
+      .enabled).toBe(false);
+  });
+
+  it('is disabled while the controller is offline', () => {
+    expect(updateAvailability(due, firmware(), false))
+      .toEqual({ enabled: false, reason: 'Controller offline' });
+    expect(updateAvailability(due, null, false).reason).toBe('Controller offline');
+  });
+
+  it('is disabled without the controller verdict', () => {
+    expect(updateAvailability({ update_available: false }, firmware(), true).enabled).toBe(false);
+    expect(updateAvailability({}, firmware(), true).enabled).toBe(false);
+  });
+
+  it('does not second-guess the verdict with the image block', () => {
+    // Versions and image presence are the controller's to weigh.
+    expect(updateAvailability(due, firmware({ available_version: null }), true).enabled).toBe(true);
+    expect(updateAvailability(due, null, true).enabled).toBe(true);
+  });
+});
+
+describe('updateOfferLabel', () => {
+  it('shows the device version and the image version', () => {
+    expect(updateOfferLabel({ version: '0.3' }, firmware({ available_version: '0.4+d' })))
+      .toBe('0.3 -> 0.4+d');
+  });
+
+  it('reads unknown for a missing or empty side', () => {
+    expect(updateOfferLabel({ version: '' }, firmware({ available_version: '0.4' })))
+      .toBe('unknown -> 0.4');
+    expect(updateOfferLabel({ version: null }, null)).toBe('unknown -> unknown');
   });
 });

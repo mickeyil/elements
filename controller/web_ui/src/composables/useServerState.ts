@@ -33,6 +33,9 @@ export interface SnapshotDevice {
   // '' for firmware that predates reporting it.
   version?: string | null;
   ip?: string | null;
+  // The controller's verdict that the built image would change what this
+  // device runs; the status page offers "Update firmware" only when true.
+  update_available?: boolean;
 }
 
 interface SessionStrip {

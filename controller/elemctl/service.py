@@ -23,6 +23,7 @@ from pathlib import Path
 
 from . import config as config_mod
 from . import config_edit
+from . import firmware
 from . import ota
 from . import wire
 from .controller_protocol import encode_frame, encode_json
@@ -451,6 +452,17 @@ class ControllerService:
         image = self._firmware_image
         if not image.is_file():
             raise ValueError(f'firmware image not found: {image}')
+        # The same rule the state dict publishes per device, so the offer the
+        # UI shows and what this accepts cannot disagree. The image version is
+        # the one last read from the sidecar (at most a refresh interval old).
+        # The versions go to the log, not the error: the UI shows the error
+        # and deliberately shows no versions.
+        if not firmware.update_available(info.version, self._firmware_available_version,
+                                         image_present=True):
+            log.info('update_firmware: refused for %s: device reports version %r, '
+                     'image is %r', uid, info.version, self._firmware_available_version)
+            raise ValueError(f'no firmware update available for {uid!r}: '
+                             'it already runs this image or a newer one')
 
         runner = self._ota_factory(uid=uid, device_ip=info.ip, image_path=image,
                                    listen_port=self._config.ota_port,
@@ -609,6 +621,7 @@ class ControllerService:
                 # predates reporting it.
                 'version': info.version if info else None,
                 'ip': info.ip if info else None,
+                'update_available': self._update_available(dc.device_uid, info),
             })
         # Devices broadcasting DISCOVER but not in the config: a UID stub the
         # operator can configure. Configured devices win, so none appears twice.
@@ -616,7 +629,8 @@ class ControllerService:
             info = self._hub.device_info(uid)
             devices.append({'uid': uid, 'configured': False, 'status': 'discovered',
                             'version': info.version if info else None,
-                            'ip': info.ip if info else None})
+                            'ip': info.ip if info else None,
+                            'update_available': self._update_available(uid, info)})
         firmware = {
             'available_version': self._firmware_available_version,
             'image_present': self._firmware_image_present,
@@ -626,6 +640,19 @@ class ControllerService:
         }
         return {'type': 'state', 'session': session, 'devices': devices,
                 'firmware': firmware}
+
+    def _update_available(self, uid, info):
+        """Whether to offer uid the built image (see firmware.update_available).
+
+        The service is the authority: the UI shows no versions and offers an
+        update only where this says so. Sims never take one, and neither does
+        a device that has never broadcast DISCOVER: update_firmware has no
+        address to send it to, so offering it would only earn a refusal."""
+        if uid.startswith('sim-') or info is None:
+            return False
+        return firmware.update_available(info.version,
+                                         self._firmware_available_version,
+                                         self._firmware_image_present)
 
     def _catalog_dict(self):
         programs = [{

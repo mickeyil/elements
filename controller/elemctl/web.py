@@ -126,9 +126,11 @@ def _make_disconnected_snapshot(snapshot: dict | None) -> dict:
                 dev['serving'] = False
                 dev['clock_synced'] = None
                 dev['clock_skew_ms'] = None
-                # No address to update through; the last reported version
+                # No address to update through, and only the controller can
+                # say whether an update is due. The last reported version
                 # stays, as the last thing known about the device.
                 dev['ip'] = None
+                dev['update_available'] = False
                 configured.append(dev)
         out['devices'] = configured
         out['online_count'] = 0

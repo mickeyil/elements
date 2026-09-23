@@ -8,11 +8,11 @@ import { useInjectedServerState, type SnapshotDevice } from '../composables/useS
 import { updateFirmware } from '../lib/deviceApi';
 import { clockLabel } from '../lib/deviceClock';
 import {
-  availableImageLabel,
+  isUpdateOffered,
+  updateOfferLabel,
   updateAvailability,
   updateForDevice,
   updateProgressLabel,
-  versionLabel,
   type FirmwareState,
   type UpdateAvailability,
 } from '../lib/firmwareModel';
@@ -43,8 +43,6 @@ const layouts = computed<Record<string, unknown>>(() => {
 });
 
 const firmware = computed<FirmwareState | null>(() => snapshot.value?.firmware ?? null);
-
-const imageLabel = computed<string | null>(() => availableImageLabel(firmware.value));
 
 const devices = computed<SnapshotDevice[]>(() => {
   const items = Array.isArray(snapshot.value?.devices) ? snapshot.value.devices : [];
@@ -287,9 +285,6 @@ onBeforeUnmount(() => {
           <span v-if="counts.offline" class="status-summary-offline">{{ counts.offline }} offline</span>
         </div>
         <div v-else class="status-toolbar-spacer" />
-        <span v-if="imageLabel" class="status-firmware-image mono" title="Firmware image an update installs">
-          {{ imageLabel }}
-        </span>
         <button
           type="button"
           class="action-button status-new-device-button"
@@ -349,9 +344,6 @@ onBeforeUnmount(() => {
             <div class="device-bottom-row">
               <div class="device-meta">
                 <p class="device-uid mono">DEVICE: {{ device.uid }}</p>
-                <p class="device-uid mono" :title="device.ip ? `Last heard from ${device.ip}` : ''">
-                  VERSION: <span class="device-version">{{ versionLabel(device.version) }}</span>
-                </p>
                 <p
                   v-if="firmwareNote(device)"
                   class="device-firmware-note mono"
@@ -412,12 +404,12 @@ onBeforeUnmount(() => {
                       Configure
                     </button>
                     <button
-                      v-if="!device.isSim"
+                      v-if="isUpdateOffered(device)"
                       type="button"
                       class="device-menu-item"
                       :disabled="!firmwareAvailability(device).enabled"
                       :title="firmwareAvailability(device).enabled
-                        ? `Flash ${firmware?.available_version ?? 'the built image'} over the air`
+                        ? updateOfferLabel(device, firmware)
                         : firmwareAvailability(device).reason"
                       @click="startFirmwareUpdate(device)"
                     >
@@ -505,14 +497,6 @@ onBeforeUnmount(() => {
 
 .status-new-device-button {
   flex: 0 0 auto;
-}
-
-.status-firmware-image {
-  margin-left: auto;
-  color: var(--muted);
-  font-size: 0.64rem;
-  letter-spacing: 0.08em;
-  white-space: nowrap;
 }
 
 .status-new-device-plus {
@@ -665,11 +649,6 @@ onBeforeUnmount(() => {
   display: grid;
   gap: 0.2rem;
   min-width: 0;
-}
-
-/* Versions are case-significant ("+d", commit hashes); keep them as sent. */
-.device-version {
-  text-transform: none;
 }
 
 .device-firmware-note {

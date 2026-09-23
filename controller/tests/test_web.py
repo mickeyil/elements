@@ -71,7 +71,7 @@ def test_make_disconnected_snapshot_drops_firmware_and_device_address():
     snap = {
         'devices': [
             {'uid': 'esp-000000000001', 'configured': True, 'status': 'online',
-             'version': '0.5', 'ip': '10.0.0.9'},
+             'version': '0.5', 'ip': '10.0.0.9', 'update_available': True},
         ],
         'firmware': {'available_version': '0.6', 'image_present': True,
                      'update': {'uid': 'esp-000000000001', 'phase': 'sending'}},
@@ -82,7 +82,8 @@ def test_make_disconnected_snapshot_drops_firmware_and_device_address():
     assert out['firmware'] is None
     dev = out['devices'][0]
     assert dev['ip'] is None            # nothing to update through
-    assert dev['version'] == '0.5'      # last known, still shown
+    assert dev['update_available'] is False   # the controller's call, and it is gone
+    assert dev['version'] == '0.5'      # last known, kept
 
 
 def test_empty_snapshot_includes_programs_after_disconnect():

@@ -410,7 +410,8 @@ def test_discovered_device_surfaced_as_stub(tmp_path):
     devices = _by_type(_json(service.snapshot_messages()), 'state')[0]['devices']
     discovered = [d for d in devices if d['uid'] == 'sim-new']
     assert discovered == [{'uid': 'sim-new', 'configured': False,
-                           'status': 'discovered', 'version': None, 'ip': None}]
+                           'status': 'discovered', 'version': None, 'ip': None,
+                           'update_available': False}]
 
 
 def test_configured_device_not_duplicated_when_also_discovered(tmp_path):
@@ -743,7 +744,7 @@ def test_device_version_and_ip_come_from_discovery(tmp_path):
     # A legacy device reports no version: '' (known, empty), not None.
     assert _device(service, ESP) == {'uid': ESP, 'configured': False,
                                      'status': 'discovered', 'version': '',
-                                     'ip': '10.0.0.9'}
+                                     'ip': '10.0.0.9', 'update_available': False}
 
 
 def test_firmware_block_without_an_image(tmp_path):
@@ -774,6 +775,43 @@ def test_firmware_sidecar_rechecked_on_an_interval(tmp_path):
     published = _by_type(_json(json_msgs), 'state')
     assert published and published[0]['firmware']['available_version'] == '0.8'
     assert published[0]['firmware']['image_present'] is True
+
+
+def test_update_available_is_decided_per_device(tmp_path):
+    service, hub = make_service(tmp_path)
+    hub.discovered = {ESP}
+    hub.info[ESP] = DeviceInfo(ip='10.0.0.9', version='0.6', seen_us=1)
+    hub.info['sim-a'] = DeviceInfo(ip='127.0.0.1', version='e029971', seen_us=1)
+    # No image built: nothing to offer anyone.
+    assert _device(service, ESP)['update_available'] is False
+    assert _device(service, 'sim-a')['update_available'] is False
+
+    _write_image(tmp_path, '0.7')
+    _elapse(service, FIRMWARE_CHECK_INTERVAL_US)
+    service.tick_once()
+    assert _device(service, ESP)['update_available'] is True
+    # A sim is never offered one, whatever its version says.
+    assert _device(service, 'sim-a')['update_available'] is False
+
+    # Current or newer than the image: no offer.
+    hub.info[ESP] = DeviceInfo(ip='10.0.0.9', version='0.7', seen_us=1)
+    assert _device(service, ESP)['update_available'] is False
+    hub.info[ESP] = DeviceInfo(ip='10.0.0.9', version='0.10', seen_us=1)
+    assert _device(service, ESP)['update_available'] is False
+    # Firmware that predates version reporting cannot be compared: offered.
+    hub.info[ESP] = DeviceInfo(ip='10.0.0.9', version='', seen_us=1)
+    assert _device(service, ESP)['update_available'] is True
+
+
+def test_update_available_needs_a_discovered_address(tmp_path):
+    # An ESP with no DeviceInfo (in practice a configured one that has never
+    # broadcast) has no address to send to, so it is not offered an update
+    # even though an image is waiting. Configured and discovered devices share
+    # the decision; a discovered stub is the ESP this fixture can list.
+    _write_image(tmp_path)
+    service, hub = make_service(tmp_path)
+    hub.discovered = {ESP}
+    assert _device(service, ESP)['update_available'] is False
 
 
 def test_update_firmware_starts_a_transfer_to_the_discovered_address(tmp_path, fake_ota):
@@ -810,6 +848,27 @@ def test_update_firmware_refusals(tmp_path, fake_ota):
     reply = cmd(service, 'update_firmware', uid='sim-a')
     assert reply['ok'] is False and 'sim' in reply['error']
     assert fake_ota.instances == []
+
+
+@pytest.mark.parametrize('device_version', ['0.7', '0.8', '1.0'])
+def test_update_firmware_refused_when_no_update_is_available(tmp_path, fake_ota,
+                                                             device_version):
+    # The service is the authority: a device already on the image's version,
+    # or newer, is refused even if a client asks anyway.
+    _write_image(tmp_path, '0.7')
+    service, hub = make_service(tmp_path, ota_factory=fake_ota)
+    hub.info[ESP] = DeviceInfo(ip='10.0.0.9', version=device_version, seen_us=1)
+    reply = cmd(service, 'update_firmware', uid=ESP)
+    assert reply['ok'] is False and 'no firmware update available' in reply['error']
+    assert fake_ota.instances == []
+
+
+def test_update_firmware_accepts_a_dirty_image_over_the_same_version(tmp_path, fake_ota):
+    _write_image(tmp_path, '0.7+d')
+    service, hub = make_service(tmp_path, ota_factory=fake_ota)
+    hub.info[ESP] = DeviceInfo(ip='10.0.0.9', version='0.7+d', seen_us=1)
+    assert cmd(service, 'update_firmware', uid=ESP)['ok']
+    assert len(fake_ota.instances) == 1
 
 
 def test_update_firmware_refused_while_one_runs(tmp_path, fake_ota):
