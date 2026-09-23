@@ -15,7 +15,7 @@
 // In scope (testable without a real network):
 //   - initial state (controller_ip / tcp_port both 0; no bind)
 //   - lazy bind to ephemeral on the first poll()
-//   - DISCOVER wire shape (magic, type, uid, dst, port)
+//   - DISCOVER wire shape (magic, type, uid, version, dst, port)
 //   - configurable dst_ip (sim path)
 //   - broadcast interval gating
 //   - OFFER parsing populates controller_ip / tcp_port
@@ -140,9 +140,11 @@ std::vector<uint8_t> build_offer(uint32_t ip, uint16_t port,
     return pkt;
 }
 
-DeviceIdentity make_identity(const char* uid = "sim-test-uid") {
+DeviceIdentity make_identity(const char* uid = "sim-test-uid",
+                             const char* version = "") {
     DeviceIdentity id;
     std::strncpy(id.uid, uid, UID_BUF_SIZE - 1);
+    std::strncpy(id.version, version, VERSION_BUF_SIZE - 1);
     id.boot_token = 0xDEADBEEF;
     return id;
 }
@@ -184,7 +186,34 @@ TEST_CASE("first poll() lazy-binds on an ephemeral port", "[discovery]") {
 // DISCOVER wire shape
 // ---------------------------------------------------------------------------
 
-TEST_CASE("DISCOVER carries magic, type, and uid", "[discovery]") {
+TEST_CASE("DISCOVER carries magic, type, uid, and version", "[discovery]") {
+    set_test_now_us(1'000'000);
+
+    DeviceIdentity   id  = make_identity("sim-foo", "0.54+d");
+    FakeUdpTransport udp;
+    DiscoveryClient  d(udp, id);
+
+    d.poll();
+
+    REQUIRE(udp.sent.size() == 1);
+    const auto& bytes = udp.sent.back().bytes;
+    REQUIRE(bytes.size() == 35);
+
+    uint16_t magic = 0;
+    std::memcpy(&magic, bytes.data(), 2);
+    CHECK(magic == MAGIC);
+    CHECK(bytes[2] == 0x01);
+
+    // uid: "sim-foo" then null-padded out to 16 bytes.
+    CHECK(std::memcmp(bytes.data() + 3, "sim-foo", 7) == 0);
+    for (size_t i = 10; i < 19; ++i) CHECK(bytes[i] == 0);
+
+    // version: "0.54+d" then null-padded out to 16 bytes.
+    CHECK(std::memcmp(bytes.data() + 19, "0.54+d", 6) == 0);
+    for (size_t i = 25; i < 35; ++i) CHECK(bytes[i] == 0);
+}
+
+TEST_CASE("DISCOVER sends an empty version slot as all zeros", "[discovery]") {
     set_test_now_us(1'000'000);
 
     DeviceIdentity   id  = make_identity("sim-foo");
@@ -195,16 +224,24 @@ TEST_CASE("DISCOVER carries magic, type, and uid", "[discovery]") {
 
     REQUIRE(udp.sent.size() == 1);
     const auto& bytes = udp.sent.back().bytes;
-    REQUIRE(bytes.size() == 19);
+    REQUIRE(bytes.size() == 35);
+    for (size_t i = 19; i < 35; ++i) CHECK(bytes[i] == 0);
+}
 
-    uint16_t magic = 0;
-    std::memcpy(&magic, bytes.data(), 2);
-    CHECK(magic == MAGIC);
-    CHECK(bytes[2] == 0x01);
+TEST_CASE("DISCOVER truncates a long version to the 16-byte slot", "[discovery]") {
+    set_test_now_us(1'000'000);
 
-    // uid: "sim-foo" then null-padded out to 16 bytes.
-    CHECK(std::memcmp(bytes.data() + 3, "sim-foo", 7) == 0);
-    for (size_t i = 10; i < 19; ++i) CHECK(bytes[i] == 0);
+    // 20 chars: fits the in-memory buffer, overflows the wire slot.
+    DeviceIdentity   id  = make_identity("sim-foo", "0123456789abcdefWXYZ");
+    FakeUdpTransport udp;
+    DiscoveryClient  d(udp, id);
+
+    d.poll();
+
+    REQUIRE(udp.sent.size() == 1);
+    const auto& bytes = udp.sent.back().bytes;
+    REQUIRE(bytes.size() == 35);
+    CHECK(std::memcmp(bytes.data() + 19, "0123456789abcdef", 16) == 0);
 }
 
 TEST_CASE("DISCOVER goes to broadcast on default dst_ip", "[discovery]") {

@@ -85,7 +85,7 @@ void setup()
     FastLED.setBrightness(255);
 
     g_app->begin();
-    slog_info("elements device %s up", g_identity.uid);
+    slog_info("elements device %s (firmware %s) up", g_identity.uid, g_identity.version);
 }
 
 void loop()

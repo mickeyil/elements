@@ -75,6 +75,25 @@ add_executable(sim_device
 )
 target_link_libraries(sim_device elements_core)
 
+# The sim's version (commit hash, "+d" when src/ is dirty) as a generated
+# header. The target runs on every build because git state is not a file
+# CMake can depend on; the script rewrites the header only when the text
+# changes, so an unchanged tree recompiles nothing. Only sim_device sees
+# the header: the library and tests stay independent of git state.
+set(ELEMENTS_GENERATED_DIR ${CMAKE_BINARY_DIR}/generated)
+add_custom_target(elements_version_header
+    COMMAND ${CMAKE_COMMAND}
+            -DOUTPUT=${ELEMENTS_GENERATED_DIR}/elements_version.h
+            -DREPO_ROOT=${CMAKE_SOURCE_DIR}
+            -DGIT_EXECUTABLE=${GIT_EXECUTABLE}
+            -P ${CMAKE_SOURCE_DIR}/cmake/GenerateVersionHeader.cmake
+    BYPRODUCTS ${ELEMENTS_GENERATED_DIR}/elements_version.h
+    COMMENT "Refreshing sim version header"
+    VERBATIM
+)
+add_dependencies(sim_device elements_version_header)
+target_include_directories(sim_device PRIVATE ${ELEMENTS_GENERATED_DIR})
+
 # ---------------------------------------------------------------------------
 # Tests (Catch2, fetched at configure time)
 # ---------------------------------------------------------------------------

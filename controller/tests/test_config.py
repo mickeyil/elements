@@ -1,6 +1,7 @@
 """Unit tests for elemctl config loading (v3 schema)."""
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -9,13 +10,17 @@ from elemctl.config import (
     DEFAULT_DISCOVERY_PORT,
     DEFAULT_FRAME_PORT,
     DEFAULT_LINK_PORT,
+    DEFAULT_FIRMWARE_IMAGE_PATH,
     DEFAULT_LOG_PORT,
+    DEFAULT_OTA_PORT,
     DEFAULT_SYNC_PORT,
     MAX_DEVICE_PIXELS,
+    REPO_ROOT,
     default_config_doc,
     load_config,
     load_config_obj,
     resolve_config_path,
+    resolve_firmware_image,
     resolve_runtime_path,
     validate_device_uid,
 )
@@ -60,6 +65,7 @@ def test_ports_default_to_well_known_values(tmp_path):
     assert config.frame_port == DEFAULT_FRAME_PORT == 6042
     assert config.sync_port == DEFAULT_SYNC_PORT == 6043
     assert config.log_port == DEFAULT_LOG_PORT == 6044
+    assert config.ota_port == DEFAULT_OTA_PORT == 6045
 
 
 def test_explicit_ports_override_defaults(tmp_path):
@@ -69,15 +75,17 @@ def test_explicit_ports_override_defaults(tmp_path):
         "frame_port": 7042,
         "sync_port": 7043,
         "log_port": 7044,
+        "ota_port": 7045,
     })
     config = load_config(_write_config(tmp_path, doc))
     assert (config.discovery_port, config.link_port, config.frame_port,
-            config.sync_port, config.log_port) == (7040, 7041, 7042,
-                                                   7043, 7044)
+            config.sync_port, config.log_port,
+            config.ota_port) == (7040, 7041, 7042, 7043, 7044, 7045)
 
 
 @pytest.mark.parametrize('field', [
     'discovery_port', 'link_port', 'frame_port', 'sync_port', 'log_port',
+    'ota_port',
 ])
 @pytest.mark.parametrize('bad', [0, 65536, -1, 'x', None, True])
 def test_invalid_port_rejected(tmp_path, field, bad):
@@ -89,6 +97,43 @@ def test_invalid_port_rejected(tmp_path, field, bad):
 def test_duplicate_ports_rejected(tmp_path):
     doc = _valid_config(controller={"frame_port": 6043})
     with pytest.raises(ConfigError, match='duplicates'):
+        load_config(_write_config(tmp_path, doc))
+
+
+def test_ota_port_must_not_duplicate_another_port(tmp_path):
+    doc = _valid_config(controller={"ota_port": 6041})
+    with pytest.raises(ConfigError, match='duplicates'):
+        load_config(_write_config(tmp_path, doc))
+
+
+def test_firmware_settings_default(tmp_path):
+    config = load_config(_write_config(tmp_path, _valid_config()))
+    assert config.firmware_image is None
+    assert config.ota_password is None
+    assert resolve_firmware_image(config) == REPO_ROOT / 'build/pio/esp32dev/firmware.bin'
+    assert str(resolve_firmware_image(config)) == DEFAULT_FIRMWARE_IMAGE_PATH
+
+
+def test_firmware_settings_explicit(tmp_path):
+    doc = _valid_config(controller={
+        "firmware_image": "/srv/fw/firmware.bin",
+        "ota_password": "hunter2",
+    })
+    config = load_config(_write_config(tmp_path, doc))
+    assert resolve_firmware_image(config) == Path('/srv/fw/firmware.bin')
+    assert config.ota_password == "hunter2"
+
+    # A relative image path is taken from the repo root, not the cwd.
+    doc = _valid_config(controller={"firmware_image": "out/fw.bin"})
+    config = load_config(_write_config(tmp_path, doc))
+    assert resolve_firmware_image(config) == REPO_ROOT / 'out/fw.bin'
+
+
+@pytest.mark.parametrize('field', ['firmware_image', 'ota_password'])
+@pytest.mark.parametrize('bad', ['', 5, True])
+def test_invalid_firmware_settings_rejected(tmp_path, field, bad):
+    doc = _valid_config(controller={field: bad})
+    with pytest.raises(ConfigError):
         load_config(_write_config(tmp_path, doc))
 
 

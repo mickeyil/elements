@@ -5,6 +5,13 @@
 
 #include <cstdio>
 
+// Injected by tools/pio_version.py for this file only. A build without
+// the script (another env, an IDE) still compiles and reports an empty
+// version, which the controller shows as unknown.
+#ifndef ELEMENTS_VERSION
+#define ELEMENTS_VERSION ""
+#endif
+
 namespace {
 
 uint32_t make_boot_token_()
@@ -45,5 +52,6 @@ DeviceIdentity make_esp_device_identity()
     DeviceIdentity identity;
     make_device_uid_(identity.uid, UID_BUF_SIZE);
     identity.boot_token = make_boot_token_();
+    snprintf(identity.version, VERSION_BUF_SIZE, "%s", ELEMENTS_VERSION);
     return identity;
 }

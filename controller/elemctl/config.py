@@ -2,8 +2,8 @@
 
 Reads a JSON config describing the controller and device topology.
 
-v3 shape: the controller section holds the five well-known ports; a
-device entry is just
+v3 shape: the controller section holds the five well-known ports plus
+the OTA port and firmware settings (all optional); a device entry is just
 `{device_uid, strip_id, length, label?}`. Devices connect in and are
 identified by UID alone, so the config stores no addresses and no
 numeric ids. The device type is implied by the UID prefix
@@ -32,6 +32,9 @@ DEFAULT_LINK_PORT = 6041
 DEFAULT_FRAME_PORT = 6042
 DEFAULT_SYNC_PORT = 6043
 DEFAULT_LOG_PORT = 6044
+# TCP port the controller listens on during a firmware update; the
+# device connects back to it (espota protocol, see ota.py).
+DEFAULT_OTA_PORT = 6045
 
 # Must match MAX_STRIP_PIXELS in src/core/hardware_profile.h
 MAX_DEVICE_PIXELS = 300
@@ -40,9 +43,12 @@ MAX_UID_BYTES = 16
 
 DEFAULT_ANIMATIONS_PATH = str(REPO_ROOT / 'animations')
 DEFAULT_LOGS_PATH = str(REPO_ROOT / 'logs')
+# Where `pio run -e esp32dev` leaves the image (platformio.ini build_dir);
+# tools/pio_version.py writes firmware.version beside it.
+DEFAULT_FIRMWARE_IMAGE_PATH = str(REPO_ROOT / 'build' / 'pio' / 'esp32dev' / 'firmware.bin')
 
 _PORT_FIELDS = ('discovery_port', 'link_port', 'frame_port', 'sync_port',
-                'log_port')
+                'log_port', 'ota_port')
 _ESP_UID_RE = re.compile(r'^esp-[0-9a-f]{12}$')
 _STRIP_ID_RE = re.compile(r'^[A-Za-z0-9_-]+$')
 
@@ -87,6 +93,7 @@ def default_config_doc() -> dict:
             "frame_port": DEFAULT_FRAME_PORT,
             "sync_port": DEFAULT_SYNC_PORT,
             "log_port": DEFAULT_LOG_PORT,
+            "ota_port": DEFAULT_OTA_PORT,
         },
         "devices": [],
     }
@@ -170,6 +177,9 @@ class Config:
     devices: list[DeviceConfig]
     animations_dir: str | None = None  # override for animations directory
     logs_dir: str | None = None        # override for logs directory
+    ota_port: int = DEFAULT_OTA_PORT
+    firmware_image: str | None = None  # override for the OTA image path
+    ota_password: str | None = None    # device ArduinoOTA password, if one is built in
 
 
 def resolve_runtime_path(
@@ -179,6 +189,13 @@ def resolve_runtime_path(
 ) -> str:
     """Resolve a runtime path with CLI > config > default precedence."""
     return os.path.expanduser(cli_override or config_value or default)
+
+
+def resolve_firmware_image(config: Config) -> Path:
+    """The OTA image path: the configured one (a relative path is taken
+    from the repo root, where the PlatformIO build lives) or the default."""
+    path = Path(os.path.expanduser(config.firmware_image or DEFAULT_FIRMWARE_IMAGE_PATH))
+    return path if path.is_absolute() else REPO_ROOT / path
 
 
 def load_config(path: str) -> Config:
@@ -233,6 +250,17 @@ def load_config_obj(raw: dict) -> Config:
     if logs_dir is not None:
         if not isinstance(logs_dir, str):
             raise ConfigError("'controller.logs_dir' must be a string")
+
+    firmware_image = ctrl.get("firmware_image")
+    if firmware_image is not None:
+        if not isinstance(firmware_image, str) or not firmware_image:
+            raise ConfigError("'controller.firmware_image' must be a non-empty string")
+
+    # Must match ELEMENTS_OTA_PASSWORD in the firmware build, when set.
+    ota_password = ctrl.get("ota_password")
+    if ota_password is not None:
+        if not isinstance(ota_password, str) or not ota_password:
+            raise ConfigError("'controller.ota_password' must be a non-empty string")
 
     # --- devices section ---
     devices_raw = raw.get("devices")
@@ -303,4 +331,7 @@ def load_config_obj(raw: dict) -> Config:
         devices=devices,
         animations_dir=animations_dir,
         logs_dir=logs_dir,
+        ota_port=ports["ota_port"],
+        firmware_image=firmware_image,
+        ota_password=ota_password,
     )

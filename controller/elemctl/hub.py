@@ -66,6 +66,14 @@ class DeviceDisconnected:
     reason: str
 
 
+@dataclass(frozen=True)
+class DeviceInfo:
+    """What a device's latest DISCOVER said about it."""
+    ip: str          # source address of the DISCOVER; where OTA is aimed
+    version: str     # build version it reported; '' when none
+    seen_us: int     # hub clock at that DISCOVER
+
+
 @dataclass
 class HubPoll:
     events: list     # DeviceConnected / DeviceDisconnected, in order
@@ -105,12 +113,19 @@ class DiscoveryServer:
     Every valid DISCOVER is recorded by last-seen time, wanted or not, so
     the layer above can surface unconfigured devices that are broadcasting.
     Recording is not offering: only wanted UIDs get an OFFER, which keeps
-    the controller talking solely to devices it means to."""
+    the controller talking solely to devices it means to.
+
+    Each DISCOVER also refreshes a DeviceInfo (address, version) that is
+    never pruned: a firmware update needs the address of a device that
+    may be offline to the session (a REGISTER refused over a protocol
+    mismatch leaves it broadcasting, not linked), and the last known
+    version stays worth showing after the broadcasts stop."""
 
     def __init__(self, port, link_port):
         self._sock = _udp_listener(port)
         self._link_port = link_port
         self._last_seen = {}   # uid -> us of its last DISCOVER, valid UIDs only
+        self._info = {}        # uid -> DeviceInfo from its last DISCOVER; never pruned
         log.info('discovery: listening on %s:%d', *self._sock.getsockname())
 
     @property
@@ -126,22 +141,29 @@ class DiscoveryServer:
             except OSError as e:
                 log.warning('discovery: recv failed: %s', e)
                 return
-            uid = wire.parse_discover(datagram)
-            if uid is None:
+            msg = wire.parse_discover(datagram)
+            if msg is None:
                 log.debug('discovery: rejected packet from %s:%d (%d bytes, prefix=%s)',
                           *src, len(datagram), datagram[:19].hex())
                 continue
+            uid = msg.uid
             error = validate_device_uid(uid)
             if error is not None:
                 log.debug('discovery: rejected UID %r from %s:%d: %s', uid, *src, error)
                 continue
             previous = self._last_seen.get(uid)
             if previous is None or now_us - previous > DISCOVERED_TTL_US:
-                log.info('discovery: found %s at %s:%d (configured=%s)',
-                         uid, *src, uid in wanted_uids)
+                log.info('discovery: found %s at %s:%d version=%r (configured=%s)',
+                         uid, *src, msg.version, uid in wanted_uids)
+            else:
+                known = self._info.get(uid)
+                if known is not None and (known.ip, known.version) != (src[0], msg.version):
+                    log.info('discovery: %s now at %s version=%r (was %s version=%r)',
+                             uid, src[0], msg.version, known.ip, known.version)
             log.debug('discovery: DISCOVER %s from %s:%d; %s', uid, *src,
                       'sending OFFER' if uid in wanted_uids else 'unconfigured; no OFFER')
             self._last_seen[uid] = now_us
+            self._info[uid] = DeviceInfo(ip=src[0], version=msg.version, seen_us=now_us)
             if uid not in wanted_uids:
                 continue
             advertised = _advertised_ip_toward(src[0])
@@ -161,6 +183,10 @@ class DiscoveryServer:
                 if now_us - seen <= DISCOVERED_TTL_US}
         self._last_seen = live
         return set(live)
+
+    def device_info(self, uid):
+        """DeviceInfo from uid's latest DISCOVER, however old; None if never heard."""
+        return self._info.get(uid)
 
     def close(self):
         self._sock.close()
@@ -613,6 +639,10 @@ class DeviceHub:
     def discovered_uids(self):
         """UIDs broadcasting DISCOVER now, wanted or not (see DiscoveryServer)."""
         return self._discovery.discovered(self._clock_us())
+
+    def device_info(self, uid):
+        """Address and version from uid's latest DISCOVER (see DiscoveryServer)."""
+        return self._discovery.device_info(uid)
 
     def disconnect(self, uid, reason='removed'):
         """Close a device's link on request (remove or re-identify)."""

@@ -1,3 +1,11 @@
+# Writes OUTPUT, a header defining ELEMENTS_VERSION for the sim build:
+# the short commit hash, plus "+d" when anything under src/ differs from
+# it (the sim is built from src/, so edits elsewhere do not change what
+# it runs). "unknown" without git or outside a checkout.
+#
+# Run in script mode (cmake -P) on every build; OUTPUT is replaced only
+# when its text changes so dependents recompile only on a real change.
+
 if(NOT DEFINED OUTPUT)
     message(FATAL_ERROR "OUTPUT is required")
 endif()
@@ -9,7 +17,7 @@ endif()
 set(VERSION "unknown")
 if(DEFINED GIT_EXECUTABLE AND NOT GIT_EXECUTABLE STREQUAL "")
     execute_process(
-        COMMAND "${GIT_EXECUTABLE}" -C "${REPO_ROOT}" describe --tags --always --dirty
+        COMMAND "${GIT_EXECUTABLE}" -C "${REPO_ROOT}" rev-parse --short HEAD
         RESULT_VARIABLE GIT_RESULT
         OUTPUT_VARIABLE GIT_OUTPUT
         ERROR_QUIET
@@ -17,6 +25,16 @@ if(DEFINED GIT_EXECUTABLE AND NOT GIT_EXECUTABLE STREQUAL "")
     )
     if(GIT_RESULT EQUAL 0 AND NOT GIT_OUTPUT STREQUAL "")
         set(VERSION "${GIT_OUTPUT}")
+        execute_process(
+            COMMAND "${GIT_EXECUTABLE}" -C "${REPO_ROOT}" status --porcelain -- src
+            RESULT_VARIABLE GIT_STATUS_RESULT
+            OUTPUT_VARIABLE GIT_STATUS_OUTPUT
+            ERROR_QUIET
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+        )
+        if(GIT_STATUS_RESULT EQUAL 0 AND NOT GIT_STATUS_OUTPUT STREQUAL "")
+            set(VERSION "${VERSION}+d")
+        endif()
     endif()
 endif()
 

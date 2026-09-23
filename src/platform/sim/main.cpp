@@ -20,6 +20,7 @@
 #include "platform/sim/sim_frame_output.h"
 #include "platform/sim/sim_system_platform.h"
 #include "controller/slog.h"
+#include "elements_version.h"  // generated at build time (CMakeLists.txt)
 
 // The sim device entry point: constructs the POSIX platform pieces,
 // hands them to the shared App, and ticks it until a signal arrives.
@@ -111,7 +112,7 @@ int main(int argc, char** argv)
     std::signal(SIGINT, handle_stop_signal);
     std::signal(SIGTERM, handle_stop_signal);
 
-    const DeviceIdentity identity = make_sim_device_identity(opts.device_uid);
+    const DeviceIdentity identity = make_sim_device_identity(opts.device_uid, ELEMENTS_VERSION);
 
     HostNetworkInterface network;
     PosixUdpTransport discovery_udp;
@@ -131,8 +132,8 @@ int main(int argc, char** argv)
     App app(network, discovery, tcp, sync_udp, log_udp, files, profile_kv,
             system, output, identity);
 
-    slog_info("sim device %s up; controller %s, frame port %u",
-              identity.uid, opts.controller_host, opts.frame_port);
+    slog_info("sim device %s (version %s) up; controller %s, frame port %u",
+              identity.uid, identity.version, opts.controller_host, opts.frame_port);
 
     app.begin();
     while (!g_stop) {

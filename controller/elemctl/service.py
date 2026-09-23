@@ -23,6 +23,7 @@ from pathlib import Path
 
 from . import config as config_mod
 from . import config_edit
+from . import ota
 from . import wire
 from .controller_protocol import encode_frame, encode_json
 from .device_status import DeviceStatusPoller
@@ -37,6 +38,15 @@ from .session import (
 )
 
 log = logging.getLogger(__name__)
+
+# How often the firmware image and its version sidecar are re-checked on
+# disk; a fresh `pio run` shows up in the UI within this long.
+FIRMWARE_CHECK_INTERVAL_US = 1_000_000
+
+# Transfer progress changes every chunk; republishing the full state that
+# often would flood the UI, so progress refreshes at most this often.
+# Phase changes (start, done, failed) publish immediately.
+OTA_PROGRESS_INTERVAL_US = 500_000
 
 
 def _doc_label(doc, target_uid):
@@ -61,7 +71,7 @@ class ControllerService:
     """
 
     def __init__(self, config, *, config_path=None, hub=None, clock_us=None,
-                 library=None):
+                 library=None, ota_factory=None):
         if clock_us is None:
             clock_us = lambda: time.monotonic_ns() // 1000
         self._config = config
@@ -89,6 +99,26 @@ class ControllerService:
         # command stores a program as a device's local fallback animation. Each
         # value is {'program_id', 'phase', 'error'}; surfaced in the state dict.
         self._bg_pushes = {}
+
+        # Firmware update: at most one transfer at a time, run on its own
+        # thread by an ota.FirmwareUpdate (tests inject a fake factory).
+        # _ota_view is the runner snapshot last chosen for publishing (see
+        # _poll_firmware_update); _ota_logged_phase makes the outcome log
+        # exactly once per transfer.
+        self._ota_factory = ota_factory or ota.FirmwareUpdate
+        self._ota = None
+        self._ota_view = None
+        self._ota_view_us = 0
+        self._ota_logged_phase = None
+        # The image on disk and the version its build stamped beside it
+        # (firmware.version, from tools/pio_version.py); see
+        # _refresh_firmware_image().
+        self._firmware_image = config_mod.resolve_firmware_image(config)
+        self._firmware_checked_us = None
+        self._firmware_sidecar_stat = None
+        self._firmware_available_version = None
+        self._firmware_image_present = False
+        self._refresh_firmware_image()
 
     @property
     def should_shutdown(self):
@@ -123,6 +153,8 @@ class ControllerService:
         self._device_status.tick(self._session.attached_uids())
         json_msgs = [encode_json(self._event_dict(ev)) for ev in events]
         self._reap_orphaned_background()
+        self._refresh_firmware_image()
+        self._poll_firmware_update()
 
         state = self._state_dict()
         if state != self._last_state:
@@ -190,6 +222,8 @@ class ControllerService:
             return self._cmd_publish(cmd)
         if name == 'set_background':
             return self._cmd_set_background(cmd)
+        if name == 'update_firmware':
+            return self._cmd_update_firmware(cmd)
         raise ValueError(f'unknown command: {name!r}')
 
     def _cmd_load(self, cmd):
@@ -393,6 +427,92 @@ class ControllerService:
             if push['phase'] not in self._BG_TERMINAL and not self._hub.is_connected(uid):
                 self._bg_fail(uid, push, 'device disconnected during install')
 
+    # -- firmware update ----------------------------------------------------
+
+    def _cmd_update_firmware(self, cmd):
+        """Flash the built firmware image onto one ESP over ArduinoOTA.
+
+        Manual by design: the operator picks the device and the moment. The
+        target address is the source of the device's latest DISCOVER, so this
+        works for any device that broadcasts, configured or not, linked or
+        refused (an old protocol version is exactly when an update is needed).
+        Validation is synchronous; the transfer runs in the background and
+        its progress is the state dict's firmware.update."""
+        uid = cmd.get('uid')
+        if not isinstance(uid, str) or not uid:
+            raise ValueError('update_firmware requires a uid')
+        if uid.startswith('sim-'):
+            raise ValueError('sim devices do not take firmware updates')
+        if self._ota is not None and self._ota.snapshot()['phase'] not in ota.TERMINAL_PHASES:
+            raise ValueError('a firmware update is already running')
+        info = self._hub.device_info(uid)
+        if info is None:
+            raise ValueError(f'no known address for {uid!r}; it has not broadcast DISCOVER')
+        image = self._firmware_image
+        if not image.is_file():
+            raise ValueError(f'firmware image not found: {image}')
+
+        runner = self._ota_factory(uid=uid, device_ip=info.ip, image_path=image,
+                                   listen_port=self._config.ota_port,
+                                   password=self._config.ota_password)
+        runner.start()
+        self._ota = runner
+        self._ota_logged_phase = None
+        log.info('update_firmware: sending %s (version %s) to %s at %s; '
+                 'device reports version %r',
+                 image, self._firmware_available_version, uid, info.ip, info.version)
+        self._poll_firmware_update(force=True)
+        return {}
+
+    def _poll_firmware_update(self, force=False):
+        """Refresh the published view of the transfer and log its outcome once."""
+        if self._ota is None:
+            return
+        snap = self._ota.snapshot()
+        phase = snap['phase']
+        if phase in ota.TERMINAL_PHASES and self._ota_logged_phase != phase:
+            self._ota_logged_phase = phase
+            if phase == ota.PHASE_DONE:
+                log.info('update_firmware: %s accepted %d bytes; it reboots into '
+                         'the new image', snap['uid'], snap['bytes_sent'])
+            else:
+                log.warning('update_firmware: %s failed after %d/%d bytes: %s',
+                            snap['uid'], snap['bytes_sent'], snap['total_bytes'],
+                            snap['error'])
+        now = self._clock_us()
+        view = self._ota_view
+        if (force or view is None or view['phase'] != phase
+                or now - self._ota_view_us >= OTA_PROGRESS_INTERVAL_US):
+            self._ota_view = snap
+            self._ota_view_us = now
+
+    def _refresh_firmware_image(self):
+        """Re-stat the image and its version sidecar, at most once per
+        FIRMWARE_CHECK_INTERVAL_US; the sidecar is re-read only when its
+        mtime or size changed."""
+        now = self._clock_us()
+        if (self._firmware_checked_us is not None
+                and now - self._firmware_checked_us < FIRMWARE_CHECK_INTERVAL_US):
+            return
+        self._firmware_checked_us = now
+        self._firmware_image_present = self._firmware_image.is_file()
+        sidecar = self._firmware_image.parent / 'firmware.version'
+        try:
+            st = sidecar.stat()
+            stamp = (st.st_mtime_ns, st.st_size)
+        except OSError:
+            stamp = None
+        if stamp == self._firmware_sidecar_stat:
+            return
+        self._firmware_sidecar_stat = stamp
+        version = None
+        if stamp is not None:
+            try:
+                version = sidecar.read_text(encoding='ascii').strip() or None
+            except (OSError, UnicodeDecodeError) as e:
+                log.warning('firmware: cannot read %s: %s', sidecar, e)
+        self._firmware_available_version = version
+
     # -- compile path -------------------------------------------------------
 
     def _resolve_manifest(self, entry):
@@ -455,6 +575,7 @@ class ControllerService:
             configured.add(dc.device_uid)
             m = s.member(dc.device_uid)
             report = self._device_status.report(dc.device_uid)
+            info = self._hub.device_info(dc.device_uid)
             devices.append({
                 'uid': dc.device_uid,
                 'configured': True,
@@ -483,12 +604,28 @@ class ControllerService:
                 # at its last sync round (0 until its second round).
                 'clock_synced': report.clock_synced if report else None,
                 'clock_skew_ms': report.clock_skew_us / 1000 if report else None,
+                # From the device's latest DISCOVER, kept after it goes quiet;
+                # None until one arrives. version is '' for firmware that
+                # predates reporting it.
+                'version': info.version if info else None,
+                'ip': info.ip if info else None,
             })
         # Devices broadcasting DISCOVER but not in the config: a UID stub the
         # operator can configure. Configured devices win, so none appears twice.
         for uid in sorted(self._hub.discovered_uids() - configured):
-            devices.append({'uid': uid, 'configured': False, 'status': 'discovered'})
-        return {'type': 'state', 'session': session, 'devices': devices}
+            info = self._hub.device_info(uid)
+            devices.append({'uid': uid, 'configured': False, 'status': 'discovered',
+                            'version': info.version if info else None,
+                            'ip': info.ip if info else None})
+        firmware = {
+            'available_version': self._firmware_available_version,
+            'image_present': self._firmware_image_present,
+            # snapshot() hands out a fresh dict, so the runner thread cannot
+            # mutate what the change gate compares against.
+            'update': self._ota_view,
+        }
+        return {'type': 'state', 'session': session, 'devices': devices,
+                'firmware': firmware}
 
     def _catalog_dict(self):
         programs = [{

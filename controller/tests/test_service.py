@@ -11,9 +11,13 @@ import struct
 from elemctl.config import Config, DeviceConfig, load_config_obj
 from elemctl.controller_protocol import KIND_FRAME, KIND_JSON, parse_json_payload
 from elemctl.device_status import STATUS_QUERY_INTERVAL_US
-from elemctl.hub import DeviceConnected, DeviceDisconnected, HubPoll
+from elemctl.hub import DeviceConnected, DeviceDisconnected, DeviceInfo, HubPoll
 from elemctl.library import ProgramLibrary
-from elemctl.service import ControllerService
+from elemctl.service import (
+    FIRMWARE_CHECK_INTERVAL_US,
+    OTA_PROGRESS_INTERVAL_US,
+    ControllerService,
+)
 from elemctl import wire
 from elemctl.wire import AckMsg, FramePreview
 
@@ -45,6 +49,7 @@ class FakeHub:
         self.sent = []
         self.status_queries = []   # (uid, on_ack) per status poll
         self.discovered = set()
+        self.info = {}             # uid -> DeviceInfo, as DISCOVER would record
         self.connected = set()
         self.disconnected = []
         self.closed = False
@@ -57,6 +62,9 @@ class FakeHub:
 
     def discovered_uids(self):
         return set(self.discovered)
+
+    def device_info(self, uid):
+        return self.info.get(uid)
 
     def disconnect(self, uid, reason='removed'):
         self.disconnected.append((uid, reason))
@@ -85,16 +93,20 @@ class FakeHub:
         self.closed = True
 
 
-def make_service(tmp_path, with_program=True):
+def make_service(tmp_path, with_program=True, ota_factory=None):
     if with_program:
         (tmp_path / 'prog.py').write_text(PROGRAM)
+    # The image path is pinned inside tmp_path so the repo's own build
+    # output never leaks into a test.
     config = Config(discovery_port=6040, link_port=6041, frame_port=6042,
                     sync_port=6043, log_port=6044,
                     devices=[DeviceConfig('sim-a', 'main', 30)],
-                    animations_dir=str(tmp_path))
+                    animations_dir=str(tmp_path),
+                    firmware_image=str(tmp_path / 'fw' / 'firmware.bin'))
     hub = FakeHub()
     service = ControllerService(config, hub=hub, clock_us=FakeClock(),
-                                library=ProgramLibrary(str(tmp_path)))
+                                library=ProgramLibrary(str(tmp_path)),
+                                ota_factory=ota_factory)
     return service, hub
 
 
@@ -398,7 +410,7 @@ def test_discovered_device_surfaced_as_stub(tmp_path):
     devices = _by_type(_json(service.snapshot_messages()), 'state')[0]['devices']
     discovered = [d for d in devices if d['uid'] == 'sim-new']
     assert discovered == [{'uid': 'sim-new', 'configured': False,
-                           'status': 'discovered'}]
+                           'status': 'discovered', 'version': None, 'ip': None}]
 
 
 def test_configured_device_not_duplicated_when_also_discovered(tmp_path):
@@ -661,3 +673,188 @@ def test_set_background_preview_rejected_while_device_is_serving(tmp_path):
     # Storing/ordering don't disrupt live playback, so a non-preview install is
     # still allowed.
     assert cmd(service, 'set_background', device_uid='sim-a', program_id='prog')['ok']
+
+
+# ---------------------------------------------------------------------------
+# Firmware: versions, the available image, and update_firmware
+# ---------------------------------------------------------------------------
+
+ESP = 'esp-aabbccddeeff'
+
+
+class FakeOta:
+    """Stands in for ota.FirmwareUpdate: records its arguments and serves
+    whatever snapshot the test sets."""
+
+    instances = []
+
+    def __init__(self, *, uid, device_ip, image_path, listen_port, password):
+        self.kwargs = dict(uid=uid, device_ip=device_ip, image_path=image_path,
+                           listen_port=listen_port, password=password)
+        self.started = False
+        self.state = {'uid': uid, 'phase': 'inviting', 'bytes_sent': 0,
+                      'total_bytes': 0, 'error': None,
+                      'started_at': None, 'finished_at': None}
+        FakeOta.instances.append(self)
+
+    def start(self):
+        self.started = True
+
+    def snapshot(self):
+        return dict(self.state)
+
+
+@pytest.fixture
+def fake_ota():
+    FakeOta.instances = []
+    return FakeOta
+
+
+def _write_image(tmp_path, version='0.7'):
+    fw = tmp_path / 'fw'
+    fw.mkdir(exist_ok=True)
+    (fw / 'firmware.bin').write_bytes(b'\xe9' + b'\x00' * 99)
+    if version is not None:
+        (fw / 'firmware.version').write_text(version + '\n')
+
+
+def _state(service):
+    return _by_type(_json(service.snapshot_messages()), 'state')[0]
+
+
+def _device(service, uid):
+    return next(d for d in _state(service)['devices'] if d['uid'] == uid)
+
+
+def _elapse(service, us):
+    service._clock_us.now_us += us
+
+
+def test_device_version_and_ip_come_from_discovery(tmp_path):
+    service, hub = make_service(tmp_path)
+    assert _device(service, 'sim-a')['version'] is None
+    assert _device(service, 'sim-a')['ip'] is None
+
+    hub.info['sim-a'] = DeviceInfo(ip='127.0.0.1', version='e029971+d', seen_us=1)
+    hub.info[ESP] = DeviceInfo(ip='10.0.0.9', version='', seen_us=1)
+    hub.discovered = {ESP}
+    assert _device(service, 'sim-a')['version'] == 'e029971+d'
+    assert _device(service, 'sim-a')['ip'] == '127.0.0.1'
+    # A legacy device reports no version: '' (known, empty), not None.
+    assert _device(service, ESP) == {'uid': ESP, 'configured': False,
+                                     'status': 'discovered', 'version': '',
+                                     'ip': '10.0.0.9'}
+
+
+def test_firmware_block_without_an_image(tmp_path):
+    service, _hub = make_service(tmp_path)
+    assert _state(service)['firmware'] == {
+        'available_version': None, 'image_present': False, 'update': None}
+
+
+def test_firmware_block_reads_the_version_sidecar(tmp_path):
+    _write_image(tmp_path, '0.7+d')
+    service, _hub = make_service(tmp_path)
+    firmware = _state(service)['firmware']
+    assert firmware['available_version'] == '0.7+d'
+    assert firmware['image_present'] is True
+
+
+def test_firmware_sidecar_rechecked_on_an_interval(tmp_path):
+    service, _hub = make_service(tmp_path)
+    service.tick_once()
+    _write_image(tmp_path, '0.8')
+
+    # Within the interval the disk is not consulted again.
+    service.tick_once()
+    assert _state(service)['firmware']['available_version'] is None
+
+    _elapse(service, FIRMWARE_CHECK_INTERVAL_US)
+    json_msgs, _ = service.tick_once()
+    published = _by_type(_json(json_msgs), 'state')
+    assert published and published[0]['firmware']['available_version'] == '0.8'
+    assert published[0]['firmware']['image_present'] is True
+
+
+def test_update_firmware_starts_a_transfer_to_the_discovered_address(tmp_path, fake_ota):
+    _write_image(tmp_path)
+    service, hub = make_service(tmp_path, ota_factory=fake_ota)
+    hub.info[ESP] = DeviceInfo(ip='10.0.0.9', version='0.6', seen_us=1)
+
+    reply = cmd(service, 'update_firmware', uid=ESP)
+    assert reply['ok'] is True and reply['result'] == {}
+    (runner,) = fake_ota.instances
+    assert runner.started
+    assert runner.kwargs['device_ip'] == '10.0.0.9'
+    assert runner.kwargs['listen_port'] == service._config.ota_port
+    assert runner.kwargs['password'] is None
+    assert str(runner.kwargs['image_path']).endswith('firmware.bin')
+    assert _state(service)['firmware']['update']['phase'] == 'inviting'
+
+
+def test_update_firmware_refusals(tmp_path, fake_ota):
+    service, hub = make_service(tmp_path, ota_factory=fake_ota)
+
+    reply = cmd(service, 'update_firmware')
+    assert reply['ok'] is False and 'requires a uid' in reply['error']
+
+    reply = cmd(service, 'update_firmware', uid=ESP)       # never broadcast
+    assert reply['ok'] is False and 'no known address' in reply['error']
+
+    hub.info[ESP] = DeviceInfo(ip='10.0.0.9', version='0.6', seen_us=1)
+    reply = cmd(service, 'update_firmware', uid=ESP)       # no image built
+    assert reply['ok'] is False and 'image not found' in reply['error']
+
+    _write_image(tmp_path)
+    hub.info['sim-a'] = DeviceInfo(ip='127.0.0.1', version='abc', seen_us=1)
+    reply = cmd(service, 'update_firmware', uid='sim-a')
+    assert reply['ok'] is False and 'sim' in reply['error']
+    assert fake_ota.instances == []
+
+
+def test_update_firmware_refused_while_one_runs(tmp_path, fake_ota):
+    _write_image(tmp_path)
+    service, hub = make_service(tmp_path, ota_factory=fake_ota)
+    hub.info[ESP] = DeviceInfo(ip='10.0.0.9', version='0.6', seen_us=1)
+    assert cmd(service, 'update_firmware', uid=ESP)['ok']
+
+    fake_ota.instances[0].state['phase'] = 'sending'
+    reply = cmd(service, 'update_firmware', uid=ESP)
+    assert reply['ok'] is False and 'already running' in reply['error']
+
+    # Once the transfer ends (either way) the next one is accepted.
+    fake_ota.instances[0].state['phase'] = 'failed'
+    assert cmd(service, 'update_firmware', uid=ESP)['ok']
+    assert len(fake_ota.instances) == 2
+
+
+def test_update_progress_is_throttled_but_outcome_is_immediate(tmp_path, fake_ota):
+    _write_image(tmp_path)
+    service, hub = make_service(tmp_path, ota_factory=fake_ota)
+    hub.info[ESP] = DeviceInfo(ip='10.0.0.9', version='0.6', seen_us=1)
+    assert cmd(service, 'update_firmware', uid=ESP)['ok']
+    runner = fake_ota.instances[0]
+    service.tick_once()
+
+    runner.state.update(phase='sending', total_bytes=4096)
+    json_msgs, _ = service.tick_once()                     # phase change: now
+    update = _by_type(_json(json_msgs), 'state')[0]['firmware']['update']
+    assert update['phase'] == 'sending' and update['bytes_sent'] == 0
+
+    runner.state['bytes_sent'] = 1024
+    json_msgs, _ = service.tick_once()                     # progress: held back
+    assert _by_type(_json(json_msgs), 'state') == []
+
+    _elapse(service, OTA_PROGRESS_INTERVAL_US)
+    json_msgs, _ = service.tick_once()
+    update = _by_type(_json(json_msgs), 'state')[0]['firmware']['update']
+    assert update['bytes_sent'] == 1024
+
+    runner.state.update(phase='failed', error='device rejected the image: md5')
+    json_msgs, _ = service.tick_once()
+    update = _by_type(_json(json_msgs), 'state')[0]['firmware']['update']
+    assert update['phase'] == 'failed' and 'md5' in update['error']
+
+    # Nothing further changes, so nothing further is published.
+    json_msgs, _ = service.tick_once()
+    assert _by_type(_json(json_msgs), 'state') == []

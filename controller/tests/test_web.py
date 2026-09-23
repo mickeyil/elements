@@ -9,6 +9,7 @@ from elemctl.web import (
     WebUiServer,
     _build_parser,
     _device_uid_from_path,
+    _device_uid_from_update_path,
     _encode_ws_frame,
     _layout_device_uid_from_path,
     _make_disconnected_snapshot,
@@ -66,6 +67,24 @@ def test_make_disconnected_snapshot_offlines_configured_and_drops_discovered():
     assert dev['clock_synced'] is None and dev['clock_skew_ms'] is None
 
 
+def test_make_disconnected_snapshot_drops_firmware_and_device_address():
+    snap = {
+        'devices': [
+            {'uid': 'esp-000000000001', 'configured': True, 'status': 'online',
+             'version': '0.5', 'ip': '10.0.0.9'},
+        ],
+        'firmware': {'available_version': '0.6', 'image_present': True,
+                     'update': {'uid': 'esp-000000000001', 'phase': 'sending'}},
+    }
+
+    out = _make_disconnected_snapshot(snap)
+
+    assert out['firmware'] is None
+    dev = out['devices'][0]
+    assert dev['ip'] is None            # nothing to update through
+    assert dev['version'] == '0.5'      # last known, still shown
+
+
 def test_empty_snapshot_includes_programs_after_disconnect():
     out = _make_disconnected_snapshot(None)
 
@@ -109,6 +128,17 @@ def test_state_message_replaces_devices_session_and_sim_map():
     assert snap['expected_count'] == 2   # both configured devices
     # only configured sim-* devices feed the layout map
     assert server._sim_devices == {'sim-a': 30}
+
+
+def test_state_message_carries_firmware_block():
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080)
+    assert server._snapshot['firmware'] is None
+    firmware = {'available_version': '0.6', 'image_present': True, 'update': None}
+
+    server._apply_json_message({'type': 'state', 'session': None, 'devices': [],
+                                'firmware': firmware})
+
+    assert server._snapshot['firmware'] == firmware
 
 
 def test_web_ui_server_initial_snapshot_includes_layouts():
@@ -1033,6 +1063,44 @@ def test_route_session_play_forwards_to_controller(monkeypatch, tmp_path):
     assert status == 200
     assert payload == {'ok': True, 'result': {}}
     assert commands == [{'id': 1, 'cmd': 'play'}]
+
+
+def test_device_uid_from_update_path_extracts_uid():
+    assert _device_uid_from_update_path('/api/devices/esp-aabbccddeeff/update') == 'esp-aabbccddeeff'
+    assert _device_uid_from_update_path('/api/devices//update') is None
+    assert _device_uid_from_update_path('/api/devices/a/b/update') is None
+    assert _device_uid_from_update_path('/api/devices/esp-aabbccddeeff') is None
+
+
+def test_route_device_update_forwards_update_firmware(monkeypatch, tmp_path):
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+    commands: list[dict] = []
+    monkeypatch.setattr(web_mod, 'ControllerClient', _capturing_client(commands, _OK_REPLY))
+
+    status, payload = _run_http_request(server, 'POST', '/api/devices/esp-aabbccddeeff/update')
+
+    assert status == 200
+    assert payload == {'ok': True, 'result': {}}
+    assert commands == [{'id': 1, 'cmd': 'update_firmware', 'uid': 'esp-aabbccddeeff'}]
+
+
+def test_route_device_update_maps_refusal_to_400(monkeypatch, tmp_path):
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+    commands: list[dict] = []
+    refused = {'type': 'reply', 'id': 1, 'ok': False,
+               'error': 'a firmware update is already running'}
+    monkeypatch.setattr(web_mod, 'ControllerClient', _capturing_client(commands, refused))
+
+    status, payload = _run_http_request(server, 'POST', '/api/devices/esp-aabbccddeeff/update')
+
+    assert status == 400
+    assert payload == {'error': 'a firmware update is already running'}
+
+
+def test_route_device_update_rejects_get(tmp_path):
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+    status, _ = _run_http_request(server, 'GET', '/api/devices/esp-aabbccddeeff/update')
+    assert status == 405
 
 
 def test_route_session_rejects_get(tmp_path):

@@ -27,10 +27,17 @@ constexpr uint8_t PKT_OFFER    = 0x02;
 
 // Wire layouts. magic and port are little-endian; ipv4 is four
 // octets in network order (matches UdpTransport's dst_ip layout).
-//   DISCOVER : [magic=2B][type=1B][uid=16B]              = 19 bytes
+//   DISCOVER : [magic=2B][type=1B][uid=16B][version=16B] = 35 bytes
 //   OFFER    : [magic=2B][type=1B][ipv4=4B][port=2B]     = 9  bytes
-constexpr size_t DISCOVER_WIRE_SIZE = 2 + 1 + UID_SIZE;
+// The version slot was appended to a 19-byte DISCOVER; the controller
+// still accepts the short form from older firmware (empty version), so
+// the slot stays at the end and the uid offset never moves.
+constexpr size_t DISCOVER_WIRE_SIZE = 2 + 1 + UID_SIZE + VERSION_SIZE;
 constexpr size_t OFFER_WIRE_SIZE    = 2 + 1 + 4 + 2;
+
+// DISCOVER field offsets (after the magic + type prefix).
+constexpr size_t DISCOVER_OFF_UID     = 3;
+constexpr size_t DISCOVER_OFF_VERSION = DISCOVER_OFF_UID + UID_SIZE;
 
 // OFFER field offsets (after the magic + type prefix).
 constexpr size_t OFFER_OFF_IP   = 3;
@@ -74,10 +81,14 @@ void DiscoveryClient::send_discover_()
     std::memcpy(pkt, &MAGIC, 2);
     pkt[2] = PKT_DISCOVER;
 
-    // Copy up to UID_SIZE bytes; trailing slots are already zero.
+    // Copy up to each slot's width; trailing bytes are already zero.
     const size_t uid_len = std::min(std::strlen(_identity.uid),
                                     static_cast<size_t>(UID_SIZE));
-    std::memcpy(pkt + 3, _identity.uid, uid_len);
+    std::memcpy(pkt + DISCOVER_OFF_UID, _identity.uid, uid_len);
+
+    const size_t version_len = std::min(std::strlen(_identity.version),
+                                        static_cast<size_t>(VERSION_SIZE));
+    std::memcpy(pkt + DISCOVER_OFF_VERSION, _identity.version, version_len);
 
     if (!_udp.send(pkt, sizeof(pkt), _dst_ip, DISCOVERY_PORT)) {
         // Send failed: close so next tick rebinds.

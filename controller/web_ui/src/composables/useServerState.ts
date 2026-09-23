@@ -15,6 +15,7 @@ import {
   type SimTarget,
 } from '../lib/viewerRenderer';
 import { deriveSimTargets } from '../lib/viewerModel';
+import type { FirmwareState } from '../lib/firmwareModel';
 
 export interface SnapshotDevice {
   // v3 device shape (the status panel renders these)
@@ -28,6 +29,10 @@ export interface SnapshotDevice {
   target_intent?: string;
   clock_synced?: boolean | null;
   clock_skew_ms?: number | null;
+  // From the device's latest DISCOVER; null until one is heard. version is
+  // '' for firmware that predates reporting it.
+  version?: string | null;
+  ip?: string | null;
 }
 
 interface SessionStrip {
@@ -61,6 +66,7 @@ export interface SnapshotEvent {
   server_version?: string | null;
   session?: SessionState | null;
   programs?: SnapshotProgram[];
+  firmware?: FirmwareState | null;
 }
 
 export interface EmptyState {

@@ -294,8 +294,12 @@ def test_unsolicited_ack_drops_the_link(hub):
 # Discovery
 # ---------------------------------------------------------------------------
 
-def discover_packet(uid):
-    return b'\xcc\xd1\x01' + uid.encode().ljust(16, b'\x00')
+def discover_packet(uid, version=None):
+    """A DISCOVER; version None builds the legacy 19-byte form."""
+    packet = b'\xcc\xd1\x01' + uid.encode().ljust(16, b'\x00')
+    if version is not None:
+        packet += version.encode().ljust(16, b'\x00')
+    return packet
 
 
 def test_discover_answered_with_offer(hub):
@@ -362,6 +366,61 @@ def test_discovered_uid_ages_out(hub, clock):
     assert 'sim-new' in poll_until_discovered(hub, 'sim-new')
     clock.advance_ms(hub_mod.DISCOVERED_TTL_US // 1000 + 1)
     assert hub.discovered_uids() == set()
+    client.close()
+
+
+def poll_until_info(hub, uid, predicate, timeout_s=2.0):
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        hub.poll(WANTED)
+        info = hub.device_info(uid)
+        if info is not None and predicate(info):
+            return info
+    return hub.device_info(uid)
+
+
+def test_device_info_records_address_and_version(hub, clock):
+    assert hub.device_info('sim-new') is None
+    client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    client.sendto(discover_packet('sim-new', '0.54+d'), ('127.0.0.1', hub.discovery_port))
+    info = poll_until_info(hub, 'sim-new', lambda i: True)
+    assert info.ip == '127.0.0.1'
+    assert info.version == '0.54+d'
+    assert info.seen_us == clock.now_us
+    client.close()
+
+
+def test_device_info_legacy_discover_has_empty_version(hub):
+    client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    client.sendto(discover_packet('sim-a'), ('127.0.0.1', hub.discovery_port))
+    info = poll_until_info(hub, 'sim-a', lambda i: True)
+    assert info.version == ''
+    client.close()
+
+
+def test_device_info_survives_ttl_and_follows_updates(hub, clock):
+    client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    client.sendto(discover_packet('sim-new', '0.1'), ('127.0.0.1', hub.discovery_port))
+    assert poll_until_info(hub, 'sim-new', lambda i: True).version == '0.1'
+
+    # Aged out of the discovered set, but the record is kept.
+    clock.advance_ms(hub_mod.DISCOVERED_TTL_US // 1000 + 1)
+    assert hub.discovered_uids() == set()
+    info = hub.device_info('sim-new')
+    assert info is not None and info.version == '0.1'
+
+    # A later DISCOVER (e.g. after an update reboot) replaces it.
+    client.sendto(discover_packet('sim-new', '0.2'), ('127.0.0.1', hub.discovery_port))
+    info = poll_until_info(hub, 'sim-new', lambda i: i.version == '0.2')
+    assert info.version == '0.2' and info.seen_us == clock.now_us
+    client.close()
+
+
+def test_device_info_not_recorded_for_invalid_uid(hub):
+    client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    client.sendto(discover_packet('bad-uid', '0.1'), ('127.0.0.1', hub.discovery_port))
+    poll_until(hub, lambda e, f: False, timeout_s=0.2)
+    assert hub.device_info('bad-uid') is None
     client.close()
 
 

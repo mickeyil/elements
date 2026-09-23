@@ -13,7 +13,7 @@ constexpr uint32_t IPV4_BROADCAST = 0xFFFFFFFFu;
 // controller_ip() and tcp_port() expose where to connect.
 //
 // Wire (magic and port little-endian; ipv4 in network order):
-//   DISCOVER  device  -> broadcast  { magic, type=0x01, uid (16B) }
+//   DISCOVER  device  -> broadcast  { magic, type=0x01, uid (16B), version (16B) }
 //   OFFER     control -> device     { magic, type=0x02, ipv4 (4B), port (2B) }
 //
 // Most-recent-OFFER-wins; stale values are not cleared. Owners gate

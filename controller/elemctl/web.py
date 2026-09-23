@@ -92,6 +92,7 @@ def _empty_snapshot() -> dict:
         'session': None,
         'devices': [],
         'programs': [],
+        'firmware': None,
     }
 
 
@@ -109,6 +110,8 @@ def _make_disconnected_snapshot(snapshot: dict | None) -> dict:
     out['event'] = 'snapshot'
     out['protocol_version'] = PROTOCOL_VERSION
     out['session'] = None
+    # The image and any transfer are the controller's to report.
+    out['firmware'] = None
     if not isinstance(out.get('programs'), list):
         out['programs'] = []
     devices = out.get('devices')
@@ -123,6 +126,9 @@ def _make_disconnected_snapshot(snapshot: dict | None) -> dict:
                 dev['serving'] = False
                 dev['clock_synced'] = None
                 dev['clock_skew_ms'] = None
+                # No address to update through; the last reported version
+                # stays, as the last thing known about the device.
+                dev['ip'] = None
                 configured.append(dev)
         out['devices'] = configured
         out['online_count'] = 0
@@ -181,7 +187,9 @@ def _layout_device_uid_from_path(path: str) -> str | None:
 
 
 def _is_device_api_path(path: str) -> bool:
-    return path == '/api/devices' or _device_uid_from_path(path) is not None
+    return (path == '/api/devices'
+            or _device_uid_from_path(path) is not None
+            or _device_uid_from_update_path(path) is not None)
 
 
 def _device_uid_from_path(path: str) -> str | None:
@@ -189,6 +197,17 @@ def _device_uid_from_path(path: str) -> str | None:
     if not path.startswith(prefix):
         return None
     device_uid = unquote(path[len(prefix):])
+    if not device_uid or '/' in device_uid:
+        return None
+    return device_uid
+
+
+def _device_uid_from_update_path(path: str) -> str | None:
+    prefix = '/api/devices/'
+    suffix = '/update'
+    if not path.startswith(prefix) or not path.endswith(suffix):
+        return None
+    device_uid = unquote(path[len(prefix):-len(suffix)])
     if not device_uid or '/' in device_uid:
         return None
     return device_uid
@@ -495,6 +514,7 @@ class WebUiServer:
             devices = msg.get('devices') or []
             self._snapshot['devices'] = devices
             self._snapshot['session'] = msg.get('session')
+            self._snapshot['firmware'] = msg.get('firmware')
             self._snapshot['online_count'] = sum(
                 1 for d in devices
                 if isinstance(d, dict) and d.get('status') == 'online'
@@ -636,6 +656,20 @@ class WebUiServer:
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
     ) -> None:
+        update_uid = _device_uid_from_update_path(path)
+        if update_uid is not None:
+            if method != 'POST':
+                await self._write_http_response(writer, 405, b'method not allowed')
+                return
+            # Starts a firmware update (manual only); progress arrives in the
+            # state snapshot's firmware.update, not in this reply.
+            status, response = self._controller_command_response({
+                'cmd': 'update_firmware',
+                'uid': update_uid,
+            })
+            await self._write_json_response(writer, status, response)
+            return
+
         if method == 'POST' and path == '/api/devices':
             pass
         elif method == 'PATCH' and _device_uid_from_path(path) is not None:

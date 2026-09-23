@@ -15,6 +15,7 @@ import pytest
 
 from elemctl import wire
 from elemctl.wire import (
+    DiscoverMsg,
     LinkReader,
     WireError,
     encode_erase_animation,
@@ -115,7 +116,9 @@ def test_link_protocol_constants_match_cpp():
 
 
 def test_identity_and_store_sizes_match_cpp():
-    assert _cpp_constants('src/platform/device_identity.h')['UID_SIZE'] == wire.UID_SIZE
+    identity = _cpp_constants('src/platform/device_identity.h')
+    assert identity['UID_SIZE'] == wire.UID_SIZE
+    assert identity['VERSION_SIZE'] == wire.VERSION_SIZE
     assert _cpp_constants('src/controller/animation_store.h')['ANIM_NAME_SIZE'] == wire.ANIM_NAME_SIZE
 
 
@@ -130,6 +133,13 @@ def test_discovery_constants_match_cpp():
     assert cpp['MAGIC'] == wire.DISCOVERY_MAGIC
     assert cpp['PKT_DISCOVER'] == wire.PKT_DISCOVER
     assert cpp['PKT_OFFER'] == wire.PKT_OFFER
+    # DISCOVER_WIRE_SIZE is an expression in the C++ (uses UID_SIZE and
+    # VERSION_SIZE), which the constant parser skips; check the same
+    # formula instead, and that the source still spells it that way.
+    text = (REPO_ROOT / 'src/controller/discovery.cpp').read_text()
+    assert 'DISCOVER_WIRE_SIZE = 2 + 1 + UID_SIZE + VERSION_SIZE;' in text
+    assert wire.DISCOVER_WIRE_SIZE == 2 + 1 + wire.UID_SIZE + wire.VERSION_SIZE == 35
+    assert wire.DISCOVER_LEGACY_WIRE_SIZE == 2 + 1 + wire.UID_SIZE == 19
 
 
 def test_sync_constants_match_cpp():
@@ -346,16 +356,39 @@ def test_parse_local_animations():
 # ---------------------------------------------------------------------------
 
 def test_parse_discover_vector():
+    datagram = b'\xcc\xd1\x01' + _uid_slot('sim-a') + _uid_slot('0.54+d')
+    assert len(datagram) == 35
+    assert parse_discover(datagram) == DiscoverMsg(uid='sim-a', version='0.54+d')
+
+
+def test_parse_discover_full_width_version():
+    datagram = b'\xcc\xd1\x01' + _uid_slot('sim-a') + b'0123456789abcdef'
+    assert parse_discover(datagram).version == '0123456789abcdef'
+
+
+def test_parse_discover_legacy_form_has_empty_version():
+    # Firmware from before the version slot sends 19 bytes.
     datagram = b'\xcc\xd1\x01' + _uid_slot('sim-a')
-    assert parse_discover(datagram) == 'sim-a'
+    assert parse_discover(datagram) == DiscoverMsg(uid='sim-a', version='')
+
+
+def test_parse_discover_empty_or_unreadable_version_is_empty():
+    head = b'\xcc\xd1\x01' + _uid_slot('sim-a')
+    assert parse_discover(head + b'\x00' * 16) == DiscoverMsg('sim-a', '')
+    # The version is informational: garbage there must not hide the device.
+    assert parse_discover(head + b'\x01\xff' + b'\x00' * 14) == DiscoverMsg('sim-a', '')
 
 
 def test_parse_discover_rejects_noise():
+    version = _uid_slot('0.1')
     assert parse_discover(b'') is None
     assert parse_discover(b'\xcc\xd1\x01') is None                      # short
-    assert parse_discover(b'\xcc\xd1\x02' + _uid_slot('sim-a')) is None  # OFFER type
-    assert parse_discover(b'\xff\xff\x01' + _uid_slot('sim-a')) is None  # bad magic
-    assert parse_discover(b'\xcc\xd1\x01' + b'\x00' * 16) is None        # empty uid
+    assert parse_discover(b'\xcc\xd1\x01' + _uid_slot('sim-a') + b'0.1') is None  # between sizes
+    assert parse_discover(b'\xcc\xd1\x01' + _uid_slot('sim-a') + version + b'x') is None  # long
+    assert parse_discover(b'\xcc\xd1\x02' + _uid_slot('sim-a') + version) is None  # OFFER type
+    assert parse_discover(b'\xff\xff\x01' + _uid_slot('sim-a') + version) is None  # bad magic
+    assert parse_discover(b'\xcc\xd1\x01' + b'\x00' * 16 + version) is None        # empty uid
+    assert parse_discover(b'\xcc\xd1\x01' + b'\x00' * 16) is None                  # legacy, empty uid
 
 
 def test_encode_offer_vector():

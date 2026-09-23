@@ -5,7 +5,17 @@ import { RouterLink } from 'vue-router';
 import DeviceModal from '../components/DeviceModal.vue';
 import RemoveDeviceModal from '../components/RemoveDeviceModal.vue';
 import { useInjectedServerState, type SnapshotDevice } from '../composables/useServerState';
+import { updateFirmware } from '../lib/deviceApi';
 import { clockLabel } from '../lib/deviceClock';
+import {
+  availableImageLabel,
+  updateAvailability,
+  updateForDevice,
+  updateProgressLabel,
+  versionLabel,
+  type FirmwareState,
+  type UpdateAvailability,
+} from '../lib/firmwareModel';
 
 type DeviceStatus = 'online' | 'offline' | 'discovered';
 
@@ -23,11 +33,18 @@ const showNewDeviceModal = ref(false);
 const editingDevice = ref<StatusCardDevice | null>(null);
 const removingDevice = ref<StatusCardDevice | null>(null);
 const configuringUid = ref<string | null>(null);
+// A refused update request (the controller re-validates), shown on the card
+// until the next attempt; a started transfer reports through firmware.update.
+const updateRequestError = ref<{ uid: string; message: string } | null>(null);
 
 const layouts = computed<Record<string, unknown>>(() => {
   const value = snapshot.value?.layouts;
   return value && typeof value === 'object' ? value : {};
 });
+
+const firmware = computed<FirmwareState | null>(() => snapshot.value?.firmware ?? null);
+
+const imageLabel = computed<string | null>(() => availableImageLabel(firmware.value));
 
 const devices = computed<SnapshotDevice[]>(() => {
   const items = Array.isArray(snapshot.value?.devices) ? snapshot.value.devices : [];
@@ -148,6 +165,39 @@ function actionMenuLabel(device: StatusCardDevice): string {
   return `Actions for ${device.uid}`;
 }
 
+function firmwareAvailability(device: StatusCardDevice): UpdateAvailability {
+  return updateAvailability(device, firmware.value, controllerConnected.value);
+}
+
+// Progress or outcome of the transfer aimed at this device, or of a refused
+// request to start one; '' when there is nothing to show.
+function firmwareNote(device: StatusCardDevice): string {
+  if (updateRequestError.value?.uid === device.uid) {
+    return `Update refused: ${updateRequestError.value.message}`;
+  }
+  const update = updateForDevice(firmware.value, device.uid);
+  return update ? updateProgressLabel(update) : '';
+}
+
+function firmwareNoteFailed(device: StatusCardDevice): boolean {
+  return updateRequestError.value?.uid === device.uid
+    || updateForDevice(firmware.value, device.uid)?.phase === 'failed';
+}
+
+async function startFirmwareUpdate(device: StatusCardDevice): Promise<void> {
+  closeMenu();
+  if (!firmwareAvailability(device).enabled) {
+    return;
+  }
+  updateRequestError.value = null;
+  try {
+    await updateFirmware(device.uid);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    updateRequestError.value = { uid: device.uid, message };
+  }
+}
+
 function toggleMenu(deviceUid: string): void {
   openMenuUid.value = openMenuUid.value === deviceUid ? null : deviceUid;
 }
@@ -237,6 +287,9 @@ onBeforeUnmount(() => {
           <span v-if="counts.offline" class="status-summary-offline">{{ counts.offline }} offline</span>
         </div>
         <div v-else class="status-toolbar-spacer" />
+        <span v-if="imageLabel" class="status-firmware-image mono" title="Firmware image an update installs">
+          {{ imageLabel }}
+        </span>
         <button
           type="button"
           class="action-button status-new-device-button"
@@ -294,7 +347,20 @@ onBeforeUnmount(() => {
               {{ stripLabel(device) }}
             </h2>
             <div class="device-bottom-row">
-              <p class="device-uid mono">DEVICE: {{ device.uid }}</p>
+              <div class="device-meta">
+                <p class="device-uid mono">DEVICE: {{ device.uid }}</p>
+                <p class="device-uid mono" :title="device.ip ? `Last heard from ${device.ip}` : ''">
+                  VERSION: <span class="device-version">{{ versionLabel(device.version) }}</span>
+                </p>
+                <p
+                  v-if="firmwareNote(device)"
+                  class="device-firmware-note mono"
+                  :class="{ 'device-firmware-note-failed': firmwareNoteFailed(device) }"
+                  :title="firmwareNote(device)"
+                >
+                  {{ firmwareNote(device) }}
+                </p>
+              </div>
               <div class="device-action-slot">
                 <div class="device-menu" data-device-menu>
                   <button
@@ -344,6 +410,18 @@ onBeforeUnmount(() => {
                       @click="openConfigureModal(device)"
                     >
                       Configure
+                    </button>
+                    <button
+                      v-if="!device.isSim"
+                      type="button"
+                      class="device-menu-item"
+                      :disabled="!firmwareAvailability(device).enabled"
+                      :title="firmwareAvailability(device).enabled
+                        ? `Flash ${firmware?.available_version ?? 'the built image'} over the air`
+                        : firmwareAvailability(device).reason"
+                      @click="startFirmwareUpdate(device)"
+                    >
+                      Update firmware
                     </button>
                   </div>
                 </div>
@@ -427,6 +505,14 @@ onBeforeUnmount(() => {
 
 .status-new-device-button {
   flex: 0 0 auto;
+}
+
+.status-firmware-image {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.64rem;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
 }
 
 .status-new-device-plus {
@@ -573,6 +659,32 @@ onBeforeUnmount(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.device-meta {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+/* Versions are case-significant ("+d", commit hashes); keep them as sent. */
+.device-version {
+  text-transform: none;
+}
+
+.device-firmware-note {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.62rem;
+  letter-spacing: 0.04em;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.device-firmware-note-failed {
+  color: #ffdede;
 }
 
 .device-action-slot {

@@ -90,6 +90,12 @@ def test_full_join_cycle(hub, sim_factory):
     assert connected.boot_token != 0
     first_boot_token = connected.boot_token
 
+    # The DISCOVER that led here carried the sim's build version (a commit
+    # hash, or 'unknown' without git), and its source is the device address.
+    info = hub.device_info(UID)
+    assert info is not None and info.ip == '127.0.0.1'
+    assert info.version
+
     # Idle survival: the device drops a quiet controller after
     # 2 x PING_INTERVAL_MS, so outlasting that proves our pings flow.
     idle_s = 2 * wire.PING_INTERVAL_MS / 1000 + 1

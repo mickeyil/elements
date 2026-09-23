@@ -99,7 +99,11 @@ STATUS_FLAG_CLOCK_SYNCED = 0x02
 DISCOVERY_MAGIC = 0xD1CC
 PKT_DISCOVER = 0x01
 PKT_OFFER = 0x02
-DISCOVER_WIRE_SIZE = 2 + 1 + UID_SIZE
+# Version slot appended to DISCOVER (src/platform/device_identity.h).
+VERSION_SIZE = 16
+DISCOVER_WIRE_SIZE = 2 + 1 + UID_SIZE + VERSION_SIZE
+# Firmware from before the version slot sends the uid only.
+DISCOVER_LEGACY_WIRE_SIZE = 2 + 1 + UID_SIZE
 OFFER_WIRE_SIZE = 2 + 1 + 4 + 2
 
 # ---- Constants mirroring src/app/clock_sync_client.cpp --------------------------
@@ -136,7 +140,7 @@ _F32 = struct.Struct('<f')
 _REGISTER = struct.Struct(f'<{UID_SIZE}sIB')        # uid + boot_token + version
 _DEVICE_STATUS = struct.Struct('<BBi')              # mode + flags + clock_skew_us
 _ANIM_RECORD = struct.Struct(f'<{ANIM_NAME_SIZE}sHI')  # name + strip_length + crc32
-_DISCOVER = struct.Struct(f'<HB{UID_SIZE}s')        # magic + type + uid
+_DISCOVER = struct.Struct(f'<HB{UID_SIZE}s')        # magic + type + uid; then version
 _OFFER_PREFIX = struct.Struct('<HB')                # magic + type; then ipv4 + port
 _SYNC_PING = struct.Struct(f'<B{UID_SIZE}sIIq')     # type + uid + boot_token + seq + t1
 _SYNC_PONG = struct.Struct('<BIIqqq')               # type + token + seq + t1 + t2 + t3
@@ -407,17 +411,35 @@ def parse_local_animations(payload):
 
 # ---- Discovery (UDP 6040) ------------------------------------------------------
 
+@dataclass(frozen=True)
+class DiscoverMsg:
+    uid: str
+    version: str     # '' when the device did not report one
+
+
 def parse_discover(datagram):
-    """Return the broadcasting device's UID, or None for unrelated traffic."""
-    if len(datagram) != DISCOVER_WIRE_SIZE:
+    """Decode a DISCOVER into a DiscoverMsg, or None for unrelated traffic.
+
+    Both sizes are valid: the current 35-byte form, and the 19-byte form
+    older firmware sends, which carries no version (''). The version is
+    informational, so an empty or unreadable slot yields '' rather than
+    dropping the packet: a device must stay discoverable, and therefore
+    offerable and updatable, whatever it put in that slot.
+    """
+    if len(datagram) not in (DISCOVER_WIRE_SIZE, DISCOVER_LEGACY_WIRE_SIZE):
         return None
-    magic, pkt_type, uid_raw = _DISCOVER.unpack(datagram)
+    magic, pkt_type, uid_raw = _DISCOVER.unpack_from(datagram)
     if magic != DISCOVERY_MAGIC or pkt_type != PKT_DISCOVER:
         return None
     try:
-        return _unpack_slot(uid_raw, 'uid')
+        uid = _unpack_slot(uid_raw, 'uid')
     except WireError:
         return None
+    try:
+        version = _unpack_slot(datagram[_DISCOVER.size:], 'version')
+    except WireError:
+        version = ''    # legacy form, unversioned build, or unreadable slot
+    return DiscoverMsg(uid=uid, version=version)
 
 
 def encode_offer(ipv4, tcp_port):

@@ -73,4 +73,10 @@ Open http://localhost:8080, add device `sim-1` (strip id `ring8`, length 8),
 then load `ring8_blue_wave` and play. Animation sources live in
 `animations/`; add or edit `.py` files there and rescan from the UI.
 
-ESP32 hardware: `make firmware` builds, `make flash` uploads.
+ESP32 hardware: `make firmware` builds, `make flash` uploads over serial.
+The build stamps a firmware version (`tools/firmware_version.py`: the
+major from `src/platform/esp32/FIRMWARE_MAJOR`, a minor counted from
+firmware commits, `+d` for a dirty tree) that devices report in DISCOVER
+and the status page shows. After a build, the status page's device menu
+can push the new image over the air with "Update firmware"; updates are
+manual only.
