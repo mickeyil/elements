@@ -141,4 +141,45 @@ describe('LatestValueSender', () => {
     await vi.advanceTimersByTimeAsync(50);
     expect(sent).toEqual([1, 2]);
   });
+
+  it('drops the waiting value on cancel, so it is never sent', async () => {
+    const sender = new LatestValueSender(send, 50);
+    sender.push(1);
+    sender.push(2);                              // waits on the request in flight
+    sender.cancel();
+    finish[0]();
+    await vi.advanceTimersByTimeAsync(10);
+
+    sender.push(3);                              // waits out the spacing
+    sender.cancel();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(sent).toEqual([1]);
+  });
+
+  it('resolves idle only after the in-flight send completes', async () => {
+    const sender = new LatestValueSender(send, 50);
+    await sender.idle();                         // nothing sent yet
+
+    sender.push(1);
+    let idle = false;
+    void sender.idle().then(() => { idle = true; });
+    await vi.advanceTimersByTimeAsync(200);
+    expect(idle).toBe(false);
+
+    finish[0]();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(idle).toBe(true);
+  });
+
+  it('sends exactly the in-flight value for push, push, cancel, idle', async () => {
+    const sender = new LatestValueSender(send, 50);
+    sender.push(1);
+    sender.push(2);
+    sender.cancel();
+    const idle = sender.idle();
+    finish[0]();
+    await idle;
+    await vi.advanceTimersByTimeAsync(200);
+    expect(sent).toEqual([1]);
+  });
 });

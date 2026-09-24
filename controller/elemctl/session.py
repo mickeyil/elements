@@ -222,6 +222,7 @@ class Session:
         self._preview = PreviewAssembler()
         self._preview_enabled = False
         self._device_frames = {}     # uid -> latest rgb of a panel-owned member
+        self._pending_device_frames = set()  # uids whose latest rgb is not yet drained
         self._manual_revision = 0
         self._tick_count = 0
 
@@ -269,8 +270,11 @@ class Session:
                 blob=artifact.blob,
                 strip_length=member.strip_length,
             ))
-        # Every strip is the show's again: preview assembles all of them.
+        # Every strip is the show's again: preview assembles all of them, and
+        # the pictures the panel's devices last showed are stale.
         self._declare_preview()
+        self._device_frames.clear()
+        self._pending_device_frames.clear()
 
     def preview_strips(self):
         """The (strip_id, length) layout of an assembled preview frame, in
@@ -572,14 +576,14 @@ class Session:
             self._apply_event(event)
         self._check_end()
         self._reconcile()
-        if self._preview_enabled:
-            self._collect_frames(poll.frames)
+        self._collect_frames(poll.frames)
         return self._drain_events()
 
     def _collect_frames(self, frames):
-        """A panel-owned member's frame is kept as its device's latest picture;
-        the rest feed program preview assembly while the show plays."""
-        playing = self.state is SessionState.PLAYING
+        """A panel-owned member's frame is always kept as its device's latest
+        picture, pending until drained; the rest feed program preview assembly
+        while preview is enabled and the show plays."""
+        playing = self._preview_enabled and self.state is SessionState.PLAYING
         if playing:
             live_us = self._clock_us() - self.program_start_us
             slack_us = _US_PER_S // max(1, self.manifest.target_fps)
@@ -589,6 +593,7 @@ class Session:
                 continue
             if member.owner == 'panel':
                 self._device_frames[frame.uid] = frame.rgb
+                self._pending_device_frames.add(frame.uid)
                 continue
             if not playing:
                 continue
@@ -604,9 +609,13 @@ class Session:
     def set_preview_enabled(self, enabled):
         """Turn preview-frame assembly on or off. Either edge starts a clean
         run, so a fresh subscriber never receives a frame assembled before it
-        asked, and no partials linger while no one is watching."""
+        asked, and no partials linger while no one is watching. Enabling also
+        marks every kept device picture pending, so the fresh subscriber gets
+        each one on the next drain."""
         self._preview_enabled = enabled
         self._preview.reset_run()
+        if enabled:
+            self._pending_device_frames = set(self._device_frames)
 
     def _preview_active(self, member):
         """True when a member's preview frames belong to the current run: the
@@ -624,10 +633,12 @@ class Session:
         return self._preview.drain()
 
     def drain_device_frames(self):
-        """(uid, rgb) of each panel-owned device's latest frame since the last
-        call."""
-        frames = list(self._device_frames.items())
-        self._device_frames.clear()
+        """(uid, rgb) of each pending device picture: a panel-owned device's
+        latest frame since the last call, or a kept one replayed for a new
+        subscriber. The pictures themselves are kept."""
+        frames = [(uid, rgb) for uid, rgb in self._device_frames.items()
+                  if uid in self._pending_device_frames]
+        self._pending_device_frames.clear()
         return frames
 
     def member(self, uid):

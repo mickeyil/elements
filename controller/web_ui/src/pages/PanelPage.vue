@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch, watchPostEffect } from 'vue';
+import { computed, onBeforeUnmount, ref, watch, watchPostEffect } from 'vue';
 
 import HsvPicker from '../components/HsvPicker.vue';
 import { useInjectedServerState, type SnapshotLibraryProgram } from '../composables/useServerState';
@@ -71,8 +71,12 @@ async function send(action: () => Promise<unknown>): Promise<void> {
   }
 }
 
+// Run and Stop supersede the color: a fill still waiting is dropped and the
+// one in flight lands first, so neither can arrive after and undo them.
 async function run(action: () => Promise<unknown>): Promise<void> {
   pending.value = true;
+  fillSender.cancel();
+  await fillSender.idle();
   await send(action);
   pending.value = false;
 }
@@ -107,6 +111,8 @@ function onColor(hsv: PanelHsv): void {
     fillSender.push({ stripId: strip.stripId, hsv });
   }
 }
+
+onBeforeUnmount(() => fillSender.cancel());
 
 // --- animations --------------------------------------------------------------
 

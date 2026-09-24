@@ -1708,6 +1708,53 @@ def test_panel_frames_bypass_the_program_assembler():
     assert session.drain_device_frames() == []
 
 
+def _show_panel_picture(session, hub, rgb):
+    """Put rgb on sim-a's strip from the panel and have the device report it."""
+    session.panel_manual('main', rgb)
+    attach_panel(session, hub)
+    tick(session); ack_last(hub)                 # picture shown
+    hub.frames = [FramePreview(uid='sim-a', frame_index=1, cycle=0, t_ms=0, rgb=rgb)]
+    tick(session)
+
+
+def test_panel_picture_seen_unwatched_is_replayed_on_preview_enable():
+    # A manual picture is reported once; with no subscriber it is drained to
+    # no one, and the device never sends it again.
+    session, hub = make_session(SINGLE)
+    _show_panel_picture(session, hub, b'\x07' * 90)
+    session.drain_device_frames()                # published to no subscriber
+
+    session.set_preview_enabled(True)
+    tick(session)
+    assert session.drain_device_frames() == [('sim-a', b'\x07' * 90)]
+    assert session.drain_device_frames() == []
+
+
+def test_each_preview_enable_replays_the_latest_panel_picture():
+    session, hub = make_session(SINGLE)
+    _show_panel_picture(session, hub, b'\x07' * 90)
+    session.set_preview_enabled(True)
+    assert session.drain_device_frames() == [('sim-a', b'\x07' * 90)]
+    hub.frames = [FramePreview(uid='sim-a', frame_index=2, cycle=0, t_ms=0,
+                               rgb=b'\x08' * 90)]
+    tick(session)
+    assert session.drain_device_frames() == [('sim-a', b'\x08' * 90)]
+
+    session.set_preview_enabled(False)
+    session.set_preview_enabled(True)
+    assert session.drain_device_frames() == [('sim-a', b'\x08' * 90)]
+
+
+def test_show_load_drops_the_kept_panel_pictures():
+    session, hub = make_session(SINGLE)
+    _show_panel_picture(session, hub, b'\x07' * 90)
+
+    session.load(make_manifest(('main', 30, b'M')))
+    assert session.drain_device_frames() == []
+    session.set_preview_enabled(True)
+    assert session.drain_device_frames() == []
+
+
 def test_show_preview_keeps_flowing_without_a_panel_strip():
     # Two strips play; the panel takes 'side'. A frame from 'main' alone now
     # completes a program frame instead of waiting on 'side' forever.

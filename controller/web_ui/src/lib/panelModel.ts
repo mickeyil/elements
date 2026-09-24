@@ -106,10 +106,13 @@ export function hsvToCss(hsv: PanelHsv): string {
 // A value pushed meanwhile waits; when the request completes only the latest
 // waiting value is sent, the ones before it skipped. Sends start at least
 // minIntervalMs apart. A failed send is the send function's to report; the
-// sender goes on with the next value.
+// sender goes on with the next value. cancel() drops the waiting value, and
+// idle() resolves once no request is in flight, so a caller can let the
+// in-flight one land before sending something that supersedes it.
 export class LatestValueSender<T> {
   private next: { value: T } | null = null;
   private busy = false;
+  private drained: Promise<void> = Promise.resolve();
   private lastStart = -Infinity;
 
   constructor(
@@ -120,8 +123,17 @@ export class LatestValueSender<T> {
   push(value: T): void {
     this.next = { value };
     if (!this.busy) {
-      void this.drain();
+      this.drained = this.drain();
     }
+  }
+
+  // Drops the waiting value; the request in flight is left to finish.
+  cancel(): void {
+    this.next = null;
+  }
+
+  idle(): Promise<void> {
+    return this.drained;
   }
 
   private async drain(): Promise<void> {
@@ -130,6 +142,7 @@ export class LatestValueSender<T> {
       const wait = this.lastStart + this.minIntervalMs - Date.now();
       if (wait > 0) {
         await new Promise((resolve) => setTimeout(resolve, wait));
+        continue;   // look again: a cancel may have dropped the value meanwhile
       }
       const { value } = this.next;
       this.next = null;
