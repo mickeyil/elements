@@ -11,6 +11,7 @@ import json
 import logging
 import mimetypes
 import os
+import re
 import select
 import shutil
 import signal
@@ -79,6 +80,28 @@ class _WsClient:
 class _HttpError(Exception):
     status: int
     message: str
+
+
+@dataclass
+class _Request:
+    reader: asyncio.StreamReader
+    writer: asyncio.StreamWriter
+    headers: dict[str, str]
+
+
+def _device_fields_error(payload: dict) -> str | None:
+    """Check the device fields a create/edit body must carry; the error
+    message, or None when they are acceptable."""
+    device_uid = payload.get('device_uid')
+    strip_id = payload.get('strip_id')
+    length = payload.get('length')
+    if not isinstance(device_uid, str) or not device_uid:
+        return 'device_uid must be a non-empty string'
+    if not isinstance(strip_id, str) or not strip_id:
+        return 'strip_id must be a non-empty string'
+    if not isinstance(length, int) or isinstance(length, bool) or length < 1:
+        return 'length must be a positive integer'
+    return None
 
 
 def _empty_snapshot() -> dict:
@@ -178,71 +201,48 @@ def _resolve_asset_path(path: str) -> Path | None:
     return asset_path
 
 
-def _layout_device_uid_from_path(path: str) -> str | None:
-    prefix = '/api/layouts/'
-    if not path.startswith(prefix):
-        return None
-    device_uid = unquote(path[len(prefix):])
-    if not device_uid or '/' in device_uid:
-        return None
-    return device_uid
+_SEGMENT = r'([^/]+)'
+
+# The HTTP API: (method, path pattern, handler method name). Patterns are
+# matched in full against the raw path; each captured segment is URL-decoded
+# and must be non-empty with no '/' after decoding, or the route does not
+# match. A path that matches a pattern under another method is answered 405.
+_ROUTES: tuple[tuple[str, re.Pattern[str], str], ...] = tuple(
+    (method, re.compile(pattern), handler)
+    for method, pattern, handler in (
+        ('GET', r'/ws', '_route_ws'),
+        ('GET', rf'/api/layouts/{_SEGMENT}', '_route_get_layout'),
+        ('POST', rf'/api/layouts/{_SEGMENT}', '_route_save_layout'),
+        ('POST', r'/api/devices', '_route_create_device'),
+        ('PATCH', rf'/api/devices/{_SEGMENT}', '_route_edit_device'),
+        ('DELETE', rf'/api/devices/{_SEGMENT}', '_route_remove_device'),
+        ('POST', rf'/api/devices/{_SEGMENT}/update', '_route_update_firmware'),
+        ('POST', r'/api/programs/rescan', '_route_rescan'),
+        ('POST', rf'/api/programs/{_SEGMENT}/load', '_route_load_program'),
+        ('POST', r'/api/session/(play|pause|resume|stop)', '_route_session'),
+    )
+)
 
 
-def _is_device_api_path(path: str) -> bool:
-    return (path == '/api/devices'
-            or _device_uid_from_path(path) is not None
-            or _device_uid_from_update_path(path) is not None)
+def _match_route(method: str, path: str) -> tuple[str | None, tuple[str, ...]] | None:
+    """Resolve a request against _ROUTES.
 
-
-def _device_uid_from_path(path: str) -> str | None:
-    prefix = '/api/devices/'
-    if not path.startswith(prefix):
-        return None
-    device_uid = unquote(path[len(prefix):])
-    if not device_uid or '/' in device_uid:
-        return None
-    return device_uid
-
-
-def _device_uid_from_update_path(path: str) -> str | None:
-    prefix = '/api/devices/'
-    suffix = '/update'
-    if not path.startswith(prefix) or not path.endswith(suffix):
-        return None
-    device_uid = unquote(path[len(prefix):-len(suffix)])
-    if not device_uid or '/' in device_uid:
-        return None
-    return device_uid
-
-
-_SESSION_VERBS = ('play', 'pause', 'resume', 'stop')
-
-
-def _is_program_api_path(path: str) -> bool:
-    return path == '/api/programs/rescan' or _program_id_from_load_path(path) is not None
-
-
-def _program_id_from_load_path(path: str) -> str | None:
-    prefix = '/api/programs/'
-    suffix = '/load'
-    if not path.startswith(prefix) or not path.endswith(suffix):
-        return None
-    program_id = unquote(path[len(prefix):-len(suffix)])
-    if not program_id or '/' in program_id:
-        return None
-    return program_id
-
-
-def _session_verb_from_path(path: str) -> str | None:
-    prefix = '/api/session/'
-    if not path.startswith(prefix):
-        return None
-    verb = path[len(prefix):]
-    return verb if verb in _SESSION_VERBS else None
-
-
-def _is_session_api_path(path: str) -> bool:
-    return _session_verb_from_path(path) is not None
+    Returns (handler name, decoded path segments) on a match, (None, ()) when
+    the path is an API route but not for this method (405), and None when no
+    route claims the path (static assets).
+    """
+    path_known = False
+    for route_method, pattern, handler in _ROUTES:
+        match = pattern.fullmatch(path)
+        if match is None:
+            continue
+        args = tuple(unquote(group) for group in match.groups())
+        if any(not arg or '/' in arg for arg in args):
+            continue
+        if route_method == method:
+            return handler, args
+        path_known = True
+    return (None, ()) if path_known else None
 
 
 def _tailscale_urls(port: int) -> list[str]:
@@ -581,27 +581,16 @@ class WebUiServer:
                 headers[name.strip().lower()] = value.strip()
 
             path = urlsplit(target).path or '/'
-            if path == '/ws':
-                if method != 'GET':
+            route = _match_route(method, path)
+            if route is not None:
+                handler, args = route
+                if handler is None:
                     await self._write_http_response(writer, 405, b'method not allowed')
                     return
-                await self._handle_ws(reader, writer, headers)
-                return
-
-            if _layout_device_uid_from_path(path) is not None:
-                await self._handle_layout_api(method, path, headers, reader, writer)
-                return
-
-            if _is_device_api_path(path):
-                await self._handle_device_api(method, path, headers, reader, writer)
-                return
-
-            if _is_program_api_path(path):
-                await self._handle_program_api(method, path, writer)
-                return
-
-            if _is_session_api_path(path):
-                await self._handle_session_api(method, path, writer)
+                try:
+                    await getattr(self, handler)(_Request(reader, writer, headers), *args)
+                except _HttpError as e:
+                    await self._write_json_response(writer, e.status, {'error': e.message})
                 return
 
             if method != 'GET':
@@ -614,151 +603,50 @@ class WebUiServer:
         except (ConnectionError, OSError, asyncio.TimeoutError):
             return
 
-    async def _handle_layout_api(
-        self,
-        method: str,
-        path: str,
-        headers: dict[str, str],
-        reader: asyncio.StreamReader,
-        writer: asyncio.StreamWriter,
-    ) -> None:
-        device_uid = _layout_device_uid_from_path(path)
-        if device_uid is None:
-            await self._write_json_response(writer, 404, {'error': 'not found'})
-            return
+    async def _route_ws(self, req: _Request) -> None:
+        await self._handle_ws(req.reader, req.writer, req.headers)
 
-        if method == 'GET':
-            status, payload = self._get_layout_response(device_uid)
-            await self._write_json_response(writer, status, payload)
-            return
+    async def _route_get_layout(self, req: _Request, device_uid: str) -> None:
+        status, payload = self._get_layout_response(device_uid)
+        await self._write_json_response(req.writer, status, payload)
 
-        if method != 'POST':
-            await self._write_http_response(writer, 405, b'method not allowed')
-            return
-
-        try:
-            body = await self._read_http_body(reader, headers)
-            payload = json.loads(body.decode('utf-8'))
-        except _HttpError as e:
-            await self._write_json_response(writer, e.status, {'error': e.message})
-            return
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            await self._write_json_response(writer, 400, {'error': 'invalid json body'})
-            return
-
+    async def _route_save_layout(self, req: _Request, device_uid: str) -> None:
+        payload = await self._read_json_body(req)
         status, response = self._save_layout_response(device_uid, payload)
-        await self._write_json_response(writer, status, response)
+        await self._write_json_response(req.writer, status, response)
         if status == 200:
             await self._broadcast_json(self._snapshot)
 
-    async def _handle_device_api(
-        self,
-        method: str,
-        path: str,
-        headers: dict[str, str],
-        reader: asyncio.StreamReader,
-        writer: asyncio.StreamWriter,
-    ) -> None:
-        update_uid = _device_uid_from_update_path(path)
-        if update_uid is not None:
-            if method != 'POST':
-                await self._write_http_response(writer, 405, b'method not allowed')
-                return
-            # Starts a firmware update (manual only); progress arrives in the
-            # state snapshot's firmware.update, not in this reply.
-            status, response = self._controller_command_response({
-                'cmd': 'update_firmware',
-                'uid': update_uid,
-            })
-            await self._write_json_response(writer, status, response)
-            return
+    async def _route_create_device(self, req: _Request) -> None:
+        payload = await self._read_json_body(req)
+        await self._write_json_response(req.writer, *self._create_device_response(payload))
 
-        if method == 'POST' and path == '/api/devices':
-            pass
-        elif method == 'PATCH' and _device_uid_from_path(path) is not None:
-            pass
-        elif method == 'DELETE' and _device_uid_from_path(path) is not None:
-            pass
-        else:
-            await self._write_http_response(writer, 405, b'method not allowed')
-            return
+    async def _route_edit_device(self, req: _Request, device_uid: str) -> None:
+        payload = await self._read_json_body(req)
+        await self._write_json_response(
+            req.writer, *self._edit_device_response(device_uid, payload))
 
-        if method == 'POST' and path == '/api/devices':
-            try:
-                body = await self._read_http_body(reader, headers)
-                payload = json.loads(body.decode('utf-8'))
-            except _HttpError as e:
-                await self._write_json_response(writer, e.status, {'error': e.message})
-                return
-            except (UnicodeDecodeError, json.JSONDecodeError):
-                await self._write_json_response(writer, 400, {'error': 'invalid json body'})
-                return
-            status, response = self._create_device_response(payload)
-            await self._write_json_response(writer, status, response)
-            return
+    async def _route_remove_device(self, req: _Request, device_uid: str) -> None:
+        await self._write_json_response(req.writer, *self._remove_device_response(device_uid))
 
-        device_uid = _device_uid_from_path(path)
-        if method == 'PATCH' and device_uid is not None:
-            try:
-                body = await self._read_http_body(reader, headers)
-                payload = json.loads(body.decode('utf-8'))
-            except _HttpError as e:
-                await self._write_json_response(writer, e.status, {'error': e.message})
-                return
-            except (UnicodeDecodeError, json.JSONDecodeError):
-                await self._write_json_response(writer, 400, {'error': 'invalid json body'})
-                return
-            status, response = self._edit_device_response(device_uid, payload)
-            await self._write_json_response(writer, status, response)
-            return
+    async def _route_update_firmware(self, req: _Request, device_uid: str) -> None:
+        # Starts a firmware update (manual only); progress arrives in the
+        # state snapshot's firmware.update, not in this reply.
+        await self._write_json_response(req.writer, *self._controller_command_response({
+            'cmd': 'update_firmware',
+            'uid': device_uid,
+        }))
 
-        if method == 'DELETE' and device_uid is not None:
-            status, response = self._remove_device_response(device_uid)
-            await self._write_json_response(writer, status, response)
-            return
+    async def _route_rescan(self, req: _Request) -> None:
+        await self._write_json_response(
+            req.writer, *self._controller_command_response({'cmd': 'rescan'}))
 
-        await self._write_http_response(writer, 405, b'method not allowed')
+    async def _route_load_program(self, req: _Request, program_id: str) -> None:
+        await self._write_json_response(req.writer, *self._load_program_response(program_id))
 
-    async def _handle_program_api(
-        self,
-        method: str,
-        path: str,
-        writer: asyncio.StreamWriter,
-    ) -> None:
-        if method != 'POST':
-            await self._write_http_response(writer, 405, b'method not allowed')
-            return
-
-        if path == '/api/programs/rescan':
-            status, response = self._controller_command_response({'cmd': 'rescan'})
-            await self._write_json_response(writer, status, response)
-            return
-
-        program_id = _program_id_from_load_path(path)
-        if program_id is not None:
-            status, response = self._load_program_response(program_id)
-            await self._write_json_response(writer, status, response)
-            return
-
-        await self._write_http_response(writer, 405, b'method not allowed')
-
-    async def _handle_session_api(
-        self,
-        method: str,
-        path: str,
-        writer: asyncio.StreamWriter,
-    ) -> None:
-        if method != 'POST':
-            await self._write_http_response(writer, 405, b'method not allowed')
-            return
-
-        verb = _session_verb_from_path(path)
-        if verb is None:
-            await self._write_http_response(writer, 405, b'method not allowed')
-            return
-
-        status, response = self._controller_command_response({'cmd': verb})
-        await self._write_json_response(writer, status, response)
+    async def _route_session(self, req: _Request, verb: str) -> None:
+        await self._write_json_response(
+            req.writer, *self._controller_command_response({'cmd': verb}))
 
     def _load_program_response(self, program_id: str) -> tuple[int, dict]:
         if not isinstance(program_id, str) or not program_id:
@@ -769,8 +657,8 @@ class WebUiServer:
         })
 
     def _controller_command_response(self, cmd: dict) -> tuple[int, dict]:
-        """Forward a command over a transient writer and shape the reply the
-        same way the device endpoints do: controller errors map to 400, an
+        """Forward a command over a transient writer and shape the reply for
+        every controller-backed endpoint: controller errors map to 400, an
         unreachable controller to its _HttpError status."""
         try:
             reply = self._send_controller_cmd(cmd)
@@ -787,89 +675,40 @@ class WebUiServer:
     def _remove_device_response(self, device_uid: str) -> tuple[int, dict]:
         if not isinstance(device_uid, str) or not device_uid:
             return 400, {'error': 'device uid must be a non-empty string'}
-
-        try:
-            reply = self._send_controller_cmd({
-                'cmd': 'remove_device',
-                'device_uid': device_uid,
-            })
-        except _HttpError as e:
-            return e.status, {'error': e.message}
-
-        if not reply.get('ok'):
-            error = reply.get('error')
-            return 400, {'error': error if isinstance(error, str) else 'controller command failed'}
-
-        result = reply.get('result')
-        return 200, {'ok': True, 'result': result if isinstance(result, dict) else {}}
+        return self._controller_command_response({
+            'cmd': 'remove_device',
+            'device_uid': device_uid,
+        })
 
     def _edit_device_response(self, target_device_uid: str, payload: object) -> tuple[int, dict]:
         if not isinstance(payload, dict):
             return 400, {'error': 'request body must be a JSON object'}
         if not isinstance(target_device_uid, str) or not target_device_uid:
             return 400, {'error': 'target device uid must be a non-empty string'}
-
-        device_uid = payload.get('device_uid')
-        strip_id = payload.get('strip_id')
-        length = payload.get('length')
-
-        if not isinstance(device_uid, str) or not device_uid:
-            return 400, {'error': 'device_uid must be a non-empty string'}
-        if not isinstance(strip_id, str) or not strip_id:
-            return 400, {'error': 'strip_id must be a non-empty string'}
-        if not isinstance(length, int) or isinstance(length, bool) or length < 1:
-            return 400, {'error': 'length must be a positive integer'}
-
-        try:
-            reply = self._send_controller_cmd({
-                'cmd': 'edit_device',
-                'target_device_uid': target_device_uid,
-                'device_uid': device_uid,
-                'strip_id': strip_id,
-                'length': length,
-            })
-        except _HttpError as e:
-            return e.status, {'error': e.message}
-
-        if not reply.get('ok'):
-            error = reply.get('error')
-            return 400, {'error': error if isinstance(error, str) else 'controller command failed'}
-
-        result = reply.get('result')
-        return 200, {'ok': True, 'result': result if isinstance(result, dict) else {}}
+        error = _device_fields_error(payload)
+        if error is not None:
+            return 400, {'error': error}
+        return self._controller_command_response({
+            'cmd': 'edit_device',
+            'target_device_uid': target_device_uid,
+            'device_uid': payload['device_uid'],
+            'strip_id': payload['strip_id'],
+            'length': payload['length'],
+        })
 
     def _create_device_response(self, payload: object) -> tuple[int, dict]:
         if not isinstance(payload, dict):
             return 400, {'error': 'request body must be a JSON object'}
-
         # v3 infers the device type from the uid prefix; no device_type field.
-        device_uid = payload.get('device_uid')
-        strip_id = payload.get('strip_id')
-        length = payload.get('length')
-
-        if not isinstance(device_uid, str) or not device_uid:
-            return 400, {'error': 'device_uid must be a non-empty string'}
-        if not isinstance(strip_id, str) or not strip_id:
-            return 400, {'error': 'strip_id must be a non-empty string'}
-        if not isinstance(length, int) or isinstance(length, bool) or length < 1:
-            return 400, {'error': 'length must be a positive integer'}
-
-        try:
-            reply = self._send_controller_cmd({
-                'cmd': 'add_device',
-                'device_uid': device_uid,
-                'strip_id': strip_id,
-                'length': length,
-            })
-        except _HttpError as e:
-            return e.status, {'error': e.message}
-
-        if not reply.get('ok'):
-            error = reply.get('error')
-            return 400, {'error': error if isinstance(error, str) else 'controller command failed'}
-
-        result = reply.get('result')
-        return 200, {'ok': True, 'result': result if isinstance(result, dict) else {}}
+        error = _device_fields_error(payload)
+        if error is not None:
+            return 400, {'error': error}
+        return self._controller_command_response({
+            'cmd': 'add_device',
+            'device_uid': payload['device_uid'],
+            'strip_id': payload['strip_id'],
+            'length': payload['length'],
+        })
 
     def _get_layout_response(self, device_uid: str) -> tuple[int, dict]:
         configured_length = self._sim_devices.get(device_uid)
@@ -912,6 +751,14 @@ class WebUiServer:
         self._layouts[device_uid] = {'rows': saved['rows']}
         self._snapshot['layouts'] = self._layouts
         return 200, saved
+
+    async def _read_json_body(self, req: _Request) -> object:
+        """Read and decode a JSON request body; _HttpError on any failure."""
+        body = await self._read_http_body(req.reader, req.headers)
+        try:
+            return json.loads(body.decode('utf-8'))
+        except (UnicodeDecodeError, json.JSONDecodeError) as e:
+            raise _HttpError(400, 'invalid json body') from e
 
     async def _read_http_body(
         self,

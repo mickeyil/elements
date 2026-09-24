@@ -8,14 +8,10 @@ from elemctl.controller_protocol import PROTOCOL_VERSION
 from elemctl.web import (
     WebUiServer,
     _build_parser,
-    _device_uid_from_path,
-    _device_uid_from_update_path,
     _encode_ws_frame,
-    _layout_device_uid_from_path,
     _make_disconnected_snapshot,
-    _program_id_from_load_path,
+    _match_route,
     _resolve_asset_path,
-    _session_verb_from_path,
     _static_cache_control,
 )
 
@@ -253,16 +249,29 @@ def test_static_cache_control_keeps_html_uncached(tmp_path, monkeypatch):
     assert _static_cache_control(index_path.resolve()) == 'no-store'
 
 
-def test_layout_device_uid_from_path_extracts_device_uid():
-    assert _layout_device_uid_from_path('/api/layouts/sim-1') == 'sim-1'
-    assert _layout_device_uid_from_path('/api/layouts/') is None
-    assert _layout_device_uid_from_path('/api/layouts/a/b') is None
+def test_match_route_extracts_layout_device_uid():
+    assert _match_route('GET', '/api/layouts/sim-1') == ('_route_get_layout', ('sim-1',))
+    assert _match_route('POST', '/api/layouts/sim-1') == ('_route_save_layout', ('sim-1',))
+    assert _match_route('GET', '/api/layouts/') is None
+    assert _match_route('GET', '/api/layouts/a/b') is None
 
 
-def test_device_uid_from_path_extracts_device_uid():
-    assert _device_uid_from_path('/api/devices/sim-1') == 'sim-1'
-    assert _device_uid_from_path('/api/devices/') is None
-    assert _device_uid_from_path('/api/devices/a/b') is None
+def test_match_route_extracts_device_uid():
+    assert _match_route('PATCH', '/api/devices/sim-1') == ('_route_edit_device', ('sim-1',))
+    assert _match_route('DELETE', '/api/devices/sim-1') == ('_route_remove_device', ('sim-1',))
+    assert _match_route('PATCH', '/api/devices/') is None
+    assert _match_route('PATCH', '/api/devices/a/b') is None
+
+
+def test_match_route_decodes_segments_and_rejects_encoded_slash():
+    assert _match_route('DELETE', '/api/devices/sim%2D1') == ('_route_remove_device', ('sim-1',))
+    assert _match_route('DELETE', '/api/devices/a%2Fb') is None
+
+
+def test_match_route_reports_known_path_with_wrong_method():
+    assert _match_route('GET', '/api/devices') == (None, ())
+    assert _match_route('POST', '/ws') == (None, ())
+    assert _match_route('GET', '/index.html') is None
 
 
 def test_tailscale_urls_formats_ipv4_output(monkeypatch):
@@ -954,35 +963,39 @@ class _FakeHttpWriter:
         return None
 
 
-def _run_http_request(server, method: str, path: str) -> tuple[int, dict]:
+def _run_http_request(server, method: str, path: str, body: bytes | None = None) -> tuple[int, dict]:
     async def run() -> tuple[int, dict]:
         reader = asyncio.StreamReader()
-        reader.feed_data(f'{method} {path} HTTP/1.1\r\nHost: x\r\n\r\n'.encode('ascii'))
+        length = f'Content-Length: {len(body)}\r\n' if body is not None else ''
+        reader.feed_data(f'{method} {path} HTTP/1.1\r\nHost: x\r\n{length}\r\n'.encode('ascii'))
+        if body is not None:
+            reader.feed_data(body)
         reader.feed_eof()
         writer = _FakeHttpWriter()
         await server._handle_http_client(reader, writer)  # type: ignore[arg-type]
-        head, _, body = bytes(writer.buffer).partition(b'\r\n\r\n')
+        head, _, response = bytes(writer.buffer).partition(b'\r\n\r\n')
         status = int(head.split(b'\r\n')[0].split()[1])
         try:
-            return status, json.loads(body)
+            return status, json.loads(response)
         except (json.JSONDecodeError, ValueError):
             return status, {}   # non-JSON body (e.g. plain-text 405)
 
     return asyncio.run(run())
 
 
-def test_program_id_from_load_path_extracts_id():
-    assert _program_id_from_load_path('/api/programs/ring16_blue_wave/load') == 'ring16_blue_wave'
-    assert _program_id_from_load_path('/api/programs/rescan') is None
-    assert _program_id_from_load_path('/api/programs//load') is None
-    assert _program_id_from_load_path('/api/programs/a/b/load') is None
+def test_match_route_extracts_program_id():
+    assert _match_route('POST', '/api/programs/ring16_blue_wave/load') == (
+        '_route_load_program', ('ring16_blue_wave',))
+    assert _match_route('POST', '/api/programs/rescan') == ('_route_rescan', ())
+    assert _match_route('POST', '/api/programs//load') is None
+    assert _match_route('POST', '/api/programs/a/b/load') is None
 
 
-def test_session_verb_from_path_accepts_only_known_verbs():
+def test_match_route_accepts_only_known_session_verbs():
     for verb in ('play', 'pause', 'resume', 'stop'):
-        assert _session_verb_from_path(f'/api/session/{verb}') == verb
-    assert _session_verb_from_path('/api/session/loop') is None
-    assert _session_verb_from_path('/api/session/') is None
+        assert _match_route('POST', f'/api/session/{verb}') == ('_route_session', (verb,))
+    assert _match_route('POST', '/api/session/loop') is None
+    assert _match_route('POST', '/api/session/') is None
 
 
 def test_load_program_response_forwards_load(monkeypatch, tmp_path):
@@ -1066,11 +1079,12 @@ def test_route_session_play_forwards_to_controller(monkeypatch, tmp_path):
     assert commands == [{'id': 1, 'cmd': 'play'}]
 
 
-def test_device_uid_from_update_path_extracts_uid():
-    assert _device_uid_from_update_path('/api/devices/esp-aabbccddeeff/update') == 'esp-aabbccddeeff'
-    assert _device_uid_from_update_path('/api/devices//update') is None
-    assert _device_uid_from_update_path('/api/devices/a/b/update') is None
-    assert _device_uid_from_update_path('/api/devices/esp-aabbccddeeff') is None
+def test_match_route_extracts_update_uid():
+    assert _match_route('POST', '/api/devices/esp-aabbccddeeff/update') == (
+        '_route_update_firmware', ('esp-aabbccddeeff',))
+    assert _match_route('POST', '/api/devices//update') is None
+    assert _match_route('POST', '/api/devices/a/b/update') is None
+    assert _match_route('POST', '/api/devices/esp-aabbccddeeff') == (None, ())
 
 
 def test_route_device_update_forwards_update_firmware(monkeypatch, tmp_path):
@@ -1107,4 +1121,38 @@ def test_route_device_update_rejects_get(tmp_path):
 def test_route_session_rejects_get(tmp_path):
     server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
     status, _ = _run_http_request(server, 'GET', '/api/session/play')
+    assert status == 405
+
+
+def test_route_create_device_forwards_body(monkeypatch, tmp_path):
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+    commands: list[dict] = []
+    monkeypatch.setattr(web_mod, 'ControllerClient', _capturing_client(commands, _OK_REPLY))
+
+    body = json.dumps({'device_uid': 'sim-1', 'strip_id': 'main', 'length': 60}).encode()
+    status, payload = _run_http_request(server, 'POST', '/api/devices', body)
+
+    assert status == 200
+    assert payload == {'ok': True, 'result': {}}
+    assert commands == [{'id': 1, 'cmd': 'add_device', 'device_uid': 'sim-1',
+                         'strip_id': 'main', 'length': 60}]
+
+
+def test_route_create_device_rejects_invalid_json(tmp_path):
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+    status, payload = _run_http_request(server, 'POST', '/api/devices', b'{nope')
+    assert status == 400
+    assert payload == {'error': 'invalid json body'}
+
+
+def test_route_create_device_requires_content_length(tmp_path):
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+    status, payload = _run_http_request(server, 'POST', '/api/devices')
+    assert status == 400
+    assert payload == {'error': 'missing content-length'}
+
+
+def test_route_devices_collection_rejects_patch(tmp_path):
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+    status, _ = _run_http_request(server, 'PATCH', '/api/devices')
     assert status == 405
