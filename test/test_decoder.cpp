@@ -43,7 +43,7 @@ struct HeaderBytes {
 // Append magic + version + header to `b`.
 void append_prefix_and_header(std::vector<uint8_t>& b, const HeaderBytes& h) {
     b.insert(b.end(), { 'E', 'L', 'E', 'M' });
-    put_u8(b, 4);                 // BLOB_VERSION
+    put_u8(b, 5);                 // BLOB_VERSION
     put_u8(b, h.flags);
     put_u8(b, h.target_fps);
     put_u8(b, h.layer_count);
@@ -241,7 +241,7 @@ TEST_CASE("decode_program: profile_strip_length == 0 is rejected", "[decoder]") 
 
 TEST_CASE("decode_program: reserved flag bits rejected", "[decoder]") {
     auto bytes = build_minimal_valid_blob();
-    bytes[5] = 0x02;   // flags byte: bit 0 is requires_sync; bit 1 reserved
+    bytes[5] = 0x04;   // flags byte: bit 0 requires_sync, bit 1 loop; bit 2 reserved
     CHECK(run(bytes) == DecodeError::InvalidField);
 }
 
@@ -275,6 +275,37 @@ TEST_CASE("decode_program: duration 0 rejected", "[decoder]") {
     HeaderBytes h; h.duration = 0;
     append_prefix_and_header(b, h);
     CHECK(run(b) == DecodeError::InvalidField);
+}
+
+TEST_CASE("decode_program: duration over MAX_PROGRAM_MS rejected", "[decoder]") {
+    std::vector<uint8_t> b;
+    HeaderBytes h; h.duration = MAX_PROGRAM_MS + 1;
+    append_prefix_and_header(b, h);
+    CHECK(run(b) == DecodeError::OverCap);
+}
+
+TEST_CASE("decode_program: a 30-day program with a 30-day event decodes",
+          "[decoder]") {
+    std::vector<uint8_t> b;
+    HeaderBytes h;
+    h.layer_count = 1;
+    h.buffer_count = 1;
+    h.pixel_view_count = 1;
+    h.duration = MAX_PROGRAM_MS;
+    append_prefix_and_header(b, h);
+    append_buffer_sizes(b, { 4 });
+    ViewBytes v;
+    v.buffer_idx = 0; v.size = 4;
+    v.has_physical = true;
+    v.physical_identity = true;
+    append_pixel_view(b, v);
+    put_u16(b, 1);
+    EventBytes e;
+    e.anim_type = static_cast<uint8_t>(AnimType::Wave);
+    e.start = 0; e.duration = MAX_PROGRAM_MS; e.dst = 0;
+    e.params = wave_params(2, 0, 0, 0, 0, 1, 1.0f, 0, 0);
+    append_event(b, e);
+    CHECK(run(b) == DecodeError::Ok);
 }
 
 TEST_CASE("decode_program: layer_count over MAX_LAYER_COUNT rejected", "[decoder]") {
@@ -731,6 +762,18 @@ TEST_CASE("decode_program: requires_sync flag carried into Program", "[decoder]"
     Program* p = decode_program(bytes.data(), bytes.size(), 4, &err);
     REQUIRE(p != nullptr);
     CHECK(p->requires_sync == true);
+    CHECK(p->loop == false);
+    free_program(p);
+}
+
+TEST_CASE("decode_program: loop flag carried into Program", "[decoder]") {
+    auto bytes = build_minimal_valid_blob();
+    bytes[5] = 0x02;   // flags: loop = 1
+    DecodeError err = DecodeError::Ok;
+    Program* p = decode_program(bytes.data(), bytes.size(), 4, &err);
+    REQUIRE(p != nullptr);
+    CHECK(p->loop == true);
+    CHECK(p->requires_sync == false);
     free_program(p);
 }
 

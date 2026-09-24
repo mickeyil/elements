@@ -128,7 +128,7 @@ void Engine::finish_events_ending_at(ProgramTime t)
             continue;
         }
         e.animation->render(_program->pixel_views.at(e.dst_pixv_idx),
-                            seconds(e.duration));
+                            e.duration);
         state.cursor++;
         state.started = false;
     }
@@ -183,7 +183,7 @@ void Engine::render_active(ProgramTime t)
         // already finished everything ending at or before t.
         AnimationEvent& e = _program->layers[li].at(state.cursor);
         PixelView& dst = _program->pixel_views.at(e.dst_pixv_idx);
-        e.animation->render(dst, seconds(t - e.start));
+        e.animation->render(dst, t - e.start);
         _active_dst_views[li] = &dst;
     }
 }

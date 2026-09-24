@@ -24,6 +24,10 @@
 //
 // Clock domain is selected per loaded program: requires_sync=true reads
 // SyncedClock::now_remote_us(); requires_sync=false reads now_local_us().
+//
+// A looping program never ends: the cursor keeps counting elapsed time,
+// and each frame renders at that time modulo the duration. The frame that
+// crosses into a new cycle (or skips several) rewinds the engine first.
 
 enum class DeviceState : uint8_t { IDLE, LOADED, PLAYING, PAUSED, ENDED };
 
@@ -36,7 +40,7 @@ enum class RenderFrameResult : uint8_t {
 
     // Natural end-of-program transition. Strip was cleared to black and the
     // state changed PLAYING -> ENDED. Returned only for that transition;
-    // later calls return Unchanged.
+    // later calls return Unchanged. Never returned for a looping program.
     Ended,
 };
 
@@ -80,12 +84,13 @@ public:
     // (anchor = now_local_us(), cursor = 0).
     PlaybackResult handle_start(int64_t program_start_us);
 
-    // Re-anchor the program-time cursor to t_program (seconds, rounded to
-    // the nearest millisecond). Valid from LOADED or PAUSED. Target must be
-    // strictly ahead of the current cursor and strictly inside
-    // [0, duration), else BadTime. Resets the engine, sets cursor to the
-    // target, transitions to PAUSED. Does not render.
-    PlaybackResult handle_jump(float t_program);
+    // Re-anchor the program-time cursor to t_ms (milliseconds into the
+    // program; for a looping program, into the cycle the cursor is in).
+    // Valid from LOADED or PAUSED. Target must be strictly ahead of the
+    // current cursor and strictly inside [0, duration), else BadTime.
+    // Resets the engine, sets cursor to the target, transitions to PAUSED.
+    // Does not render.
+    PlaybackResult handle_jump(uint32_t t_ms);
 
     void handle_pause();
 
@@ -116,19 +121,26 @@ public:
     bool take_present_request();
 
     DeviceState state() const;
-    // Program length in seconds; 0 when no program is loaded.
-    float duration() const;
+    // Program length in ms (one cycle of a looping program); 0 when no
+    // program is loaded.
+    uint32_t duration_ms() const;
     // Returns 0 when no program is loaded.
     uint8_t target_fps() const;
-    float current_t_program() const;
+    // Where the cursor sits: the loop cycle (always 0 for a non-looping
+    // program) and ms into it. 0/0 in IDLE and LOADED; ENDED reports the
+    // duration.
+    uint32_t current_cycle() const;
+    uint32_t current_t_ms() const;
     uint16_t strip_length() const;
     bool requires_sync() const;
+    bool loop() const;
 
     Strip& strip();
     const Strip& strip() const;
 
 private:
     int64_t program_clock_now_us() const;
+    int64_t duration_us_() const;
     void unload_program_();
     void reset_program_state_();
     void reset_timing_state_();
@@ -143,7 +155,13 @@ private:
     ProgramDuration _duration;
     uint8_t _target_fps = 0;
     int64_t _program_start_us = 0;
+    // Elapsed program time, never wrapped: pause, resume and the rollback
+    // guard all work on it. A looping program's position is this modulo
+    // the duration.
     int64_t _t_program_cursor_us = 0;
+    // The loop cycle the engine's timeline currently belongs to.
+    int64_t _engine_cycle = 0;
     bool _requires_sync = false;
+    bool _loop = false;
     bool _present_pending = false;
 };

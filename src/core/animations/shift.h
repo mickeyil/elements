@@ -30,7 +30,7 @@ public:
     // Snapshots `src` into `work`. `work` is also remembered for render().
     void initialize(const PixelView* src, PixelView* work) override;
 
-    void render(PixelView& dst, float t_animation) override;
+    void render(PixelView& dst, ProgramDuration t) override;
 
 private:
     ShiftParams _p;

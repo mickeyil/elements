@@ -17,12 +17,15 @@ class Strip;
 // loopback every sim shares the same source address.
 //
 // Packet (multi-byte fields little-endian):
-//   uid=16B | frame_index=u32 | t_program=f32 | rgb bytes
+//   uid=16B | frame_index=u32 | cycle=u32 | t_ms=u32 | rgb bytes
+//
+// cycle and t_ms place the frame on the program timeline: the loop cycle
+// (0 unless the program loops) and whole ms into it.
 //
 // This is its own protocol, not the controller link; the destination
 // comes from sim CLI flags. The firmware counterpart is EspFrameOutput.
 
-constexpr size_t FRAME_PREVIEW_HEADER_BYTES = UID_SIZE + 4 + 4;
+constexpr size_t FRAME_PREVIEW_HEADER_BYTES = UID_SIZE + 4 + 4 + 4;
 
 static_assert(FRAME_PREVIEW_HEADER_BYTES + MAX_STRIP_PIXELS * sizeof(rgb_t)
                   <= MAX_PAYLOAD_SIZE,
@@ -40,7 +43,7 @@ public:
 
     // Send the frame, best effort: a failed send closes the socket
     // (it reopens on the next write) and the frame is dropped.
-    void write(const Strip& strip, float t_program) override;
+    void write(const Strip& strip, uint32_t cycle, uint32_t t_ms) override;
 
 private:
     UdpTransport&  _udp;

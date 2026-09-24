@@ -21,3 +21,4 @@ test/build/
 test/fixtures/*.bin
 /logs/
 /.codex
+.claude/

@@ -25,6 +25,11 @@ struct Program {
     // True when the program must play in sync with other devices.
     bool requires_sync = false;
 
+    // True when playback replays the program from 0 each time it reaches
+    // `duration`, indefinitely. The engine itself never wraps; the player
+    // resets it at each cycle boundary.
+    bool loop = false;
+
     uint8_t layer_count = 0;
 
     // The bottom-to-top layer timeline. Each layer owns its own events and

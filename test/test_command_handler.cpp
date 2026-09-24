@@ -1,7 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstring>
-#include <limits>
 #include <map>
 #include <string>
 #include <vector>
@@ -162,7 +161,7 @@ std::vector<uint8_t> build_paint_blob(uint16_t strip_length, float duration,
 {
     std::vector<uint8_t> b;
     b.insert(b.end(), { 'E', 'L', 'E', 'M' });
-    put_u8(b, 4);                                     // BLOB_VERSION
+    put_u8(b, 5);                                     // BLOB_VERSION
     put_u8(b, requires_sync ? 0x01 : 0x00);           // flags
     put_u8(b, 50);                                    // target_fps
     put_u8(b, 1);                                     // layer_count
@@ -331,19 +330,19 @@ TEST_CASE("jump maps BadTime onto BadPayload and seeks on success")
     Harness h;
     REQUIRE(h.load_live() == AckStatus::Ok);
 
-    std::vector<uint8_t> nan_target;
-    put_f32(nan_target, std::numeric_limits<float>::quiet_NaN());
-    CHECK(h.run(CMD_JUMP, nan_target) == AckStatus::BadPayload);
+    std::vector<uint8_t> short_target;
+    put_u16(short_target, 500);  // a u32 ms is 4 bytes
+    CHECK(h.run(CMD_JUMP, short_target) == AckStatus::BadPayload);
 
     std::vector<uint8_t> behind;
-    put_f32(behind, 0.0f);  // not strictly ahead of cursor 0
+    put_u32(behind, 0);  // not strictly ahead of cursor 0
     CHECK(h.run(CMD_JUMP, behind) == AckStatus::BadPayload);
 
     std::vector<uint8_t> ahead;
-    put_f32(ahead, 0.5f);
+    put_u32(ahead, 500);
     CHECK(h.run(CMD_JUMP, ahead) == AckStatus::Ok);
     CHECK(h.playback.state() == DeviceState::PAUSED);
-    CHECK(h.playback.current_t_program() == 0.5f);
+    CHECK(h.playback.current_t_ms() == 500);
 }
 
 // ---------------------------------------------------------------------------

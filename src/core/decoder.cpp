@@ -21,6 +21,11 @@
 
 namespace {
 
+// Header flag bits; the rest are reserved and must be zero.
+constexpr uint8_t FLAG_REQUIRES_SYNC = 0x01;
+constexpr uint8_t FLAG_LOOP          = 0x02;
+constexpr uint8_t FLAGS_KNOWN        = FLAG_REQUIRES_SYNC | FLAG_LOOP;
+
 struct ParsedHeader {
     uint8_t  flags;
     uint8_t  target_fps;
@@ -61,7 +66,7 @@ DecodeError validate_header(const ParsedHeader& hdr)
 {
     // Reserved flag bits must be zero so a future version can introduce a
     // new bit knowing old decoders rejected blobs that set it.
-    if ((hdr.flags & ~uint8_t{0x01}) != 0)            return DecodeError::InvalidField;
+    if ((hdr.flags & ~FLAGS_KNOWN) != 0)               return DecodeError::InvalidField;
     if (hdr.strip_length == 0)                         return DecodeError::InvalidField;
     if (hdr.target_fps == 0)                           return DecodeError::InvalidField;
 
@@ -72,6 +77,7 @@ DecodeError validate_header(const ParsedHeader& hdr)
     if (hdr.copy_op_count    > MAX_COPY_OP_COUNT)      return DecodeError::OverCap;
 
     if (hdr.duration_ms == 0)                          return DecodeError::InvalidField;
+    if (hdr.duration_ms > MAX_PROGRAM_MS)              return DecodeError::OverCap;
     return DecodeError::Ok;
 }
 
@@ -413,10 +419,10 @@ bool peek_blob_header(const uint8_t* blob, size_t len,
 
     ParsedHeader hdr{};
     if (parse_header(r, hdr) != DecodeError::Ok) return false;
-    if ((hdr.flags & ~uint8_t{0x01}) != 0) return false;
+    if ((hdr.flags & ~FLAGS_KNOWN) != 0) return false;
 
     strip_length_out = hdr.strip_length;
-    requires_sync_out = (hdr.flags & 0x01) != 0;
+    requires_sync_out = (hdr.flags & FLAG_REQUIRES_SYNC) != 0;
     return true;
 }
 
@@ -455,7 +461,8 @@ Program* decode_program(
 
     prog->duration      = ProgramDuration{hdr.duration_ms};
     prog->target_fps    = hdr.target_fps;
-    prog->requires_sync = (hdr.flags & 0x01) != 0;
+    prog->requires_sync = (hdr.flags & FLAG_REQUIRES_SYNC) != 0;
+    prog->loop          = (hdr.flags & FLAG_LOOP) != 0;
     prog->layer_count   = hdr.layer_count;
 
     err = parse_buffer_sizes(r, hdr, *prog);

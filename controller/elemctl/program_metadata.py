@@ -6,8 +6,13 @@ import ast
 import math
 
 
-def extract_metadata(source: str, filename: str) -> tuple[float, float]:
-    """Extract BEAT and DURATION numeric literals from DSL source."""
+def extract_metadata(source: str, filename: str) -> tuple[float, float | None, bool]:
+    """Extract BEAT, DURATION and the optional LOOP from DSL source.
+
+    BEAT and DURATION are positive numeric literals; DURATION may instead be
+    the bare name `forever`, returned as None. LOOP is an optional True/False
+    literal, False when absent. Returns (beat, duration, loop).
+    """
     try:
         tree = ast.parse(source, filename=filename)
     except SyntaxError as e:
@@ -15,6 +20,8 @@ def extract_metadata(source: str, filename: str) -> tuple[float, float]:
 
     beat = None
     duration = None
+    forever = False
+    loop = None
 
     for node in ast.iter_child_nodes(tree):
         if not isinstance(node, ast.Assign):
@@ -24,7 +31,21 @@ def extract_metadata(source: str, filename: str) -> tuple[float, float]:
         target = node.targets[0]
         if not isinstance(target, ast.Name):
             continue
-        if target.id not in ('BEAT', 'DURATION'):
+        if target.id not in ('BEAT', 'DURATION', 'LOOP'):
+            continue
+        if target.id == 'LOOP':
+            if loop is not None:
+                raise ValueError("duplicate LOOP assignment")
+            if not (isinstance(node.value, ast.Constant)
+                    and isinstance(node.value.value, bool)):
+                raise ValueError("LOOP must be True or False")
+            loop = node.value.value
+            continue
+        if (target.id == 'DURATION' and isinstance(node.value, ast.Name)
+                and node.value.id == 'forever'):
+            if duration is not None or forever:
+                raise ValueError("duplicate DURATION assignment")
+            forever = True
             continue
         if not isinstance(node.value, ast.Constant):
             raise ValueError(f"{target.id} must be a numeric literal")
@@ -42,16 +63,16 @@ def extract_metadata(source: str, filename: str) -> tuple[float, float]:
                 raise ValueError("duplicate BEAT assignment")
             beat = float(value)
         else:
-            if duration is not None:
+            if duration is not None or forever:
                 raise ValueError("duplicate DURATION assignment")
             duration = float(value)
 
     if beat is None:
         raise ValueError("missing BEAT")
-    if duration is None:
+    if duration is None and not forever:
         raise ValueError("missing DURATION")
 
-    return beat, duration
+    return beat, duration, bool(loop)
 
 
 def extract_strips(source: str, filename: str = '<string>') -> list[str] | None:

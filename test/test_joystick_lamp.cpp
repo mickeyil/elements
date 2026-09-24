@@ -160,19 +160,19 @@ TEST_CASE("police strobe alternates blue and red phases at 50% duty") {
     PixelView dst;
     REQUIRE(dst.initialize(buf, 4));
 
-    anim.render(dst, 0.01f);  // lit half of the blue phase's first flash
+    anim.render(dst, ProgramDuration{10});  // lit half of the blue phase's first flash
     REQUIRE(buf[0].h == 240.0f);
     REQUIRE(buf[0].v == 1.0f);
     REQUIRE(buf[3].v == 1.0f);
 
-    anim.render(dst, 0.06f);  // dark half of the same flash
+    anim.render(dst, ProgramDuration{60});  // dark half of the same flash
     REQUIRE(buf[0].v == 0.0f);
 
-    anim.render(dst, 0.51f);  // red phase
+    anim.render(dst, ProgramDuration{510});  // red phase
     REQUIRE(buf[0].h == 0.0f);
     REQUIRE(buf[0].v == 1.0f);
 
-    anim.render(dst, 1.01f);  // wraps back to blue
+    anim.render(dst, ProgramDuration{1010});  // wraps back to blue
     REQUIRE(buf[0].h == 240.0f);
 }
 
@@ -182,12 +182,11 @@ TEST_CASE("police strobe flashes five times per color phase") {
     PixelView dst;
     REQUIRE(dst.initialize(buf, 1));
 
-    // Sample between the 50 ms duty edges so float rounding at the
-    // boundaries cannot fake a transition.
+    // Sample every 5 ms across one color phase and count rising edges.
     int rises = 0;
     bool prev = false;
-    for (int i = 0; i < 100; i++) {
-        anim.render(dst, 0.0025f + i * 0.005f);
+    for (uint32_t i = 0; i < 100; i++) {
+        anim.render(dst, ProgramDuration{2 + i * 5});
         const bool lit = buf[0].v > 0.5f;
         if (lit && !prev) rises++;
         prev = lit;

@@ -26,7 +26,7 @@ class FakeService:
         self.preview_enabled = enabled
 
 
-FRAME = encode_frame(1, 0.02, [b'\x00\x00\x03'])
+FRAME = encode_frame(1, 0, 20, [b'\x00\x00\x03'])
 
 
 def make_server():

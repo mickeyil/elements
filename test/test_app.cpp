@@ -220,7 +220,8 @@ public:
     struct Frame
     {
         uint8_t r = 0, g = 0, b = 0;  // pixel 0
-        float t_program = 0.0f;
+        uint32_t cycle = 0;
+        uint32_t t_ms = 0;
     };
 
     void apply_profile(const HardwareProfile& profile) override
@@ -229,7 +230,7 @@ public:
         profile_strip_length = profile.strip_length;
     }
 
-    void write(const Strip& strip, float t_program) override
+    void write(const Strip& strip, uint32_t cycle, uint32_t t_ms) override
     {
         Frame f;
         if (strip.size() > 0) {
@@ -237,7 +238,8 @@ public:
             f.g = strip[0].g;
             f.b = strip[0].b;
         }
-        f.t_program = t_program;
+        f.cycle = cycle;
+        f.t_ms = t_ms;
         frames.push_back(f);
     }
 
@@ -347,7 +349,7 @@ std::vector<uint8_t> build_paint_blob(float duration, uint8_t target_fps = 50)
 
     // Header.
     b.insert(b.end(), { 'E', 'L', 'E', 'M' });
-    put_u8(b, 4);                                     // BLOB_VERSION
+    put_u8(b, 5);                                     // BLOB_VERSION
     put_u8(b, 0x00);                                  // flags: unsynced
     put_u8(b, target_fps);
     put_u8(b, 1);                                     // layer_count
@@ -691,7 +693,8 @@ TEST_CASE("a local animation restarts on Ended")
     REQUIRE(h.frames() == 2);
     CHECK(is_black(h.last_frame()));
     // Presented before the restart, so it carries the program's end time.
-    CHECK(h.last_frame().t_program == 0.1f);
+    CHECK(h.last_frame().t_ms == 100);
+    CHECK(h.last_frame().cycle == 0);
 
     // The restarted program renders again.
     h.advance(20'000);

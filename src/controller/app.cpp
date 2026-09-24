@@ -190,5 +190,6 @@ void App::present_if_pending_()
     // With no profile nothing was ever shown and the output is not set up.
     if (!_playback.has_hardware_profile()) return;
 
-    _output.write(_playback.strip(), _playback.current_t_program());
+    _output.write(_playback.strip(), _playback.current_cycle(),
+                  _playback.current_t_ms());
 }

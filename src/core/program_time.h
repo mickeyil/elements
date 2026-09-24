@@ -6,8 +6,8 @@
 // (event start and end, copy-op time, program length) to a whole
 // millisecond once, and the blob carries those integers. The decoder,
 // engine and playback then compare exact values, so adjacent events meet
-// and a copy op lands on the frame its source ends. Effects still take
-// float seconds; convert with seconds() at that boundary only.
+// and a copy op lands on the frame its source ends. Animations take the
+// same integers (see Animation::render); no timeline value is ever float.
 
 // A position on the program timeline.
 struct ProgramTime {
@@ -31,5 +31,3 @@ inline bool operator<=(ProgramTime a, ProgramTime b) { return a.ms <= b.ms; }
 inline bool operator> (ProgramTime a, ProgramTime b) { return a.ms >  b.ms; }
 inline bool operator>=(ProgramTime a, ProgramTime b) { return a.ms >= b.ms; }
 
-inline float seconds(ProgramDuration d) { return static_cast<float>(d.ms) / 1000.0f; }
-inline float seconds(ProgramTime t)     { return static_cast<float>(t.ms) / 1000.0f; }

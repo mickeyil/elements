@@ -20,7 +20,7 @@ public:
     static Animation* from_blob(const uint8_t* params, size_t params_size,
                                 DecodeError* err_out);
 
-    void render(PixelView& dst, float t_animation) override;
+    void render(PixelView& dst, ProgramDuration t) override;
 
 private:
     SparkParams _p;

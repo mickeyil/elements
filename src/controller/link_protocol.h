@@ -7,7 +7,7 @@
 // Opcode behavior lives with the handlers in src/command_handler.cpp.
 
 // Bumped on every breaking wire change. Sent in REGISTER.
-constexpr uint8_t PROTOCOL_VERSION = 4;
+constexpr uint8_t PROTOCOL_VERSION = 5;
 
 // ---- Session / configuration ----------------------------------------------
 
@@ -19,7 +19,7 @@ constexpr uint8_t CMD_SET_PROFILE = 0x01;
 
 constexpr uint8_t CMD_LOAD                 = 0x10;
 constexpr uint8_t CMD_START                = 0x11;
-constexpr uint8_t CMD_JUMP                 = 0x12;
+constexpr uint8_t CMD_JUMP                 = 0x12;  // payload: u32 ms
 constexpr uint8_t CMD_PAUSE                = 0x13;
 constexpr uint8_t CMD_RESUME               = 0x14;
 constexpr uint8_t CMD_STOP                 = 0x15;

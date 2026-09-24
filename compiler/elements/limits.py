@@ -18,3 +18,6 @@ MAX_COPY_OP_COUNT = 512
 MAX_EVENTS_PER_LAYER = 1024
 MAX_EVENT_PARAMS_BYTES = 8192
 MAX_POOL_BYTES = 100 * 1024
+# Longest program: 30 days. The one bound on every timeline value, so a
+# duration (and anything measured within it) always fits a u32 of ms.
+MAX_PROGRAM_MS = 30 * 24 * 60 * 60 * 1000

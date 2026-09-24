@@ -166,7 +166,7 @@ class ControllerService:
             self._catalog_dirty = False
             json_msgs.append(encode_json(self._catalog_dict()))
 
-        frame_msgs = [encode_frame(f.frame_index, f.t_rel, f.strips)
+        frame_msgs = [encode_frame(f.frame_index, f.cycle, f.t_ms, f.strips)
                       for f in self._session.drain_preview_frames()]
         return json_msgs, frame_msgs
 
@@ -531,17 +531,22 @@ class ControllerService:
         topology = self._topology_fingerprint()
         manifest = self._artifact_cache.get(entry.source_hash, topology)
         if manifest is None:
-            manifest = self._compile(entry.source, entry.beat, entry.duration)
+            manifest = self._compile(entry.source, entry.beat, entry.duration,
+                                     entry.loop)
             self._artifact_cache.put(entry.source_hash, topology, manifest)
         return manifest
 
-    def _compile(self, source, beat, duration):
-        from elements.dsl import _builder, build_manifest
+    def _compile(self, source, beat, duration, loop):
+        from elements.dsl import _builder, build_manifest, forever
         _builder.reset()
         _builder.configured_strip_lengths = self._logical_strip_lengths()
         try:
             exec(source, {'__builtins__': __builtins__})
-            return build_manifest(beat=beat, duration=duration)
+            # A None duration is DURATION = forever; the compiler resolves it
+            # to MAX_PROGRAM_MS, looping.
+            return build_manifest(beat=beat,
+                                  duration=forever if duration is None else duration,
+                                  loop=loop)
         finally:
             _builder.reset()
 
@@ -573,6 +578,8 @@ class ControllerService:
             'epoch': s.epoch,
             'program_id': self._loaded_program_id,
             'duration': manifest.duration if manifest is not None else None,
+            # A looping session replays each duration and never ends.
+            'loop': manifest.loop if manifest is not None else False,
             'program_start_us': s.program_start_us,
             'cursor_us': s.cursor_us,
             # Program strip layout in manifest order: the order and lengths an

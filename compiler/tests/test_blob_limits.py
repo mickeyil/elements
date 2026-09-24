@@ -13,21 +13,22 @@ from elements import limits
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 _CONSTEXPR = re.compile(
-    r"static\s+constexpr\s+\w+\s+(\w+)\s*=\s*([0-9]+(?:\s*\*\s*[0-9]+)?)\s*;"
+    r"static\s+constexpr\s+\w+\s+(\w+)\s*=\s*"
+    r"([0-9]+[uU]?(?:\s*\*\s*[0-9]+[uU]?)*)\s*;"
 )
 
 
 def _parse_constexpr_ints(path: Path) -> dict[str, int]:
     """Extract `static constexpr <type> NAME = <expr>;` integer constants.
 
-    Handles plain decimal literals and a single `A * B` product (the form
-    MAX_POOL_BYTES uses).
+    Handles plain decimal literals, optionally `u`-suffixed, and products
+    of them (the form MAX_POOL_BYTES and MAX_PROGRAM_MS use).
     """
     out: dict[str, int] = {}
     for name, expr in _CONSTEXPR.findall(path.read_text(encoding="utf-8")):
         value = 1
         for token in expr.split("*"):
-            value *= int(token)
+            value *= int(token.strip().rstrip("uU"))
         out[name] = value
     return out
 
@@ -45,6 +46,7 @@ def test_blob_limits_match_cpp():
         "MAX_EVENTS_PER_LAYER": limits.MAX_EVENTS_PER_LAYER,
         "MAX_EVENT_PARAMS_BYTES": limits.MAX_EVENT_PARAMS_BYTES,
         "MAX_POOL_BYTES": limits.MAX_POOL_BYTES,
+        "MAX_PROGRAM_MS": limits.MAX_PROGRAM_MS,
     }
 
     for name, py_value in expected.items():

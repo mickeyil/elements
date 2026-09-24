@@ -70,15 +70,19 @@ struct Harness
     }
 };
 
-std::vector<uint8_t> expected_packet(uint32_t frame_index, float t_program,
-                                     const Strip& strip)
+void push_u32(std::vector<uint8_t>& pkt, uint32_t v)
+{
+    for (int i = 0; i < 4; ++i) pkt.push_back((v >> (8 * i)) & 0xFF);
+}
+
+std::vector<uint8_t> expected_packet(uint32_t frame_index, uint32_t cycle,
+                                     uint32_t t_ms, const Strip& strip)
 {
     std::vector<uint8_t> pkt(UID_SIZE, 0);
     std::memcpy(pkt.data(), "sim-pv", 6);
-    for (int i = 0; i < 4; ++i) pkt.push_back((frame_index >> (8 * i)) & 0xFF);
-    uint8_t f[4];
-    std::memcpy(f, &t_program, 4);
-    pkt.insert(pkt.end(), f, f + 4);
+    push_u32(pkt, frame_index);
+    push_u32(pkt, cycle);
+    push_u32(pkt, t_ms);
     pkt.insert(pkt.end(), strip.bytes(), strip.bytes() + strip.byte_size());
     return pkt;
 }
@@ -89,10 +93,10 @@ TEST_CASE("write sends one packet with header and raw RGB")
 {
     Harness h;
 
-    h.out.write(h.strip, 0.5f);
+    h.out.write(h.strip, 3, 500);
 
     REQUIRE(h.udp.sent.size() == 1);
-    CHECK(h.udp.sent[0] == expected_packet(0, 0.5f, h.strip));
+    CHECK(h.udp.sent[0] == expected_packet(0, 3, 500, h.strip));
     CHECK(h.udp.last_ip == DST_IP);
     CHECK(h.udp.last_port == DST_PORT);
 }
@@ -101,11 +105,11 @@ TEST_CASE("the frame index increments per write")
 {
     Harness h;
 
-    h.out.write(h.strip, 0.0f);
-    h.out.write(h.strip, 0.1f);
+    h.out.write(h.strip, 0, 0);
+    h.out.write(h.strip, 0, 100);
 
     REQUIRE(h.udp.sent.size() == 2);
-    CHECK(h.udp.sent[1] == expected_packet(1, 0.1f, h.strip));
+    CHECK(h.udp.sent[1] == expected_packet(1, 0, 100, h.strip));
 }
 
 TEST_CASE("the socket binds lazily and only once")
@@ -113,8 +117,8 @@ TEST_CASE("the socket binds lazily and only once")
     Harness h;
     CHECK(h.udp.bind_calls == 0);
 
-    h.out.write(h.strip, 0.0f);
-    h.out.write(h.strip, 0.1f);
+    h.out.write(h.strip, 0, 0);
+    h.out.write(h.strip, 0, 100);
     CHECK(h.udp.bind_calls == 1);
 }
 
@@ -123,15 +127,15 @@ TEST_CASE("a failed send closes the socket; the next write recovers")
     Harness h;
 
     h.udp.fail_sends = true;
-    h.out.write(h.strip, 0.0f);
+    h.out.write(h.strip, 0, 0);
     CHECK_FALSE(h.udp.is_bound());
     CHECK(h.udp.sent.empty());
 
     // The dropped frame still consumed an index; the receiver sees a gap.
     h.udp.fail_sends = false;
-    h.out.write(h.strip, 0.1f);
+    h.out.write(h.strip, 0, 100);
     REQUIRE(h.udp.sent.size() == 1);
-    CHECK(h.udp.sent[0] == expected_packet(1, 0.1f, h.strip));
+    CHECK(h.udp.sent[0] == expected_packet(1, 0, 100, h.strip));
 }
 
 TEST_CASE("a failed bind drops the frame without sending")
@@ -139,11 +143,11 @@ TEST_CASE("a failed bind drops the frame without sending")
     Harness h;
 
     h.udp.accept_bind = false;
-    h.out.write(h.strip, 0.0f);
+    h.out.write(h.strip, 0, 0);
     CHECK(h.udp.sent.empty());
 
     h.udp.accept_bind = true;
-    h.out.write(h.strip, 0.1f);
+    h.out.write(h.strip, 0, 100);
     REQUIRE(h.udp.sent.size() == 1);
-    CHECK(h.udp.sent[0] == expected_packet(1, 0.1f, h.strip));
+    CHECK(h.udp.sent[0] == expected_packet(1, 0, 100, h.strip));
 }

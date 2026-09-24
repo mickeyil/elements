@@ -7,13 +7,50 @@ from elemctl.program_metadata import extract_metadata, extract_strips
 
 
 def test_extract_metadata_valid_source():
-    beat, duration = extract_metadata(
+    beat, duration, loop = extract_metadata(
         "BEAT = 0.5\nDURATION = 32\n",
         "demo.py",
     )
 
     assert beat == 0.5
     assert duration == 32.0
+    assert loop is False
+
+
+def test_extract_metadata_forever_duration():
+    beat, duration, loop = extract_metadata(
+        "from elements.dsl import *\nBEAT = 1\nDURATION = forever\n",
+        "demo.py",
+    )
+
+    assert beat == 1.0
+    assert duration is None     # forever
+    assert loop is False        # the compiler makes a forever program loop
+
+
+def test_extract_metadata_loop_literal():
+    _, duration, loop = extract_metadata(
+        "BEAT = 1\nDURATION = 8\nLOOP = True\n", "demo.py")
+    assert (duration, loop) == (8.0, True)
+    _, _, loop = extract_metadata(
+        "BEAT = 1\nDURATION = 8\nLOOP = False\n", "demo.py")
+    assert loop is False
+
+
+def test_extract_metadata_loop_must_be_a_bool_literal():
+    for value in ('1', "'yes'", 'x'):
+        with pytest.raises(ValueError, match='LOOP must be True or False'):
+            extract_metadata(f"BEAT = 1\nDURATION = 8\nLOOP = {value}\n", "demo.py")
+
+
+def test_extract_metadata_duplicate_duration_with_forever_rejected():
+    with pytest.raises(ValueError, match='duplicate DURATION'):
+        extract_metadata("BEAT = 1\nDURATION = 8\nDURATION = forever\n", "demo.py")
+
+
+def test_extract_metadata_other_names_are_not_forever():
+    with pytest.raises(ValueError, match='DURATION must be a numeric literal'):
+        extract_metadata("BEAT = 1\nDURATION = always\n", "demo.py")
 
 
 def test_extract_metadata_missing_beat_raises():
@@ -61,6 +98,19 @@ def test_program_library_rescan_valid_programs(tmp_path):
     assert entries[0].source_hash is not None
     assert entries[0].error is None
     assert entries[0].strips is None
+    assert entries[0].loop is False
+
+
+def test_program_library_rescan_forever_and_loop(tmp_path):
+    (tmp_path / 'ever.py').write_text(
+        "from elements.dsl import *\nBEAT = 1.0\nDURATION = forever\n")
+    (tmp_path / 'looped.py').write_text("BEAT = 1.0\nDURATION = 4\nLOOP = True\n")
+
+    library = ProgramLibrary(str(tmp_path))
+    ever, looped = library.list_programs()
+
+    assert (ever.duration, ever.loop, ever.error) == (None, False, None)
+    assert (looped.duration, looped.loop, looped.error) == (4.0, True, None)
 
 
 def test_program_library_rescan_extracts_literal_strip_names(tmp_path):

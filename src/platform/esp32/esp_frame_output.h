@@ -21,7 +21,7 @@ class EspFrameOutput : public FrameOutput
 {
 public:
     void apply_profile(const HardwareProfile& profile) override;
-    void write(const Strip& strip, float t_program) override;
+    void write(const Strip& strip, uint32_t cycle, uint32_t t_ms) override;
 
     // FastLED registration target, MAX_STRIP_PIXELS long.
     CRGB* leds() { return _leds; }

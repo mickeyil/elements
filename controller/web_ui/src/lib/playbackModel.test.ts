@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { deriveTransport, type TransportDevice } from './playbackModel';
+import { deriveTransport, formatTimeReadout, type TransportDevice } from './playbackModel';
 
 const readyDevice: TransportDevice = {
   configured: true,
@@ -74,5 +74,22 @@ describe('deriveTransport', () => {
 
   it('treats a missing session as idle', () => {
     expect(deriveTransport(null, []).state).toBe('idle');
+  });
+});
+
+describe('formatTimeReadout', () => {
+  it('is empty without a program length', () => {
+    expect(formatTimeReadout(null)).toBe('');
+    expect(formatTimeReadout({ current_t_ms: 500 })).toBe('');
+  });
+
+  it('shows position over length for a finite program', () => {
+    expect(formatTimeReadout({ duration: 4, current_cycle: 0, current_t_ms: 1500 }))
+      .toBe('1.5s / 4.0s');
+  });
+
+  it('shows elapsed time across cycles for a looping program', () => {
+    expect(formatTimeReadout({ duration: 4, loop: true, current_cycle: 3, current_t_ms: 500 }))
+      .toBe('12.5s (loop)');
   });
 });

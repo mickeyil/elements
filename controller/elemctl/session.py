@@ -505,10 +505,13 @@ class Session:
                 member = self._members.get(frame.uid)
                 # A packet whose program time runs past live by more than a frame
                 # is a straggler from a previous run (UID, phase, and token can
-                # still match across a replay); drop it.
+                # still match across a replay); drop it. Compare elapsed time:
+                # a looping frame's time counts every earlier cycle.
+                elapsed_us = frame.cycle * self._duration_us() + frame.t_ms * 1000
                 if (member is not None and self._preview_active(member)
-                        and frame.t_program * _US_PER_S <= live_us + slack_us):
-                    self._preview.add(member.strip_id, frame.t_program, frame.rgb)
+                        and elapsed_us <= live_us + slack_us):
+                    self._preview.add(member.strip_id, frame.cycle, frame.t_ms,
+                                      frame.rgb)
         return self._drain_events()
 
     def set_preview_enabled(self, enabled):
@@ -766,8 +769,10 @@ class Session:
         left untouched. For unsynced programs the device anchors on its own
         receive time, so this can read ENDED a delivery delay early; that is the
         accepted clock approximation, and the PLAYING-rung guard keeps it from
-        issuing any stray command."""
-        if self.state is not SessionState.PLAYING:
+        issuing any stray command.
+
+        A looping program has no end: its session stays PLAYING until stopped."""
+        if self.state is not SessionState.PLAYING or self.manifest.loop:
             return
         if self._clock_us() - self.program_start_us < self._duration_us():
             return

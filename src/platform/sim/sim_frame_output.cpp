@@ -18,7 +18,7 @@ SimFrameOutput::SimFrameOutput(UdpTransport& udp,
     std::memcpy(_uid_slot, identity.uid, uid_len);
 }
 
-void SimFrameOutput::write(const Strip& strip, float t_program)
+void SimFrameOutput::write(const Strip& strip, uint32_t cycle, uint32_t t_ms)
 {
     // The index advances even for dropped frames, so the receiver can
     // tell a drop from a pause.
@@ -30,7 +30,8 @@ void SimFrameOutput::write(const Strip& strip, float t_program)
     WireWriter w(pkt, sizeof(pkt));
     w.write_bytes(_uid_slot, sizeof(_uid_slot));
     w.write_u32(frame_index);
-    w.write_f32(t_program);
+    w.write_u32(cycle);
+    w.write_u32(t_ms);
     w.write_bytes(strip.bytes(), strip.byte_size());
 
     if (!w.ok() || !_udp.send(pkt, w.bytes_written(), _dst_ip, _dst_port)) {

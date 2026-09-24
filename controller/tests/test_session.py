@@ -105,7 +105,7 @@ def make_session(device_configs=DISTINCT_STRIPS):
     return session, hub
 
 
-def make_manifest(*strips, duration=10.0):
+def make_manifest(*strips, duration=10.0, loop=False):
     """strips: (strip_id, length, blob) tuples; strip_id is unique per manifest."""
     return CompiledManifest(
         duration=duration,
@@ -114,6 +114,7 @@ def make_manifest(*strips, duration=10.0):
             for sid, length, blob in strips
         },
         safe_intervals=[(0, int(duration * 1000))],
+        loop=loop,
     )
 
 
@@ -121,10 +122,10 @@ def tick(session):
     return session.tick()
 
 
-def drive_to_loaded(session, hub, uid='sim-a', blob=b'M'):
+def drive_to_loaded(session, hub, uid='sim-a', blob=b'M', loop=False):
     """Load a single-strip manifest, attach the device, and ACK its way to a
     parked LOADED state (SET_PROFILE Ok, then LOAD Ok)."""
-    session.load(make_manifest(('main', 30, blob)))
+    session.load(make_manifest(('main', 30, blob), loop=loop))
     hub.emit(DeviceConnected(uid=uid, boot_token=1, rebooted=False))
     tick(session)                       # attach + SET_PROFILE
     _, on_ack = hub.last_send(uid)
@@ -134,9 +135,9 @@ def drive_to_loaded(session, hub, uid='sim-a', blob=b'M'):
     on_ack(ack_ok())                    # blob loaded; member parked at LOADED
 
 
-def drive_to_playing(session, hub, uid='sim-a'):
+def drive_to_playing(session, hub, uid='sim-a', loop=False):
     """Bring the device to LOADED, then play() and ACK the Start: PLAYING."""
-    drive_to_loaded(session, hub, uid=uid)
+    drive_to_loaded(session, hub, uid=uid, loop=loop)
     session.play()
     tick(session)
     _, on_ack = hub.last_send(uid)
@@ -1123,6 +1124,28 @@ def test_resume_refused_from_ended():
         session.resume()
 
 
+def test_looping_program_never_ends():
+    session, hub = make_session(SINGLE)
+    drive_to_playing(session, hub, loop=True)
+    for _ in range(3):
+        session._clock_us.now_us += 10_000_000   # a whole 10 s cycle each time
+        tick(session)
+        assert session.state is SessionState.PLAYING
+        assert session.member('sim-a').phase is DeviceState.PLAYING
+
+
+def test_looping_program_still_stops():
+    session, hub = make_session(SINGLE)
+    drive_to_playing(session, hub, loop=True)
+    session._clock_us.now_us += 25_000_000
+    tick(session)
+    session.stop()
+    assert session.state is SessionState.LOADED
+    tick(session)
+    op, _ = hub.last_send('sim-a')
+    assert op == wire.CMD_STOP
+
+
 def test_play_replays_from_ended_without_reload():
     session, hub = make_session(SINGLE)
     drive_to_playing(session, hub)
@@ -1331,8 +1354,8 @@ def test_replay_from_ended_requires_stopping_a_paused_leftover():
     assert op == wire.CMD_START              # replays from 0, not Resume
 
 
-def _frame(uid='sim-a', t_program=0.02, pixels=30):
-    return FramePreview(uid=uid, frame_index=1, t_program=t_program,
+def _frame(uid='sim-a', t_ms=20, pixels=30, cycle=0):
+    return FramePreview(uid=uid, frame_index=1, cycle=cycle, t_ms=t_ms,
                         rgb=b'\x00' * (pixels * 3))
 
 
@@ -1341,12 +1364,37 @@ def test_preview_frame_assembled_while_playing():
     drive_to_playing(session, hub)
     session.set_preview_enabled(True)
     session._clock_us.now_us += 1_000_000      # live runs ahead of the frame
-    hub.frames = [_frame()]                     # t_program 0.02, well behind live
+    hub.frames = [_frame()]                     # t_ms 20, well behind live
     tick(session)
     frames = session.drain_preview_frames()
     assert len(frames) == 1
-    assert frames[0].frame_index == 1            # floor(0.02 * 50)
+    assert frames[0].frame_index == 1            # 20 ms * 50 fps // 1000
     assert frames[0].strips == [b'\x00' * 90]
+
+
+def test_looping_preview_compares_elapsed_time_across_cycles():
+    # Live is 2.5 s into the third 10 s cycle. A frame early in that cycle is
+    # current even though its t_ms is small; one from the next cycle is ahead
+    # of live and so a straggler from an earlier run.
+    session, hub = make_session(SINGLE)
+    drive_to_playing(session, hub, loop=True)
+    session.set_preview_enabled(True)
+    session._clock_us.now_us += 22_500_000
+    hub.frames = [_frame(cycle=2, t_ms=2_000), _frame(cycle=3, t_ms=20)]
+    tick(session)
+    frames = session.drain_preview_frames()
+    assert [(f.cycle, f.frame_index) for f in frames] == [(2, 100)]
+
+
+def test_looping_preview_late_frame_from_previous_cycle_kept_apart():
+    session, hub = make_session(SINGLE)
+    drive_to_playing(session, hub, loop=True)
+    session.set_preview_enabled(True)
+    session._clock_us.now_us += 10_500_000       # 0.5 s into cycle 1
+    hub.frames = [_frame(cycle=1, t_ms=400), _frame(cycle=0, t_ms=400)]
+    tick(session)
+    frames = session.drain_preview_frames()
+    assert sorted((f.cycle, f.frame_index) for f in frames) == [(0, 20), (1, 20)]
 
 
 def test_preview_frames_dropped_when_disabled():
@@ -1363,7 +1411,7 @@ def test_preview_frame_dropped_when_ahead_of_live():
     session, hub = make_session(SINGLE)
     drive_to_playing(session, hub)
     session.set_preview_enabled(True)
-    hub.frames = [_frame(t_program=5.0)]
+    hub.frames = [_frame(t_ms=5_000)]
     tick(session)
     assert session.drain_preview_frames() == []
 

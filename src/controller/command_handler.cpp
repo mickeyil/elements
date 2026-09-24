@@ -140,11 +140,11 @@ AckStatus CommandHandler::handle_start_(WireReader& r)
 
 AckStatus CommandHandler::handle_jump_(WireReader& r)
 {
-    float t_program = 0.0f;
-    if (!r.read_f32(t_program) || !r.require_empty()) {
+    uint32_t t_ms = 0;
+    if (!r.read_u32(t_ms) || !r.require_empty()) {
         return AckStatus::BadPayload;
     }
-    return map_playback_result(_ctx.playback.handle_jump(t_program));
+    return map_playback_result(_ctx.playback.handle_jump(t_ms));
 }
 
 AckStatus CommandHandler::handle_pause_(WireReader& r)

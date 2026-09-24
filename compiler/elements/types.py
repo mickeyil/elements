@@ -53,6 +53,24 @@ class SecMarker:
         return f"sec({self.seconds})"
 
 
+class Forever:
+    """Marker for an open-ended length: DURATION = forever, or an event's
+    duration=forever. A forever program lasts MAX_PROGRAM_MS and loops; a
+    forever event ends at program end."""
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def __repr__(self):
+        return "forever"
+
+
+forever = Forever()
+
+
 # ---------------------------------------------------------------------------
 # Color constants
 # ---------------------------------------------------------------------------
@@ -161,11 +179,12 @@ class CompiledStripArtifact:
 
 @dataclass
 class CompiledManifest:
-    duration: float               # authored length, seconds; duration_ms is what blobs carry
+    duration: float               # program length, seconds; duration_ms is what blobs carry
     strips: dict[str, CompiledStripArtifact]   # keyed by strip_id; unique
     safe_intervals: list[tuple[int, int]]      # [lo_ms, hi_ms) windows safe to seek into
     target_fps: int = 50          # program-level pacing hint, Hz; mirrored in every blob header
     requires_sync: bool = False   # program-level; mirrored in every blob header
+    loop: bool = False            # program-level; mirrored in every blob header
 
     @property
     def duration_ms(self) -> int:

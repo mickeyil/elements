@@ -236,7 +236,7 @@ void loop()
                       g_lamp.intensity());
     }
 
-    g_anims[g_lamp.anim_index()]->render(g_view, now / 1000.0f);
+    g_anims[g_lamp.anim_index()]->render(g_view, ProgramDuration{now});
     const float hue = g_lamp.hue_for_current();
     const float intensity = g_lamp.intensity();
     for (uint16_t i = 0; i < NUM_LEDS; i++) {

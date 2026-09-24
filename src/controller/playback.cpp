@@ -1,18 +1,10 @@
 #include "controller/playback.h"
 
-#include <cmath>
-
 #include "core/decoder.h"
 
 namespace {
 
-constexpr float US_PER_SECOND = 1'000'000.0f;
 constexpr int64_t US_PER_MS = 1000;
-
-float t_program_from_us(int64_t t_program_us)
-{
-    return float(t_program_us) / US_PER_SECOND;
-}
 
 int64_t us_from_ms(uint32_t ms)
 {
@@ -79,6 +71,7 @@ bool Playback::handle_load(const uint8_t* blob, size_t blob_len,
     const ProgramDuration duration = program->duration;
     const uint8_t target_fps = program->target_fps;
     const bool requires_sync = program->requires_sync;
+    const bool loop = program->loop;
 
     Engine* engine = Engine::create(program);
     if (engine == nullptr) {
@@ -91,6 +84,7 @@ bool Playback::handle_load(const uint8_t* blob, size_t blob_len,
     _duration = duration;
     _target_fps = target_fps;
     _requires_sync = requires_sync;
+    _loop = loop;
     _engine.reset(engine);
     _state = DeviceState::LOADED;
     return true;
@@ -111,11 +105,12 @@ PlaybackResult Playback::handle_start(int64_t program_start_us)
     _program_start_us = _requires_sync ? program_start_us
                                        : _clock.now_local_us();
     _t_program_cursor_us = 0;
+    _engine_cycle = 0;
     _state = DeviceState::PLAYING;
     return PlaybackResult::Ok;
 }
 
-PlaybackResult Playback::handle_jump(float t_program)
+PlaybackResult Playback::handle_jump(uint32_t t_ms)
 {
     if (_engine == nullptr) {
         return PlaybackResult::WrongState;
@@ -126,23 +121,19 @@ PlaybackResult Playback::handle_jump(float t_program)
     if (_requires_sync && !_clock.is_synced()) {
         return PlaybackResult::Unsynced;
     }
-    // The target arrives as float seconds. Round it half up to the
-    // millisecond grid, the same rule the compiler applies to authored
-    // times. Non-finite is rejected before the cast (UB on NaN/Inf).
-    if (!std::isfinite(t_program) || t_program < 0.0f) {
-        return PlaybackResult::BadTime;
-    }
-    const double target_ms = std::floor(double(t_program) * 1000.0 + 0.5);
-    if (target_ms >= double(_duration.ms)) {
+    if (t_ms >= _duration.ms) {
         return PlaybackResult::BadTime;
     }
 
-    const int64_t target_us = us_from_ms(static_cast<uint32_t>(target_ms));
+    // A looping program jumps within the cycle the cursor is in.
+    const int64_t cycle = _loop ? _t_program_cursor_us / duration_us_() : 0;
+    const int64_t target_us = cycle * duration_us_() + us_from_ms(t_ms);
     if (target_us <= _t_program_cursor_us) {
         return PlaybackResult::BadTime;
     }
 
     _engine->reset();
+    _engine_cycle = cycle;
     _t_program_cursor_us = target_us;
     _state = DeviceState::PAUSED;
     return PlaybackResult::Ok;
@@ -221,7 +212,17 @@ RenderFrameResult Playback::render_next_frame()
 
     // Floor onto the millisecond grid so no boundary renders before the
     // clock reaches it.
-    const int64_t t_ms = t_program_us / US_PER_MS;
+    int64_t t_ms = t_program_us / US_PER_MS;
+    if (_loop) {
+        // Entering a new cycle, or skipping whole ones, rewinds the engine
+        // before this frame renders: the wrap shows no black frame.
+        const int64_t cycle = t_ms / _duration.ms;
+        t_ms %= _duration.ms;
+        if (cycle != _engine_cycle) {
+            _engine->reset();
+            _engine_cycle = cycle;
+        }
+    }
     const bool rendered = t_ms < int64_t(_duration.ms)
         && _engine->render_frame(ProgramTime{static_cast<uint32_t>(t_ms)}, _strip);
     if (!rendered) {
@@ -246,9 +247,9 @@ DeviceState Playback::state() const
     return _state;
 }
 
-float Playback::duration() const
+uint32_t Playback::duration_ms() const
 {
-    return seconds(_duration);
+    return _duration.ms;
 }
 
 uint8_t Playback::target_fps() const
@@ -256,24 +257,34 @@ uint8_t Playback::target_fps() const
     return _target_fps;
 }
 
-float Playback::current_t_program() const
+uint32_t Playback::current_cycle() const
+{
+    if (!_loop || (_state != DeviceState::PAUSED && _state != DeviceState::PLAYING)) {
+        return 0;
+    }
+    return static_cast<uint32_t>(_t_program_cursor_us / duration_us_());
+}
+
+uint32_t Playback::current_t_ms() const
 {
     switch (_state) {
         case DeviceState::IDLE:
         case DeviceState::LOADED:
-            return 0.0f;
+            return 0;
         case DeviceState::PAUSED:
-        case DeviceState::PLAYING: {
-            const float t_program = t_program_from_us(_t_program_cursor_us);
-            if (t_program > seconds(_duration)) {
-                return seconds(_duration);
+        case DeviceState::PLAYING:
+            if (_loop) {
+                return static_cast<uint32_t>(
+                    (_t_program_cursor_us % duration_us_()) / US_PER_MS);
             }
-            return t_program;
-        }
+            if (_t_program_cursor_us >= duration_us_()) {
+                return _duration.ms;
+            }
+            return static_cast<uint32_t>(_t_program_cursor_us / US_PER_MS);
         case DeviceState::ENDED:
-            return seconds(_duration);
+            return _duration.ms;
     }
-    return 0.0f;
+    return 0;
 }
 
 uint16_t Playback::strip_length() const
@@ -284,6 +295,11 @@ uint16_t Playback::strip_length() const
 bool Playback::requires_sync() const
 {
     return _requires_sync;
+}
+
+bool Playback::loop() const
+{
+    return _loop;
 }
 
 Strip& Playback::strip()
@@ -302,6 +318,11 @@ int64_t Playback::program_clock_now_us() const
                           : _clock.now_local_us();
 }
 
+int64_t Playback::duration_us_() const
+{
+    return us_from_ms(_duration.ms);
+}
+
 void Playback::unload_program_()
 {
     _engine.reset();
@@ -313,6 +334,7 @@ void Playback::reset_program_state_()
     _duration = ProgramDuration{};
     _target_fps = 0;
     _requires_sync = false;
+    _loop = false;
     reset_timing_state_();
 }
 
@@ -320,6 +342,7 @@ void Playback::reset_timing_state_()
 {
     _program_start_us = 0;
     _t_program_cursor_us = 0;
+    _engine_cycle = 0;
 }
 
 void Playback::clear_render_buffer_()

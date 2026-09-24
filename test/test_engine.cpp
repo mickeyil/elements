@@ -18,7 +18,7 @@
 namespace {
 
 // Animation that records every initialize/render call so tests can verify
-// activation timing, frame counts, and t_animation values. Optionally writes
+// activation timing, frame counts, and render times. Optionally writes
 // `_render_value` to every pixel of dst on render() so the strip output can
 // be observed end-to-end.
 class FakeAnim : public Animation {
@@ -28,9 +28,9 @@ public:
         _last_src = src;
         _last_work = work;
     }
-    void render(PixelView& dst, float t_animation) override {
+    void render(PixelView& dst, ProgramDuration t) override {
         _render_count++;
-        _last_t = t_animation;
+        _last_t = t.ms;
         _last_dst = &dst;
         for (uint16_t i = 0; i < dst.size(); i++) {
             dst[i] = _render_value;
@@ -39,7 +39,7 @@ public:
 
     int init_count() const { return _init_count; }
     int render_count() const { return _render_count; }
-    float last_t() const { return _last_t; }
+    uint32_t last_t() const { return _last_t; }
     PixelView* last_dst() const { return _last_dst; }
     const PixelView* last_src() const { return _last_src; }
     PixelView* last_work() const { return _last_work; }
@@ -49,7 +49,7 @@ public:
 private:
     int _init_count = 0;
     int _render_count = 0;
-    float _last_t = -1.0f;
+    uint32_t _last_t = UINT32_MAX;
     PixelView* _last_dst = nullptr;
     const PixelView* _last_src = nullptr;
     PixelView* _last_work = nullptr;
@@ -61,7 +61,7 @@ private:
 class SrcReadAnim : public Animation {
 public:
     void initialize(const PixelView* src, PixelView*) override { _src = src; }
-    void render(PixelView& dst, float) override {
+    void render(PixelView& dst, ProgramDuration) override {
         if (_src && _src->size() > 0 && dst.size() > 0) {
             dst[0] = (*_src)[0];
         }
@@ -179,17 +179,17 @@ TEST_CASE("Engine: initialize fires once on first activation, render every frame
     REQUIRE(eng->render_frame(ProgramTime{500}, strip));   // first activation
     CHECK(anim->init_count() == 1);
     CHECK(anim->render_count() == 1);
-    CHECK(anim->last_t() == 0.0f);
+    CHECK(anim->last_t() == 0);
 
     REQUIRE(eng->render_frame(ProgramTime{1000}, strip));   // mid event
     CHECK(anim->init_count() == 1);            // not re-initialized
     CHECK(anim->render_count() == 2);
-    CHECK(anim->last_t() == 0.5f);
+    CHECK(anim->last_t() == 500);
 
     REQUIRE(eng->render_frame(ProgramTime{1600}, strip));   // past event end
     CHECK(anim->init_count() == 1);
     CHECK(anim->render_count() == 3);          // retired with its endpoint render
-    CHECK(anim->last_t() == 1.0f);
+    CHECK(anim->last_t() == 1000);
     CHECK(strip[0].r == 0);                    // no active layer
 
     delete eng;
@@ -215,10 +215,10 @@ TEST_CASE("Engine: cursor advances to the next event on the same layer", "[engin
 
     REQUIRE(eng->render_frame(ProgramTime{750}, strip));
     CHECK(a1->render_count() == 2);   // retired with its endpoint render
-    CHECK(a1->last_t() == 0.5f);
+    CHECK(a1->last_t() == 500);
     CHECK(a2->init_count() == 1);     // second event activated
     CHECK(a2->render_count() == 1);
-    CHECK(a2->last_t() == 0.25f);
+    CHECK(a2->last_t() == 250);
 
     delete eng;
 }
@@ -605,11 +605,10 @@ public:
             _seen_src_h = (*src)[0].h;
         }
     }
-    void render(PixelView& dst, float t_animation) override {
-        const int t_ms = static_cast<int>(t_animation * 1000.0f + 0.5f);
-        _log.push_back(_name + ".render(" + std::to_string(t_ms) + ")");
+    void render(PixelView& dst, ProgramDuration t) override {
+        _log.push_back(_name + ".render(" + std::to_string(t.ms) + ")");
         for (uint16_t i = 0; i < dst.size(); i++) {
-            dst[i] = hsva_t(t_animation, 1.0f, 1.0f, 1.0f);
+            dst[i] = hsva_t(static_cast<float>(t.ms), 1.0f, 1.0f, 1.0f);
         }
     }
 
@@ -637,7 +636,7 @@ Program* adjacent_pair(Log& log, LogAnim*& a, LogAnim*& b) {
 // Layer 0: A on [0,100) draws view 0. A copy op at 100 moves view 0 into
 // view 1. Layer 1: B on [100,200) reads view 1 in initialize() and draws
 // view 0. Only the order endpoint, copy, start hands B the hue A wrote at
-// its end (0.1): running the copy first hands it A's frame-0 hue (0), and
+// its end (100): running the copy first hands it A's frame-0 hue (0), and
 // starting B first hands it the untouched buffer (0).
 Program* copy_handoff(Log& log, LogAnim*& a, LogAnim*& b) {
     Program* prog = new Program();
@@ -717,13 +716,13 @@ TEST_CASE("Engine: a copy at a boundary carries the endpoint to the event starti
         log.clear();
         REQUIRE(eng->render_frame(ProgramTime{150}, strip));
         CHECK(log == Log{"A.render(100)", "B.init", "B.render(50)"});
-        CHECK(b->seen_src_h() == 0.1f);
+        CHECK(b->seen_src_h() == 100.0f);
     }
 
     SECTION("late first frame") {
         REQUIRE(eng->render_frame(ProgramTime{150}, strip));
         CHECK(log == Log{"A.init", "A.render(100)", "B.init", "B.render(50)"});
-        CHECK(b->seen_src_h() == 0.1f);
+        CHECK(b->seen_src_h() == 100.0f);
     }
 
     SECTION("reset, then a late first frame") {
@@ -733,7 +732,7 @@ TEST_CASE("Engine: a copy at a boundary carries the endpoint to the event starti
         log.clear();
         REQUIRE(eng->render_frame(ProgramTime{150}, strip));
         CHECK(log == Log{"A.init", "A.render(100)", "B.init", "B.render(50)"});
-        CHECK(b->seen_src_h() == 0.1f);
+        CHECK(b->seen_src_h() == 100.0f);
     }
 
     delete eng;

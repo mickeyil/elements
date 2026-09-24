@@ -14,10 +14,14 @@ bool read_finite_f32(BlobReader& r, float& out) {
 
 Wave::Wave(const WaveParams& p) : _p(p) {}
 
-void Wave::render(PixelView& dst, float t_animation)
+void Wave::render(PixelView& dst, ProgramDuration t)
 {
+    // Reduce t to its offset within one period in double, then go to float:
+    // only the per-pixel math below runs in float32.
+    const double period_ms = static_cast<double>(_p.period) * 1000.0;
+    const double r = std::fmod(static_cast<double>(t.ms), period_ms);
     const float base_phase =
-        (2.0f * static_cast<float>(M_PI) * t_animation / _p.period) + _p.phase0;
+        static_cast<float>(2.0 * M_PI * r / period_ms) + _p.phase0;
     const float range = _p.max_val - _p.min_val;
 
     for (uint16_t i = 0; i < dst.size(); i++) {

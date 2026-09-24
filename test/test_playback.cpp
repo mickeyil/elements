@@ -3,7 +3,6 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
-#include <limits>
 #include <vector>
 
 #include "core/animation_types.h"
@@ -42,7 +41,7 @@ std::vector<uint8_t> build_paint_blob(float duration, bool requires_sync,
 
     // Header.
     b.insert(b.end(), { 'E', 'L', 'E', 'M' });
-    put_u8(b, 4);                                     // BLOB_VERSION
+    put_u8(b, 5);                                     // BLOB_VERSION
     put_u8(b, requires_sync ? 0x01 : 0x00);           // flags
     put_u8(b, target_fps);
     put_u8(b, 1);                                     // layer_count
@@ -82,14 +81,14 @@ std::vector<uint8_t> build_paint_blob(float duration, bool requires_sync,
 
 // White paint on [120,180) ms, then a zero-velocity shift on [200,800) that
 // holds the paint's pixels. Strip length = 1. Two buffers: the layer's dst
-// and the shift's work snapshot.
-std::vector<uint8_t> build_paint_then_shift_blob() {
+// and the shift's work snapshot. With `loop`, the 800 ms program repeats.
+std::vector<uint8_t> build_paint_then_shift_blob(bool loop = false) {
     std::vector<uint8_t> b;
 
     // Header.
     b.insert(b.end(), { 'E', 'L', 'E', 'M' });
-    put_u8(b, 4);                                     // BLOB_VERSION
-    put_u8(b, 0x00);                                  // flags: unsynced
+    put_u8(b, 5);                                     // BLOB_VERSION
+    put_u8(b, loop ? 0x02 : 0x00);                    // flags: unsynced, loop
     put_u8(b, 50);                                    // target_fps
     put_u8(b, 1);                                     // layer_count
     put_u16(b, 1);                                    // strip_length
@@ -183,7 +182,7 @@ TEST_CASE("Playback: default construction has no profile and is IDLE", "[playbac
     Playback pb(clock);
     CHECK_FALSE(pb.has_hardware_profile());
     CHECK(pb.state() == DeviceState::IDLE);
-    CHECK(pb.duration() == 0.0f);
+    CHECK(pb.duration_ms() == 0);
     CHECK(pb.target_fps() == 0);
     CHECK_FALSE(pb.requires_sync());
 }
@@ -235,7 +234,7 @@ TEST_CASE("Playback: handle_load decodes a blob and transitions to LOADED", "[pl
     auto blob = build_paint_blob(2.0f, false, /*target_fps=*/30);
     REQUIRE(pb.handle_load(blob.data(), blob.size()));
     CHECK(pb.state() == DeviceState::LOADED);
-    CHECK(pb.duration() == 2.0f);
+    CHECK(pb.duration_ms() == 2000);
     CHECK(pb.target_fps() == 30);
     CHECK_FALSE(pb.requires_sync());
 }
@@ -249,7 +248,7 @@ TEST_CASE("Playback: handle_load on a malformed blob keeps state IDLE", "[playba
     CHECK_FALSE(pb.handle_load(bad, sizeof(bad), &err));
     CHECK(err == DecodeError::BadMagic);
     CHECK(pb.state() == DeviceState::IDLE);
-    CHECK(pb.duration() == 0.0f);
+    CHECK(pb.duration_ms() == 0);
     CHECK(pb.target_fps() == 0);
 }
 
@@ -379,7 +378,7 @@ TEST_CASE("Playback: handle_pause from PLAYING preserves cursor", "[playback]") 
 
     pb.handle_pause();
     CHECK(pb.state() == DeviceState::PAUSED);
-    CHECK(pb.current_t_program() == 0.5f);
+    CHECK(pb.current_t_ms() == 500);
 }
 
 TEST_CASE("Playback: handle_pause ignored from non-PLAYING", "[playback]") {
@@ -462,19 +461,19 @@ TEST_CASE("Playback: handle_jump rejects target at or behind cursor", "[playback
     REQUIRE(pb.handle_load(blob.data(), blob.size()));
 
     // From LOADED, cursor=0. Jump to 0 is rejected (not strictly ahead).
-    CHECK(pb.handle_jump(0.0f) == PlaybackResult::BadTime);
+    CHECK(pb.handle_jump(0) == PlaybackResult::BadTime);
     CHECK(pb.state() == DeviceState::LOADED);
-    CHECK(pb.current_t_program() == 0.0f);
+    CHECK(pb.current_t_ms() == 0);
 
     // Move cursor to 0.5 via a real jump.
-    REQUIRE(pb.handle_jump(0.5f) == PlaybackResult::Ok);
+    REQUIRE(pb.handle_jump(500) == PlaybackResult::Ok);
     REQUIRE(pb.state() == DeviceState::PAUSED);
-    REQUIRE(pb.current_t_program() == 0.5f);
+    REQUIRE(pb.current_t_ms() == 500);
 
     // Now reject jumps behind or at 0.5.
-    CHECK(pb.handle_jump(0.5f) == PlaybackResult::BadTime);
-    CHECK(pb.handle_jump(0.25f) == PlaybackResult::BadTime);
-    CHECK(pb.current_t_program() == 0.5f);
+    CHECK(pb.handle_jump(500) == PlaybackResult::BadTime);
+    CHECK(pb.handle_jump(250) == PlaybackResult::BadTime);
+    CHECK(pb.current_t_ms() == 500);
 }
 
 TEST_CASE("Playback: handle_jump rejects out-of-range target", "[playback]") {
@@ -484,29 +483,10 @@ TEST_CASE("Playback: handle_jump rejects out-of-range target", "[playback]") {
     auto blob = build_paint_blob(1.0f, false);
     REQUIRE(pb.handle_load(blob.data(), blob.size()));
 
-    CHECK(pb.handle_jump(-0.1f) == PlaybackResult::BadTime);
-    CHECK(pb.handle_jump(1.0f) == PlaybackResult::BadTime);   // exclusive upper
-    CHECK(pb.handle_jump(2.0f) == PlaybackResult::BadTime);
+    CHECK(pb.handle_jump(1000) == PlaybackResult::BadTime);   // exclusive upper
+    CHECK(pb.handle_jump(2000) == PlaybackResult::BadTime);
     CHECK(pb.state() == DeviceState::LOADED);
-    CHECK(pb.current_t_program() == 0.0f);
-}
-
-TEST_CASE("Playback: handle_jump rejects non-finite target", "[playback]") {
-    set_clock_us(0);
-    SyncedClock clock;
-    Playback pb(1, clock);
-    auto blob = build_paint_blob(1.0f, false);
-    REQUIRE(pb.handle_load(blob.data(), blob.size()));
-
-    const float nan = std::numeric_limits<float>::quiet_NaN();
-    const float pos_inf = std::numeric_limits<float>::infinity();
-    const float neg_inf = -std::numeric_limits<float>::infinity();
-
-    CHECK(pb.handle_jump(nan) == PlaybackResult::BadTime);
-    CHECK(pb.handle_jump(pos_inf) == PlaybackResult::BadTime);
-    CHECK(pb.handle_jump(neg_inf) == PlaybackResult::BadTime);
-    CHECK(pb.state() == DeviceState::LOADED);
-    CHECK(pb.current_t_program() == 0.0f);
+    CHECK(pb.current_t_ms() == 0);
 }
 
 TEST_CASE("Playback: handle_jump from LOADED advances cursor and pauses",
@@ -517,9 +497,9 @@ TEST_CASE("Playback: handle_jump from LOADED advances cursor and pauses",
     auto blob = build_paint_blob(2.0f, false);
     REQUIRE(pb.handle_load(blob.data(), blob.size()));
 
-    REQUIRE(pb.handle_jump(0.5f) == PlaybackResult::Ok);
+    REQUIRE(pb.handle_jump(500) == PlaybackResult::Ok);
     CHECK(pb.state() == DeviceState::PAUSED);
-    CHECK(pb.current_t_program() == 0.5f);
+    CHECK(pb.current_t_ms() == 500);
     CHECK(strip_is_black(pb));
 }
 
@@ -529,7 +509,7 @@ TEST_CASE("Playback: handle_jump rejected from PLAYING/IDLE/ENDED", "[playback]"
     Playback pb(1, clock);
 
     // IDLE
-    CHECK(pb.handle_jump(0.5f) == PlaybackResult::WrongState);
+    CHECK(pb.handle_jump(500) == PlaybackResult::WrongState);
     CHECK(pb.state() == DeviceState::IDLE);
 
     auto blob = build_paint_blob(1.0f, false);
@@ -538,14 +518,14 @@ TEST_CASE("Playback: handle_jump rejected from PLAYING/IDLE/ENDED", "[playback]"
     // PLAYING
     pb.handle_start(0);
     REQUIRE(pb.state() == DeviceState::PLAYING);
-    CHECK(pb.handle_jump(0.5f) == PlaybackResult::WrongState);
+    CHECK(pb.handle_jump(500) == PlaybackResult::WrongState);
     CHECK(pb.state() == DeviceState::PLAYING);
 
     // ENDED
     set_clock_us(int64_t(1.0 * 1e6));
     REQUIRE(pb.render_next_frame() == RenderFrameResult::Ended);
     REQUIRE(pb.state() == DeviceState::ENDED);
-    CHECK(pb.handle_jump(0.5f) == PlaybackResult::WrongState);
+    CHECK(pb.handle_jump(500) == PlaybackResult::WrongState);
     CHECK(pb.state() == DeviceState::ENDED);
 }
 
@@ -557,9 +537,9 @@ TEST_CASE("Playback: handle_jump rejects synced program when not synced",
     auto blob = build_paint_blob(2.0f, /*requires_sync=*/true);
     REQUIRE(pb.handle_load(blob.data(), blob.size()));
 
-    CHECK(pb.handle_jump(0.5f) == PlaybackResult::Unsynced);
+    CHECK(pb.handle_jump(500) == PlaybackResult::Unsynced);
     CHECK(pb.state() == DeviceState::LOADED);
-    CHECK(pb.current_t_program() == 0.0f);
+    CHECK(pb.current_t_ms() == 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -581,7 +561,7 @@ TEST_CASE("Playback: handle_stop from non-IDLE clears strip and goes to LOADED",
 
     REQUIRE(pb.handle_stop() == RenderFrameResult::Rendered);
     CHECK(pb.state() == DeviceState::LOADED);
-    CHECK(pb.current_t_program() == 0.0f);
+    CHECK(pb.current_t_ms() == 0);
     CHECK(strip_is_black(pb));
 }
 
@@ -646,7 +626,7 @@ TEST_CASE("Playback: render_next_frame transitions PLAYING -> ENDED at duration"
     CHECK(pb.render_next_frame() == RenderFrameResult::Ended);
     CHECK(pb.state() == DeviceState::ENDED);
     CHECK(strip_is_black(pb));
-    CHECK(pb.current_t_program() == 1.0f);
+    CHECK(pb.current_t_ms() == 1000);
 }
 
 TEST_CASE("Playback: render_next_frame returns Ended exactly once", "[playback]") {
@@ -676,9 +656,9 @@ TEST_CASE("Playback: render_next_frame waits while cursor leads clock (post-JUMP
     auto blob = build_paint_blob(2.0f, /*requires_sync=*/true);
     REQUIRE(pb.handle_load(blob.data(), blob.size()));
 
-    REQUIRE(pb.handle_jump(0.5f) == PlaybackResult::Ok);
+    REQUIRE(pb.handle_jump(500) == PlaybackResult::Ok);
     REQUIRE(pb.state() == DeviceState::PAUSED);
-    REQUIRE(pb.current_t_program() == 0.5f);
+    REQUIRE(pb.current_t_ms() == 500);
 
     pb.handle_resume(0);   // synced: remote-clock anchor
     REQUIRE(pb.state() == DeviceState::PLAYING);
@@ -748,7 +728,7 @@ TEST_CASE("Playback: unsynced handle_start ignores caller anchor, starts now",
     // 0.5s of wall time later, t_program should be 0.5s.
     set_clock_us(int64_t(7.5 * 1e6));
     CHECK(pb.render_next_frame() == RenderFrameResult::Rendered);
-    CHECK(pb.current_t_program() == 0.5f);
+    CHECK(pb.current_t_ms() == 500);
 }
 
 TEST_CASE("Playback: unsynced handle_resume ignores anchor, resumes from cursor immediately",
@@ -759,8 +739,8 @@ TEST_CASE("Playback: unsynced handle_resume ignores anchor, resumes from cursor 
     auto blob = build_paint_blob(2.0f, /*requires_sync=*/false);
     REQUIRE(pb.handle_load(blob.data(), blob.size()));
 
-    REQUIRE(pb.handle_jump(0.5f) == PlaybackResult::Ok);
-    REQUIRE(pb.current_t_program() == 0.5f);
+    REQUIRE(pb.handle_jump(500) == PlaybackResult::Ok);
+    REQUIRE(pb.current_t_ms() == 500);
 
     // Resume with bogus anchor. Unsynced should resume immediately from 0.5s.
     set_clock_us(int64_t(3.2 * 1e6));    // 0.2s of wall time has passed
@@ -769,7 +749,7 @@ TEST_CASE("Playback: unsynced handle_resume ignores anchor, resumes from cursor 
 
     // No wall-time wait: render right now should produce a frame at 0.5s.
     CHECK(pb.render_next_frame() == RenderFrameResult::Rendered);
-    CHECK(pb.current_t_program() == 0.5f);
+    CHECK(pb.current_t_ms() == 500);
 }
 
 // ---------------------------------------------------------------------------
@@ -808,7 +788,7 @@ TEST_CASE("Playback: reset_for_detach drops program and clears strip",
 
     pb.reset_for_detach();
     CHECK(pb.state() == DeviceState::IDLE);
-    CHECK(pb.duration() == 0.0f);
+    CHECK(pb.duration_ms() == 0);
     CHECK(pb.target_fps() == 0);
     CHECK_FALSE(pb.requires_sync());
     CHECK(strip_is_black(pb));
@@ -827,32 +807,32 @@ TEST_CASE("Playback: apply_hardware_profile resets program state", "[playback]")
 
     REQUIRE(pb.apply_hardware_profile(HardwareProfile(2)));
     CHECK(pb.state() == DeviceState::IDLE);
-    CHECK(pb.duration() == 0.0f);
+    CHECK(pb.duration_ms() == 0);
     CHECK(pb.strip_length() == 2);
 }
 
 // ---------------------------------------------------------------------------
-// current_t_program reporting
+// current_t_ms reporting
 // ---------------------------------------------------------------------------
 
-TEST_CASE("Playback: current_t_program reports 0 in IDLE/LOADED and duration in ENDED",
+TEST_CASE("Playback: current_t_ms reports 0 in IDLE/LOADED and duration in ENDED",
           "[playback]") {
     set_clock_us(0);
     SyncedClock clock;
     Playback pb(1, clock);
-    CHECK(pb.current_t_program() == 0.0f);
+    CHECK(pb.current_t_ms() == 0);
 
     auto blob = build_paint_blob(1.0f, false);
     REQUIRE(pb.handle_load(blob.data(), blob.size()));
-    CHECK(pb.current_t_program() == 0.0f);
+    CHECK(pb.current_t_ms() == 0);
 
     pb.handle_start(0);
     set_clock_us(int64_t(1.0 * 1e6));
     REQUIRE(pb.render_next_frame() == RenderFrameResult::Ended);
-    CHECK(pb.current_t_program() == 1.0f);
+    CHECK(pb.current_t_ms() == 1000);
 }
 
-TEST_CASE("Playback: current_t_program follows the cursor in PLAYING", "[playback]") {
+TEST_CASE("Playback: current_t_ms follows the cursor in PLAYING", "[playback]") {
     set_clock_us(0);
     SyncedClock clock;
     Playback pb(1, clock);
@@ -862,11 +842,11 @@ TEST_CASE("Playback: current_t_program follows the cursor in PLAYING", "[playbac
 
     set_clock_us(int64_t(0.25 * 1e6));
     REQUIRE(pb.render_next_frame() == RenderFrameResult::Rendered);
-    CHECK(pb.current_t_program() == 0.25f);
+    CHECK(pb.current_t_ms() == 250);
 
     set_clock_us(int64_t(0.75 * 1e6));
     REQUIRE(pb.render_next_frame() == RenderFrameResult::Rendered);
-    CHECK(pb.current_t_program() == 0.75f);
+    CHECK(pb.current_t_ms() == 750);
 }
 
 // ---------------------------------------------------------------------------
@@ -890,6 +870,131 @@ TEST_CASE("Playback: a stall over a short source still hands its pixels to the s
     set_clock_us(300'000);
     REQUIRE(pb.render_next_frame() == RenderFrameResult::Rendered);
     CHECK(strip_is_white(pb));
+}
+
+// ---------------------------------------------------------------------------
+// Looping programs
+// ---------------------------------------------------------------------------
+//
+// build_paint_then_shift_blob(true): an 800 ms cycle, black before 120 ms,
+// white from then on. Once the shift has started, an engine that missed a
+// rewind keeps drawing it, so black early in a later cycle proves the reset.
+
+TEST_CASE("Playback: a looping program wraps with an engine reset and never ends",
+          "[playback][loop]") {
+    set_clock_us(0);
+    SyncedClock clock;
+    Playback pb(1, clock);
+    auto blob = build_paint_then_shift_blob(/*loop=*/true);
+    REQUIRE(pb.handle_load(blob.data(), blob.size()));
+    CHECK(pb.loop());
+    REQUIRE(pb.handle_start(0) == PlaybackResult::Ok);
+
+    set_clock_us(700'000);
+    REQUIRE(pb.render_next_frame() == RenderFrameResult::Rendered);
+    CHECK(strip_is_white(pb));
+    CHECK(pb.current_cycle() == 0);
+    CHECK(pb.current_t_ms() == 700);
+
+    // Cycle 1, 50 ms in: replayed from the top, nothing started yet.
+    set_clock_us(850'000);
+    REQUIRE(pb.render_next_frame() == RenderFrameResult::Rendered);
+    CHECK(pb.state() == DeviceState::PLAYING);
+    CHECK(strip_is_black(pb));
+    CHECK(pb.current_cycle() == 1);
+    CHECK(pb.current_t_ms() == 50);
+
+    set_clock_us(950'000);   // inside the paint again
+    REQUIRE(pb.render_next_frame() == RenderFrameResult::Rendered);
+    CHECK(strip_is_white(pb));
+
+    // The frame that crosses the boundary renders the new cycle directly:
+    // 790 ms into cycle 1, then 300 ms into cycle 2, no black in between.
+    set_clock_us(1'590'000);
+    REQUIRE(pb.render_next_frame() == RenderFrameResult::Rendered);
+    CHECK(strip_is_white(pb));
+    set_clock_us(1'900'000);
+    REQUIRE(pb.render_next_frame() == RenderFrameResult::Rendered);
+    CHECK(strip_is_white(pb));
+    CHECK(pb.current_cycle() == 2);
+    CHECK(pb.current_t_ms() == 300);
+}
+
+TEST_CASE("Playback: skipping whole cycles still resets the engine",
+          "[playback][loop]") {
+    set_clock_us(0);
+    SyncedClock clock;
+    Playback pb(1, clock);
+    auto blob = build_paint_then_shift_blob(/*loop=*/true);
+    REQUIRE(pb.handle_load(blob.data(), blob.size()));
+    REQUIRE(pb.handle_start(0) == PlaybackResult::Ok);
+
+    set_clock_us(790'000);
+    REQUIRE(pb.render_next_frame() == RenderFrameResult::Rendered);
+    CHECK(strip_is_white(pb));
+
+    // A stall of about 2.5 cycles lands 50 ms into cycle 3.
+    set_clock_us(3 * 800'000 + 50'000);
+    REQUIRE(pb.render_next_frame() == RenderFrameResult::Rendered);
+    CHECK(strip_is_black(pb));
+    CHECK(pb.current_cycle() == 3);
+    CHECK(pb.current_t_ms() == 50);
+
+    set_clock_us(3 * 800'000 + 300'000);
+    REQUIRE(pb.render_next_frame() == RenderFrameResult::Rendered);
+    CHECK(strip_is_white(pb));
+}
+
+TEST_CASE("Playback: pause and resume across a loop boundary", "[playback][loop]") {
+    set_clock_us(0);
+    SyncedClock clock;
+    Playback pb(1, clock);
+    auto blob = build_paint_then_shift_blob(/*loop=*/true);
+    REQUIRE(pb.handle_load(blob.data(), blob.size()));
+    REQUIRE(pb.handle_start(0) == PlaybackResult::Ok);
+
+    set_clock_us(700'000);
+    REQUIRE(pb.render_next_frame() == RenderFrameResult::Rendered);
+    pb.handle_pause();
+    REQUIRE(pb.state() == DeviceState::PAUSED);
+
+    // Paused for a long while: the cursor holds at 700 ms.
+    set_clock_us(5'000'000);
+    CHECK(pb.render_next_frame() == RenderFrameResult::Unchanged);
+    CHECK(pb.current_cycle() == 0);
+    CHECK(pb.current_t_ms() == 700);
+
+    // Unsynced resume continues from the cursor; 150 ms later is 50 ms
+    // into cycle 1.
+    REQUIRE(pb.handle_resume(0) == PlaybackResult::Ok);
+    set_clock_us(5'150'000);
+    REQUIRE(pb.render_next_frame() == RenderFrameResult::Rendered);
+    CHECK(strip_is_black(pb));
+    CHECK(pb.current_cycle() == 1);
+    CHECK(pb.current_t_ms() == 50);
+
+    set_clock_us(5'250'000);
+    REQUIRE(pb.render_next_frame() == RenderFrameResult::Rendered);
+    CHECK(strip_is_white(pb));
+}
+
+TEST_CASE("Playback: a looping jump targets the cursor's cycle", "[playback][loop]") {
+    set_clock_us(0);
+    SyncedClock clock;
+    Playback pb(1, clock);
+    auto blob = build_paint_then_shift_blob(/*loop=*/true);
+    REQUIRE(pb.handle_load(blob.data(), blob.size()));
+    REQUIRE(pb.handle_start(0) == PlaybackResult::Ok);
+
+    set_clock_us(850'000);   // 50 ms into cycle 1
+    REQUIRE(pb.render_next_frame() == RenderFrameResult::Rendered);
+    pb.handle_pause();
+
+    CHECK(pb.handle_jump(40) == PlaybackResult::BadTime);    // behind the cursor
+    CHECK(pb.handle_jump(800) == PlaybackResult::BadTime);   // past the cycle
+    REQUIRE(pb.handle_jump(600) == PlaybackResult::Ok);
+    CHECK(pb.current_cycle() == 1);
+    CHECK(pb.current_t_ms() == 600);
 }
 
 // ---------------------------------------------------------------------------

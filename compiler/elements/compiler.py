@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .types import (
-    SecMarker, AnimDef, PixelGroup, StripDef, COLORS,
+    SecMarker, Forever, AnimDef, PixelGroup, StripDef, COLORS,
     ANIM_TYPES, TIME_PARAMS, REQUIRED_PARAMS, STATEFUL_TYPES,
     CHANNELS, DIRECTIONS,
     CompiledStripArtifact, CompiledManifest, MemoryEstimate, ms_from_seconds,
@@ -180,26 +180,62 @@ def _validate_early(events: list[dict], strips: list[StripDef]):
 # 2. Time resolution
 # ---------------------------------------------------------------------------
 
-def _resolve_times(events: list[dict], beat: float, duration: float) -> int:
-    """Resolve every event onto the millisecond grid; return the program length in ms.
+def resolve_program_duration(duration, loop: bool = False) -> tuple[int, bool]:
+    """Resolve a program length (seconds, or forever) and its loop flag.
 
-    Beats scale by the beat length, sec() values are taken as written, and
-    each absolute boundary (start, end, program end) is rounded once with
-    ms_from_seconds. Everything downstream plans on the integers, so two
-    events that meet in the source meet exactly in the blob.
+    Returns (duration_ms, loop). A forever program is MAX_PROGRAM_MS long
+    and always loops; a finite one keeps the loop flag it was given. Both
+    the DSL build and the controller compile go through here.
     """
-    beat = _ensure_finite_positive(beat, "beat")
+    if not isinstance(loop, bool):
+        raise CompileError("loop must be a bool")
+    if isinstance(duration, Forever):
+        return limits.MAX_PROGRAM_MS, True
     duration = _ensure_finite_positive(duration, "program duration")
     duration_ms = ms_from_seconds(duration)
     if duration_ms == 0:
         raise CompileError(f"program duration {duration}s rounds to 0 ms")
+    if duration_ms > limits.MAX_PROGRAM_MS:
+        raise CompileError(
+            f"program duration {duration:g}s exceeds MAX_PROGRAM_MS "
+            f"({_fmt_ms(limits.MAX_PROGRAM_MS)}, 30 days); use "
+            f"DURATION = forever to play indefinitely"
+        )
+    return duration_ms, loop
+
+
+def _resolve_times(events: list[dict], beat: float, duration_ms: int):
+    """Resolve every event onto the millisecond grid of a program duration_ms long.
+
+    Beats scale by the beat length, sec() values are taken as written, and
+    each absolute boundary (start, end) is rounded once with
+    ms_from_seconds. Everything downstream plans on the integers, so two
+    events that meet in the source meet exactly in the blob. A forever
+    event ends exactly at program end.
+    """
+    beat = _ensure_finite_positive(beat, "beat")
 
     for e in events:
         at, ev_dur = e["at"], e["duration"]
+        if isinstance(at, Forever):
+            raise CompileError(
+                f"{e['anim'].anim_type} event start time cannot be forever; "
+                f"only its duration can"
+            )
         at_in_sec = isinstance(at, SecMarker)
-        dur_in_sec = isinstance(ev_dur, SecMarker)
         at = _ensure_finite_positive(at.seconds if at_in_sec else at,
                                      "event start time", allow_zero=True)
+        at_sec = at if at_in_sec else at * beat
+
+        if isinstance(ev_dur, Forever):
+            # Ends exactly at program end. A start at or past it is
+            # rejected in _validate_late.
+            e["at_ms"] = ms_from_seconds(at_sec)
+            e["end_ms"] = duration_ms
+            e["forever"] = True
+            continue
+
+        dur_in_sec = isinstance(ev_dur, SecMarker)
         ev_dur = _ensure_finite_positive(ev_dur.seconds if dur_in_sec else ev_dur,
                                          "event duration")
 
@@ -208,7 +244,6 @@ def _resolve_times(events: list[dict], beat: float, duration: float) -> int:
         # scaling, so adjacent beat-authored events share one double. Round
         # boundaries, never lengths: rounding start and duration separately
         # could land the end one ms off the next start.
-        at_sec = at if at_in_sec else at * beat
         if at_in_sec or dur_in_sec:
             end_sec = at_sec + (ev_dur if dur_in_sec else ev_dur * beat)
         else:
@@ -244,8 +279,6 @@ def _resolve_times(events: list[dict], beat: float, duration: float) -> int:
                 resolved_params["velocity"] = val / beat
 
         e["resolved_params"] = resolved_params
-
-    return duration_ms
 
 
 # ---------------------------------------------------------------------------
@@ -348,6 +381,12 @@ def _resolve_sources(events: list[dict], layers: list[list[dict]]):
             default=None,
         )
         if source_evt is None:
+            if any(se.get("forever") for se in source_events):
+                raise CompileError(
+                    f"{e['anim'].anim_type} at {_fmt_ms(e['at_ms'])} uses source= "
+                    f"{source_anim.anim_type}, but that event ends at program end "
+                    f"(forever), so it never ends before the shift starts"
+                )
             raise CompileError(
                 f"{e['anim'].anim_type} at {_fmt_ms(e['at_ms'])} uses source= "
                 f"{source_anim.anim_type} on layer {source_li}, but no source event "
@@ -887,7 +926,7 @@ def _check_caps(strip_length: int, buffer_sizes: list[int],
 
 
 def _compile_strip(strip_events: list[dict], strip_length: int, duration_ms: int,
-                   target_fps: int, requires_sync: bool
+                   target_fps: int, requires_sync: bool, loop: bool
                    ) -> tuple[bytes, list[tuple[int, int]], MemoryEstimate]:
     """Run the per-strip pipeline. Returns (blob, safe_intervals, memory)."""
     layers = _infer_layers(strip_events)
@@ -914,7 +953,7 @@ def _compile_strip(strip_events: list[dict], strip_length: int, duration_ms: int
 
     program = BlobProgram(
         strip_length=strip_length, duration=duration_ms,
-        target_fps=target_fps, requires_sync=requires_sync,
+        target_fps=target_fps, requires_sync=requires_sync, loop=loop,
         buffer_sizes=buffer_sizes, pixel_views=pixel_views,
         copy_ops=copy_ops, layers=blob_layers,
     )
@@ -948,11 +987,16 @@ def _validate_program_config(target_fps: int, requires_sync: bool):
 
 
 def compile_manifest(strips: list[StripDef], events: list[dict],
-                     beat: float, duration: float,
+                     beat: float, duration,
                      target_fps: int = 50,
-                     requires_sync: bool = False) -> CompiledManifest:
-    """Full compile pipeline: returns manifest with blobs + safe intervals."""
+                     requires_sync: bool = False,
+                     loop: bool = False) -> CompiledManifest:
+    """Full compile pipeline: returns manifest with blobs + safe intervals.
+
+    duration is seconds, or forever (see resolve_program_duration).
+    """
     _validate_program_config(target_fps, requires_sync)
+    duration_ms, loop = resolve_program_duration(duration, loop)
 
     # Deep copy events so we don't mutate the builder's originals
     events = [dict(e) for e in events]
@@ -961,7 +1005,7 @@ def compile_manifest(strips: list[StripDef], events: list[dict],
     _validate_early(events, strips)
 
     # 2. Time resolution — global, strip-independent
-    duration_ms = _resolve_times(events, beat, duration)
+    _resolve_times(events, beat, duration_ms)
 
     # 3–9. Per-strip pipeline; iterate input strips for canonical order.
     # Strip names are unique (enforced in _validate_early), so keying the
@@ -972,7 +1016,7 @@ def compile_manifest(strips: list[StripDef], events: list[dict],
     for s in strips:
         strip_events = by_strip.get(s.name, [])
         blob, intervals, memory = _compile_strip(strip_events, s.length, duration_ms,
-                                                 target_fps, requires_sync)
+                                                 target_fps, requires_sync, loop)
         strip_artifacts[s.name] = CompiledStripArtifact(
             strip_id=s.name, length=s.length, blob=blob, memory=memory,
         )
@@ -988,19 +1032,22 @@ def compile_manifest(strips: list[StripDef], events: list[dict],
     safe = _apply_width_filter(safe, target_fps)
 
     return CompiledManifest(
-        duration=duration,
+        duration=duration_ms / 1000,
         strips=strip_artifacts,
         safe_intervals=safe,
         target_fps=target_fps,
         requires_sync=requires_sync,
+        loop=loop,
     )
 
 
 def compile_program(strips: list[StripDef], events: list[dict],
-                    beat: float, duration: float,
+                    beat: float, duration,
                     target_fps: int = 50,
-                    requires_sync: bool = False) -> dict[str, bytes]:
+                    requires_sync: bool = False,
+                    loop: bool = False) -> dict[str, bytes]:
     """Full compile pipeline: returns one binary blob per strip."""
     manifest = compile_manifest(strips, events, beat, duration,
-                                target_fps=target_fps, requires_sync=requires_sync)
+                                target_fps=target_fps, requires_sync=requires_sync,
+                                loop=loop)
     return {a.strip_id: a.blob for a in manifest.strips.values()}

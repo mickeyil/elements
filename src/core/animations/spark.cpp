@@ -14,11 +14,14 @@ bool read_finite_f32(BlobReader& r, float& out) {
 
 Spark::Spark(const SparkParams& p) : _p(p) {}
 
-void Spark::render(PixelView& dst, float t_animation)
+void Spark::render(PixelView& dst, ProgramDuration t)
 {
+    // Compare in ms; only the fraction of the fade reaches float.
+    const double t_ms = static_cast<double>(t.ms);
+    const double fade_ms = static_cast<double>(_p.fade) * 1000.0;
     float alpha;
-    if (t_animation < _p.fade) {
-        alpha = 1.0f - (t_animation / _p.fade);
+    if (t_ms < fade_ms) {
+        alpha = 1.0f - static_cast<float>(t_ms / fade_ms);
         alpha = alpha * alpha;
     } else {
         alpha = 0.0f;

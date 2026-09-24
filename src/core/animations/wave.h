@@ -14,7 +14,7 @@ struct WaveParams {
     uint8_t channel;          // 0=H, 1=S, 2=V
     float h, s, v;             // values for the unmodulated channels
     float min_val, max_val;    // output range for the modulated channel
-    float period;
+    float period;              // seconds
     float phase0;
     float pixel_step;          // phase added per pixel
 };
@@ -27,7 +27,7 @@ public:
     static Animation* from_blob(const uint8_t* params, size_t params_size,
                                 DecodeError* err_out);
 
-    void render(PixelView& dst, float t_animation) override;
+    void render(PixelView& dst, ProgramDuration t) override;
 
 private:
     WaveParams _p;

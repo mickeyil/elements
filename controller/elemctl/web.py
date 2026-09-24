@@ -57,7 +57,7 @@ log = logging.getLogger(__name__)
 _STATIC_DIR = Path(__file__).resolve().parents[2] / 'local' / 'web_dist'
 _STATIC_ROOT = _STATIC_DIR.resolve()
 _WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
-_FRAME_HEADER = struct.Struct('<If')
+_FRAME_HEADER = struct.Struct('<III')   # frame_index, cycle, t_ms
 _MAX_HTTP_BODY = 1 << 20
 _WS_CLOSE_TIMEOUT = 0.25
 _CONTROLLER_REPLY_TIMEOUT = 2.0
@@ -543,8 +543,9 @@ class WebUiServer:
             return
         if len(payload) < _FRAME_HEADER.size:
             return
-        _frame_index, t_rel = _FRAME_HEADER.unpack_from(payload, 0)
-        session['current_t_rel'] = t_rel
+        _frame_index, cycle, t_ms = _FRAME_HEADER.unpack_from(payload, 0)
+        session['current_cycle'] = cycle
+        session['current_t_ms'] = t_ms
 
     async def _handle_http_client(
         self,

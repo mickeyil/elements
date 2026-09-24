@@ -19,8 +19,8 @@ counts opcode + payload but not itself.
 Conventions: encoders take plain Python values (str names and uids,
 int ports and times, bytes blobs) and return framed wire bytes;
 parsers take raw payload or datagram bytes. Times ending in _us are
-integer microseconds on the controller's monotonic clock; t_program
-is float seconds.
+integer microseconds on the controller's monotonic clock; t_ms
+values are whole milliseconds on the program timeline.
 
 TCP parsers raise WireError on malformed input (a corrupt stream is a
 protocol violation; the caller drops the connection). UDP parsers
@@ -28,16 +28,13 @@ return None instead (random datagrams on a well-known port are not an
 event worth handling).
 """
 
-import math
 import socket
 import struct
 from dataclasses import dataclass
 
-from elements.types import ms_from_seconds
-
 # ---- Constants mirroring src/app/link_protocol.h --------------------------------
 
-PROTOCOL_VERSION = 4
+PROTOCOL_VERSION = 5
 
 CMD_REGISTER             = 0x00
 CMD_SET_PROFILE          = 0x01
@@ -115,7 +112,7 @@ SYNC_PONG_WIRE_SIZE = 33
 
 # ---- Constants mirroring src/platform/sim/sim_frame_output.h --------------------------
 
-FRAME_PREVIEW_HEADER_BYTES = UID_SIZE + 4 + 4
+FRAME_PREVIEW_HEADER_BYTES = UID_SIZE + 4 + 4 + 4
 
 # ---- Constants mirroring src/app/log_sender.cpp ---------------------------------
 
@@ -135,8 +132,8 @@ class WireError(ValueError):
 
 _MSG_HEADER = struct.Struct('<IB')                  # length + opcode
 _U16 = struct.Struct('<H')
+_U32 = struct.Struct('<I')
 _I64 = struct.Struct('<q')
-_F32 = struct.Struct('<f')
 _REGISTER = struct.Struct(f'<{UID_SIZE}sIB')        # uid + boot_token + version
 _DEVICE_STATUS = struct.Struct('<BBi')              # mode + flags + clock_skew_us
 _ANIM_RECORD = struct.Struct(f'<{ANIM_NAME_SIZE}sHI')  # name + strip_length + crc32
@@ -144,7 +141,7 @@ _DISCOVER = struct.Struct(f'<HB{UID_SIZE}s')        # magic + type + uid; then v
 _OFFER_PREFIX = struct.Struct('<HB')                # magic + type; then ipv4 + port
 _SYNC_PING = struct.Struct(f'<B{UID_SIZE}sIIq')     # type + uid + boot_token + seq + t1
 _SYNC_PONG = struct.Struct('<BIIqqq')               # type + token + seq + t1 + t2 + t3
-_FRAME_PREVIEW = struct.Struct(f'<{UID_SIZE}sIf')   # uid + frame_index + t_program
+_FRAME_PREVIEW = struct.Struct(f'<{UID_SIZE}sIII')  # uid + frame_index + cycle + t_ms
 _LOG_HEADER = struct.Struct(f'<HB{UID_SIZE}sIIIB')  # magic + version + uid
                                                     # + boot_token + seq
                                                     # + uptime_ms + level
@@ -175,13 +172,6 @@ def _unpack_slot(raw, what):
     if not all(0x20 <= b <= 0x7E for b in text):
         raise WireError(f'{what} slot is not printable ASCII: {raw!r}')
     return text.decode('ascii')
-
-
-def _require_finite(value, what):
-    value = float(value)
-    if not math.isfinite(value):
-        raise WireError(f'{what} must be finite, got {value!r}')
-    return value
 
 
 def _require_u16(value, what):
@@ -249,13 +239,14 @@ def encode_start(program_start_us):
 
 
 # JUMP repositions playback onto a compiler-marked safe interval. Retained for
-# future seek and live rejoin; the v3 session does not issue it.
-def encode_jump(t_program):
-    # The device rounds the float32 it receives to the nearest ms. Sending a
-    # value already on the compiler's grid makes that round trip exact for
-    # any program under a few hours; a raw float can land one ms early.
-    t_program = _require_finite(t_program, 't_program')
-    return encode_message(CMD_JUMP, _F32.pack(ms_from_seconds(t_program) / 1000))
+# future seek and live rejoin; the v3 session does not issue it. t_ms is the
+# target in whole ms (for a looping program, into the current cycle), the
+# same grid the compiler's safe intervals use.
+def encode_jump(t_ms):
+    if (isinstance(t_ms, bool) or not isinstance(t_ms, int)
+            or not 0 <= t_ms <= 0xFFFFFFFF):
+        raise WireError(f't_ms must be a u32 integer, got {t_ms!r}')
+    return encode_message(CMD_JUMP, _U32.pack(t_ms))
 
 
 def encode_pause():
@@ -495,8 +486,9 @@ def encode_sync_pong(controller_boot_token, seq, t1_us, t2_us, t3_us):
 @dataclass(frozen=True)
 class FramePreview:
     uid: str
-    frame_index: int
-    t_program: float
+    frame_index: int   # the sim's own send counter
+    cycle: int         # loop cycle of the frame; 0 unless the program loops
+    t_ms: int          # program time within that cycle, whole ms
     rgb: bytes
 
 
@@ -506,7 +498,7 @@ def parse_frame_preview(datagram):
     dropped packets."""
     if len(datagram) < FRAME_PREVIEW_HEADER_BYTES:
         return None
-    uid_raw, frame_index, t_program = _FRAME_PREVIEW.unpack_from(datagram, 0)
+    uid_raw, frame_index, cycle, t_ms = _FRAME_PREVIEW.unpack_from(datagram, 0)
     rgb = datagram[FRAME_PREVIEW_HEADER_BYTES:]
     if not rgb or len(rgb) % 3 != 0:
         return None
@@ -514,8 +506,8 @@ def parse_frame_preview(datagram):
         uid = _unpack_slot(uid_raw, 'uid')
     except WireError:
         return None
-    return FramePreview(uid=uid, frame_index=frame_index,
-                        t_program=t_program, rgb=bytes(rgb))
+    return FramePreview(uid=uid, frame_index=frame_index, cycle=cycle,
+                        t_ms=t_ms, rgb=bytes(rgb))
 
 
 # ---- Device logs (UDP 6044) --------------------------------------------------

@@ -26,19 +26,36 @@ void Shift::initialize(const PixelView* src, PixelView* work)
     }
 }
 
-void Shift::render(PixelView& dst, float t_animation)
+void Shift::render(PixelView& dst, ProgramDuration t)
 {
     if (_work == nullptr) {
         return;
     }
 
-    float offset = _p.velocity * t_animation;
-    if (_p.direction == 0) {
-        offset = -offset;
-    }
-
     const hsva_t fill(_p.fill_h, _p.fill_s, _p.fill_v, _p.fill_a);
     const int work_len = static_cast<int>(_work->size());
+
+    // The raw offset grows without bound over a long event, so bring it
+    // into a small range in double before the per-pixel float math.
+    double offset_d = static_cast<double>(_p.velocity)
+                    * static_cast<double>(t.ms) / 1000.0;
+    if (_p.direction == 0) {
+        offset_d = -offset_d;
+    }
+    if (_p.circular) {
+        // Whole turns change nothing: normalize to [0, work_len).
+        offset_d = std::fmod(offset_d, static_cast<double>(work_len));
+        if (offset_d < 0.0) {
+            offset_d += work_len;
+        }
+    } else if (std::fabs(offset_d) > static_cast<double>(work_len) + dst.size()) {
+        // Shifted wholly out of view: every pixel is exposed.
+        for (uint16_t i = 0; i < dst.size(); i++) {
+            dst[i] = fill;
+        }
+        return;
+    }
+    const float offset = static_cast<float>(offset_d);
 
     for (uint16_t i = 0; i < dst.size(); i++) {
         const float src_f = static_cast<float>(i) - offset;

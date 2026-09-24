@@ -228,19 +228,16 @@ def test_encode_start_and_resume_vectors():
     assert encode_resume(t) == b'\x09\x00\x00\x00\x14' + expected_payload
 
 
-def test_encode_jump_vector_and_finite_check():
-    assert encode_jump(1.5) == b'\x05\x00\x00\x00\x12' + struct.pack('<f', 1.5)
-    with pytest.raises(WireError):
-        encode_jump(math.nan)
-    with pytest.raises(WireError):
-        encode_jump(math.inf)
+def test_encode_jump_vector():
+    # The target travels as u32 whole ms, the compiler's own grid.
+    assert encode_jump(1500) == b'\x05\x00\x00\x00\x12' + struct.pack('<I', 1500)
+    assert encode_jump(0xFFFFFFFF)[5:] == b'\xff\xff\xff\xff'
 
 
-def test_encode_jump_normalizes_to_the_ms_grid():
-    # The device rounds the float32 to the nearest ms. Raw 0.1255 arrives as
-    # 0.12549999 and lands on 125; the compiler places that instant at 126.
-    f = struct.unpack('<f', encode_jump(0.1255)[5:])[0]
-    assert math.floor(f * 1000 + 0.5) == 126
+def test_encode_jump_rejects_non_u32():
+    for bad in (-1, 1 << 32, 1.5, math.nan, True):
+        with pytest.raises(WireError):
+            encode_jump(bad)
 
 
 def test_empty_payload_commands():
@@ -439,18 +436,27 @@ def test_encode_sync_pong_rejects_zero_token():
 # Frame previews
 # ---------------------------------------------------------------------------
 
+def test_frame_preview_header_matches_cpp():
+    # The C++ spells the size as an expression the constant parser skips;
+    # check the source still says uid + frame_index + cycle + t_ms.
+    text = (REPO_ROOT / 'src/platform/sim/sim_frame_output.h').read_text()
+    assert 'FRAME_PREVIEW_HEADER_BYTES = UID_SIZE + 4 + 4 + 4;' in text
+    assert wire.FRAME_PREVIEW_HEADER_BYTES == wire.UID_SIZE + 12
+
+
 def test_parse_frame_preview():
     rgb = bytes(range(9))
-    datagram = _uid_slot('sim-a') + struct.pack('<If', 5, 0.25) + rgb
+    datagram = _uid_slot('sim-a') + struct.pack('<III', 5, 7, 250) + rgb
     frame = parse_frame_preview(datagram)
     assert frame.uid == 'sim-a'
     assert frame.frame_index == 5
-    assert frame.t_program == 0.25
+    assert frame.cycle == 7
+    assert frame.t_ms == 250
     assert frame.rgb == rgb
 
 
 def test_parse_frame_preview_rejects_noise():
-    header = _uid_slot('sim-a') + struct.pack('<If', 5, 0.25)
+    header = _uid_slot('sim-a') + struct.pack('<III', 5, 0, 250)
     assert parse_frame_preview(header) is None               # no pixels
     assert parse_frame_preview(header + b'\x00\x01') is None  # not divisible by 3
     assert parse_frame_preview(header[:-1]) is None          # short header

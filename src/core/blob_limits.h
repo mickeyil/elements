@@ -19,3 +19,7 @@ static constexpr uint16_t MAX_EVENTS_PER_LAYER = 1024;
 // mode and count header.
 static constexpr uint16_t MAX_EVENT_PARAMS_BYTES = 8192;
 static constexpr size_t   MAX_POOL_BYTES       = 100 * 1024;
+// Longest program: 30 days. Bounds every timeline value, so a duration and
+// anything measured within it fits a u32 of ms with room to spare. Must
+// match MAX_PROGRAM_MS in compiler/elements/limits.py.
+static constexpr uint32_t MAX_PROGRAM_MS       = 30u * 24u * 60u * 60u * 1000u;

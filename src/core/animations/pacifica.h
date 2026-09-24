@@ -13,7 +13,7 @@
 // whitecapped and deepened.
 //
 // The original keeps per-frame phase accumulators; this port computes those
-// phases in closed form, so render() is a pure function of t_animation and
+// phases in closed form, so render() is a pure function of t and
 // synced devices produce identical frames. Compositing runs in an internal
 // RGB scratch buffer that the decoder sizes via allocate_scratch(); the
 // finished frame converts to HSV on the way into dst.
@@ -36,7 +36,7 @@ public:
     // from_blob. render() is a no-op until it succeeds.
     bool allocate_scratch(uint16_t size);
 
-    void render(PixelView& dst, float t_animation) override;
+    void render(PixelView& dst, ProgramDuration t) override;
 
 private:
     void render_wave_layer(const fx::palette16& pal, uint16_t n,

@@ -55,3 +55,26 @@ export function deriveTransport(
     waitingForDevices,
   };
 }
+
+export interface TimeSession {
+  duration?: number | null;   // seconds; one cycle of a looping program
+  loop?: boolean;
+  current_cycle?: number;     // from the latest preview frame
+  current_t_ms?: number;
+}
+
+// The transport's time readout. A finite program shows position / length; a
+// looping one never ends, so it shows total elapsed time instead: every
+// completed cycle plus the position in the current one.
+export function formatTimeReadout(session: TimeSession | null | undefined): string {
+  const duration = Number(session?.duration ?? 0);
+  if (!duration) {
+    return '';
+  }
+  const t = Number(session?.current_t_ms ?? 0) / 1000;
+  if (session?.loop) {
+    const elapsed = Number(session.current_cycle ?? 0) * duration + t;
+    return `${elapsed.toFixed(1)}s (loop)`;
+  }
+  return `${t.toFixed(1)}s / ${duration.toFixed(1)}s`;
+}

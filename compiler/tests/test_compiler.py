@@ -18,7 +18,8 @@ from elements.blob import (
     decode_blob, decode_params, PIXV_NONE,
     ANIM_WAVE, ANIM_SHIFT, ANIM_SPARK, ANIM_PAINT, ANIM_PACIFICA,
 )
-from elements.compiler import CompileError
+from elements.compiler import CompileError, resolve_program_duration
+from elements import limits
 
 
 # ---------------------------------------------------------------------------
@@ -64,7 +65,7 @@ class TestHeader:
         assert test_blob[:4] == b"ELEM"
 
     def test_version(self, test_blob):
-        assert test_blob[4] == 4
+        assert test_blob[4] == 5
 
     def test_layer_count(self, decoded):
         assert len(decoded.layers) == 2
@@ -827,6 +828,114 @@ class TestProgramConfig:
         with pytest.raises(CompileError, match="requires_sync must be a bool"):
             build(beat=1.0, duration=2.0, requires_sync=1)
 
+    def test_loop_propagates_to_manifest_and_blob(self):
+        self._schedule_one("cfg_loop")
+        m = build_manifest(beat=1.0, duration=2.0, loop=True)
+        assert m.loop is True and m.duration_ms == 2000
+        assert decode_blob(m.strips["cfg_loop"].blob).loop is True
+
+    def test_loop_defaults_off(self):
+        self._schedule_one("cfg_loop_off")
+        m = build_manifest(beat=1.0, duration=2.0)
+        assert m.loop is False
+        assert decode_blob(m.strips["cfg_loop_off"].blob).loop is False
+
+    def test_loop_non_bool_rejected(self):
+        self._schedule_one("cfg_loop_type")
+        with pytest.raises(CompileError, match="loop must be a bool"):
+            build(beat=1.0, duration=2.0, loop=1)
+
+
+class TestForever:
+    """DURATION = forever and duration=forever events (blob v5)."""
+
+    def _paint(self, v=1.0):
+        return paint(colors=[(0, 0, v)] * 4, format="hsv")
+
+    def test_forever_is_a_singleton_marker(self):
+        from elements.types import Forever
+        assert Forever() is forever
+        assert repr(forever) == "forever"
+
+    def test_forever_program_is_max_length_and_loops(self):
+        s = strip("fv_prog", length=4)
+        self._paint().schedule(s.pixels("0-3"), at=0, duration=2)
+        m = build_manifest(beat=1.0, duration=forever)
+        assert m.duration_ms == limits.MAX_PROGRAM_MS == 30 * 24 * 3600 * 1000
+        assert m.loop is True
+        p = decode_blob(m.strips["fv_prog"].blob)
+        assert p.duration == limits.MAX_PROGRAM_MS
+        assert p.loop is True
+
+    def test_resolver_forever_forces_loop(self):
+        assert resolve_program_duration(forever) == (limits.MAX_PROGRAM_MS, True)
+        assert resolve_program_duration(forever, loop=False) == \
+            (limits.MAX_PROGRAM_MS, True)
+        assert resolve_program_duration(2.5) == (2500, False)
+        assert resolve_program_duration(2.5, loop=True) == (2500, True)
+
+    def test_forever_event_ends_at_program_end(self):
+        s = strip("fv_evt", length=4)
+        self._paint().schedule(s.pixels("0-3"), at=sec(0.25), duration=forever)
+        p = decode_blob(build(beat=1.0, duration=3.0)["fv_evt"])
+        e = p.layers[0].events[0]
+        assert (e.start, e.start + e.duration) == (250, 3000)
+        assert p.loop is False
+
+    def test_forever_event_in_forever_program(self):
+        s = strip("fv_both", length=4)
+        pac = pacifica()
+        pac.schedule(s.pixels("0-3"), at=0, duration=forever)
+        p = decode_blob(build(beat=1.0, duration=forever)["fv_both"])
+        e = p.layers[0].events[0]
+        assert (e.start, e.duration) == (0, limits.MAX_PROGRAM_MS)
+
+    def test_event_after_forever_event_goes_to_another_layer(self):
+        # A forever event overlaps everything after its start, so layer
+        # inference never places a later event behind it: it stays last on
+        # its layer and later events overlay it.
+        s = strip("fv_layer", length=4)
+        self._paint(0.2).schedule(s.pixels("0-3"), at=0, duration=forever)
+        self._paint(1.0).schedule(s.pixels("0-3"), at=1, duration=1)
+        p = decode_blob(build(beat=1.0, duration=4.0)["fv_layer"])
+        assert len(p.layers) == 2
+        assert [len(layer.events) for layer in p.layers] == [1, 1]
+        assert p.layers[0].events[0].duration == 4000
+
+    def test_source_from_forever_event_rejected_readably(self):
+        s = strip("fv_src", length=4)
+        src = self._paint()
+        src.schedule(s.pixels("0-3"), at=0, duration=forever)
+        sh = shift(direction="right", velocity=1, circular=True, fill="transparent")
+        sh.schedule(s.pixels("0-3"), at=2, duration=1, source=src)
+        with pytest.raises(CompileError, match=r"ends at program end \(forever\)"):
+            build(beat=1.0, duration=4.0)
+
+    def test_forever_start_rejected(self):
+        s = strip("fv_at", length=4)
+        self._paint().schedule(s.pixels("0-3"), at=forever, duration=1)
+        with pytest.raises(CompileError, match="start time cannot be forever"):
+            build(beat=1.0, duration=4.0)
+
+    def test_forever_event_starting_at_program_end_rejected(self):
+        s = strip("fv_late", length=4)
+        self._paint().schedule(s.pixels("0-3"), at=4, duration=forever)
+        with pytest.raises(CompileError, match="starts at 4s"):
+            build(beat=1.0, duration=4.0)
+
+    def test_program_over_30_days_rejected(self):
+        s = strip("fv_long", length=4)
+        self._paint().schedule(s.pixels("0-3"), at=0, duration=1)
+        with pytest.raises(CompileError, match="exceeds MAX_PROGRAM_MS"):
+            build(beat=1.0, duration=limits.MAX_PROGRAM_MS / 1000 + 1)
+
+    def test_program_of_exactly_30_days_accepted(self):
+        s = strip("fv_max", length=4)
+        self._paint().schedule(s.pixels("0-3"), at=0, duration=1)
+        m = build_manifest(beat=1.0, duration=limits.MAX_PROGRAM_MS / 1000)
+        assert m.duration_ms == limits.MAX_PROGRAM_MS
+        assert m.loop is False
+
 
 def _extract_int(pattern: str, text: str, description: str) -> int:
     m = re.search(pattern, text)
@@ -936,7 +1045,7 @@ class TestPacifica:
 # ---------------------------------------------------------------------------
 
 class TestMillisecondGrid:
-    """Boundaries are rounded once, so decimal times meet exactly (blob v4)."""
+    """Boundaries are rounded once, so decimal times meet exactly (blob v4+)."""
 
     def _paint(self, v=1.0):
         return paint(colors=[(0, 0, v)] * 4, format="hsv")

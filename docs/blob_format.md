@@ -29,15 +29,21 @@ leftover bytes at the end are an error (`TrailingBytes`).
 
     type      field             description
     char[4]   magic             always "ELEM" (0x45 4C 45 4D)
-    u8        version           format version, currently 4
-    u8        flags             bit0 = requires_sync; other bits reserved (0)
+    u8        version           format version, currently 5
+    u8        flags             bit0 = requires_sync, bit1 = loop; other bits reserved (0)
     u8        target_fps        intended frame rate, Hz
     u8        layer_count       number of layers in the layers section
     u16       strip_length      physical LED count this blob targets
     u16       buffer_count      number of entries in the buffer-sizes section
     u16       pixel_view_count  number of descriptors in the pixel-views section
     u16       copy_op_count     number of records in the copy-ops section
-    u32       duration          total program length, milliseconds; must be > 0
+    u32       duration          total program length, milliseconds; in (0, MAX_PROGRAM_MS]
+
+`loop` makes playback replay the program from 0 each time it reaches
+`duration`, until stopped; a looping program never ends. The engine itself
+never wraps: the player rewinds it at each cycle boundary and renders the
+new cycle's first frame in the same step. The DSL's `DURATION = forever` is
+a `MAX_PROGRAM_MS` program with `loop` set.
 
 ## Time
 
@@ -49,6 +55,13 @@ shared boundary therefore compare exactly on the device instead of
 drifting apart by a float rounding error. Animation parameters that are
 times (periods, fades, velocities) stay float seconds; they are never
 compared for ordering.
+
+Every timeline value is bounded by `MAX_PROGRAM_MS` (30 days), so it fits
+a u32 with room to spare. Animations receive their elapsed time as the
+same whole milliseconds, never as float seconds (see `src/core/animation.h`).
+The controller's JUMP command carries its target the same way: a u32 of
+whole milliseconds on this grid (into the current cycle, for a looping
+program).
 
 ## Buffer sizes
 
@@ -161,6 +174,7 @@ Structural caps the decoder enforces before allocating. Defined in
     MAX_EVENTS_PER_LAYER    1024     per-layer event_count
     MAX_EVENT_PARAMS_BYTES  8192     per-event params_size
     MAX_POOL_BYTES          100 KiB  sum of size*16 over all pool buffers
+    MAX_PROGRAM_MS          30 days  header duration (2,592,000,000 ms)
 
 ## Rejection reasons
 
@@ -168,7 +182,7 @@ Structural caps the decoder enforces before allocating. Defined in
 `src/core/blob_reader.h`):
 
     BadMagic             first 4 bytes are not "ELEM"
-    BadVersion           version byte is not 4
+    BadVersion           version byte is not 5
     Truncated            a read ran past the end of the buffer
     TrailingBytes        bytes remained after the last section was read
     InvalidField         out-of-range index, bad flags, unsorted/overlapping records, zero duration

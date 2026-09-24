@@ -132,14 +132,19 @@ void Pacifica::deepen_colors(uint16_t n)
     }
 }
 
-void Pacifica::render(PixelView& dst, float t_animation)
+void Pacifica::render(PixelView& dst, ProgramDuration t)
 {
     if (_scratch == nullptr || dst.size() > _scratch_size) {
         return;
     }
     const uint16_t n = dst.size();
 
-    const double t_ms = static_cast<double>(t_animation) * 1000.0 * _p.speed;
+    // Effect time in ms. speed is unbounded, so this can pass 2^32 within
+    // MAX_PROGRAM_MS; the drift integrals below take it whole, in double.
+    const double t_ms = static_cast<double>(t.ms) * _p.speed;
+    // The beat functions take u32 ms. Wrapping modulo 2^32 first is exact,
+    // not an approximation: beat88 computes (ms * k) mod 2^32 >> 16, and
+    // (ms mod 2^32) * k is the same value mod 2^32.
     const uint32_t ms =
         static_cast<uint32_t>(std::fmod(t_ms, 4294967296.0));
 

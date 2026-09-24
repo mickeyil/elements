@@ -481,9 +481,9 @@ def test_sync_ping_discarded_without_admission(hub, uid, boot_token):
 # Frame previews
 # ---------------------------------------------------------------------------
 
-def frame_packet(uid, frame_index=0, t_program=0.0, pixels=1):
+def frame_packet(uid, frame_index=0, cycle=0, t_ms=0, pixels=1):
     return (uid.encode().ljust(16, b'\x00')
-            + struct.pack('<If', frame_index, t_program)
+            + struct.pack('<III', frame_index, cycle, t_ms)
             + b'\x10\x20\x30' * pixels)
 
 

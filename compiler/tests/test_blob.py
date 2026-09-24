@@ -84,7 +84,7 @@ class TestHeader:
     def test_magic_and_version(self):
         blob = emit_blob(_sample_program())
         assert blob[:4] == BLOB_MAGIC == b"ELEM"
-        assert blob[4] == BLOB_VERSION == 4
+        assert blob[4] == BLOB_VERSION == 5
 
     def test_header_fields(self):
         blob = emit_blob(_sample_program())
@@ -111,6 +111,15 @@ class TestHeader:
         p.requires_sync = False
         blob = emit_blob(p)
         assert blob[5] == 0x00
+
+    def test_loop_flag_is_bit1_and_round_trips(self):
+        p = _sample_program()
+        p.loop = True
+        blob = emit_blob(p)
+        assert blob[5] == 0x03          # requires_sync | loop
+        assert decode_blob(blob).loop is True
+        p.loop = False
+        assert decode_blob(emit_blob(p)).loop is False
 
 
 class TestPixelViewFlags:

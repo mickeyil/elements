@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue';
 
 import { useInjectedServerState, type SnapshotProgram } from '../composables/useServerState';
-import { deriveTransport } from '../lib/playbackModel';
+import { deriveTransport, formatTimeReadout } from '../lib/playbackModel';
 import { loadProgram, rescanPrograms, sessionCommand, type SessionVerb } from '../lib/playbackApi';
 
 const { snapshot, session, controllerConnected } = useInjectedServerState();
@@ -69,14 +69,7 @@ function onTransport(verb: SessionVerb): void {
 }
 
 const stateLabel = computed(() => transport.value.state);
-const timeReadout = computed(() => {
-  const t = Number(session.value?.current_t_rel ?? 0);
-  const duration = Number(session.value?.duration ?? 0);
-  if (!duration) {
-    return '';
-  }
-  return `${t.toFixed(1)}s / ${duration.toFixed(1)}s`;
-});
+const timeReadout = computed(() => formatTimeReadout(session.value));
 
 function programLabel(program: SnapshotProgram): string {
   return program.error ? `${program.program_id} (error)` : program.program_id;

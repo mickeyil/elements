@@ -69,9 +69,9 @@ private:
 // flashes per half second, alternating blue and red each phase.
 class Police : public Animation {
 public:
-    static constexpr float COLOR_PHASE_S = 0.5f;  // one color's flash burst
+    static constexpr uint32_t COLOR_PHASE_MS = 500;  // one color's flash burst
     static constexpr int FLASHES_PER_PHASE = 5;
-    static constexpr float FLASH_PERIOD_S = COLOR_PHASE_S / FLASHES_PER_PHASE;
+    static constexpr uint32_t FLASH_PERIOD_MS = COLOR_PHASE_MS / FLASHES_PER_PHASE;
 
-    void render(PixelView& dst, float t_animation) override;
+    void render(PixelView& dst, ProgramDuration t) override;
 };

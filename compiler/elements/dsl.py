@@ -12,12 +12,13 @@ Usage:
 from __future__ import annotations
 from typing import Any
 
-from .types import PI, SecMarker, PixelGroup, StripDef, AnimDef, CompiledManifest
+from .types import (PI, SecMarker, PixelGroup, StripDef, AnimDef, CompiledManifest,
+                    Forever, forever)
 from .compiler import compile_program, compile_manifest
 
 # Re-export for `from elements.dsl import *`
-__all__ = ["PI", "sec", "strip", "wave", "shift", "spark", "paint", "pacifica",
-           "build", "build_manifest", "CompiledManifest"]
+__all__ = ["PI", "sec", "forever", "strip", "wave", "shift", "spark", "paint",
+           "pacifica", "build", "build_manifest", "CompiledManifest"]
 
 
 def sec(value: float) -> SecMarker:
@@ -111,21 +112,28 @@ def pacifica(**params) -> AnimDef:
     return _make_anim("pacifica", params)
 
 
-def build(beat: float, duration: float,
-          target_fps: int = 50, requires_sync: bool = False) -> dict[str, bytes]:
+# duration is seconds or `forever`. loop=True replays the program from 0 each
+# time it reaches its duration; a forever program always loops.
+
+def build(beat: float, duration: float | Forever,
+          target_fps: int = 50, requires_sync: bool = False,
+          loop: bool = False) -> dict[str, bytes]:
     """Compile the accumulated program. Returns one binary blob per strip."""
     try:
         return compile_program(_builder.strips, _builder.events, beat, duration,
-                               target_fps=target_fps, requires_sync=requires_sync)
+                               target_fps=target_fps, requires_sync=requires_sync,
+                               loop=loop)
     finally:
         _builder.reset()
 
 
-def build_manifest(beat: float, duration: float,
-                   target_fps: int = 50, requires_sync: bool = False) -> CompiledManifest:
+def build_manifest(beat: float, duration: float | Forever,
+                   target_fps: int = 50, requires_sync: bool = False,
+                   loop: bool = False) -> CompiledManifest:
     """Compile the accumulated program. Returns manifest with blobs + safe intervals."""
     try:
         return compile_manifest(_builder.strips, _builder.events, beat, duration,
-                                target_fps=target_fps, requires_sync=requires_sync)
+                                target_fps=target_fps, requires_sync=requires_sync,
+                                loop=loop)
     finally:
         _builder.reset()

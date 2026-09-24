@@ -15,7 +15,7 @@ class FakeAnim : public Animation {
 public:
     explicit FakeAnim(int* live_counter) : _live(live_counter) { ++*_live; }
     ~FakeAnim() override { --*_live; }
-    void render(PixelView&, float) override {}
+    void render(PixelView&, ProgramDuration) override {}
 private:
     int* _live;
 };

@@ -212,7 +212,7 @@ TEST_CASE("store rejects malformed and synced blobs")
     CHECK_FALSE(store.store("a", bad_version.data(), bad_version.size()));
 
     auto reserved_flags = good;
-    reserved_flags[5] = 0x02;
+    reserved_flags[5] = 0x04;   // bit 0 requires_sync, bit 1 loop, bit 2 reserved
     CHECK_FALSE(store.store("a", reserved_flags.data(), reserved_flags.size()));
 
     const auto synced = make_blob(10, true);

@@ -19,7 +19,7 @@ Paint::Paint(hsva_t* constant, uint16_t count)
 
 Paint::~Paint() { delete[] _constant; }
 
-void Paint::render(PixelView& dst, float)
+void Paint::render(PixelView& dst, ProgramDuration)
 {
     if (_mode == Mode::Solid) {
         for (uint16_t i = 0; i < dst.size(); i++) {

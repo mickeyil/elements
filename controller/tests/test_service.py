@@ -181,6 +181,40 @@ def test_load_compiles_and_enters_loaded(tmp_path):
     assert device['target_intent'] == 'ready'   # routed, parked at LOADED
 
 
+def test_load_reports_loop_off_by_default(tmp_path):
+    service, _hub = make_service(tmp_path)
+    cmd(service, 'load', program_id='prog')
+    state = _by_type(_json(service.snapshot_messages()), 'state')[0]
+    assert state['session']['loop'] is False
+
+
+def test_load_forever_program_is_thirty_days_and_loops(tmp_path):
+    service, _hub = make_service(tmp_path, with_program=False)
+    (tmp_path / 'ever.py').write_text(
+        "from elements.dsl import forever, strip, paint\n"
+        "BEAT = 1.0\n"
+        "DURATION = forever\n"
+        "main = strip('main')\n"
+        "paint(color='white').schedule(main.pixels('0'), at=0, duration=forever)\n"
+    )
+    cmd(service, 'rescan')
+    reply = cmd(service, 'load', program_id='ever')
+    assert reply['ok'] is True, reply
+    state = _by_type(_json(service.snapshot_messages()), 'state')[0]
+    assert state['session']['loop'] is True
+    assert state['session']['duration'] == 30 * 24 * 3600
+
+
+def test_load_loop_literal_passes_through(tmp_path):
+    service, _hub = make_service(tmp_path, with_program=False)
+    (tmp_path / 'looped.py').write_text("LOOP = True\n" + PROGRAM)
+    cmd(service, 'rescan')
+    assert cmd(service, 'load', program_id='looped')['ok'] is True
+    state = _by_type(_json(service.snapshot_messages()), 'state')[0]
+    assert state['session']['loop'] is True
+    assert state['session']['duration'] == 4.0
+
+
 def test_load_unknown_program_errors(tmp_path):
     service, _hub = make_service(tmp_path)
     reply = cmd(service, 'load', program_id='nope')
@@ -520,14 +554,14 @@ def test_preview_frame_emitted_only_when_enabled(tmp_path):
     service._clock_us.now_us += 1_000_000             # live runs ahead of frames
 
     # No subscriber yet: the frame is dropped, nothing is assembled.
-    hub.frames = [FramePreview(uid='sim-a', frame_index=999,
-                               t_program=0.02, rgb=b'\x00' * 90)]
+    hub.frames = [FramePreview(uid='sim-a', frame_index=999, cycle=0,
+                               t_ms=20, rgb=b'\x00' * 90)]
     _json_msgs, frame_msgs = service.tick_once()
     assert frame_msgs == []
 
     service.set_preview_enabled(True)
-    hub.frames = [FramePreview(uid='sim-a', frame_index=1000,
-                               t_program=0.04, rgb=b'\x00' * 90)]
+    hub.frames = [FramePreview(uid='sim-a', frame_index=1000, cycle=0,
+                               t_ms=40, rgb=b'\x00' * 90)]
     _json_msgs, frame_msgs = service.tick_once()
     assert len(frame_msgs) == 1
     assert frame_msgs[0][4] == KIND_FRAME             # the kind byte

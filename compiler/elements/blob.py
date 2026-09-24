@@ -1,4 +1,4 @@
-"""Elements v4 binary blob serialization.
+"""Elements v5 binary blob serialization.
 
 The byte layout is docs/blob_format.md, enforced by src/core/decoder.cpp; this
 module is the emitter side. It serializes a BlobProgram (the compiler's
@@ -23,13 +23,14 @@ from dataclasses import dataclass, field
 from .types import ANIM_TYPES
 
 BLOB_MAGIC = b"ELEM"
-BLOB_VERSION = 4
+BLOB_VERSION = 5
 
 # Sentinel for an absent pixel view index (matches src/core/runtime_constants.h).
 PIXV_NONE = 0xFFFF
 
 # Header flag bits.
 _FLAG_REQUIRES_SYNC = 0x01
+_FLAG_LOOP = 0x02
 
 # Pixel view flag bits.
 _VIEW_STORAGE_IDENTITY = 0x01
@@ -94,6 +95,7 @@ class BlobProgram:
     duration: int        # ms
     target_fps: int = 50
     requires_sync: bool = False
+    loop: bool = False   # replay from 0 at duration, forever
     buffer_sizes: list[int] = field(default_factory=list)
     pixel_views: list[PixelViewSpec] = field(default_factory=list)
     copy_ops: list[CopyOpSpec] = field(default_factory=list)
@@ -197,11 +199,13 @@ def _view_flags(v: PixelViewSpec) -> int:
 
 
 def emit_blob(program: BlobProgram) -> bytes:
-    """Serialize a BlobProgram into the v4 binary blob."""
+    """Serialize a BlobProgram into the v5 binary blob."""
     buf = bytearray()
 
     # Header (20 bytes)
     flags = _FLAG_REQUIRES_SYNC if program.requires_sync else 0
+    if program.loop:
+        flags |= _FLAG_LOOP
     buf += BLOB_MAGIC
     buf += struct.pack("<BBBB", BLOB_VERSION, flags, program.target_fps,
                        len(program.layers))
@@ -243,7 +247,7 @@ def emit_blob(program: BlobProgram) -> bytes:
 # ---------------------------------------------------------------------------
 
 def decode_blob(data: bytes) -> BlobProgram:
-    """Decode a v4 blob back into a BlobProgram. Raises on malformed input."""
+    """Decode a v5 blob back into a BlobProgram. Raises on malformed input."""
     if data[0:4] != BLOB_MAGIC:
         raise ValueError("bad magic")
     version, flags, target_fps, layer_count = struct.unpack_from("<BBBB", data, 4)
@@ -312,6 +316,7 @@ def decode_blob(data: bytes) -> BlobProgram:
     return BlobProgram(
         strip_length=strip_length, duration=duration,
         target_fps=target_fps, requires_sync=bool(flags & _FLAG_REQUIRES_SYNC),
+        loop=bool(flags & _FLAG_LOOP),
         buffer_sizes=buffer_sizes, pixel_views=pixel_views,
         copy_ops=copy_ops, layers=layers,
     )

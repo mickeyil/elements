@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 class Strip;
 struct HardwareProfile;
 
@@ -8,7 +10,8 @@ struct HardwareProfile;
 // then calls write() once per rendered frame; the implementation
 // turns the program-space RGB strip into platform output.
 //
-// t_program fills the sim preview header; the firmware ignores it.
+// cycle and t_ms (the playback cursor: loop cycle, and ms into it) fill
+// the sim preview header; the firmware ignores them.
 //
 // Implementations:
 //   - EspFrameOutput (firmware: gamma, channel order, FastLED)
@@ -24,5 +27,5 @@ public:
     virtual void apply_profile(const HardwareProfile& profile) = 0;
 
     // Write one frame. The strip holds pre-gamma program-space RGB.
-    virtual void write(const Strip& strip, float t_program) = 0;
+    virtual void write(const Strip& strip, uint32_t cycle, uint32_t t_ms) = 0;
 };

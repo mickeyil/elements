@@ -11,7 +11,7 @@ void EspFrameOutput::apply_profile(const HardwareProfile& profile)
     _order = profile.color_order;
 }
 
-void EspFrameOutput::write(const Strip& strip, float)
+void EspFrameOutput::write(const Strip& strip, uint32_t, uint32_t)
 {
     // A physical strip longer than the profile shows black past the
     // program's pixels: copy_to() zeroes that tail.

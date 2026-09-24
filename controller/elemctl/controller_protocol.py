@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import struct
 
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 3
 ROLE_WRITER = 'writer'
 ROLE_OBSERVER = 'observer'
 
@@ -17,7 +17,7 @@ KIND_JSON = 0x01   # UTF-8 JSON
 KIND_FRAME = 0x02  # binary program frame
 
 _HEADER = struct.Struct('<IB')  # length(u32) + kind(u8)
-_FRAME_HEADER = struct.Struct('<If')  # frame_index(u32) + t_rel(f32)
+_FRAME_HEADER = struct.Struct('<III')  # frame_index(u32) + cycle(u32) + t_ms(u32)
 
 
 def encode_json(obj: dict) -> bytes:
@@ -26,12 +26,15 @@ def encode_json(obj: dict) -> bytes:
     return _HEADER.pack(1 + len(payload), KIND_JSON) + payload
 
 
-def encode_frame(frame_index: int, t_rel: float, strips: list[bytes]) -> bytes:
+def encode_frame(frame_index: int, cycle: int, t_ms: int,
+                 strips: list[bytes]) -> bytes:
     """Encode a program frame as a length-prefixed controller-protocol message.
 
-    Payload: [u32 frame_index][f32 t_rel][rgb_0]...[rgb_N-1]
+    Payload: [u32 frame_index][u32 cycle][u32 t_ms][rgb_0]...[rgb_N-1]
+    t_ms is the frame's time within its loop cycle; cycle is 0 unless the
+    program loops, so elapsed program time is cycle * duration + t_ms.
     """
-    body = _FRAME_HEADER.pack(frame_index, t_rel)
+    body = _FRAME_HEADER.pack(frame_index, cycle, t_ms)
     for rgb in strips:
         body += rgb
     return _HEADER.pack(1 + len(body), KIND_FRAME) + body

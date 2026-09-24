@@ -47,9 +47,12 @@ export interface SessionState {
   session_id?: number | string;
   epoch?: number;
   duration?: number;
+  loop?: boolean;            // a looping session replays each duration, never ends
   state?: string;            // v3 playback state: idle/loaded/playing/paused/ended
   program_id?: string | null;
-  current_t_rel?: number;
+  // From the latest preview frame: loop cycle and ms into it.
+  current_cycle?: number;
+  current_t_ms?: number;
   safe_intervals?: unknown[];
   strips?: SessionStrip[];
 }
@@ -164,18 +167,20 @@ export function useServerState() {
       return;
     }
 
+    // Header: u32 frame_index, u32 cycle, u32 t_ms (controller_protocol.py).
     const view = new DataView(buffer);
-    if (view.byteLength < 8) {
+    if (view.byteLength < 12) {
       return;
     }
 
-    session.value.current_t_rel = view.getFloat32(4, true);
+    session.value.current_cycle = view.getUint32(4, true);
+    session.value.current_t_ms = view.getUint32(8, true);
 
     if (!logicalStrips.value.length || !simTargets.value.length) {
       return;
     }
 
-    let offset = 8;
+    let offset = 12;
     const nextSlices: Uint8Array[] = [];
     for (const strip of logicalStrips.value) {
       const stripLength = Number(strip?.length ?? 0);

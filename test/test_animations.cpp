@@ -12,6 +12,7 @@
 #include "core/animations/spark.h"
 #include "core/animations/wave.h"
 #include "core/animation.h"
+#include "core/blob_limits.h"
 #include "core/blob_reader.h"
 #include "core/colors.h"
 #include "core/pixel_view.h"
@@ -122,7 +123,7 @@ TEST_CASE("Wave: t=0 phase0=0 channel=V gives midpoint", "[anim][wave]") {
     Wave wave(p);
     hsva_t buf[4];
     PixelView dst; init_view(dst, buf, 4);
-    wave.render(dst, 0.0f);
+    wave.render(dst, ProgramDuration{0});
 
     // sin(0)*0.5+0.5 = 0.5 -> v = 0.5
     for (uint16_t i = 0; i < 4; i++) {
@@ -141,7 +142,7 @@ TEST_CASE("Wave: channel selector picks the modulated component", "[anim][wave]"
         p.channel = 0; p.min_val = 0.0f; p.max_val = 360.0f;
         Wave wave(p);
         hsva_t buf[1]; PixelView dst; init_view(dst, buf, 1);
-        wave.render(dst, 1.0f);  // sin(pi/2)=1 -> val=360
+        wave.render(dst, ProgramDuration{1000});  // sin(pi/2)=1 -> val=360
         CHECK(buf[0].h == Approx(360.0f).epsilon(1e-4));
         CHECK(buf[0].s == Approx(0.5f).epsilon(1e-4));
         CHECK(buf[0].v == Approx(0.5f).epsilon(1e-4));
@@ -150,7 +151,7 @@ TEST_CASE("Wave: channel selector picks the modulated component", "[anim][wave]"
         p.channel = 1; p.min_val = 0.0f; p.max_val = 1.0f;
         Wave wave(p);
         hsva_t buf[1]; PixelView dst; init_view(dst, buf, 1);
-        wave.render(dst, 1.0f);  // sin(pi/2)=1 -> val=1
+        wave.render(dst, ProgramDuration{1000});  // sin(pi/2)=1 -> val=1
         CHECK(buf[0].h == Approx(200.0f).epsilon(1e-4));
         CHECK(buf[0].s == Approx(1.0f).epsilon(1e-4));
         CHECK(buf[0].v == Approx(0.5f).epsilon(1e-4));
@@ -159,7 +160,7 @@ TEST_CASE("Wave: channel selector picks the modulated component", "[anim][wave]"
         p.channel = 2; p.min_val = 0.0f; p.max_val = 1.0f;
         Wave wave(p);
         hsva_t buf[1]; PixelView dst; init_view(dst, buf, 1);
-        wave.render(dst, 1.0f);
+        wave.render(dst, ProgramDuration{1000});
         CHECK(buf[0].h == Approx(200.0f).epsilon(1e-4));
         CHECK(buf[0].s == Approx(0.5f).epsilon(1e-4));
         CHECK(buf[0].v == Approx(1.0f).epsilon(1e-4));
@@ -176,7 +177,7 @@ TEST_CASE("Wave: pixel_step shifts phase across pixels", "[anim][wave]") {
 
     Wave wave(p);
     hsva_t buf[4]; PixelView dst; init_view(dst, buf, 4);
-    wave.render(dst, 0.0f);  // base_phase = 0
+    wave.render(dst, ProgramDuration{0});  // base_phase = 0
 
     // Pixel i has phase i*pi/2: sin gives 0, 1, 0, -1; rescaled to [0,1] gives 0.5, 1, 0.5, 0
     CHECK(buf[0].v == Approx(0.5f).epsilon(1e-4));
@@ -193,7 +194,7 @@ TEST_CASE("Wave: from_blob round-trip produces equivalent render", "[anim][wave]
     REQUIRE(err == DecodeError::Ok);
 
     hsva_t buf[2]; PixelView dst; init_view(dst, buf, 2);
-    anim->render(dst, 0.0f);
+    anim->render(dst, ProgramDuration{0});
     CHECK(buf[0].v == Approx(0.5f).epsilon(1e-4));
 
     delete anim;
@@ -239,7 +240,7 @@ TEST_CASE("Spark: t=0 gives full alpha", "[anim][spark]") {
 
     Spark spark(p);
     hsva_t buf[2]; PixelView dst; init_view(dst, buf, 2);
-    spark.render(dst, 0.0f);
+    spark.render(dst, ProgramDuration{0});
 
     for (uint16_t i = 0; i < 2; i++) {
         CHECK(buf[i].h == Approx(60.0f));
@@ -255,13 +256,13 @@ TEST_CASE("Spark: alpha follows quadratic ease-out", "[anim][spark]") {
     Spark spark(p);
     hsva_t buf[1]; PixelView dst; init_view(dst, buf, 1);
 
-    spark.render(dst, 0.5f);  // (1 - 0.5)^2 = 0.25
+    spark.render(dst, ProgramDuration{500});  // (1 - 0.5)^2 = 0.25
     CHECK(buf[0].a == Approx(0.25f).epsilon(1e-4));
 
-    spark.render(dst, 1.0f);  // alpha clamps to 0 at fade
+    spark.render(dst, ProgramDuration{1000});  // alpha clamps to 0 at fade
     CHECK(buf[0].a == Approx(0.0f).margin(1e-4));
 
-    spark.render(dst, 5.0f);  // past fade, still 0
+    spark.render(dst, ProgramDuration{5000});  // past fade, still 0
     CHECK(buf[0].a == Approx(0.0f).margin(1e-4));
 }
 
@@ -273,7 +274,7 @@ TEST_CASE("Spark: from_blob round-trip", "[anim][spark][from_blob]") {
     REQUIRE(err == DecodeError::Ok);
 
     hsva_t buf[1]; PixelView dst; init_view(dst, buf, 1);
-    anim->render(dst, 0.0f);
+    anim->render(dst, ProgramDuration{0});
     CHECK(buf[0].h == Approx(120.0f));
     CHECK(buf[0].a == Approx(1.0f));
     delete anim;
@@ -300,7 +301,7 @@ TEST_CASE("Spark: from_blob rejects NaN", "[anim][spark][from_blob]") {
 TEST_CASE("Paint: solid mode fills every pixel", "[anim][paint]") {
     Paint paint(60.0f, 0.5f, 1.0f, 0.75f);
     hsva_t buf[3]; PixelView dst; init_view(dst, buf, 3);
-    paint.render(dst, 0.0f);
+    paint.render(dst, ProgramDuration{0});
     for (uint16_t i = 0; i < 3; i++) {
         CHECK(buf[i].h == Approx(60.0f));
         CHECK(buf[i].s == Approx(0.5f));
@@ -318,7 +319,7 @@ TEST_CASE("Paint: constant mode replays the array into dst", "[anim][paint]") {
 
     Paint paint(constant, 3);
     hsva_t buf[3]; PixelView dst; init_view(dst, buf, 3);
-    paint.render(dst, 0.0f);
+    paint.render(dst, ProgramDuration{0});
 
     CHECK(buf[0].h == Approx(0.0f));
     CHECK(buf[1].h == Approx(120.0f));
@@ -345,7 +346,7 @@ TEST_CASE("Paint: from_blob solid round-trip", "[anim][paint][from_blob]") {
     REQUIRE(err == DecodeError::Ok);
 
     hsva_t buf[1]; PixelView dst; init_view(dst, buf, 1);
-    anim->render(dst, 0.0f);
+    anim->render(dst, ProgramDuration{0});
     CHECK(buf[0].h == Approx(60.0f));
     CHECK(buf[0].s == Approx(0.25f));
     CHECK(buf[0].v == Approx(0.5f));
@@ -365,7 +366,7 @@ TEST_CASE("Paint: from_blob constant round-trip", "[anim][paint][from_blob]") {
     REQUIRE(err == DecodeError::Ok);
 
     hsva_t buf[2]; PixelView dst; init_view(dst, buf, 2);
-    anim->render(dst, 0.0f);
+    anim->render(dst, ProgramDuration{0});
     CHECK(buf[0].h == Approx(0.0f));
     CHECK(buf[1].h == Approx(120.0f));
     delete anim;
@@ -446,7 +447,7 @@ TEST_CASE("Shift: render at t=0 produces work contents (no offset)",
 
     hsva_t dst_buf[3] = {};
     PixelView dst; init_view(dst, dst_buf, 3);
-    shift.render(dst, 0.0f);
+    shift.render(dst, ProgramDuration{0});
 
     for (uint16_t i = 0; i < 3; i++) {
         CHECK(dst_buf[i].h == src_buf[i].h);
@@ -469,7 +470,7 @@ TEST_CASE("Shift: positive velocity, direction=right shifts right",
 
     hsva_t dst_buf[3] = {};
     PixelView dst; init_view(dst, dst_buf, 3);
-    shift.render(dst, 1.0f);  // offset = +1 -> dst[i] = work[i-1]
+    shift.render(dst, ProgramDuration{1000});  // offset = +1 -> dst[i] = work[i-1]
 
     CHECK(dst_buf[0].h == work_buf[2].h);  // wrap: work[(0-1) mod 3] = work[2]
     CHECK(dst_buf[1].h == work_buf[0].h);
@@ -492,7 +493,7 @@ TEST_CASE("Shift: positive velocity, direction=left shifts left",
 
     hsva_t dst_buf[3] = {};
     PixelView dst; init_view(dst, dst_buf, 3);
-    shift.render(dst, 1.0f);  // offset = -1 -> dst[i] = work[i+1]
+    shift.render(dst, ProgramDuration{1000});  // offset = -1 -> dst[i] = work[i+1]
 
     CHECK(dst_buf[0].h == work_buf[1].h);
     CHECK(dst_buf[1].h == work_buf[2].h);
@@ -515,7 +516,7 @@ TEST_CASE("Shift: non-circular fills exposed pixels", "[anim][shift]") {
 
     hsva_t dst_buf[3] = {};
     PixelView dst; init_view(dst, dst_buf, 3);
-    shift.render(dst, 1.0f);  // offset = +1 -> dst[0] = work[-1] (out of range -> fill)
+    shift.render(dst, ProgramDuration{1000});  // offset = +1 -> dst[0] = work[-1] (out of range -> fill)
 
     CHECK(dst_buf[0].h == 99.0f);              // filled
     CHECK(dst_buf[1].h == work_buf[0].h);
@@ -539,7 +540,7 @@ TEST_CASE("Shift: snapshot survives later src mutation", "[anim][shift]") {
 
     hsva_t dst_buf[2] = {};
     PixelView dst; init_view(dst, dst_buf, 2);
-    shift.render(dst, 0.0f);
+    shift.render(dst, ProgramDuration{0});
 
     CHECK(dst_buf[0].h == 11.0f);
     CHECK(dst_buf[1].h == 22.0f);
@@ -604,9 +605,9 @@ TEST_CASE("Pacifica: render is a pure function of t", "[anim][pacifica]") {
     hsva_t buf_a[N]; PixelView dst_a; init_view(dst_a, buf_a, N);
     hsva_t buf_b[N]; PixelView dst_b; init_view(dst_b, buf_b, N);
 
-    a.render(dst_a, 1.0f);
-    a.render(dst_a, 5.0f);
-    b.render(dst_b, 5.0f);
+    a.render(dst_a, ProgramDuration{1000});
+    a.render(dst_a, ProgramDuration{5000});
+    b.render(dst_b, ProgramDuration{5000});
 
     for (uint16_t i = 0; i < N; i++) {
         CHECK(buf_a[i].h == buf_b[i].h);
@@ -624,7 +625,7 @@ TEST_CASE("Pacifica: every pixel is written, in range", "[anim][pacifica]") {
     hsva_t buf[N];
     for (uint16_t i = 0; i < N; i++) buf[i] = hsva_t(-999, -999, -999, -999);
     PixelView dst; init_view(dst, buf, N);
-    anim.render(dst, 2.5f);
+    anim.render(dst, ProgramDuration{2500});
 
     for (uint16_t i = 0; i < N; i++) {
         CHECK(buf[i].h >= 0.0f);
@@ -644,8 +645,8 @@ TEST_CASE("Pacifica: output evolves over time", "[anim][pacifica]") {
 
     hsva_t buf1[N]; PixelView dst1; init_view(dst1, buf1, N);
     hsva_t buf2[N]; PixelView dst2; init_view(dst2, buf2, N);
-    anim.render(dst1, 0.0f);
-    anim.render(dst2, 3.0f);
+    anim.render(dst1, ProgramDuration{0});
+    anim.render(dst2, ProgramDuration{3000});
 
     bool any_diff = false;
     for (uint16_t i = 0; i < N; i++) {
@@ -662,7 +663,7 @@ TEST_CASE("Pacifica: brightness 0 blacks out V", "[anim][pacifica]") {
     REQUIRE(anim.allocate_scratch(N));
 
     hsva_t buf[N]; PixelView dst; init_view(dst, buf, N);
-    anim.render(dst, 1.0f);
+    anim.render(dst, ProgramDuration{1000});
     for (uint16_t i = 0; i < N; i++) {
         CHECK(buf[i].v == 0.0f);
     }
@@ -679,8 +680,8 @@ TEST_CASE("Pacifica: hue_shift rotates hue", "[anim][pacifica]") {
 
     hsva_t buf1[N]; PixelView dst1; init_view(dst1, buf1, N);
     hsva_t buf2[N]; PixelView dst2; init_view(dst2, buf2, N);
-    plain.render(dst1, 1.0f);
-    shifted.render(dst2, 1.0f);
+    plain.render(dst1, ProgramDuration{1000});
+    shifted.render(dst2, ProgramDuration{1000});
 
     for (uint16_t i = 0; i < N; i++) {
         if (buf1[i].s == 0.0f) continue;  // hue is meaningless on grays
@@ -697,7 +698,7 @@ TEST_CASE("Pacifica: render without scratch leaves dst untouched",
     hsva_t buf[4];
     for (uint16_t i = 0; i < 4; i++) buf[i] = hsva_t(77, 1, 1, 1);
     PixelView dst; init_view(dst, buf, 4);
-    anim.render(dst, 1.0f);
+    anim.render(dst, ProgramDuration{1000});
     for (uint16_t i = 0; i < 4; i++) {
         CHECK(buf[i].h == 77.0f);
     }
@@ -712,7 +713,7 @@ TEST_CASE("Pacifica: from_blob round-trip", "[anim][pacifica][from_blob]") {
 
     REQUIRE(static_cast<Pacifica*>(anim)->allocate_scratch(4));
     hsva_t buf[4]; PixelView dst; init_view(dst, buf, 4);
-    anim->render(dst, 0.5f);
+    anim->render(dst, ProgramDuration{500});
     CHECK(buf[0].a == 1.0f);
     delete anim;
 }
@@ -745,5 +746,141 @@ TEST_CASE("Pacifica: from_blob rejects bad params", "[anim][pacifica][from_blob]
         bytes.pop_back();
         CHECK(Pacifica::from_blob(bytes.data(), bytes.size(), &err) == nullptr);
         CHECK(err == DecodeError::InvalidField);
+    }
+}
+
+// ===========================================================================
+// Long event times: t runs up to MAX_PROGRAM_MS (30 days)
+// ===========================================================================
+
+TEST_CASE("Wave: phase at a whole number of periods equals phase at 0, up to 30 days",
+          "[anim][wave][long]") {
+    WaveParams p = {};
+    p.channel = 2;
+    p.min_val = 0.0f; p.max_val = 1.0f;
+    p.period = 2.0f; p.phase0 = 0.3f; p.pixel_step = 0.7f;
+    Wave wave(p);
+
+    hsva_t at0[4]; PixelView dst0; init_view(dst0, at0, 4);
+    hsva_t atk[4]; PixelView dstk; init_view(dstk, atk, 4);
+    wave.render(dst0, ProgramDuration{0});
+    // MAX_PROGRAM_MS is a whole number of 2 s periods, and so is a day.
+    for (uint32_t t : {uint32_t{86'400'000}, MAX_PROGRAM_MS}) {
+        wave.render(dstk, ProgramDuration{t});
+        for (uint16_t i = 0; i < 4; i++) {
+            CHECK(atk[i].v == at0[i].v);
+        }
+    }
+}
+
+TEST_CASE("Wave: output stays finite and in range near 30 days",
+          "[anim][wave][long]") {
+    WaveParams p = {};
+    p.channel = 2;
+    p.min_val = 0.2f; p.max_val = 0.8f;
+    p.period = 0.37f; p.phase0 = 0.0f; p.pixel_step = 0.5f;
+    Wave wave(p);
+
+    hsva_t buf[8]; PixelView dst; init_view(dst, buf, 8);
+    for (uint32_t t : {MAX_PROGRAM_MS - 7, MAX_PROGRAM_MS}) {
+        wave.render(dst, ProgramDuration{t});
+        for (uint16_t i = 0; i < 8; i++) {
+            CHECK(std::isfinite(buf[i].v));
+            CHECK(buf[i].v >= 0.2f - 1e-5f);
+            CHECK(buf[i].v <= 0.8f + 1e-5f);
+        }
+    }
+}
+
+TEST_CASE("Shift: circular offset stays exact near 30 days", "[anim][shift][long]") {
+    ShiftParams p = {};
+    p.direction = 1;
+    p.velocity = 1.0f;     // 1 pixel/sec
+    p.circular = 1;
+    Shift shift(p);
+
+    hsva_t src_buf[3] = { hsva_t(10,1,1,1), hsva_t(20,1,1,1), hsva_t(30,1,1,1) };
+    hsva_t work_buf[3] = {};
+    PixelView src; init_view(src, src_buf, 3);
+    PixelView work; init_view(work, work_buf, 3);
+    shift.initialize(&src, &work);
+
+    hsva_t dst_buf[3] = {};
+    PixelView dst; init_view(dst, dst_buf, 3);
+
+    // 2,592,000 s is a whole number of turns of a 3-pixel strip.
+    shift.render(dst, ProgramDuration{MAX_PROGRAM_MS});
+    CHECK(dst_buf[0].h == 10.0f);
+    CHECK(dst_buf[1].h == 20.0f);
+    CHECK(dst_buf[2].h == 30.0f);
+
+    // One second earlier the offset is 2 mod 3: dst[i] = work[i - 2].
+    shift.render(dst, ProgramDuration{MAX_PROGRAM_MS - 1000});
+    CHECK(dst_buf[0].h == 20.0f);
+    CHECK(dst_buf[1].h == 30.0f);
+    CHECK(dst_buf[2].h == 10.0f);
+}
+
+TEST_CASE("Shift: non-circular shifted far out of view is all fill",
+          "[anim][shift][long]") {
+    ShiftParams p = {};
+    p.velocity = 1.0f;
+    p.circular = 0;
+    p.fill_h = 99.0f; p.fill_s = 0.5f; p.fill_v = 0.5f; p.fill_a = 0.5f;
+
+    for (uint8_t direction : {uint8_t{0}, uint8_t{1}}) {
+        p.direction = direction;
+        Shift shift(p);
+        hsva_t src_buf[3] = { hsva_t(10,1,1,1), hsva_t(20,1,1,1), hsva_t(30,1,1,1) };
+        hsva_t work_buf[3] = {};
+        PixelView src; init_view(src, src_buf, 3);
+        PixelView work; init_view(work, work_buf, 3);
+        shift.initialize(&src, &work);
+
+        hsva_t dst_buf[3] = {};
+        PixelView dst; init_view(dst, dst_buf, 3);
+        shift.render(dst, ProgramDuration{MAX_PROGRAM_MS});
+        for (uint16_t i = 0; i < 3; i++) {
+            CHECK(dst_buf[i].h == 99.0f);
+            CHECK(dst_buf[i].a == 0.5f);
+        }
+    }
+}
+
+TEST_CASE("Spark: fully faded at 30 days", "[anim][spark][long]") {
+    SparkParams p = {};
+    p.color_h = 60.0f; p.color_s = 1.0f; p.color_v = 1.0f;
+    p.fade = 1.0f;
+    Spark spark(p);
+    hsva_t buf[2]; PixelView dst; init_view(dst, buf, 2);
+    spark.render(dst, ProgramDuration{MAX_PROGRAM_MS});
+    CHECK(buf[0].a == 0.0f);
+    CHECK(buf[1].a == 0.0f);
+}
+
+TEST_CASE("Pacifica: output stays sane near 30 days, even past 2^32 effect ms",
+          "[anim][pacifica][long]") {
+    constexpr uint16_t N = 16;
+    // speed 3 puts the effect clock past 2^32 ms well within 30 days.
+    for (float speed : {1.0f, 3.0f}) {
+        PacificaParams params = default_pacifica_params();
+        params.speed = speed;
+        Pacifica anim(params);
+        REQUIRE(anim.allocate_scratch(N));
+
+        hsva_t buf[N]; PixelView dst; init_view(dst, buf, N);
+        for (uint32_t t : {MAX_PROGRAM_MS - 13, MAX_PROGRAM_MS}) {
+            anim.render(dst, ProgramDuration{t});
+            for (uint16_t i = 0; i < N; i++) {
+                CHECK(std::isfinite(buf[i].h));
+                CHECK(buf[i].h >= 0.0f);
+                CHECK(buf[i].h < 360.0f);
+                CHECK(buf[i].s >= 0.0f);
+                CHECK(buf[i].s <= 1.0f);
+                CHECK(buf[i].v > 0.0f);
+                CHECK(buf[i].v <= 1.0f);
+                CHECK(buf[i].a == 1.0f);
+            }
+        }
     }
 }

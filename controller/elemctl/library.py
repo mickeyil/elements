@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
 
 log = logging.getLogger(__name__)
-_CACHE_VERSION = 1
+_CACHE_VERSION = 2
 _PROGRAM_ID_RE = re.compile(r'^[A-Za-z0-9._-]+$')
 
 
@@ -29,9 +29,10 @@ class ProgramEntry:
     source: str | None
     source_hash: str | None
     beat: float | None
-    duration: float | None
+    duration: float | None     # seconds; None when errored, or for DURATION = forever
     error: str | None
     strips: list[str] | None = None
+    loop: bool = False         # the source's LOOP literal
 
 
 class ProgramLibrary:
@@ -150,7 +151,7 @@ class ProgramLibrary:
         resolved = str(path.resolve())
         source_hash = hashlib.sha256(source.encode('utf-8')).hexdigest()
         try:
-            beat, duration = extract_metadata(source, resolved)
+            beat, duration, loop = extract_metadata(source, resolved)
         except ValueError as e:
             return ProgramEntry(
                 program_id=program_id,
@@ -177,6 +178,7 @@ class ProgramLibrary:
             duration=duration,
             error=None,
             strips=strips,
+            loop=loop,
         )
 
 
