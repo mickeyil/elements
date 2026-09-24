@@ -81,7 +81,7 @@ void setup()
                    g_files, g_profile_kv, g_system, g_output, g_identity);
     g_app = &app;
 
-    FastLED.addLeds<WS2812B, LED_PIN, GRB>(g_output.leds(), MAX_STRIP_PIXELS);
+    FastLED.addLeds<WS2811, LED_PIN, RGB>(g_output.leds(), MAX_STRIP_PIXELS);
     FastLED.setBrightness(255);
 
     g_app->begin();
