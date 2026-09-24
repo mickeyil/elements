@@ -61,13 +61,14 @@ lives in the gitignored `build/`, `local/`, and `instance/` directories.
 
 ## Run
 
-In three terminals:
+In two terminals:
 
 ```bash
-./elemctl server      # controller
+./elemctl run         # controller + web UI at http://localhost:8080 (ctrl-c stops both)
 ./elemctl sim sim-1   # a simulated device
-./elemctl web         # web UI at http://localhost:8080
 ```
+
+`./elemctl server` and `./elemctl web` also run individually.
 
 Open http://localhost:8080, add device `sim-1` (strip id `ring8`, length 8),
 then load `ring8_blue_wave` and play. Animation sources live in

@@ -82,7 +82,7 @@ def configure_logger(
 
     if console and not has_console:
         console_handler = logging.StreamHandler(sys.stdout)
-        if sys.stdout.isatty():
+        if sys.stdout.isatty() or os.environ.get("ELEMCTL_FORCE_COLOR"):
             console_handler.setFormatter(_ColorFormatter())
         else:
             console_handler.setFormatter(_MillisFormatter(_ColorFormatter._BASE))

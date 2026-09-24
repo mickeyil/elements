@@ -63,4 +63,6 @@ The web app drives playback: load a program and control play/pause/resume/stop f
 ./elemctl web   # starts the web UI server on http://127.0.0.1:8080/
 ```
 
-Requires a running controller (`./elemctl server`).
+Requires a running controller (`./elemctl server`). `./elemctl run` starts both
+in one terminal with a `[server]`/`[web]`-tagged joint log; ctrl-c stops both, and
+if either exits on its own the other is stopped too.

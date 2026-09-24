@@ -6,11 +6,15 @@ Repo code (controller/, compiler/) is added to sys.path at runtime,
 so the current checkout always runs regardless of which clone invokes this.
 """
 
+import argparse
 import hashlib
 import json
 import os
+import signal
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 
 SCRIPT_PATH = str(Path(__file__).resolve())
@@ -30,9 +34,10 @@ commands:
   sim      launch a configured network simulator
   server   start controller server
   web      start web UI server and realtime viewer
+  run      start server and web together with a joint log (ctrl-c stops both)
   setup    install deps, build the web UI and native binaries (online)"""
 
-_SUBCOMMANDS = {'sim', 'server', 'web', 'setup'}
+_SUBCOMMANDS = {'sim', 'server', 'web', 'run', 'setup'}
 
 
 def _inside_venv():
@@ -125,6 +130,117 @@ def _build_native():
           '--target', 'sim_device', '--parallel', jobs], tool='cmake')
 
 
+def _pump_output(proc, tag, lock):
+    """Copy one child's output to our stdout, one line at a time, tagged."""
+    out = sys.stdout.buffer
+    for line in proc.stdout:
+        with lock:
+            out.write(tag + line)
+            out.flush()
+
+
+def _stop_children(procs, grace=5.0):
+    """Ask every still-running child to stop, then kill any that ignores us."""
+    for p in procs.values():
+        if p.poll() is None:
+            p.send_signal(signal.SIGTERM)
+    deadline = time.monotonic() + grace
+    for p in procs.values():
+        try:
+            p.wait(timeout=max(0.0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            p.kill()
+            p.wait()
+
+
+def _run_all(argv):
+    """`elemctl run`: supervise `server` and `web` as children of one process.
+
+    Their output is interleaved on our stdout with a [server]/[web] tag.
+    Ctrl-C reaches all three processes at once (same process group), and each
+    child already shuts down cleanly on SIGINT; we just wait for them. If one
+    child exits on its own, the other is stopped and its exit code is ours.
+    """
+    parser = argparse.ArgumentParser(
+        prog='elemctl run',
+        description='Run the controller server and the web UI together')
+    parser.add_argument('--config', default=None,
+                        help='config JSON path (passed to both)')
+    parser.add_argument('--socket', default=None,
+                        help='controller unix socket path (passed to both)')
+    parser.add_argument('--log-dir', default=None,
+                        help='logs directory (passed to both)')
+    parser.add_argument('--debug', action='store_true',
+                        help='enable debug logging (server)')
+    parser.add_argument('--host', default=None, help='HTTP bind host (web)')
+    parser.add_argument('--port', default=None, help='HTTP port (web)')
+    args = parser.parse_args(argv)
+
+    shared = []
+    for opt in ('config', 'socket', 'log_dir'):
+        value = getattr(args, opt)
+        if value is not None:
+            shared += ['--' + opt.replace('_', '-'), value]
+    server_args = shared + (['--debug'] if args.debug else [])
+    web_args = list(shared)
+    if args.host is not None:
+        web_args += ['--host', args.host]
+    if args.port is not None:
+        web_args += ['--port', args.port]
+
+    env = os.environ.copy()
+    env['PYTHONUNBUFFERED'] = '1'
+    if sys.stdout.isatty():
+        # Children write to a pipe, so let them know the far end is a terminal.
+        env['ELEMCTL_FORCE_COLOR'] = '1'
+
+    def spawn(sub, sub_args):
+        return subprocess.Popen(
+            [sys.executable, SCRIPT_PATH, sub, *sub_args],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env)
+
+    procs = {'server': spawn('server', server_args)}
+    procs['web'] = spawn('web', web_args)
+
+    lock = threading.Lock()
+    width = max(len(n) for n in procs)
+    pumps = [
+        threading.Thread(target=_pump_output,
+                         args=(p, f'[{n:<{width}}] '.encode(), lock),
+                         daemon=True)
+        for n, p in procs.items()
+    ]
+    for t in pumps:
+        t.start()
+
+    exit_code = 0
+    try:
+        while True:
+            done = [n for n, p in procs.items() if p.poll() is not None]
+            if done:
+                name = done[0]
+                exit_code = procs[name].returncode
+                print(f'elemctl: {name} exited with code {exit_code}; stopping the rest',
+                      file=sys.stderr)
+                break
+            time.sleep(0.2)
+        _stop_children(procs)
+    except KeyboardInterrupt:
+        # The terminal already delivered SIGINT to the children; wait for them,
+        # and on a second ctrl-c fall through to a hard kill.
+        exit_code = 130
+        try:
+            _stop_children(procs)
+        except KeyboardInterrupt:
+            for p in procs.values():
+                if p.poll() is None:
+                    p.kill()
+                    p.wait()
+    for t in pumps:
+        t.join(timeout=2.0)
+    sys.exit(exit_code)
+
+
 def _ensure_venv(force=False):
     """Create venv if needed, install deps if needed, then execv into it.
 
@@ -188,6 +304,8 @@ def main():
     elif sub == 'web':
         from elemctl.web import main as m
         m()
+    elif sub == 'run':
+        _run_all(sys.argv[1:])
     elif sub == 'setup':
         if not os.environ.pop('_ELEMCTL_SETUP_DONE', None):
             _install_deps()
