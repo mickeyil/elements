@@ -9,6 +9,7 @@ import copy
 import hashlib
 import json
 import logging
+import math
 import mimetypes
 import os
 import re
@@ -43,11 +44,13 @@ from .sim_layout import (
 from .slogger import configure_logger
 from .controller_client import ControllerClient
 from .controller_protocol import (
+    KIND_DEVICE_FRAME,
     KIND_FRAME,
     KIND_JSON,
     PROTOCOL_VERSION,
     ROLE_OBSERVER,
     ROLE_WRITER,
+    parse_device_frame_payload,
     parse_json_payload,
 )
 from .version import get_runtime_version
@@ -116,6 +119,7 @@ def _empty_snapshot() -> dict:
         'session': None,
         'devices': [],
         'programs': [],
+        'library': [],
         'firmware': None,
     }
 
@@ -138,6 +142,8 @@ def _make_disconnected_snapshot(snapshot: dict | None) -> dict:
     out['firmware'] = None
     if not isinstance(out.get('programs'), list):
         out['programs'] = []
+    if not isinstance(out.get('library'), list):
+        out['library'] = []
     devices = out.get('devices')
     if isinstance(devices, list):
         # Discovery is the controller's to report; with it gone, keep only the
@@ -222,6 +228,9 @@ _ROUTES: tuple[tuple[str, re.Pattern[str], str], ...] = tuple(
         ('POST', r'/api/programs/rescan', '_route_rescan'),
         ('POST', rf'/api/programs/{_SEGMENT}/load', '_route_load_program'),
         ('POST', r'/api/session/(play|pause|resume|stop)', '_route_session'),
+        ('POST', rf'/api/panel/{_SEGMENT}/fill', '_route_panel_fill'),
+        ('POST', rf'/api/panel/{_SEGMENT}/run', '_route_panel_run'),
+        ('POST', rf'/api/panel/{_SEGMENT}/stop', '_route_panel_stop'),
     )
 )
 
@@ -309,6 +318,10 @@ class WebUiServer:
         # controller's frame subscription in step with it, so frames stream
         # only when someone is watching.
         self._want_frames = threading.Event()
+        # uid -> latest device-frame payload of each panel-driven device. The
+        # controller sends a device's picture only when it changes, so a new
+        # browser gets these instead of waiting for the next change.
+        self._device_frames: dict[str, bytes] = {}
 
     async def run(self) -> None:
         self._loop = asyncio.get_running_loop()
@@ -472,6 +485,8 @@ class WebUiServer:
                 self._loop.call_soon_threadsafe(self._queue.put_nowait, ('json', msg))
             elif kind == KIND_FRAME:
                 self._loop.call_soon_threadsafe(self._queue.put_nowait, ('frame', payload))
+            elif kind == KIND_DEVICE_FRAME:
+                self._loop.call_soon_threadsafe(self._queue.put_nowait, ('device_frame', payload))
 
     async def _broadcast_loop(self) -> None:
         assert self._queue is not None
@@ -484,6 +499,7 @@ class WebUiServer:
                 self._controller_connected = connected
                 await self._broadcast_json(msg)
                 if not connected:
+                    self._device_frames.clear()
                     self._snapshot = _make_disconnected_snapshot(self._snapshot)
                     self._snapshot['server_version'] = self._server_version
                     self._snapshot['layouts'] = self._layouts
@@ -506,7 +522,15 @@ class WebUiServer:
                 frame = payload
                 assert isinstance(frame, bytes)
                 self._apply_frame(frame)
-                await self._broadcast_binary(frame)
+                await self._broadcast_binary(KIND_FRAME, frame)
+                continue
+
+            if item_type == 'device_frame':
+                frame = payload
+                assert isinstance(frame, bytes)
+                uid, _rgb = parse_device_frame_payload(frame)
+                self._device_frames[uid] = frame
+                await self._broadcast_binary(KIND_DEVICE_FRAME, frame)
 
     def _apply_json_message(self, msg: dict) -> None:
         """Fold a v3 controller message into the browser snapshot. The service
@@ -538,6 +562,8 @@ class WebUiServer:
         if msg_type == 'catalog':
             programs = msg.get('programs')
             self._snapshot['programs'] = programs if isinstance(programs, list) else []
+            library = msg.get('library')
+            self._snapshot['library'] = library if isinstance(library, list) else []
 
     def _apply_frame(self, payload: bytes) -> None:
         session = self._snapshot.get('session')
@@ -653,6 +679,49 @@ class WebUiServer:
     async def _route_session(self, req: _Request, verb: str) -> None:
         await self._write_json_response(
             req.writer, *self._controller_command_response({'cmd': verb}))
+
+    async def _route_panel_fill(self, req: _Request, strip_id: str) -> None:
+        payload = await self._read_json_body(req)
+        await self._write_json_response(
+            req.writer, *self._panel_fill_response(strip_id, payload))
+
+    async def _route_panel_run(self, req: _Request, strip_id: str) -> None:
+        payload = await self._read_json_body(req)
+        await self._write_json_response(
+            req.writer, *self._panel_run_response(strip_id, payload))
+
+    async def _route_panel_stop(self, req: _Request, strip_id: str) -> None:
+        await self._write_json_response(req.writer, *self._controller_command_response({
+            'cmd': 'panel_stop',
+            'strip_id': strip_id,
+        }))
+
+    def _panel_fill_response(self, strip_id: str, payload: object) -> tuple[int, dict]:
+        """Hold one color on the strip: h in degrees, s and v in 0..1 (the
+        controller wraps and clamps them)."""
+        if not isinstance(payload, dict):
+            return 400, {'error': 'request body must be a JSON object'}
+        hsv = {key: payload.get(key) for key in ('h', 's', 'v')}
+        if not all(isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+                   for x in hsv.values()):
+            return 400, {'error': 'h, s and v must be finite numbers'}
+        return self._controller_command_response({
+            'cmd': 'panel_fill',
+            'strip_id': strip_id,
+            **hsv,
+        })
+
+    def _panel_run_response(self, strip_id: str, payload: object) -> tuple[int, dict]:
+        if not isinstance(payload, dict):
+            return 400, {'error': 'request body must be a JSON object'}
+        program_id = payload.get('program_id')
+        if not isinstance(program_id, str) or not program_id:
+            return 400, {'error': 'program_id must be a non-empty string'}
+        return self._controller_command_response({
+            'cmd': 'panel_run',
+            'strip_id': strip_id,
+            'program_id': program_id,
+        })
 
     def _load_program_response(self, program_id: str) -> tuple[int, dict]:
         if not isinstance(program_id, str) or not program_id:
@@ -864,6 +933,8 @@ class WebUiServer:
         try:
             await self._send_json(client, _server_status(self._controller_connected))
             await self._send_json(client, self._snapshot)
+            for frame in list(self._device_frames.values()):
+                await self._send_binary(client, KIND_DEVICE_FRAME, frame)
 
             while not reader.at_eof():
                 data = await reader.read(1024)
@@ -953,11 +1024,11 @@ class WebUiServer:
             self._ws_clients.discard(client)
             await self._close_ws_writer(client.writer)
 
-    async def _broadcast_binary(self, payload: bytes) -> None:
+    async def _broadcast_binary(self, kind: int, payload: bytes) -> None:
         dead: list[_WsClient] = []
         for client in list(self._ws_clients):
             try:
-                await self._send_binary(client, payload)
+                await self._send_binary(client, kind, payload)
             except (ConnectionError, OSError, asyncio.TimeoutError):
                 dead.append(client)
         for client in dead:
@@ -968,8 +1039,10 @@ class WebUiServer:
         payload = json.dumps(msg, separators=(',', ':')).encode('utf-8')
         await self._send_ws_payload(client, 0x1, payload)
 
-    async def _send_binary(self, client: _WsClient, payload: bytes) -> None:
-        await self._send_ws_payload(client, 0x2, payload)
+    async def _send_binary(self, client: _WsClient, kind: int, payload: bytes) -> None:
+        # The controller-protocol kind byte leads every binary message, so the
+        # browser can tell a program frame from a device frame.
+        await self._send_ws_payload(client, 0x2, bytes([kind]) + payload)
 
     async def _send_ws_payload(self, client: _WsClient, opcode: int, payload: bytes) -> None:
         client.writer.write(_encode_ws_frame(opcode, payload))

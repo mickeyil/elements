@@ -15,6 +15,7 @@ Browser (Vue 3)  ◄──── HTTP / WebSocket ────►  elemctl web  
 | Route | Page | What it does |
 |-------|------|-------------|
 | `/` | StatusPage | Device status panel, playback info; "Simulate" on an ESP card adds a sim twin of its strip |
+| `/panel` | PanelPage | Operator panel: take one strip from the show to hold a color, loop a panel-library program or blank it, with a sim preview |
 | `/viewer` | ViewerPage | Live animation preview (canvas rendering of RGB frames) |
 | `/layouts/:deviceUid` | LayoutEditorPage | 2D pixel layout editor for simulator devices |
 
@@ -28,6 +29,14 @@ Browser (Vue 3)  ◄──── HTTP / WebSocket ────►  elemctl web  
 | `POST` | `/api/devices/:deviceUid/sim` | Add a sim twin of an ESP device's strip (uid `sim-<strip_id>`, hashed past 16 bytes; 409 if the strip already has a sim) |
 
 These proxy to the controller's `add_device` / `edit_device` / `remove_device` commands. Devices that share a strip id form a strip group that mirrors one program: editing the strip id or length of one member applies it to the whole group, while the uid and label stay per-device.
+
+## Panel API
+
+| Method | Endpoint | Action |
+|--------|----------|--------|
+| `POST` | `/api/panel/:stripId/fill` | Hold one color on the strip; body `{h, s, v}` (h in degrees, s and v 0..1) |
+| `POST` | `/api/panel/:stripId/run` | Loop a panel-library program on the strip; body `{program_id}` |
+| `POST` | `/api/panel/:stripId/stop` | Blank the strip |
 
 ## Layout API
 

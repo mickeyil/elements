@@ -4,7 +4,7 @@ import logging
 import signal
 import elemctl.web as web_mod
 import pytest
-from elemctl.controller_protocol import PROTOCOL_VERSION
+from elemctl.controller_protocol import PROTOCOL_VERSION, encode_device_frame
 from elemctl.web import (
     WebUiServer,
     _build_parser,
@@ -1230,3 +1230,189 @@ def test_route_sim_twin_rejects_get(tmp_path):
     server = _server_with_devices(tmp_path, [_ESP])
     status, _ = _run_http_request(server, 'GET', '/api/devices/esp-aabbccddeeff/sim')
     assert status == 405
+
+
+# --- operator panel ------------------------------------------------------------
+
+
+def test_match_route_extracts_panel_strip_id():
+    for action in ('fill', 'run', 'stop'):
+        assert _match_route('POST', f'/api/panel/ring8/{action}') == (
+            f'_route_panel_{action}', ('ring8',))
+    assert _match_route('POST', '/api/panel//fill') is None
+    assert _match_route('GET', '/api/panel/ring8/stop') == (None, ())
+
+
+def test_route_panel_fill_forwards_hsv(monkeypatch, tmp_path):
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+    commands: list[dict] = []
+    monkeypatch.setattr(web_mod, 'ControllerClient', _capturing_client(commands, _OK_REPLY))
+
+    body = json.dumps({'h': 120, 's': 0.5, 'v': 1}).encode()
+    status, payload = _run_http_request(server, 'POST', '/api/panel/ring8/fill', body)
+
+    assert status == 200
+    assert payload == {'ok': True, 'result': {}}
+    assert commands == [{'id': 1, 'cmd': 'panel_fill', 'strip_id': 'ring8',
+                         'h': 120, 's': 0.5, 'v': 1}]
+
+
+@pytest.mark.parametrize('body', [
+    {'h': 120, 's': 0.5},
+    {'h': 'red', 's': 0.5, 'v': 1},
+    {'h': True, 's': 0.5, 'v': 1},
+    {'h': float('nan'), 's': 0.5, 'v': 1},
+    [120, 0.5, 1],
+])
+def test_route_panel_fill_rejects_a_bad_body(tmp_path, body):
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+    status, payload = _run_http_request(
+        server, 'POST', '/api/panel/ring8/fill', json.dumps(body).encode())
+    assert status == 400
+    assert 'error' in payload
+
+
+def test_route_panel_run_forwards_program_id(monkeypatch, tmp_path):
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+    commands: list[dict] = []
+    monkeypatch.setattr(web_mod, 'ControllerClient', _capturing_client(commands, _OK_REPLY))
+
+    body = json.dumps({'program_id': 'pacifica'}).encode()
+    status, payload = _run_http_request(server, 'POST', '/api/panel/ring8/run', body)
+
+    assert status == 200
+    assert payload == {'ok': True, 'result': {}}
+    assert commands == [{'id': 1, 'cmd': 'panel_run', 'strip_id': 'ring8',
+                         'program_id': 'pacifica'}]
+
+
+def test_route_panel_run_rejects_a_missing_program_id(tmp_path):
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+    status, payload = _run_http_request(server, 'POST', '/api/panel/ring8/run', b'{}')
+    assert status == 400
+    assert payload == {'error': 'program_id must be a non-empty string'}
+
+
+def test_route_panel_stop_forwards_strip_id(monkeypatch, tmp_path):
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+    commands: list[dict] = []
+    monkeypatch.setattr(web_mod, 'ControllerClient', _capturing_client(commands, _OK_REPLY))
+
+    status, payload = _run_http_request(server, 'POST', '/api/panel/ring8/stop')
+
+    assert status == 200
+    assert payload == {'ok': True, 'result': {}}
+    assert commands == [{'id': 1, 'cmd': 'panel_stop', 'strip_id': 'ring8'}]
+
+
+def test_catalog_message_folds_library_into_snapshot():
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080)
+    assert server._snapshot['library'] == []
+
+    library = [{'program_id': 'pacifica', 'error': None}]
+    server._apply_json_message({'type': 'catalog', 'programs': [], 'library': library})
+
+    assert server._snapshot['library'] == library
+
+
+def test_disconnected_snapshot_keeps_library():
+    assert _make_disconnected_snapshot(None)['library'] == []
+    library = [{'program_id': 'pacifica', 'error': None}]
+    assert _make_disconnected_snapshot({'library': library})['library'] == library
+
+
+class _FakeWsWriter(_FakeHttpWriter):
+    def get_extra_info(self, name: str) -> None:
+        return None
+
+
+def _ws_messages(data: bytes) -> list[tuple[int, bytes]]:
+    """(opcode, payload) of each unmasked server websocket frame in data."""
+    out = []
+    i = 0
+    while i < len(data):
+        opcode = data[i] & 0x0F
+        size = data[i + 1]
+        i += 2
+        if size == 126:
+            size = int.from_bytes(data[i:i + 2], 'big')
+            i += 2
+        elif size == 127:
+            size = int.from_bytes(data[i:i + 8], 'big')
+            i += 8
+        out.append((opcode, data[i:i + size]))
+        i += size
+    return out
+
+
+def _run_broadcast(server, items: list[tuple[str, object]]) -> None:
+    """Run the broadcast loop over the queued items, then stop it."""
+    async def run() -> None:
+        server._queue = asyncio.Queue()
+        for item in items:
+            server._queue.put_nowait(item)
+        task = asyncio.create_task(server._broadcast_loop())
+        while not server._queue.empty():
+            await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(run())
+
+
+def _connect_ws(server) -> list[tuple[int, bytes]]:
+    """Open a websocket that closes at once; the messages it was sent."""
+    writer = _FakeWsWriter()
+
+    async def run() -> None:
+        reader = asyncio.StreamReader()
+        reader.feed_eof()
+        await server._handle_ws(reader, writer, {  # type: ignore[arg-type]
+            'upgrade': 'websocket', 'sec-websocket-key': 'dGhlIHNhbXBsZSBub25jZQ=='})
+
+    asyncio.run(run())
+    _head, _, frames = bytes(writer.buffer).partition(b'\r\n\r\n')
+    return _ws_messages(frames)
+
+
+def _device_frame_payload(uid: str, rgb: bytes) -> bytes:
+    return encode_device_frame(uid, rgb)[5:]   # drop the length and kind header
+
+
+def test_binary_messages_lead_with_the_controller_kind(tmp_path):
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+    writer = _FakeWsWriter()
+    server._ws_clients.add(web_mod._WsClient(writer=writer, peer='browser'))  # type: ignore[arg-type]
+    frame = bytes(12) + b'\x01\x02\x03'
+    device_frame = _device_frame_payload('sim-ring8', b'\x0a\x0b\x0c')
+
+    _run_broadcast(server, [('frame', frame), ('device_frame', device_frame)])
+
+    assert _ws_messages(bytes(writer.buffer)) == [
+        (0x2, bytes([web_mod.KIND_FRAME]) + frame),
+        (0x2, bytes([web_mod.KIND_DEVICE_FRAME]) + device_frame),
+    ]
+
+
+def test_device_frames_are_cached_for_new_clients_and_cleared_on_disconnect(tmp_path):
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+    old = _device_frame_payload('sim-ring8', b'\x01\x01\x01')
+    latest = _device_frame_payload('sim-ring8', b'\x02\x02\x02')
+    other = _device_frame_payload('sim-porch', b'\x03\x03\x03')
+
+    _run_broadcast(server, [('device_frame', old), ('device_frame', latest),
+                            ('device_frame', other)])
+
+    assert server._device_frames == {'sim-ring8': latest, 'sim-porch': other}
+    messages = _connect_ws(server)
+    assert [opcode for opcode, _ in messages] == [0x1, 0x1, 0x2, 0x2]   # status, snapshot, frames
+    assert [payload for _, payload in messages[2:]] == [
+        bytes([web_mod.KIND_DEVICE_FRAME]) + latest,
+        bytes([web_mod.KIND_DEVICE_FRAME]) + other,
+    ]
+
+    _run_broadcast(server, [('server_status', web_mod._server_status(False))])
+
+    assert server._device_frames == {}
+    assert [opcode for opcode, _ in _connect_ws(server)] == [0x1, 0x1]
