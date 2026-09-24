@@ -1,21 +1,9 @@
+import { apiRequest } from './deviceApi';
+
 export type SessionVerb = 'play' | 'pause' | 'resume' | 'stop';
 
-async function postJson(url: string, fallbackError: string): Promise<Record<string, unknown>> {
-  const response = await fetch(url, { method: 'POST' });
-
-  let data: Record<string, unknown> | null = null;
-  try {
-    data = (await response.json()) as Record<string, unknown>;
-  } catch {
-    data = null;
-  }
-
-  if (!response.ok) {
-    const message = data?.error;
-    throw new Error(typeof message === 'string' ? message : fallbackError);
-  }
-
-  return data ?? {};
+function postJson(url: string, fallbackError: string): Promise<Record<string, unknown>> {
+  return apiRequest(url, { method: 'POST', fallbackError });
 }
 
 export function rescanPrograms(): Promise<Record<string, unknown>> {

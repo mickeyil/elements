@@ -1,5 +1,6 @@
 """Unit tests for elemctl config loading (v3 schema)."""
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from elemctl.config import (
     DEFAULT_OTA_PORT,
     DEFAULT_SYNC_PORT,
     MAX_DEVICE_PIXELS,
+    MAX_UID_BYTES,
     REPO_ROOT,
     default_config_doc,
     load_config,
@@ -22,6 +24,7 @@ from elemctl.config import (
     resolve_config_path,
     resolve_firmware_image,
     resolve_runtime_path,
+    sim_twin_uid,
     validate_device_uid,
 )
 
@@ -280,3 +283,21 @@ def test_resolve_runtime_path_precedence():
     assert resolve_runtime_path('/cli', '/config', '/default') == '/cli'
     assert resolve_runtime_path(None, '/config', '/default') == '/config'
     assert resolve_runtime_path(None, None, '/default') == '/default'
+
+
+def test_sim_twin_uid_prefixes_a_short_strip_id():
+    assert sim_twin_uid('ring8') == 'sim-ring8'
+
+
+def test_sim_twin_uid_keeps_a_strip_id_at_the_16_byte_boundary():
+    strip_id = 'a' * (MAX_UID_BYTES - len('sim-'))
+    assert sim_twin_uid(strip_id) == 'sim-' + strip_id
+    assert len(sim_twin_uid(strip_id)) == MAX_UID_BYTES
+
+
+def test_sim_twin_uid_hashes_a_strip_id_past_the_boundary():
+    strip_id = 'a' * (MAX_UID_BYTES - len('sim-') + 1)
+    uid = sim_twin_uid(strip_id)
+    assert uid == 'sim-' + hashlib.sha256(strip_id.encode()).hexdigest()[:12]
+    assert len(uid) == MAX_UID_BYTES
+    assert validate_device_uid(uid) is None

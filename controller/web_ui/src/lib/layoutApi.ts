@@ -1,54 +1,34 @@
+import { ApiError, apiRequest } from './deviceApi';
 import type { LayoutDocumentPayload } from './editorModel';
 
 export interface SaveLayoutRequest extends LayoutDocumentPayload {
   base_csv_hash: string | null;
 }
 
-async function parseJsonResponse(response: Response): Promise<unknown> {
-  try {
-    return await response.json();
-  } catch {
-    return null;
-  }
+function layoutUrl(deviceUid: string): string {
+  return `/api/layouts/${encodeURIComponent(deviceUid)}`;
 }
 
 export async function getLayout(deviceUid: string): Promise<LayoutDocumentPayload | null> {
-  const response = await fetch(`/api/layouts/${encodeURIComponent(deviceUid)}`);
-  if (response.status === 404) {
-    return null;
+  try {
+    return await apiRequest<LayoutDocumentPayload>(layoutUrl(deviceUid), {
+      fallbackError: (status) => `Failed to load layout (${status})`,
+    });
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) {
+      return null;
+    }
+    throw error;
   }
-
-  const payload = await parseJsonResponse(response);
-  if (!response.ok) {
-    const message =
-      payload && typeof payload === 'object' && 'error' in payload
-        ? String((payload as { error: unknown }).error)
-        : `Failed to load layout (${response.status})`;
-    throw new Error(message);
-  }
-  return payload as LayoutDocumentPayload;
 }
 
-export async function saveLayout(
+export function saveLayout(
   deviceUid: string,
   payload: SaveLayoutRequest,
 ): Promise<LayoutDocumentPayload> {
-  const response = await fetch(`/api/layouts/${encodeURIComponent(deviceUid)}`, {
+  return apiRequest<LayoutDocumentPayload>(layoutUrl(deviceUid), {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(payload),
+    body: payload,
+    fallbackError: (status) => `Failed to save layout (${status})`,
   });
-
-  const responsePayload = await parseJsonResponse(response);
-  if (!response.ok) {
-    const message =
-      responsePayload && typeof responsePayload === 'object' && 'error' in responsePayload
-        ? String((responsePayload as { error: unknown }).error)
-        : `Failed to save layout (${response.status})`;
-    throw new Error(message);
-  }
-
-  return responsePayload as LayoutDocumentPayload;
 }

@@ -31,6 +31,7 @@ from .config import (
     load_config,
     resolve_config_path,
     resolve_runtime_path,
+    sim_twin_uid,
 )
 from .sim_layout import (
     DEFAULT_LAYOUTS_PATH,
@@ -217,6 +218,7 @@ _ROUTES: tuple[tuple[str, re.Pattern[str], str], ...] = tuple(
         ('PATCH', rf'/api/devices/{_SEGMENT}', '_route_edit_device'),
         ('DELETE', rf'/api/devices/{_SEGMENT}', '_route_remove_device'),
         ('POST', rf'/api/devices/{_SEGMENT}/update', '_route_update_firmware'),
+        ('POST', rf'/api/devices/{_SEGMENT}/sim', '_route_create_sim_twin'),
         ('POST', r'/api/programs/rescan', '_route_rescan'),
         ('POST', rf'/api/programs/{_SEGMENT}/load', '_route_load_program'),
         ('POST', r'/api/session/(play|pause|resume|stop)', '_route_session'),
@@ -637,6 +639,10 @@ class WebUiServer:
             'uid': device_uid,
         }))
 
+    async def _route_create_sim_twin(self, req: _Request, device_uid: str) -> None:
+        await self._write_json_response(
+            req.writer, *self._create_sim_twin_response(device_uid))
+
     async def _route_rescan(self, req: _Request) -> None:
         await self._write_json_response(
             req.writer, *self._controller_command_response({'cmd': 'rescan'}))
@@ -709,6 +715,45 @@ class WebUiServer:
             'strip_id': payload['strip_id'],
             'length': payload['length'],
         })
+
+    def _create_sim_twin_response(self, source_uid: str) -> tuple[int, dict]:
+        """Add a sim device that mirrors a configured ESP device's strip. It
+        reads the configured devices from the controller's latest state, the
+        same view the layout endpoints follow; one sim twin per strip."""
+        configured = [
+            d for d in self._snapshot.get('devices') or []
+            if isinstance(d, dict) and d.get('configured')
+        ]
+        source = next((d for d in configured if d.get('uid') == source_uid), None)
+        if source is None:
+            return 404, {'error': f'unknown device: {source_uid}'}
+        if source_uid.startswith('sim-'):
+            return 400, {'error': 'a sim device cannot be simulated'}
+
+        strip_id = source.get('strip_id')
+        length = source.get('length')
+        if not isinstance(strip_id, str) or not strip_id:
+            return 400, {'error': f'device has no strip id: {source_uid}'}
+        existing = [
+            d.get('uid') for d in configured
+            if str(d.get('uid', '')).startswith('sim-') and d.get('strip_id') == strip_id
+        ]
+        if existing:
+            return 409, {'error': f'strip {strip_id} is already simulated by {existing[0]}'}
+        twin_uid = sim_twin_uid(strip_id)
+        if any(d.get('uid') == twin_uid for d in configured):
+            return 409, {'error': f'device {twin_uid} already exists'}
+
+        cmd = {
+            'cmd': 'add_device',
+            'device_uid': twin_uid,
+            'strip_id': strip_id,
+            'length': length,
+        }
+        label = source.get('label')
+        if isinstance(label, str) and label:
+            cmd['label'] = label
+        return self._controller_command_response(cmd)
 
     def _get_layout_response(self, device_uid: str) -> tuple[int, dict]:
         configured_length = self._sim_devices.get(device_uid)
@@ -878,6 +923,7 @@ class WebUiServer:
             400: 'Bad Request',
             404: 'Not Found',
             405: 'Method Not Allowed',
+            409: 'Conflict',
             413: 'Payload Too Large',
             503: 'Service Unavailable',
             500: 'Internal Server Error',

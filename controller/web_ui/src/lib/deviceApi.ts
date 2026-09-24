@@ -10,96 +10,123 @@ export interface UpdateDevicePayload {
   length: number;
 }
 
-export async function createDevice(payload: CreateDevicePayload): Promise<Record<string, unknown>> {
-  const response = await fetch('/api/devices', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(payload),
-  });
+// An API call that failed: the server's error message, or the fallback when
+// the body carries none, with the HTTP status for callers that branch on it.
+export class ApiError extends Error {
+  readonly status: number;
 
-  let data: Record<string, unknown> | null = null;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+  }
+}
+
+export interface ApiRequestOptions {
+  method?: string;
+  // Sent as JSON when present.
+  body?: unknown;
+  // The error message when a failed response carries no `error` string.
+  fallbackError: string | ((status: number) => string);
+}
+
+// The one fetch -> parse -> throw path of the web API clients. Resolves with
+// the parsed JSON body ({} when there is none); throws ApiError on a non-ok
+// response.
+export async function apiRequest<T = Record<string, unknown>>(
+  url: string,
+  { method = 'GET', body, fallbackError }: ApiRequestOptions,
+): Promise<T> {
+  const init: RequestInit = { method };
+  if (body !== undefined) {
+    init.headers = { 'Content-Type': 'application/json' };
+    init.body = JSON.stringify(body);
+  }
+  const response = await fetch(url, init);
+
+  let data: unknown = null;
   try {
-    data = (await response.json()) as Record<string, unknown>;
+    data = await response.json();
   } catch {
     data = null;
   }
 
   if (!response.ok) {
-    const message = data?.error;
-    throw new Error(typeof message === 'string' ? message : 'Failed to create device.');
+    const message = (data as { error?: unknown } | null)?.error;
+    const fallback = typeof fallbackError === 'function'
+      ? fallbackError(response.status)
+      : fallbackError;
+    throw new ApiError(typeof message === 'string' ? message : fallback, response.status);
   }
 
-  return data ?? {};
+  return (data ?? {}) as T;
 }
 
-export async function updateDevice(
+function deviceUrl(deviceUid: string, action = ''): string {
+  return `/api/devices/${encodeURIComponent(deviceUid)}${action}`;
+}
+
+export function createDevice(payload: CreateDevicePayload): Promise<Record<string, unknown>> {
+  return apiRequest('/api/devices', {
+    method: 'POST',
+    body: payload,
+    fallbackError: 'Failed to create device.',
+  });
+}
+
+export function updateDevice(
   targetDeviceUid: string,
   payload: UpdateDevicePayload,
 ): Promise<Record<string, unknown>> {
-  const response = await fetch(`/api/devices/${encodeURIComponent(targetDeviceUid)}`, {
+  return apiRequest(deviceUrl(targetDeviceUid), {
     method: 'PATCH',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(payload),
+    body: payload,
+    fallbackError: 'Failed to update device.',
   });
-
-  let data: Record<string, unknown> | null = null;
-  try {
-    data = (await response.json()) as Record<string, unknown>;
-  } catch {
-    data = null;
-  }
-
-  if (!response.ok) {
-    const message = data?.error;
-    throw new Error(typeof message === 'string' ? message : 'Failed to update device.');
-  }
-
-  return data ?? {};
 }
 
-export async function removeDevice(deviceUid: string): Promise<Record<string, unknown>> {
-  const response = await fetch(`/api/devices/${encodeURIComponent(deviceUid)}`, {
+export function removeDevice(deviceUid: string): Promise<Record<string, unknown>> {
+  return apiRequest(deviceUrl(deviceUid), {
     method: 'DELETE',
+    fallbackError: 'Failed to remove device.',
   });
-
-  let data: Record<string, unknown> | null = null;
-  try {
-    data = (await response.json()) as Record<string, unknown>;
-  } catch {
-    data = null;
-  }
-
-  if (!response.ok) {
-    const message = data?.error;
-    throw new Error(typeof message === 'string' ? message : 'Failed to remove device.');
-  }
-
-  return data ?? {};
 }
 
 // Starts a firmware update of one device (the controller flashes the built
 // image over the air). Resolves once the transfer has started; its progress
 // arrives in the server state's firmware.update.
-export async function updateFirmware(deviceUid: string): Promise<Record<string, unknown>> {
-  const response = await fetch(`/api/devices/${encodeURIComponent(deviceUid)}/update`, {
+export function updateFirmware(deviceUid: string): Promise<Record<string, unknown>> {
+  return apiRequest(deviceUrl(deviceUid, '/update'), {
     method: 'POST',
+    fallbackError: 'Failed to start the firmware update.',
   });
+}
 
-  let data: Record<string, unknown> | null = null;
-  try {
-    data = (await response.json()) as Record<string, unknown>;
-  } catch {
-    data = null;
+// Adds a sim device that mirrors this device's strip (same strip id and
+// length). The server picks the sim's uid; the new card arrives with the
+// next state snapshot.
+export function createSimTwin(deviceUid: string): Promise<Record<string, unknown>> {
+  return apiRequest(deviceUrl(deviceUid, '/sim'), {
+    method: 'POST',
+    fallbackError: 'Failed to create the simulated device.',
+  });
+}
+
+interface StripMember {
+  uid?: string;
+  configured?: boolean;
+  strip_id?: string;
+}
+
+// True when a configured sim device already serves the strip; the server
+// allows one sim twin per strip, so "Simulate" is not offered then.
+export function stripHasSimTwin(devices: readonly StripMember[], stripId: string | undefined): boolean {
+  if (!stripId) {
+    return false;
   }
-
-  if (!response.ok) {
-    const message = data?.error;
-    throw new Error(typeof message === 'string' ? message : 'Failed to start the firmware update.');
-  }
-
-  return data ?? {};
+  return devices.some((device) =>
+    Boolean(device.configured)
+    && typeof device.uid === 'string'
+    && device.uid.startsWith('sim-')
+    && device.strip_id === stripId);
 }

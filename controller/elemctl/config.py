@@ -12,6 +12,7 @@ numeric ids. The device type is implied by the UID prefix
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -82,6 +83,16 @@ def validate_device_uid(device_uid: str) -> str | None:
             return f'esp uid must be esp-<12 lowercase hex>: {device_uid!r}'
         return None
     return f'device_uid must start with "sim-" or "esp-": {device_uid!r}'
+
+
+def sim_twin_uid(strip_id: str) -> str:
+    """The uid of the sim device that simulates a strip: sim-<strip_id>
+    when it fits the wire slot, else sim-<first 12 hex of sha256(strip_id)>,
+    so a long strip id still gets a stable uid."""
+    uid = f'sim-{strip_id}'
+    if len(uid.encode('utf-8')) <= MAX_UID_BYTES:
+        return uid
+    return 'sim-' + hashlib.sha256(strip_id.encode('utf-8')).hexdigest()[:12]
 
 
 def default_config_doc() -> dict:

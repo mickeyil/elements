@@ -1156,3 +1156,77 @@ def test_route_devices_collection_rejects_patch(tmp_path):
     server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
     status, _ = _run_http_request(server, 'PATCH', '/api/devices')
     assert status == 405
+
+
+# --- sim twin -----------------------------------------------------------------
+
+
+def _server_with_devices(tmp_path, devices: list[dict]):
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+    server._apply_json_message({'type': 'state', 'devices': devices})
+    return server
+
+
+_ESP = {'uid': 'esp-aabbccddeeff', 'configured': True, 'strip_id': 'ring8',
+        'length': 8, 'label': 'Porch'}
+
+
+def test_route_sim_twin_adds_a_sim_for_the_strip(monkeypatch, tmp_path):
+    server = _server_with_devices(tmp_path, [_ESP])
+    commands: list[dict] = []
+    monkeypatch.setattr(web_mod, 'ControllerClient', _capturing_client(commands, _OK_REPLY))
+
+    status, payload = _run_http_request(server, 'POST', '/api/devices/esp-aabbccddeeff/sim')
+
+    assert status == 200
+    assert payload == {'ok': True, 'result': {}}
+    assert commands == [{'id': 1, 'cmd': 'add_device', 'device_uid': 'sim-ring8',
+                         'strip_id': 'ring8', 'length': 8, 'label': 'Porch'}]
+
+
+def test_route_sim_twin_omits_a_missing_label(monkeypatch, tmp_path):
+    server = _server_with_devices(tmp_path, [{**_ESP, 'label': None}])
+    commands: list[dict] = []
+    monkeypatch.setattr(web_mod, 'ControllerClient', _capturing_client(commands, _OK_REPLY))
+
+    _run_http_request(server, 'POST', '/api/devices/esp-aabbccddeeff/sim')
+
+    assert 'label' not in commands[0]
+
+
+def test_route_sim_twin_unknown_device_is_404(tmp_path):
+    # A discovered (unconfigured) device has no strip to simulate.
+    server = _server_with_devices(tmp_path, [
+        {'uid': 'esp-aabbccddeeff', 'configured': False, 'status': 'discovered'}])
+    status, payload = _run_http_request(server, 'POST', '/api/devices/esp-aabbccddeeff/sim')
+    assert status == 404
+    assert 'unknown device' in payload['error']
+
+
+def test_route_sim_twin_refuses_a_sim_source(tmp_path):
+    server = _server_with_devices(tmp_path, [
+        {'uid': 'sim-ring8', 'configured': True, 'strip_id': 'ring8', 'length': 8}])
+    status, _ = _run_http_request(server, 'POST', '/api/devices/sim-ring8/sim')
+    assert status == 400
+
+
+def test_route_sim_twin_conflicts_when_the_strip_already_has_a_sim(tmp_path):
+    server = _server_with_devices(tmp_path, [
+        _ESP, {'uid': 'sim-porch', 'configured': True, 'strip_id': 'ring8', 'length': 8}])
+    status, payload = _run_http_request(server, 'POST', '/api/devices/esp-aabbccddeeff/sim')
+    assert status == 409
+    assert 'sim-porch' in payload['error']
+
+
+def test_route_sim_twin_conflicts_when_the_derived_uid_exists(tmp_path):
+    server = _server_with_devices(tmp_path, [
+        _ESP, {'uid': 'sim-ring8', 'configured': True, 'strip_id': 'other', 'length': 30}])
+    status, payload = _run_http_request(server, 'POST', '/api/devices/esp-aabbccddeeff/sim')
+    assert status == 409
+    assert 'sim-ring8' in payload['error']
+
+
+def test_route_sim_twin_rejects_get(tmp_path):
+    server = _server_with_devices(tmp_path, [_ESP])
+    status, _ = _run_http_request(server, 'GET', '/api/devices/esp-aabbccddeeff/sim')
+    assert status == 405

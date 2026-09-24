@@ -5,7 +5,7 @@ import { RouterLink } from 'vue-router';
 import DeviceModal from '../components/DeviceModal.vue';
 import RemoveDeviceModal from '../components/RemoveDeviceModal.vue';
 import { useInjectedServerState, type SnapshotDevice } from '../composables/useServerState';
-import { updateFirmware } from '../lib/deviceApi';
+import { createSimTwin, stripHasSimTwin, updateFirmware } from '../lib/deviceApi';
 import { clockLabel } from '../lib/deviceClock';
 import {
   isUpdateOffered,
@@ -33,9 +33,10 @@ const showNewDeviceModal = ref(false);
 const editingDevice = ref<StatusCardDevice | null>(null);
 const removingDevice = ref<StatusCardDevice | null>(null);
 const configuringUid = ref<string | null>(null);
-// A refused update request (the controller re-validates), shown on the card
-// until the next attempt; a started transfer reports through firmware.update.
-const updateRequestError = ref<{ uid: string; message: string } | null>(null);
+// A refused card action (an update request, which the controller
+// re-validates, or a Simulate), shown on the card until the next attempt; a
+// started transfer reports through firmware.update.
+const cardActionError = ref<{ uid: string; message: string } | null>(null);
 
 const layouts = computed<Record<string, unknown>>(() => {
   const value = snapshot.value?.layouts;
@@ -170,15 +171,15 @@ function firmwareAvailability(device: StatusCardDevice): UpdateAvailability {
 // Progress or outcome of the transfer aimed at this device, or of a refused
 // request to start one; '' when there is nothing to show.
 function firmwareNote(device: StatusCardDevice): string {
-  if (updateRequestError.value?.uid === device.uid) {
-    return `Update refused: ${updateRequestError.value.message}`;
+  if (cardActionError.value?.uid === device.uid) {
+    return cardActionError.value.message;
   }
   const update = updateForDevice(firmware.value, device.uid);
   return update ? updateProgressLabel(update) : '';
 }
 
 function firmwareNoteFailed(device: StatusCardDevice): boolean {
-  return updateRequestError.value?.uid === device.uid
+  return cardActionError.value?.uid === device.uid
     || updateForDevice(firmware.value, device.uid)?.phase === 'failed';
 }
 
@@ -187,12 +188,33 @@ async function startFirmwareUpdate(device: StatusCardDevice): Promise<void> {
   if (!firmwareAvailability(device).enabled) {
     return;
   }
-  updateRequestError.value = null;
+  cardActionError.value = null;
   try {
     await updateFirmware(device.uid);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    updateRequestError.value = { uid: device.uid, message };
+    cardActionError.value = { uid: device.uid, message: `Update refused: ${message}` };
+  }
+}
+
+// "Simulate" adds a sim twin of a configured ESP card's strip; the server
+// allows one per strip, so it is not offered once a sim serves the strip.
+function isSimulateOffered(device: StatusCardDevice): boolean {
+  return device.isConfigured && !device.isSim
+    && !stripHasSimTwin(devices.value, device.strip_id);
+}
+
+async function simulateDevice(device: StatusCardDevice): Promise<void> {
+  closeMenu();
+  if (!canAddDevice.value) {
+    return;
+  }
+  cardActionError.value = null;
+  try {
+    await createSimTwin(device.uid);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    cardActionError.value = { uid: device.uid, message: `Simulate failed: ${message}` };
   }
 }
 
@@ -392,6 +414,16 @@ onBeforeUnmount(() => {
                       >
                         {{ layoutMenuLabel(device) }}
                       </RouterLink>
+                      <button
+                        v-if="isSimulateOffered(device)"
+                        type="button"
+                        class="device-menu-item"
+                        :disabled="!canAddDevice"
+                        :title="canAddDevice ? 'Add a simulated device on this strip' : addDisabledReason"
+                        @click="simulateDevice(device)"
+                      >
+                        Simulate
+                      </button>
                     </template>
                     <button
                       v-else
