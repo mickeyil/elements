@@ -8,9 +8,11 @@ from pathlib import Path
 
 import pytest
 
+from elemctl.config import Config, DeviceConfig
 from elemctl.sim import (
     SIM_REBOOT_EXIT_CODE,
     build_sim_command,
+    resolve_sim_uid,
     supervise,
     validate_sim_uid,
 )
@@ -36,6 +38,44 @@ class TestValidateSimUid:
 
     def test_rejects_non_printable(self):
         assert 'printable' in validate_sim_uid('sim-a\tb')
+
+    def test_rejects_bare_prefix(self):
+        assert 'continue' in validate_sim_uid('sim-')
+
+
+def _config(*devices: DeviceConfig) -> Config:
+    return Config(discovery_port=6040, link_port=6041, frame_port=6042,
+                  sync_port=6043, log_port=6044, devices=list(devices))
+
+
+class TestResolveSimUid:
+    def test_configured_uid_is_taken_as_is(self):
+        config = _config(DeviceConfig('sim-kitchen', 'ring8', 8))
+        assert resolve_sim_uid('sim-kitchen', config) == 'sim-kitchen'
+
+    def test_strip_id_resolves_to_its_one_sim_device(self):
+        config = _config(DeviceConfig('esp-aabbccddeeff', 'ring8', 8),
+                         DeviceConfig('sim-ring8', 'ring8', 8))
+        assert resolve_sim_uid('ring8', config) == 'sim-ring8'
+
+    def test_strip_served_only_by_esp_errors_with_a_hint(self):
+        config = _config(DeviceConfig('esp-aabbccddeeff', 'ring8', 8))
+        with pytest.raises(ValueError, match='no configured .* serves strip') as exc:
+            resolve_sim_uid('ring8', config)
+        assert 'Simulate' in str(exc.value)
+
+    def test_strip_with_several_sims_lists_them(self):
+        config = _config(DeviceConfig('sim-a', 'ring8', 8),
+                         DeviceConfig('sim-b', 'ring8', 8))
+        with pytest.raises(ValueError, match='sim-a, sim-b'):
+            resolve_sim_uid('ring8', config)
+
+    def test_unconfigured_sim_uid_runs_as_itself(self):
+        assert resolve_sim_uid('sim-new', _config()) == 'sim-new'
+
+    def test_strip_match_wins_over_the_uid_fallback(self):
+        config = _config(DeviceConfig('sim-x', 'sim-strip', 8))
+        assert resolve_sim_uid('sim-strip', config) == 'sim-x'
 
 
 class TestBuildSimCommand:

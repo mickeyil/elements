@@ -8,18 +8,32 @@ on any other exit. A crash-loop guard gives up when reboots come too
 fast. Ctrl-C reaches the whole foreground process group, so the sim
 shuts itself down and the supervisor sees a normal exit; SIGTERM sent
 to the supervisor alone is forwarded to the child.
+
+The device argument is a sim uid or a strip id: a strip id resolves, via
+the config, to the one configured sim device serving that strip, so the
+uid of a sim twin stays infrastructure the user never has to type.
 """
 
 from __future__ import annotations
 
 import argparse
 import collections
+import json
 import os
 import signal
 import subprocess
 import sys
 import time
 from pathlib import Path
+
+from .config import (
+    DEFAULT_CONFIG_PATH,
+    DEFAULT_FRAME_PORT,
+    Config,
+    ConfigError,
+    load_config,
+    validate_device_uid,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 BUILD_DIR = REPO_ROOT / 'build'
@@ -34,28 +48,48 @@ MAX_REBOOTS = 5
 REBOOT_WINDOW_SEC = 30.0
 
 DEFAULT_CONTROLLER_HOST = '127.0.0.1'
-DEFAULT_FRAME_PORT = 6042
-
-# Wire slot size; see src/platform/device_identity.h.
-UID_MAX_BYTES = 16
 
 STORAGE_ROOT_ENV = 'ELEMENTS_SIM_STORAGE_ROOT'
 
 
 def validate_sim_uid(uid: str) -> str | None:
-    """Check uid against the wire policy (src/platform/device_identity.h).
+    """Check uid against the wire policy (config.validate_device_uid),
+    requiring a sim uid.
 
     Returns an error message, or None when the uid is acceptable.
     """
-    if not uid:
-        return 'device uid is empty'
-    if not uid.startswith('sim-'):
+    if uid and not uid.startswith('sim-'):
         return f'sim uid must start with "sim-": {uid!r}'
-    if len(uid) > UID_MAX_BYTES:
-        return f'sim uid longer than {UID_MAX_BYTES} bytes: {uid!r}'
-    if not all(0x20 <= ord(c) <= 0x7E for c in uid):
-        return f'sim uid must be printable ASCII: {uid!r}'
-    return None
+    return validate_device_uid(uid)
+
+
+def resolve_sim_uid(device: str, config: Config) -> str:
+    """Resolve the `elemctl sim` argument to a sim uid.
+
+    A configured device uid is taken as is. Otherwise the argument names a
+    strip, and the one configured sim device serving it is the answer. An
+    unconfigured sim- uid that names no strip still runs as itself, so a
+    sim can come up first and be configured from its discovered stub.
+    Raises ValueError when no sim device, or more than one, serves it.
+    """
+    if any(dc.device_uid == device for dc in config.devices):
+        return device
+    sims = [dc.device_uid for dc in config.devices
+            if dc.device_type == 'sim' and dc.strip_id == device]
+    if len(sims) == 1:
+        return sims[0]
+    if not sims and device.startswith('sim-'):
+        return device
+    if not sims:
+        raise ValueError(
+            f'no configured device uid or sim device serves strip {device!r}; '
+            'create one with Simulate on a device card in the web status page, '
+            'or add a sim- device to the config'
+        )
+    raise ValueError(
+        f'strip {device!r} is served by several sim devices '
+        f'({", ".join(sims)}); pass the device uid instead'
+    )
 
 
 def build_sim_command(
@@ -140,14 +174,19 @@ def main() -> None:
         prog='elemctl sim',
         description='Launch and supervise a sim device',
     )
-    parser.add_argument('device_uid', help='sim device UID (sim-..., max 16 chars)')
+    parser.add_argument(
+        'device',
+        help='strip id served by a configured sim device, or a sim device UID '
+             '(sim-..., max 16 chars)',
+    )
     parser.add_argument(
         '--controller-host', default=DEFAULT_CONTROLLER_HOST,
         help='controller IPv4 for unicast discovery (default: %(default)s)',
     )
     parser.add_argument(
-        '--frame-port', type=int, default=DEFAULT_FRAME_PORT,
-        help='controller frame-preview UDP port (default: %(default)s)',
+        '--frame-port', type=int, default=None,
+        help='controller frame-preview UDP port (default: the config\'s '
+             f'controller.frame_port, else {DEFAULT_FRAME_PORT})',
     )
     parser.add_argument(
         '--storage-root', default=str(REPO_ROOT / 'local'),
@@ -156,16 +195,34 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    error = validate_sim_uid(args.device_uid)
+    # Without a readable config the argument can only be a uid.
+    try:
+        config: Config | None = load_config(DEFAULT_CONFIG_PATH)
+    except (OSError, ConfigError, json.JSONDecodeError):
+        config = None
+
+    device_uid = args.device
+    if config is not None:
+        try:
+            device_uid = resolve_sim_uid(args.device, config)
+        except ValueError as e:
+            print(f'elemctl sim: {e}', file=sys.stderr)
+            sys.exit(2)
+
+    error = validate_sim_uid(device_uid)
     if error is not None:
         print(f'elemctl sim: {error}', file=sys.stderr)
         sys.exit(2)
 
+    frame_port = args.frame_port
+    if frame_port is None:
+        frame_port = config.frame_port if config is not None else DEFAULT_FRAME_PORT
+
     try:
         cmd = build_sim_command(
-            args.device_uid,
+            device_uid,
             controller_host=args.controller_host,
-            frame_port=args.frame_port,
+            frame_port=frame_port,
         )
     except ValueError as e:
         print(f'elemctl sim: {e}', file=sys.stderr)
