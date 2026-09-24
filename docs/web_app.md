@@ -14,7 +14,7 @@ Browser (Vue 3)  ◄──── HTTP / WebSocket ────►  elemctl web  
 
 | Route | Page | What it does |
 |-------|------|-------------|
-| `/` | StatusPage | Device status panel, playback info |
+| `/` | StatusPage | Device status panel, playback info; "Simulate" on an ESP card adds a sim twin of its strip |
 | `/viewer` | ViewerPage | Live animation preview (canvas rendering of RGB frames) |
 | `/layouts/:deviceUid` | LayoutEditorPage | 2D pixel layout editor for simulator devices |
 
@@ -25,8 +25,9 @@ Browser (Vue 3)  ◄──── HTTP / WebSocket ────►  elemctl web  
 | `POST` | `/api/devices` | Add device |
 | `PATCH` | `/api/devices/:deviceUid` | Edit device |
 | `DELETE` | `/api/devices/:deviceUid` | Remove device |
+| `POST` | `/api/devices/:deviceUid/sim` | Add a sim twin of an ESP device's strip (uid `sim-<strip_id>`, hashed past 16 bytes; 409 if the strip already has a sim) |
 
-These proxy to the controller's `add_device` / `edit_device` / `remove_device` commands.
+These proxy to the controller's `add_device` / `edit_device` / `remove_device` commands. Devices that share a strip id form a strip group that mirrors one program: editing the strip id or length of one member applies it to the whole group, while the uid and label stay per-device.
 
 ## Layout API
 
