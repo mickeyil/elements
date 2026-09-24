@@ -241,9 +241,12 @@ class Session:
         self.program_start_us = 0
         self.cursor_us = 0
         self.state = SessionState.LOADED
-        # Reset preview assembly to the new program's strips and pacing.
+        # Reset preview assembly to the new program's strips and pacing. Sims
+        # report their whole configured strip, not the compiled length (config
+        # guarantees one length per strip_id).
+        lengths = {m.strip_id: m.strip_length for m in self._members.values()}
         self._preview.set_program(
-            [(sid, art.length) for sid, art in manifest.strips.items()],
+            [(sid, lengths[sid]) for sid in manifest.strips],
             manifest.target_fps)
 
         for uid, member in self._members.items():
@@ -256,7 +259,7 @@ class Session:
                 intent=Intent.READY,
                 program_token=(self.session_id, member.strip_id),
                 blob=artifact.blob,
-                strip_length=artifact.length,
+                strip_length=member.strip_length,
             ))
 
     def _check_all_strips_served(self, manifest):
@@ -272,13 +275,9 @@ class Session:
     def _check_geometry(self, manifest):
         """Reject a strip compiled for more pixels than the device physically
         has; a shorter strip is allowed, since the DSL permits an authored
-        length up to (not only equal to) the configured one.
-
-        Round B note: this assumes SET_PROFILE will adopt the blob's own
-        length, so the device decoder's exact strip_length match still holds
-        for a shorter blob. If SET_PROFILE instead sends the configured length,
-        a shorter blob would fail on the device, and the rule here (and in the
-        DSL) must tighten to an exact match."""
+        length up to (not only equal to) the configured one. SET_PROFILE
+        always sends the configured length, and the device decoder accepts a
+        blob no longer than its profile, leaving the unmapped LEDs dark."""
         for member in self._members.values():
             artifact = manifest.strips.get(member.strip_id)
             if artifact is not None and artifact.length > member.strip_length:

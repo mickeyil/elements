@@ -452,7 +452,7 @@ Program* decode_program(
     err = validate_header(hdr);
     if (err != DecodeError::Ok) return report(err);
 
-    if (hdr.strip_length != profile_strip_length) {
+    if (hdr.strip_length > profile_strip_length) {
         return report(DecodeError::StripLengthMismatch);
     }
 

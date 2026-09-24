@@ -23,8 +23,8 @@ bool peek_blob_header(const uint8_t* blob, size_t len,
                       uint16_t& strip_length_out, bool& requires_sync_out);
 
 // Parse a blob into a Program. Returns nullptr on failure and writes the
-// reason to `*err_out` (if non-null). The blob's strip length must match
-// `profile_strip_length` exactly.
+// reason to `*err_out` (if non-null). The blob's strip length must not
+// exceed `profile_strip_length`; LEDs past it are left unmapped.
 //
 // The returned Program owns every nested allocation. Free with
 // `free_program()`.

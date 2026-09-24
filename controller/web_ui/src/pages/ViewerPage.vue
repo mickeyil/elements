@@ -69,7 +69,7 @@ function clearHover(target: SimTarget): void {
                 <strong class="target-name">{{ target.deviceUid }}</strong>
                 <span class="target-strip">strip {{ target.stripName }}</span>
                 <span class="target-length">
-                  logical {{ target.logicalLength }} / physical {{ target.physicalLength }} px
+                  {{ target.physicalLength }} px
                 </span>
               </div>
               <span class="pill target-pill" :class="pillClass(target.connected)">

@@ -265,9 +265,14 @@ TEST_CASE("decode_program: strip_length over MAX_STRIP_PIXELS rejected", "[decod
     CHECK(run(b, MAX_STRIP_PIXELS + 1) == DecodeError::OverCap);
 }
 
-TEST_CASE("decode_program: strip_length mismatch rejected", "[decoder]") {
+TEST_CASE("decode_program: strip_length over the profile rejected", "[decoder]") {
     auto bytes = build_minimal_valid_blob();
-    CHECK(run(bytes, /*profile*/ 8) == DecodeError::StripLengthMismatch);
+    CHECK(run(bytes, /*profile*/ 3) == DecodeError::StripLengthMismatch);
+}
+
+TEST_CASE("decode_program: strip_length under the profile accepted", "[decoder]") {
+    auto bytes = build_minimal_valid_blob();
+    CHECK(run(bytes, /*profile*/ 8) == DecodeError::Ok);
 }
 
 TEST_CASE("decode_program: duration 0 rejected", "[decoder]") {

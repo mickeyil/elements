@@ -187,7 +187,7 @@ Structural caps the decoder enforces before allocating. Defined in
     TrailingBytes        bytes remained after the last section was read
     InvalidField         out-of-range index, bad flags, unsorted/overlapping records, zero duration
     OverCap              a limit above was exceeded
-    StripLengthMismatch  header strip_length != active profile strip length
+    StripLengthMismatch  header strip_length > active profile strip length
     OutOfMemory          an allocation failed during decode
 
 `BadMagic` and `BadVersion` are checked before any allocation. Count caps

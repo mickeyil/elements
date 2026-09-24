@@ -576,6 +576,7 @@ class ControllerService:
     def _state_dict(self):
         s = self._session
         manifest = s.manifest
+        lengths = self._logical_strip_lengths()
         session = {
             'state': s.state.name.lower(),
             'session_id': s.session_id,
@@ -588,8 +589,10 @@ class ControllerService:
             'cursor_us': s.cursor_us,
             # Program strip layout in manifest order: the order and lengths an
             # observer needs to split an assembled preview frame's rgb payload.
-            'strips': ([{'strip_id': sid, 'length': art.length}
-                        for sid, art in manifest.strips.items()]
+            # Frames carry each strip's whole configured length, not the
+            # compiled one.
+            'strips': ([{'strip_id': sid, 'length': lengths[sid]}
+                        for sid in manifest.strips]
                        if manifest is not None else []),
         }
         devices = []

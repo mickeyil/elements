@@ -235,9 +235,9 @@ TEST_CASE("test_full_paint fixture: per-pixel paint spans a full strip")
 
 TEST_CASE("fixture strip-length mismatch is rejected")
 {
-    // The decoder must reject a blob whose strip_length != the active profile.
+    // The decoder must reject a blob whose strip_length exceeds the active profile.
     DecodeError err = DecodeError::Ok;
-    Program* prog = decode_fixture("test_shift.bin", 7, err);
+    Program* prog = decode_fixture("test_shift.bin", 4, err);
     CHECK(err == DecodeError::StripLengthMismatch);
     CHECK(prog == nullptr);
 }

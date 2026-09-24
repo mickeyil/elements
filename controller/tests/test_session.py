@@ -122,10 +122,10 @@ def tick(session):
     return session.tick()
 
 
-def drive_to_loaded(session, hub, uid='sim-a', blob=b'M', loop=False):
+def drive_to_loaded(session, hub, uid='sim-a', blob=b'M', loop=False, length=30):
     """Load a single-strip manifest, attach the device, and ACK its way to a
     parked LOADED state (SET_PROFILE Ok, then LOAD Ok)."""
-    session.load(make_manifest(('main', 30, blob), loop=loop))
+    session.load(make_manifest(('main', length, blob), loop=loop))
     hub.emit(DeviceConnected(uid=uid, boot_token=1, rebooted=False))
     tick(session)                       # attach + SET_PROFILE
     _, on_ack = hub.last_send(uid)
@@ -135,9 +135,9 @@ def drive_to_loaded(session, hub, uid='sim-a', blob=b'M', loop=False):
     on_ack(ack_ok())                    # blob loaded; member parked at LOADED
 
 
-def drive_to_playing(session, hub, uid='sim-a', loop=False):
+def drive_to_playing(session, hub, uid='sim-a', loop=False, length=30):
     """Bring the device to LOADED, then play() and ACK the Start: PLAYING."""
-    drive_to_loaded(session, hub, uid=uid, loop=loop)
+    drive_to_loaded(session, hub, uid=uid, loop=loop, length=length)
     session.play()
     tick(session)
     _, on_ack = hub.last_send(uid)
@@ -364,10 +364,11 @@ def test_load_mirrors_shared_strip_id():
 def test_load_allows_strip_shorter_than_device():
     # A blob compiled for fewer pixels than the device has is legal; the DSL
     # allows an authored length below the configured one, so only longer fails.
+    # The target keeps the device's configured length for its profile.
     session, _hub = make_session()                       # sim-a 'left', 30 px
     session.load(make_manifest(('left', 10, b'L'), ('right', 30, b'R')))
     assert session.member('sim-a').target.intent is Intent.READY
-    assert session.member('sim-a').target.strip_length == 10
+    assert session.member('sim-a').target.strip_length == 30
 
 
 def test_load_rejects_strip_longer_than_device():
@@ -454,6 +455,26 @@ def test_fresh_attach_ladder_profile_then_load_then_park():
     before = len(hub.sent)
     tick(session)
     assert len(hub.sent) == before
+
+
+def test_shorter_strip_profiles_the_configured_length_then_loads():
+    # SET_PROFILE carries the device's configured length, never the blob's, so
+    # a shorter program needs no profile change; the device lights only the
+    # pixels the blob maps.
+    session, hub = make_session(SINGLE)                  # sim-a 'main', 30 px
+    session.load(make_manifest(('main', 10, b'M')))
+    hub.emit(DeviceConnected(uid='sim-a', boot_token=1, rebooted=False))
+
+    tick(session)
+    _, encoded, on_ack = hub.sent[-1]
+    assert encoded == wire.encode_set_profile(30)
+    on_ack(ack_ok())
+
+    tick(session)
+    _, encoded, on_ack = hub.sent[-1]
+    assert encoded == wire.encode_load(b'M')
+    on_ack(ack_ok())
+    assert session.member('sim-a').phase is DeviceState.LOADED
 
 
 def test_one_command_in_flight_per_member():
@@ -1423,6 +1444,19 @@ def test_preview_frame_dropped_when_not_playing():
     hub.frames = [_frame()]
     tick(session)
     assert session.drain_preview_frames() == []
+
+
+def test_preview_expects_the_physical_length_for_a_shorter_strip():
+    # Sims report their whole profile strip, so a 10 px program on a 30 px
+    # device previews 90 bytes; a packet sized to the program is dropped.
+    session, hub = make_session(SINGLE)
+    drive_to_playing(session, hub, length=10)
+    session.set_preview_enabled(True)
+    session._clock_us.now_us += 1_000_000
+    hub.frames = [_frame(t_ms=20, pixels=10), _frame(t_ms=40, pixels=30)]
+    tick(session)
+    frames = session.drain_preview_frames()
+    assert [(f.frame_index, f.strips) for f in frames] == [(2, [b'\x00' * 90])]
 
 
 def test_preview_frame_dropped_on_wrong_length():

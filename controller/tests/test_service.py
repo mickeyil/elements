@@ -329,6 +329,17 @@ def test_state_includes_strip_layout(tmp_path):
     assert state['session']['strips'] == [{'strip_id': 'main', 'length': 30}]
 
 
+def test_state_strip_length_is_the_configured_length(tmp_path):
+    # Preview frames carry each strip's whole configured length, so observers
+    # split them by that, not by a shorter authored length.
+    service, _hub = make_service(tmp_path)
+    source = PROGRAM.replace("strip('main')", "strip('main', 10)")
+    assert cmd(service, 'publish', program_id='short', source=source)['ok'] is True
+    assert cmd(service, 'load', program_id='short')['ok'] is True
+    state = _by_type(_json(service.snapshot_messages()), 'state')[0]
+    assert state['session']['strips'] == [{'strip_id': 'main', 'length': 30}]
+
+
 def test_configured_device_status_tracks_attachment(tmp_path):
     service, hub = make_service(tmp_path)
     device = _by_type(_json(service.snapshot_messages()), 'state')[0]['devices'][0]

@@ -255,12 +255,32 @@ TEST_CASE("Playback: handle_load on a malformed blob keeps state IDLE", "[playba
 TEST_CASE("Playback: handle_load forwards StripLengthMismatch", "[playback]") {
     set_clock_us(0);
     SyncedClock clock;
-    Playback pb(8, clock);  // profile = 8, blob = 1
+    Playback pb(1, clock);  // profile = 1, blob = 2
     auto blob = build_paint_blob(1.0f, false);
+    blob[8] = 2;            // header strip_length
     DecodeError err = DecodeError::Ok;
     CHECK_FALSE(pb.handle_load(blob.data(), blob.size(), &err));
     CHECK(err == DecodeError::StripLengthMismatch);
     CHECK(pb.state() == DeviceState::IDLE);
+}
+
+TEST_CASE("Playback: a blob shorter than the profile lights only its pixels",
+          "[playback]") {
+    set_clock_us(0);
+    SyncedClock clock;
+    Playback pb(4, clock);  // profile = 4, blob = 1
+    auto blob = build_paint_blob(1.0f, false);
+    REQUIRE(pb.handle_load(blob.data(), blob.size()));
+    pb.handle_start(0);
+    REQUIRE(pb.render_next_frame() == RenderFrameResult::Rendered);
+    REQUIRE(pb.strip().size() == 4);
+    CHECK(pb.strip()[0].r == 255);
+    for (uint16_t i = 1; i < 4; i++) {
+        CAPTURE(i);
+        CHECK(pb.strip()[i].r == 0);
+        CHECK(pb.strip()[i].g == 0);
+        CHECK(pb.strip()[i].b == 0);
+    }
 }
 
 TEST_CASE("Playback: handle_load without err_out does not crash", "[playback]") {
