@@ -1519,3 +1519,207 @@ def test_mixed_ended_and_paused_leftover_replays_whole_cohort():
     b_op = next(e[4] for u, e, _ in reversed(hub.sent) if u == 'sim-b')
     assert a_op == wire.CMD_START             # ENDED member replays from 0
     assert b_op == wire.CMD_START             # normalized LOADED member too
+
+
+# ---------------------------------------------------------------------------
+# Operator panel: one strip driven outside the show (manual / run / stop)
+# ---------------------------------------------------------------------------
+
+PANEL_TOKEN = ('panel', 'pacifica', 'main')
+
+
+def ack_last(hub, uid='sim-a'):
+    _, on_ack = hub.last_send(uid)
+    on_ack(ack_ok())
+
+
+def attach_panel(session, hub, uid='sim-a'):
+    """Attach a device whose strip already has a panel target and ACK its
+    SET_PROFILE."""
+    hub.emit(DeviceConnected(uid=uid, boot_token=1, rebooted=False))
+    tick(session)
+    op, on_ack = hub.last_send(uid)
+    assert op == wire.CMD_SET_PROFILE
+    on_ack(ack_ok())
+
+
+def test_panel_manual_profiles_then_shows_the_picture():
+    session, hub = make_session(SINGLE)
+    rgb = b'\x01\x02\x03' * 30
+    session.panel_manual('main', rgb)
+    attach_panel(session, hub)
+    tick(session)
+    _, encoded, on_ack = hub.sent[-1]
+    assert encoded == wire.encode_manual(rgb)
+    on_ack(ack_ok())
+
+    member = session.member('sim-a')
+    assert member.owner == 'panel'
+    assert member.phase is DeviceState.MANUAL
+    assert member.serving is True
+
+
+def test_panel_fills_coalesce_to_the_latest():
+    session, hub = make_session(SINGLE)
+    first, second, third = (bytes([c]) * 90 for c in (1, 2, 3))
+    session.panel_manual('main', first)
+    attach_panel(session, hub)
+    tick(session)                                # MANUAL(first) in flight
+    session.panel_manual('main', second)
+    session.panel_manual('main', third)
+    tick(session)
+    assert len(hub.sent) == 2                    # profile + the one MANUAL
+
+    ack_last(hub)                                # first lands
+    tick(session)
+    assert [e for _, e, _ in hub.sent[2:]] == [wire.encode_manual(third)]
+    ack_last(hub)
+    tick(session)
+    assert len(hub.sent) == 3                    # the target is shown: nothing more
+
+
+def test_panel_manual_unknown_strip_is_refused():
+    session, _hub = make_session(SINGLE)
+    with pytest.raises(ValueError):
+        session.panel_manual('nope', b'\x00' * 90)
+
+
+def test_panel_run_loads_and_starts_without_the_show():
+    session, hub = make_session(SINGLE)
+    session.panel_run('main', b'P', PANEL_TOKEN)
+    attach_panel(session, hub)
+    tick(session)
+    _, encoded, on_ack = hub.sent[-1]
+    assert encoded == wire.encode_load(b'P')
+    on_ack(ack_ok())
+    tick(session)
+    op, on_ack = hub.last_send('sim-a')
+    assert op == wire.CMD_START                  # no play(), no authorization
+    on_ack(ack_ok())
+
+    assert session.state is SessionState.IDLE
+    assert session.member('sim-a').phase is DeviceState.PLAYING
+
+
+def test_panel_stop_blanks_the_strip():
+    session, hub = make_session(SINGLE)
+    session.panel_manual('main', b'\x01' * 90)
+    attach_panel(session, hub)
+    tick(session); ack_last(hub)                 # picture shown
+    session.panel_stop('main')
+    tick(session)
+    op, on_ack = hub.last_send('sim-a')
+    assert op == wire.CMD_STOP
+    on_ack(ack_ok())
+
+    member = session.member('sim-a')
+    assert member.phase is DeviceState.IDLE      # STOP from MANUAL leaves IDLE
+    assert member.serving is False
+    assert member.owner == 'panel'
+    tick(session)
+    assert len(hub.sent) == 3                    # one STOP only
+
+
+def test_panel_restart_after_stop_starts_the_kept_program():
+    # STOP parks a panel program at LOADED; running it again only Starts it,
+    # and the device serves again, so a later stop still blanks it.
+    session, hub = make_session(SINGLE)
+    session.panel_run('main', b'P', PANEL_TOKEN)
+    attach_panel(session, hub)
+    tick(session); ack_last(hub)                 # LOAD
+    tick(session); ack_last(hub)                 # START
+    session.panel_stop('main')
+    tick(session); ack_last(hub)                 # STOP
+    session.panel_run('main', b'P', PANEL_TOKEN)
+    tick(session)
+    op, on_ack = hub.last_send('sim-a')
+    assert op == wire.CMD_START
+    on_ack(ack_ok())
+    session.panel_stop('main')
+    tick(session)
+    assert hub.last_send('sim-a')[0] == wire.CMD_STOP
+
+
+def test_load_reclaims_a_panel_strip():
+    session, hub = make_session(SINGLE)
+    session.panel_manual('main', b'\x01' * 90)
+    attach_panel(session, hub)
+    tick(session); ack_last(hub)                 # picture shown
+
+    session.load(make_manifest(('main', 30, b'M')))
+    member = session.member('sim-a')
+    assert member.owner == 'show'
+    assert member.target.intent is Intent.READY
+    tick(session)
+    _, encoded, on_ack = hub.sent[-1]
+    assert encoded == wire.encode_load(b'M')     # profile kept: straight to LOAD
+    on_ack(ack_ok())
+    assert member.phase is DeviceState.LOADED
+
+
+def test_show_verbs_skip_a_panel_member():
+    session, hub = make_session(TWO_STRIPS)
+    session.load(make_manifest(('main', 30, b'M'), ('side', 30, b'S')))
+    hub.emit(DeviceConnected(uid='sim-a', boot_token=1, rebooted=False),
+             DeviceConnected(uid='sim-b', boot_token=1, rebooted=False))
+    tick(session)
+    for uid in ('sim-a', 'sim-b'):
+        ack_last(hub, uid)                       # profiles
+    tick(session)
+    for uid in ('sim-a', 'sim-b'):
+        ack_last(hub, uid)                       # both LOADED
+
+    token = ('panel', 'pacifica', 'side')
+    session.panel_run('side', b'P', token)
+    tick(session); ack_last(hub, 'sim-b')        # LOAD
+    tick(session); ack_last(hub, 'sim-b')        # START: the panel member plays
+
+    session.play()                               # not held up by the panel member
+    assert session.member('sim-b').target.program_token == token
+    tick(session)
+    assert hub.last_send('sim-a')[0] == wire.CMD_START
+    ack_last(hub, 'sim-a')
+
+    session.stop()
+    assert session.member('sim-b').target.intent is Intent.PLAYING
+    b_sent = len([u for u, _, _ in hub.sent if u == 'sim-b'])
+    tick(session)
+    assert hub.last_send('sim-a')[0] == wire.CMD_STOP
+    assert len([u for u, _, _ in hub.sent if u == 'sim-b']) == b_sent
+
+
+def test_panel_frames_bypass_the_program_assembler():
+    # The show plays 'main', then the panel takes it over: its device's frames
+    # come out as that device's latest picture, never as program frames.
+    session, hub = make_session(SINGLE)
+    drive_to_playing(session, hub, loop=True)
+    session.panel_run('main', b'P', PANEL_TOKEN)
+    tick(session); ack_last(hub)                 # LOAD
+    tick(session); ack_last(hub)                 # START
+    session.set_preview_enabled(True)
+    session._clock_us.now_us += 1_000_000
+    latest = FramePreview(uid='sim-a', frame_index=2, cycle=0, t_ms=40,
+                          rgb=b'\x07' * 90)
+    hub.frames = [_frame(t_ms=20), latest]
+    tick(session)
+
+    assert session.drain_preview_frames() == []
+    assert session.drain_device_frames() == [('sim-a', b'\x07' * 90)]
+    assert session.drain_device_frames() == []
+
+
+def test_reconnect_reapplies_the_manual_picture():
+    session, hub = make_session(SINGLE)
+    rgb = b'\x09' * 90
+    session.panel_manual('main', rgb)
+    attach_panel(session, hub)
+    tick(session); ack_last(hub)                 # picture shown
+
+    hub.emit(DeviceDisconnected(uid='sim-a', reason='ack timeout'))
+    tick(session)
+    hub.emit(DeviceConnected(uid='sim-a', boot_token=2, rebooted=False))
+    tick(session)
+    assert hub.last_send('sim-a')[0] == wire.CMD_SET_PROFILE
+    ack_last(hub)
+    tick(session)
+    assert hub.sent[-1][1] == wire.encode_manual(rgb)

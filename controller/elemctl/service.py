@@ -14,9 +14,15 @@ This is the control core: it speaks load/play/pause/resume/stop, device
 add/edit/remove, plus library queries and shutdown, and it publishes session
 state, events, and assembled preview frames. The web client's full-state and
 status vocabulary is still the v2 shape (the web pass).
+
+The operator panel drives one strip outside the show: panel_fill holds a
+constant color, panel_run loops a program from the panel library
+(<animations_dir>/library, programs written for any strip via TARGET), and
+panel_stop blanks it. Each such device's latest frame is published on its own.
 """
 
 import logging
+import math
 import time
 
 from pathlib import Path
@@ -26,7 +32,7 @@ from . import config_edit
 from . import firmware
 from . import ota
 from . import wire
-from .controller_protocol import encode_frame, encode_json
+from .controller_protocol import encode_device_frame, encode_frame, encode_json
 from .device_status import DeviceStatusPoller
 from .hub import DeviceHub
 from .library import ArtifactCache, ProgramLibrary
@@ -63,6 +69,41 @@ def _bg_refused(step, status):
     return f'{step} refused: {wire.ACK_STATUS_NAMES.get(status, status)}'
 
 
+def hsv_to_rgb(h, s, v):
+    """Port of hsv_to_rgb in src/core/colors.cpp, so a panel fill shows the
+    color the device would render for it. h is degrees, wrapped into
+    [0, 360); s and v are clamped to [0, 1]; NaN reads as 0. Returns linear
+    (pre-gamma) 0-255 (r, g, b). This computes in double where the device
+    uses float, so a channel can land one step apart at a rounding tie."""
+    # fmodf keeps the dividend's sign, as math.fmod does; fmodf of an
+    # infinite hue is NaN, which the C code folds to 0.
+    h = math.fmod(h, 360.0) if math.isfinite(h) else 0.0
+    if h < 0.0:
+        h += 360.0
+    if not h < 360.0:
+        h = 0.0
+    s = min(s, 1.0) if s > 0.0 else 0.0
+    v = min(v, 1.0) if v > 0.0 else 0.0
+
+    if s <= 0.0:
+        r = g = b = v
+    else:
+        hh = h / 60.0
+        i = int(hh)
+        ff = hh - i
+        p = v * (1.0 - s)
+        q = v * (1.0 - s * ff)
+        t = v * (1.0 - s * (1.0 - ff))
+        r, g, b = ((v, t, p), (q, v, p), (p, v, t),
+                   (p, q, v), (t, p, v), (v, p, q))[min(i, 5)]
+    return tuple(int(c * 255.0 + 0.5) for c in (r, g, b))
+
+
+# The panel mode a panel-owned member's target intent means.
+_PANEL_MODES = {Intent.MANUAL: 'manual', Intent.PLAYING: 'program',
+                Intent.DETACHED: 'stopped'}
+
+
 class ControllerService:
     """Binds hub + session + library; the socket-free heart of the server.
 
@@ -88,8 +129,11 @@ class ControllerService:
         self._hub = hub
         self._session = Session(hub, config.devices, clock_us)
         self._device_status = DeviceStatusPoller(hub, clock_us)
+        animations_dir = config.animations_dir or config_mod.DEFAULT_ANIMATIONS_PATH
         self._library = library if library is not None else ProgramLibrary(
-            config.animations_dir or config_mod.DEFAULT_ANIMATIONS_PATH)
+            animations_dir)
+        self._panel_library = ProgramLibrary(str(Path(animations_dir) / 'library'))
+        self._panel_hsv = {}         # strip_id -> [h, s, v] of the last panel fill
         self._artifact_cache = ArtifactCache()
 
         self._loaded_program_id = None
@@ -145,8 +189,9 @@ class ControllerService:
     def tick_once(self):
         """Advance the session one tick and collect what to publish: session
         events, the full state when it changed, the catalog when it changed,
-        and any assembled preview frames. Returns (json_msgs, frame_msgs), both
-        lists of encoded bytes."""
+        any assembled preview frames, and the latest frame of each
+        panel-driven device. Returns (json_msgs, frame_msgs), both lists of
+        encoded bytes."""
         events = self._session.tick()
         for ev in events:
             if isinstance(ev, (MemberAttached, MemberDetached)):
@@ -168,6 +213,8 @@ class ControllerService:
 
         frame_msgs = [encode_frame(f.frame_index, f.cycle, f.t_ms, f.strips)
                       for f in self._session.drain_preview_frames()]
+        frame_msgs += [encode_device_frame(uid, rgb)
+                       for uid, rgb in self._session.drain_device_frames()]
         return json_msgs, frame_msgs
 
     def handle_cmd(self, cmd):
@@ -217,6 +264,7 @@ class ControllerService:
             return {'programs': self._catalog_dict()['programs']}
         if name == 'rescan':
             self._library.rescan()
+            self._panel_library.rescan()
             self._catalog_dirty = True
             return {}
         if name == 'publish':
@@ -225,6 +273,14 @@ class ControllerService:
             return self._cmd_set_background(cmd)
         if name == 'update_firmware':
             return self._cmd_update_firmware(cmd)
+        if name == 'panel_fill':
+            return self._cmd_panel_fill(cmd)
+        if name == 'panel_run':
+            return self._cmd_panel_run(cmd)
+        if name == 'panel_stop':
+            strip_id, _length = self._panel_strip(cmd)
+            self._session.panel_stop(strip_id)
+            return {}
         raise ValueError(f'unknown command: {name!r}')
 
     def _cmd_load(self, cmd):
@@ -239,6 +295,40 @@ class ControllerService:
         manifest = self._resolve_manifest(entry)
         self._session.load(manifest)   # raises ValueError on routing/geometry
         self._loaded_program_id = program_id
+        return {'program_id': program_id}
+
+    # -- operator panel -----------------------------------------------------
+
+    def _panel_strip(self, cmd):
+        """The strip_id a panel command names, with its configured length."""
+        strip_id = cmd.get('strip_id')
+        length = self._logical_strip_lengths().get(strip_id)
+        if length is None:
+            raise ValueError(f'unknown strip_id: {strip_id!r}')
+        return strip_id, length
+
+    def _cmd_panel_fill(self, cmd):
+        """Hold one color on the whole strip: h in degrees, s and v in 0..1."""
+        strip_id, length = self._panel_strip(cmd)
+        hsv = [cmd.get('h'), cmd.get('s'), cmd.get('v')]
+        if not all(isinstance(x, (int, float)) for x in hsv):
+            raise ValueError('panel_fill requires numeric h, s and v')
+        self._session.panel_manual(strip_id, bytes(hsv_to_rgb(*hsv)) * length)
+        self._panel_hsv[strip_id] = hsv
+        return {}
+
+    def _cmd_panel_run(self, cmd):
+        """Loop a panel-library program on the strip."""
+        strip_id, length = self._panel_strip(cmd)
+        program_id = cmd.get('program_id')
+        entry = self._panel_library.get(program_id)
+        if entry is None:
+            raise ValueError(f'unknown library program: {program_id!r}')
+        if entry.error is not None:
+            raise ValueError(f'program {program_id!r} has errors: {entry.error}')
+        manifest = self._compile_panel(entry, strip_id, length)
+        self._session.panel_run(strip_id, manifest.strips[strip_id].blob,
+                                ('panel', program_id, strip_id))
         return {'program_id': program_id}
 
     def _cmd_publish(self, cmd):
@@ -535,22 +625,42 @@ class ControllerService:
         topology = self._topology_fingerprint()
         manifest = self._artifact_cache.get(entry.source_hash, topology)
         if manifest is None:
-            manifest = self._compile(entry.source, entry.beat, entry.duration,
-                                     entry.loop)
+            manifest = self._compile(entry, self._logical_strip_lengths())
             self._artifact_cache.put(entry.source_hash, topology, manifest)
         return manifest
 
-    def _compile(self, source, beat, duration, loop):
+    def _compile_panel(self, entry, strip_id, length):
+        """Compile a panel-library program for one strip. The program names
+        its strip TARGET, bound here to strip_id, and must drive that strip
+        alone, loop, and not require sync: it runs on the device by itself,
+        outside the show's clock. Cached per strip and length, so two targets
+        never share a blob."""
+        topology = f'panel:{strip_id}:{length}'
+        manifest = self._artifact_cache.get(entry.source_hash, topology)
+        if manifest is None:
+            manifest = self._compile(entry, {strip_id: length}, TARGET=strip_id)
+            if (list(manifest.strips) != [strip_id] or not manifest.loop
+                    or manifest.requires_sync):
+                raise ValueError(
+                    f'library program {entry.program_id!r} must drive only '
+                    'strip(TARGET), loop, and not require sync')
+            self._artifact_cache.put(entry.source_hash, topology, manifest)
+        return manifest
+
+    def _compile(self, entry, strip_lengths, **names):
+        """Run a program's source against the given strip lengths, with any
+        extra names bound in its globals, and compile the manifest."""
         from elements.dsl import _builder, build_manifest, forever
         _builder.reset()
-        _builder.configured_strip_lengths = self._logical_strip_lengths()
+        _builder.configured_strip_lengths = strip_lengths
         try:
-            exec(source, {'__builtins__': __builtins__})
+            exec(entry.source, {'__builtins__': __builtins__, **names})
             # A None duration is DURATION = forever; the compiler resolves it
             # to MAX_PROGRAM_MS, looping.
-            return build_manifest(beat=beat,
-                                  duration=forever if duration is None else duration,
-                                  loop=loop)
+            return build_manifest(
+                beat=entry.beat,
+                duration=forever if entry.duration is None else entry.duration,
+                loop=entry.loop)
         finally:
             _builder.reset()
 
@@ -619,6 +729,10 @@ class ControllerService:
                 'profile_state': m.profile_state.name.lower(),
                 'last_refusal': list(m.last_refusal) if m.last_refusal else None,
                 'blocked': list(m.blocked) if m.blocked else None,
+                # Who drives the device: the loaded show, or the operator
+                # panel until the next load reclaims it.
+                'owner': m.owner,
+                'panel': self._panel_view(m),
                 # Progress of a set_background install, or None if never run. A
                 # copy, so in-place phase mutations by ACK callbacks don't also
                 # mutate the cached _last_state and defeat the change gate.
@@ -655,6 +769,18 @@ class ControllerService:
         return {'type': 'state', 'session': session, 'devices': devices,
                 'firmware': firmware}
 
+    def _panel_view(self, member):
+        """What the operator panel has a panel-owned member doing, or None."""
+        if member.owner != 'panel':
+            return None
+        target = member.target
+        mode = _PANEL_MODES[target.intent]
+        return {
+            'mode': mode,
+            'program_id': target.program_token[1] if mode == 'program' else None,
+            'hsv': self._panel_hsv.get(member.strip_id) if mode == 'manual' else None,
+        }
+
     def _update_available(self, uid, info):
         """Whether to offer uid the built image (see firmware.update_available).
 
@@ -676,7 +802,9 @@ class ControllerService:
             'strips': e.strips,
             'error': e.error,
         } for e in self._library.list_programs()]
-        return {'type': 'catalog', 'programs': programs}
+        library = [{'program_id': e.program_id, 'error': e.error}
+                   for e in self._panel_library.list_programs()]
+        return {'type': 'catalog', 'programs': programs, 'library': library}
 
     def _event_dict(self, ev):
         if isinstance(ev, MemberAttached):

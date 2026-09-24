@@ -15,6 +15,11 @@ verbs set those targets. Pause, resume, end-of-program completion, and
 preview-frame assembly (per-strip frames bucketed into whole-program frames)
 have since landed. Operator seek and live rejoin of a late or reconnecting
 device (a JUMP onto a compiler-marked safe interval) are deferred.
+
+An operator panel can also take one strip over, outside the show: a constant
+picture (panel_manual), a looping library program (panel_run), or dark
+(panel_stop). Its members are panel-owned, which the show verbs skip, until
+the next load() reclaims them.
 """
 
 import logging
@@ -44,16 +49,17 @@ class SessionState(Enum):
     ENDED = auto()
 
 
-# The controller's mirror of the device's playback core. The first five
-# values match the firmware DeviceState (src/app/playback.h); UNKNOWN is the
-# controller-only addition, appended last, for a device whose state has
-# not been confirmed since it connected.
+# The controller's mirror of the device's playback core. The first six
+# values match the firmware DeviceState (src/controller/playback.h); UNKNOWN
+# is the controller-only addition, appended last, for a device whose state
+# has not been confirmed since it connected.
 class DeviceState(Enum):
     IDLE = auto()
     LOADED = auto()
     PLAYING = auto()
     PAUSED = auto()
     ENDED = auto()
+    MANUAL = auto()
     UNKNOWN = auto()
 
 
@@ -64,6 +70,7 @@ class Intent(Enum):
     READY = auto()      # profile applied and blob loaded, parked at LOADED
     PLAYING = auto()    # playing from the shared anchor
     PAUSED = auto()     # paused at a cursor
+    MANUAL = auto()     # holding a constant picture (panel only)
 
 
 # A SET_PROFILE Ok means either "already matched" or "saved a new profile
@@ -85,6 +92,8 @@ class Target:
     strip_length: int = 0
     anchor_us: int = 0               # program_start_us, for PLAYING
     cursor_us: int = 0               # paused position, for PAUSED
+    pixels: bytes = None             # the MANUAL picture, one rgb triple per pixel
+    revision: int = 0                # which MANUAL picture; increases per panel fill
 
 
 @dataclass(frozen=True)
@@ -128,9 +137,11 @@ class Member:
         self.phase = DeviceState.UNKNOWN
         self.profile_state = ProfileState.UNKNOWN
         self.cursor_us = 0
+        self.owner = 'show'          # 'show', or 'panel' while the operator panel drives it
 
         self._target = Target(intent=Intent.DETACHED)
         self._loaded_token = None    # program_token confirmed loaded on the device
+        self._applied_manual = None  # MANUAL revision confirmed shown on the device
         self._inflight = None        # name of the command awaiting an ACK, or None
 
         self.last_refusal = None     # (command, status) of the latest non-Ok ACK; cleared on Ok
@@ -180,6 +191,7 @@ class Member:
         self.phase = DeviceState.UNKNOWN
         self.cursor_us = 0
         self._loaded_token = None
+        self._applied_manual = None
         self._inflight = None
         self.start_authorized = False
         self.retry_at_tick = 0
@@ -209,6 +221,8 @@ class Session:
         self._events = []
         self._preview = PreviewAssembler()
         self._preview_enabled = False
+        self._device_frames = {}     # uid -> latest rgb of a panel-owned member
+        self._manual_revision = 0
         self._tick_count = 0
 
         self.state = SessionState.IDLE
@@ -250,6 +264,7 @@ class Session:
             manifest.target_fps)
 
         for uid, member in self._members.items():
+            member.owner = 'show'     # the show reclaims any panel strip
             member._clear_blocked()   # a new program is a fresh chance to drive
             artifact = manifest.strips.get(member.strip_id)
             if artifact is None:
@@ -311,10 +326,8 @@ class Session:
         self.state = SessionState.PLAYING
         # A fresh run renumbers frames from 0; resume() does not (it continues).
         self._preview.reset_run()
-        for member in self._members.values():
+        for member in self._show_members():
             current = member.target
-            if current.intent is Intent.DETACHED:
-                continue
             # Authorize on the loaded program, not the instantaneous phase: a
             # member mid-transition (e.g. a stop just sent) still has the right
             # blob and should start once the reconciler resyncs it to LOADED.
@@ -366,9 +379,7 @@ class Session:
         while that device keeps running on the old one. Restart-while-playing
         is B2; until then play() is refused in this state. A stop already in
         flight is settling, so it does not count."""
-        for member in self._members.values():
-            if member.target.intent is Intent.DETACHED:
-                continue
+        for member in self._show_members():
             if member._inflight == 'start':
                 return True
             if (member.phase in (DeviceState.PLAYING, DeviceState.PAUSED)
@@ -381,9 +392,7 @@ class Session:
         paused (a Pause or Start in flight). resume() must wait for pause to
         settle, or it would re-anchor program time against a device that never
         actually paused and is still running on the old anchor."""
-        for member in self._members.values():
-            if member.target.intent is Intent.DETACHED:
-                continue
+        for member in self._show_members():
             if member._inflight in ('start', 'pause'):
                 return True
             if member.phase is DeviceState.PLAYING:
@@ -401,9 +410,7 @@ class Session:
         anchor the device has not adopted. Parked late members (start_authorized
         False, nothing in flight) are not caught, so pause() of the playing
         devices is not blocked by them."""
-        for member in self._members.values():
-            if member.target.intent is Intent.DETACHED:
-                continue
+        for member in self._show_members():
             if member._inflight in ('start', 'resume'):
                 return True   # in flight (first attempt or retry): wait for the ACK
             if member.start_authorized:
@@ -420,12 +427,11 @@ class Session:
         return False
 
     def _retarget_routed(self, intent, anchor_us=0, cursor_us=0):
-        """Replace the intent on every non-detached member, carrying its
-        program identity and blob forward. Detached members keep DETACHED."""
-        for member in self._members.values():
+        """Replace the intent on every routed show member, carrying its
+        program identity and blob forward. Detached members keep DETACHED
+        and panel members keep their panel target."""
+        for member in self._show_members():
             current = member.target
-            if current.intent is Intent.DETACHED:
-                continue
             member.set_target(Target(
                 intent=intent,
                 program_token=current.program_token,
@@ -434,6 +440,61 @@ class Session:
                 anchor_us=anchor_us,
                 cursor_us=cursor_us,
             ))
+
+    def _show_members(self):
+        """The members the show drives: show-owned and routed (not DETACHED).
+        The show verbs and their settling checks look at these alone."""
+        return [m for m in self._members.values()
+                if m.owner == 'show' and m.target.intent is not Intent.DETACHED]
+
+    # -----------------------------------------------------------------------
+    # Operator panel: drive every member serving one strip_id, outside the
+    # show. Each call takes those members over (owner 'panel'); the next
+    # load() gives them back. The targets survive a detach like show targets.
+    # -----------------------------------------------------------------------
+
+    def panel_manual(self, strip_id, rgb):
+        """Show a constant picture: rgb holds one r, g, b triple per pixel of
+        the strip's configured length. Each call is a new revision, so fills
+        issued faster than the device ACKs coalesce to the latest."""
+        members = self._strip_members(strip_id)
+        self._manual_revision += 1
+        for member in members:
+            self._panel_target(member, Target(
+                intent=Intent.MANUAL,
+                strip_length=member.strip_length,
+                pixels=bytes(rgb),
+                revision=self._manual_revision,
+            ))
+
+    def panel_run(self, strip_id, blob, program_token):
+        """Load and start a looping, unsynced program compiled for the strip.
+        program_token names it; the same token is not reloaded."""
+        for member in self._strip_members(strip_id):
+            self._panel_target(member, Target(
+                intent=Intent.PLAYING,
+                program_token=program_token,
+                blob=blob,
+                strip_length=member.strip_length,
+            ))
+
+    def panel_stop(self, strip_id):
+        """Blank the strip: one STOP, which leaves a manual picture at IDLE and
+        a panel program parked at LOADED. The members stay panel-owned."""
+        for member in self._strip_members(strip_id):
+            self._panel_target(member, Target(intent=Intent.DETACHED))
+
+    def _strip_members(self, strip_id):
+        members = [m for m in self._members.values() if m.strip_id == strip_id]
+        if not members:
+            raise ValueError(f'no configured device serves strip_id {strip_id!r}')
+        return members
+
+    @staticmethod
+    def _panel_target(member, target):
+        member.owner = 'panel'
+        member._clear_blocked()   # an operator action is a fresh chance to drive
+        member.set_target(target)
 
     # -----------------------------------------------------------------------
     # Device editing: add / edit / remove a configured device. The service
@@ -497,21 +558,34 @@ class Session:
             self._apply_event(event)
         self._check_end()
         self._reconcile()
-        if self._preview_enabled and self.state is SessionState.PLAYING:
+        if self._preview_enabled:
+            self._collect_frames(poll.frames)
+        return self._drain_events()
+
+    def _collect_frames(self, frames):
+        """A panel-owned member's frame is kept as its device's latest picture;
+        the rest feed program preview assembly while the show plays."""
+        playing = self.state is SessionState.PLAYING
+        if playing:
             live_us = self._clock_us() - self.program_start_us
             slack_us = _US_PER_S // max(1, self.manifest.target_fps)
-            for frame in poll.frames:
-                member = self._members.get(frame.uid)
-                # A packet whose program time runs past live by more than a frame
-                # is a straggler from a previous run (UID, phase, and token can
-                # still match across a replay); drop it. Compare elapsed time:
-                # a looping frame's time counts every earlier cycle.
-                elapsed_us = frame.cycle * self._duration_us() + frame.t_ms * 1000
-                if (member is not None and self._preview_active(member)
-                        and elapsed_us <= live_us + slack_us):
-                    self._preview.add(member.strip_id, frame.cycle, frame.t_ms,
-                                      frame.rgb)
-        return self._drain_events()
+        for frame in frames:
+            member = self._members.get(frame.uid)
+            if member is None:
+                continue
+            if member.owner == 'panel':
+                self._device_frames[frame.uid] = frame.rgb
+                continue
+            if not playing:
+                continue
+            # A packet whose program time runs past live by more than a frame
+            # is a straggler from a previous run (UID, phase, and token can
+            # still match across a replay); drop it. Compare elapsed time:
+            # a looping frame's time counts every earlier cycle.
+            elapsed_us = frame.cycle * self._duration_us() + frame.t_ms * 1000
+            if self._preview_active(member) and elapsed_us <= live_us + slack_us:
+                self._preview.add(member.strip_id, frame.cycle, frame.t_ms,
+                                  frame.rgb)
 
     def set_preview_enabled(self, enabled):
         """Turn preview-frame assembly on or off. Either edge starts a clean
@@ -534,6 +608,13 @@ class Session:
     def drain_preview_frames(self):
         """Whole-program preview frames assembled since the last call."""
         return self._preview.drain()
+
+    def drain_device_frames(self):
+        """(uid, rgb) of each panel-owned device's latest frame since the last
+        call."""
+        frames = list(self._device_frames.items())
+        self._device_frames.clear()
+        return frames
 
     def member(self, uid):
         return self._members.get(uid)
@@ -607,6 +688,16 @@ class Session:
                        lambda m: self._after_set_profile(m))
             return
 
+        # MANUAL is valid from any device state, so no STOP first. A new
+        # revision replaces the picture; the confirmed one is left alone.
+        if target.intent is Intent.MANUAL:
+            if member._applied_manual != target.revision:
+                revision = target.revision
+                self._send(member, 'manual', wire.encode_manual(target.pixels),
+                           lambda m: self._after_manual(m, revision),
+                           still_relevant=lambda m: m.target.intent is Intent.MANUAL)
+            return
+
         if member._loaded_token != target.program_token:
             token = target.program_token
             self._send(member, 'load', wire.encode_load(target.blob),
@@ -621,13 +712,17 @@ class Session:
             return
 
         if target.intent is Intent.PLAYING:
+            # A panel program is the member's own: it starts whenever loaded,
+            # whatever the show is doing. It is unsynced, so the device ignores
+            # the anchor (0).
+            panel = member.owner == 'panel'
             # Don't drive playback unless the session is actually playing. After
             # a natural end the targets stay PLAYING, but a member that still
             # carries start authorization (e.g. a Start refused Unsynced, never
             # cleared) would otherwise be Started into an ended session. play()
             # re-arms the session before any replay; profile and load above
             # still run, so a device attaching while ended can prepare.
-            if self.state is not SessionState.PLAYING:
+            if not panel and self.state is not SessionState.PLAYING:
                 return
             # The authorized cohort starts from program time 0. An unauthorized
             # PLAYING member at LOADED (a late joiner / reconnector) parks dark
@@ -635,7 +730,7 @@ class Session:
             # ENDED is allowed so replay Starts without a reload (the device
             # permits Start from ENDED and resets its engine).
             if (member.phase in (DeviceState.LOADED, DeviceState.ENDED)
-                    and member.start_authorized):
+                    and (panel or member.start_authorized)):
                 self._send(member, 'start', wire.encode_start(target.anchor_us),
                            lambda m: self._after_start(m),
                            still_relevant=lambda m: m.target.intent is Intent.PLAYING)
@@ -691,8 +786,9 @@ class Session:
             member.profile_state = ProfileState.UNKNOWN
             self._invalidate_load(member)
         elif status == wire.ACK_WRONG_STATE:
-            if command == 'load':
-                # LOAD WrongState means no hardware profile (command_handler.cpp).
+            if command in ('load', 'manual'):
+                # LOAD or MANUAL WrongState means no hardware profile
+                # (command_handler.cpp).
                 member.profile_state = ProfileState.UNKNOWN
             # Either way our phase model drifted; force a reload.
             self._invalidate_load(member)
@@ -719,19 +815,33 @@ class Session:
         member._loaded_token = target.program_token
         member.serving = True
 
+    def _after_manual(self, member, revision):
+        # The device dropped any program for the picture.
+        member.phase = DeviceState.MANUAL
+        member._loaded_token = None
+        member._applied_manual = revision
+        member.serving = True
+
     def _after_stop(self, member):
         # STOP ACKs Ok unconditionally; only treat it as LOADED when we knew a
         # program was loaded, so an idle device is not mistaken for LOADED.
+        # A manual picture holds no program, so STOP returns it to IDLE.
         if member._loaded_token is not None:
             member.phase = DeviceState.LOADED
+        elif member.phase is DeviceState.MANUAL:
+            member.phase = DeviceState.IDLE
 
     def _after_stop_detached(self, member):
-        self._after_stop(member)   # the blank Stop also returns it to LOADED
+        self._after_stop(member)   # the blank Stop settles the phase the same way
         member.serving = False
 
     def _after_start(self, member):
         member.start_authorized = False   # the initial Start is consumed
-        member.phase = self._playing_phase()
+        # A panel restart of a program kept loaded across a panel STOP skips
+        # LOAD, so a Start is what makes the device serve again.
+        member.serving = True
+        member.phase = (DeviceState.PLAYING if member.owner == 'panel'
+                        else self._playing_phase())
 
     def _after_pause(self, member):
         member.phase = DeviceState.PAUSED
@@ -776,8 +886,6 @@ class Session:
         if self._clock_us() - self.program_start_us < self._duration_us():
             return
         self.state = SessionState.ENDED
-        for member in self._members.values():
-            if member.target.intent is Intent.DETACHED:
-                continue
+        for member in self._show_members():
             if member.phase is DeviceState.PLAYING:
                 member.phase = DeviceState.ENDED

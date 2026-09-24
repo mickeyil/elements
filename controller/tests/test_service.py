@@ -9,7 +9,13 @@ import json
 import struct
 
 from elemctl.config import Config, DeviceConfig, load_config_obj
-from elemctl.controller_protocol import KIND_FRAME, KIND_JSON, parse_json_payload
+from elemctl.controller_protocol import (
+    KIND_DEVICE_FRAME,
+    KIND_FRAME,
+    KIND_JSON,
+    parse_device_frame_payload,
+    parse_json_payload,
+)
 from elemctl.device_status import STATUS_QUERY_INTERVAL_US
 from elemctl.hub import DeviceConnected, DeviceDisconnected, DeviceInfo, HubPoll
 from elemctl.library import ProgramLibrary
@@ -17,7 +23,9 @@ from elemctl.service import (
     FIRMWARE_CHECK_INTERVAL_US,
     OTA_PROGRESS_INTERVAL_US,
     ControllerService,
+    hsv_to_rgb,
 )
+from elemctl.session import Intent
 from elemctl import wire
 from elemctl.wire import AckMsg, FramePreview
 
@@ -93,14 +101,14 @@ class FakeHub:
         self.closed = True
 
 
-def make_service(tmp_path, with_program=True, ota_factory=None):
+def make_service(tmp_path, with_program=True, ota_factory=None, devices=None):
     if with_program:
         (tmp_path / 'prog.py').write_text(PROGRAM)
     # The image path is pinned inside tmp_path so the repo's own build
     # output never leaks into a test.
     config = Config(discovery_port=6040, link_port=6041, frame_port=6042,
                     sync_port=6043, log_port=6044,
-                    devices=[DeviceConfig('sim-a', 'main', 30)],
+                    devices=devices or [DeviceConfig('sim-a', 'main', 30)],
                     animations_dir=str(tmp_path),
                     firmware_image=str(tmp_path / 'fw' / 'firmware.bin'))
     hub = FakeHub()
@@ -980,3 +988,164 @@ def test_update_progress_is_throttled_but_outcome_is_immediate(tmp_path, fake_ot
     # Nothing further changes, so nothing further is published.
     json_msgs, _ = service.tick_once()
     assert _by_type(_json(json_msgs), 'state') == []
+
+
+# ---------------------------------------------------------------------------
+# Operator panel: fill / run / stop one strip
+# ---------------------------------------------------------------------------
+
+# A panel-library program: written for whichever strip TARGET names.
+GLOW = (
+    "from elements.dsl import forever, strip, paint\n"
+    "BEAT = 1.0\n"
+    "DURATION = forever\n"
+    "main = strip(TARGET)\n"
+    "paint(color='white').schedule(main.pixels('0'), at=0, duration=forever)\n"
+)
+
+ONCE = (
+    "from elements.dsl import sec, strip, paint\n"
+    "BEAT = 1.0\n"
+    "DURATION = 4.0\n"
+    "main = strip(TARGET)\n"
+    "paint(color='white').schedule(main.pixels('0'), at=0, duration=sec(4))\n"
+)
+
+PAIR = (
+    "from elements.dsl import forever, strip, paint\n"
+    "BEAT = 1.0\n"
+    "DURATION = forever\n"
+    "main = strip(TARGET)\n"
+    "other = strip('other', length=5)\n"
+    "paint(color='white').schedule(main.pixels('0'), at=0, duration=forever)\n"
+    "paint(color='white').schedule(other.pixels('0'), at=0, duration=forever)\n"
+)
+
+
+def write_library(tmp_path, **programs):
+    library = tmp_path / 'library'
+    library.mkdir(exist_ok=True)
+    for program_id, source in programs.items():
+        (library / f'{program_id}.py').write_text(source)
+
+
+def _panel_device(service, uid='sim-a'):
+    state = _by_type(_json(service.snapshot_messages()), 'state')[0]
+    return next(d for d in state['devices'] if d['uid'] == uid)
+
+
+def test_hsv_to_rgb_follows_the_firmware_rules():
+    # src/core/colors.cpp: hue wraps into [0, 360), s and v clamp to [0, 1],
+    # s = 0 is grey at v, and each channel rounds half up.
+    assert hsv_to_rgb(120, 1, 1) == (0, 255, 0)
+    assert hsv_to_rgb(480, 1, 1) == hsv_to_rgb(-240, 1, 1) == (0, 255, 0)
+    assert hsv_to_rgb(360, 1, 1) == (255, 0, 0)
+    assert hsv_to_rgb(float('nan'), 1, 1) == (255, 0, 0)
+    assert hsv_to_rgb(240, 2, 3) == (0, 0, 255)
+    assert hsv_to_rgb(200, -1, 0.5) == (128, 128, 128)
+    assert hsv_to_rgb(330, 0.5, 1) == (255, 128, 191)
+
+
+def test_panel_fill_holds_the_color_on_the_whole_strip(tmp_path):
+    service, hub = make_service(tmp_path)
+    reply = cmd(service, 'panel_fill', strip_id='main', h=120, s=1, v=1)
+    assert reply['ok'] is True
+
+    hub.emit(DeviceConnected(uid='sim-a', boot_token=1, rebooted=False))
+    service.tick_once(); _ack_ok(hub)                  # SET_PROFILE
+    service.tick_once()
+    assert hub.sent[-1][1] == wire.encode_manual(bytes((0, 255, 0)) * 30)
+
+
+def test_panel_commands_refuse_bad_input(tmp_path):
+    service, _hub = make_service(tmp_path)
+    assert cmd(service, 'panel_fill', strip_id='nope', h=0, s=1, v=1)['ok'] is False
+    assert cmd(service, 'panel_fill', strip_id='main', h='red', s=1, v=1)['ok'] is False
+    assert cmd(service, 'panel_run', strip_id='main', program_id='nope')['ok'] is False
+    assert cmd(service, 'panel_stop', strip_id='nope')['ok'] is False
+    assert service._session.member('sim-a').owner == 'show'
+
+
+def test_panel_run_compiles_the_library_program_per_strip(tmp_path):
+    service, _hub = make_service(tmp_path, devices=[
+        DeviceConfig('sim-a', 'main', 30), DeviceConfig('sim-b', 'side', 12)])
+    write_library(tmp_path, glow=GLOW)
+    cmd(service, 'rescan')
+
+    assert cmd(service, 'panel_run', strip_id='main', program_id='glow')['ok'] is True
+    assert cmd(service, 'panel_run', strip_id='side', program_id='glow')['ok'] is True
+    target = service._session.member('sim-a').target
+    assert target.intent is Intent.PLAYING
+    assert target.program_token == ('panel', 'glow', 'main')
+
+    # TARGET bound each compile to its own strip, cached apart.
+    source_hash = service._panel_library.get('glow').source_hash
+    main = service._artifact_cache.get(source_hash, 'panel:main:30')
+    side = service._artifact_cache.get(source_hash, 'panel:side:12')
+    assert [(a.strip_id, a.length) for a in main.strips.values()] == [('main', 30)]
+    assert [(a.strip_id, a.length) for a in side.strips.values()] == [('side', 12)]
+    assert target.blob is main.strips['main'].blob
+
+    cmd(service, 'panel_run', strip_id='main', program_id='glow')
+    assert service._session.member('sim-a').target.blob is target.blob   # a cache hit
+
+
+def test_panel_run_refuses_non_looping_or_multi_strip_programs(tmp_path):
+    service, _hub = make_service(tmp_path)
+    write_library(tmp_path, once=ONCE, pair=PAIR)
+    cmd(service, 'rescan')
+    for program_id in ('once', 'pair'):
+        reply = cmd(service, 'panel_run', strip_id='main', program_id=program_id)
+        assert reply['ok'] is False
+        assert 'strip(TARGET), loop' in reply['error']
+    assert service._session.member('sim-a').owner == 'show'
+
+
+def test_catalog_lists_the_panel_library(tmp_path):
+    service, _hub = make_service(tmp_path)
+    write_library(tmp_path, glow=GLOW, broken='BEAT = 1.0\n')
+    cmd(service, 'rescan')
+    catalog = _by_type(_json(service.snapshot_messages()), 'catalog')[0]
+    assert [p['program_id'] for p in catalog['programs']] == ['prog']
+    assert catalog['library'] == [{'program_id': 'broken', 'error': 'missing DURATION'},
+                                  {'program_id': 'glow', 'error': None}]
+
+
+def test_state_shows_panel_ownership_and_mode(tmp_path):
+    service, _hub = make_service(tmp_path)
+    write_library(tmp_path, glow=GLOW)
+    cmd(service, 'rescan')
+    device = _panel_device(service)
+    assert (device['owner'], device['panel']) == ('show', None)
+
+    cmd(service, 'panel_fill', strip_id='main', h=30, s=0.5, v=0.25)
+    device = _panel_device(service)
+    assert device['owner'] == 'panel'
+    assert device['panel'] == {'mode': 'manual', 'program_id': None, 'hsv': [30, 0.5, 0.25]}
+
+    cmd(service, 'panel_run', strip_id='main', program_id='glow')
+    assert _panel_device(service)['panel'] == {'mode': 'program', 'program_id': 'glow',
+                                               'hsv': None}
+    cmd(service, 'panel_stop', strip_id='main')
+    assert _panel_device(service)['panel'] == {'mode': 'stopped', 'program_id': None,
+                                               'hsv': None}
+
+    cmd(service, 'load', program_id='prog')           # the show reclaims the strip
+    device = _panel_device(service)
+    assert (device['owner'], device['panel']) == ('show', None)
+
+
+def test_panel_device_frame_is_published(tmp_path):
+    service, hub = make_service(tmp_path)
+    cmd(service, 'panel_fill', strip_id='main', h=0, s=1, v=1)
+    hub.emit(DeviceConnected(uid='sim-a', boot_token=1, rebooted=False))
+    service.tick_once(); _ack_ok(hub)                  # SET_PROFILE
+    service.tick_once(); _ack_ok(hub)                  # MANUAL
+    service.set_preview_enabled(True)
+
+    rgb = bytes((255, 0, 0)) * 30
+    hub.frames = [FramePreview(uid='sim-a', frame_index=1, cycle=0, t_ms=0, rgb=rgb)]
+    _json_msgs, frame_msgs = service.tick_once()
+    assert len(frame_msgs) == 1
+    assert frame_msgs[0][4] == KIND_DEVICE_FRAME
+    assert parse_device_frame_payload(frame_msgs[0][5:]) == ('sim-a', rgb)

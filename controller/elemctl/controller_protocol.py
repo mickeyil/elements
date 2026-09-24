@@ -13,8 +13,9 @@ PROTOCOL_VERSION = 3
 ROLE_WRITER = 'writer'
 ROLE_OBSERVER = 'observer'
 
-KIND_JSON = 0x01   # UTF-8 JSON
-KIND_FRAME = 0x02  # binary program frame
+KIND_JSON = 0x01          # UTF-8 JSON
+KIND_FRAME = 0x02         # binary program frame
+KIND_DEVICE_FRAME = 0x03  # binary frame of one panel-driven device
 
 _HEADER = struct.Struct('<IB')  # length(u32) + kind(u8)
 _FRAME_HEADER = struct.Struct('<III')  # frame_index(u32) + cycle(u32) + t_ms(u32)
@@ -40,9 +41,27 @@ def encode_frame(frame_index: int, cycle: int, t_ms: int,
     return _HEADER.pack(1 + len(body), KIND_FRAME) + body
 
 
+def encode_device_frame(uid: str, rgb: bytes) -> bytes:
+    """Encode one device's latest frame as a length-prefixed
+    controller-protocol message: the picture of a strip the operator panel
+    drives, outside any program frame.
+
+    Payload: [u8 uid_len][uid utf-8][rgb], three rgb bytes per pixel.
+    """
+    raw = uid.encode('utf-8')
+    body = bytes([len(raw)]) + raw + rgb
+    return _HEADER.pack(1 + len(body), KIND_DEVICE_FRAME) + body
+
+
 def parse_json_payload(payload: bytes) -> dict:
     """Decode a KIND_JSON payload to a dict."""
     return json.loads(payload.decode('utf-8'))
+
+
+def parse_device_frame_payload(payload: bytes) -> tuple[str, bytes]:
+    """Decode a KIND_DEVICE_FRAME payload to (uid, rgb)."""
+    end = 1 + payload[0]
+    return payload[1:end].decode('utf-8'), payload[end:]
 
 
 class ProtocolReader:
