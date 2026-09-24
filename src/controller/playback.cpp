@@ -1,5 +1,7 @@
 #include "controller/playback.h"
 
+#include <cstring>
+
 #include "core/decoder.h"
 
 namespace {
@@ -175,8 +177,22 @@ RenderFrameResult Playback::handle_stop()
     }
     clear_render_buffer_();
     reset_timing_state_();
-    _state = DeviceState::LOADED;
+    _state = _engine ? DeviceState::LOADED : DeviceState::IDLE;
     return RenderFrameResult::Rendered;
+}
+
+bool Playback::handle_manual(const uint8_t* rgb, size_t len)
+{
+    if (!_profile.is_valid() || len != _strip.byte_size()) {
+        return false;
+    }
+
+    unload_program_();
+    reset_program_state_();
+    std::memcpy(_strip.bytes(), rgb, len);
+    _present_pending = true;
+    _state = DeviceState::MANUAL;
+    return true;
 }
 
 void Playback::reset_for_detach()
@@ -270,6 +286,7 @@ uint32_t Playback::current_t_ms() const
     switch (_state) {
         case DeviceState::IDLE:
         case DeviceState::LOADED:
+        case DeviceState::MANUAL:
             return 0;
         case DeviceState::PAUSED:
         case DeviceState::PLAYING:

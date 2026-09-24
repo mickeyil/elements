@@ -31,11 +31,12 @@ enum class AckStatus : uint8_t {
 // payloads (the two query commands) go through the caller's
 // WireWriter; the processor reads the length off bytes_written().
 //
-// Two commands act beyond their ACK, through AppContext flags:
+// Some commands act beyond their ACK, through AppContext flags:
 //   - Reboot sets reboot_requested; the App reboots after the ACK is
 //     flushed. SystemPlatform is never called from here.
 //   - PlayLocalAnimation sets local_program_loaded, which makes the
-//     App's render loop restart the animation on Ended.
+//     App's render loop restart the animation on Ended. Load and Manual
+//     clear it.
 //
 // Inbound REGISTER (0x00) is not handled; it is the link's one-shot
 // outbound hello and ACKs UnknownCommand like any other unknown opcode.
@@ -60,6 +61,7 @@ private:
     AckStatus handle_resume_(WireReader& r);
     AckStatus handle_stop_(WireReader& r);
     AckStatus handle_play_local_animation_(WireReader& r);
+    AckStatus handle_manual_(WireReader& r);
     AckStatus handle_store_animation_(WireReader& r);
     AckStatus handle_erase_animation_(WireReader& r);
     AckStatus handle_set_animation_order_(WireReader& r);

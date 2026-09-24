@@ -975,6 +975,29 @@ TEST_CASE("a failed LOAD blanks the LEDs")
     CHECK(is_black(h.last_frame()));
 }
 
+TEST_CASE("MANUAL over a playing program presents its picture once, no blank")
+{
+    Harness h;
+    h.attach();
+    load_and_start(h);
+    h.tcp.sent.clear();
+
+    h.advance(5'000);
+    h.command(CMD_MANUAL, {10, 20, 30});
+    CHECK(h.tcp.sent == ack_ok());
+    REQUIRE(h.frames() == 2);
+    CHECK(h.last_frame().r == 10);
+    CHECK(h.last_frame().g == 20);
+    CHECK(h.last_frame().b == 30);
+    CHECK(h.last_frame().cycle == 0);
+    CHECK(h.last_frame().t_ms == 0);
+
+    // The program is gone: nothing renders over the picture.
+    h.advance(100'000);
+    h.app.tick();
+    CHECK(h.frames() == 2);
+}
+
 TEST_CASE("re-attaching blanks the running background")
 {
     Harness h;

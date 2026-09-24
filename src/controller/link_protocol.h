@@ -7,7 +7,7 @@
 // Opcode behavior lives with the handlers in src/command_handler.cpp.
 
 // Bumped on every breaking wire change. Sent in REGISTER.
-constexpr uint8_t PROTOCOL_VERSION = 5;
+constexpr uint8_t PROTOCOL_VERSION = 6;
 
 // ---- Session / configuration ----------------------------------------------
 
@@ -24,6 +24,7 @@ constexpr uint8_t CMD_PAUSE                = 0x13;
 constexpr uint8_t CMD_RESUME               = 0x14;
 constexpr uint8_t CMD_STOP                 = 0x15;
 constexpr uint8_t CMD_PLAY_LOCAL_ANIMATION = 0x16;
+constexpr uint8_t CMD_MANUAL               = 0x17;  // payload: u8 r, g, b per pixel
 
 // ---- Local animation storage ----------------------------------------------
 

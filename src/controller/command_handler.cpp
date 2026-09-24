@@ -68,6 +68,7 @@ AckStatus CommandHandler::handle(uint8_t opcode,
         case CMD_RESUME:                 return handle_resume_(r);
         case CMD_STOP:                   return handle_stop_(r);
         case CMD_PLAY_LOCAL_ANIMATION:   return handle_play_local_animation_(r);
+        case CMD_MANUAL:                 return handle_manual_(r);
         case CMD_STORE_ANIMATION:        return handle_store_animation_(r);
         case CMD_ERASE_ANIMATION:        return handle_erase_animation_(r);
         case CMD_SET_ANIMATION_ORDER:    return handle_set_animation_order_(r);
@@ -192,6 +193,24 @@ AckStatus CommandHandler::handle_play_local_animation_(WireReader& r)
         case LocalPlayOutcome::Status::StartFailed:  return map_playback_result(out.start_result);
     }
     return AckStatus::Error;  // unreachable
+}
+
+AckStatus CommandHandler::handle_manual_(WireReader& r)
+{
+    if (!_ctx.playback.has_hardware_profile()) {
+        return AckStatus::WrongState;
+    }
+    const size_t len = r.remaining();
+    const uint8_t* rgb = r.take(len);
+    if (rgb == nullptr || len % sizeof(rgb_t) != 0) {
+        return AckStatus::BadPayload;
+    }
+    // Whole triples, but not one per pixel of the active profile.
+    if (!_ctx.playback.handle_manual(rgb, len)) {
+        return AckStatus::ProfileMismatch;
+    }
+    _ctx.local_program_loaded = false;
+    return AckStatus::Ok;
 }
 
 AckStatus CommandHandler::handle_store_animation_(WireReader& r)

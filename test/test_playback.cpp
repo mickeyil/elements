@@ -585,6 +585,18 @@ TEST_CASE("Playback: handle_stop from non-IDLE clears strip and goes to LOADED",
     CHECK(strip_is_black(pb));
 }
 
+TEST_CASE("Playback: handle_stop from LOADED stays LOADED", "[playback]") {
+    set_clock_us(0);
+    SyncedClock clock;
+    Playback pb(1, clock);
+    auto blob = build_paint_blob(2.0f, false);
+    REQUIRE(pb.handle_load(blob.data(), blob.size()));
+
+    CHECK(pb.handle_stop() == RenderFrameResult::Rendered);
+    CHECK(pb.state() == DeviceState::LOADED);
+    CHECK(pb.duration_ms() == 2000);
+}
+
 TEST_CASE("Playback: handle_stop from IDLE is a no-op", "[playback]") {
     set_clock_us(0);
     SyncedClock clock;
@@ -1107,5 +1119,149 @@ TEST_CASE("Playback: a failed load and reset_for_detach request presentation",
     REQUIRE(pb.handle_load(blob.data(), blob.size()));
     REQUIRE(pb.take_present_request());
     pb.reset_for_detach();
+    CHECK(pb.take_present_request());
+}
+
+// ---------------------------------------------------------------------------
+// handle_manual
+// ---------------------------------------------------------------------------
+
+namespace {
+
+bool strip_equals(const Playback& pb, const std::vector<uint8_t>& rgb) {
+    return pb.strip().byte_size() == rgb.size()
+        && std::memcmp(pb.strip().bytes(), rgb.data(), rgb.size()) == 0;
+}
+
+const std::vector<uint8_t> BLUE = {0, 0, 255};
+const std::vector<uint8_t> GREEN = {0, 255, 0};
+
+}  // namespace
+
+TEST_CASE("Playback: handle_manual from IDLE shows the pixels and presents once",
+          "[playback][manual]") {
+    set_clock_us(0);
+    SyncedClock clock;
+    Playback pb(3, clock);
+    const std::vector<uint8_t> rgb = {255, 0, 0, 0, 255, 0, 10, 20, 30};
+
+    REQUIRE(pb.handle_manual(rgb.data(), rgb.size()));
+    CHECK(pb.state() == DeviceState::MANUAL);
+    CHECK(strip_equals(pb, rgb));
+    CHECK(pb.take_present_request());
+    CHECK_FALSE(pb.take_present_request());
+    CHECK(pb.current_cycle() == 0);
+    CHECK(pb.current_t_ms() == 0);
+    CHECK(pb.duration_ms() == 0);
+    CHECK(pb.target_fps() == 0);
+
+    // Nothing renders over the picture.
+    set_clock_us(1'000'000);
+    CHECK(pb.render_next_frame() == RenderFrameResult::Unchanged);
+    CHECK(strip_equals(pb, rgb));
+    CHECK_FALSE(pb.take_present_request());
+}
+
+TEST_CASE("Playback: handle_manual rejects no profile and a wrong length",
+          "[playback][manual]") {
+    set_clock_us(0);
+    SyncedClock clock;
+    Playback bare(clock);
+    CHECK_FALSE(bare.handle_manual(BLUE.data(), BLUE.size()));
+    CHECK(bare.state() == DeviceState::IDLE);
+
+    Playback pb(2, clock);
+    auto blob = build_paint_blob(2.0f, false);
+    REQUIRE(pb.handle_load(blob.data(), blob.size()));
+    REQUIRE(pb.take_present_request());
+    CHECK_FALSE(pb.handle_manual(BLUE.data(), BLUE.size()));
+    CHECK(pb.state() == DeviceState::LOADED);
+    CHECK(pb.duration_ms() == 2000);
+    CHECK_FALSE(pb.take_present_request());
+}
+
+TEST_CASE("Playback: handle_manual while PLAYING drops the program",
+          "[playback][manual]") {
+    set_clock_us(0);
+    SyncedClock clock;
+    Playback pb(1, clock);
+    auto blob = build_paint_blob(2.0f, false);
+    REQUIRE(pb.handle_load(blob.data(), blob.size()));
+    pb.handle_start(0);
+    set_clock_us(int64_t(0.5 * 1e6));
+    REQUIRE(pb.render_next_frame() == RenderFrameResult::Rendered);
+    REQUIRE(pb.take_present_request());
+
+    REQUIRE(pb.handle_manual(BLUE.data(), BLUE.size()));
+    CHECK(pb.state() == DeviceState::MANUAL);
+    CHECK(pb.duration_ms() == 0);
+    CHECK(pb.target_fps() == 0);
+    CHECK(pb.current_t_ms() == 0);
+    CHECK(strip_equals(pb, BLUE));
+    CHECK(pb.take_present_request());
+    CHECK_FALSE(pb.take_present_request());
+
+    set_clock_us(int64_t(1.0 * 1e6));
+    CHECK(pb.render_next_frame() == RenderFrameResult::Unchanged);
+    CHECK(strip_equals(pb, BLUE));
+}
+
+TEST_CASE("Playback: a second MANUAL replaces the picture", "[playback][manual]") {
+    set_clock_us(0);
+    SyncedClock clock;
+    Playback pb(1, clock);
+    REQUIRE(pb.handle_manual(BLUE.data(), BLUE.size()));
+    REQUIRE(pb.take_present_request());
+
+    REQUIRE(pb.handle_manual(GREEN.data(), GREEN.size()));
+    CHECK(pb.state() == DeviceState::MANUAL);
+    CHECK(strip_equals(pb, GREEN));
+    CHECK(pb.take_present_request());
+    CHECK_FALSE(pb.take_present_request());
+}
+
+TEST_CASE("Playback: STOP from MANUAL clears the strip and goes to IDLE",
+          "[playback][manual]") {
+    set_clock_us(0);
+    SyncedClock clock;
+    Playback pb(1, clock);
+    REQUIRE(pb.handle_manual(BLUE.data(), BLUE.size()));
+    REQUIRE(pb.take_present_request());
+
+    CHECK(pb.handle_stop() == RenderFrameResult::Rendered);
+    CHECK(pb.state() == DeviceState::IDLE);
+    CHECK(strip_is_black(pb));
+    CHECK(pb.take_present_request());
+}
+
+TEST_CASE("Playback: START, RESUME, JUMP and PAUSE leave MANUAL alone",
+          "[playback][manual]") {
+    set_clock_us(0);
+    SyncedClock clock;
+    Playback pb(1, clock);
+    REQUIRE(pb.handle_manual(BLUE.data(), BLUE.size()));
+    REQUIRE(pb.take_present_request());
+
+    CHECK(pb.handle_start(0) == PlaybackResult::WrongState);
+    CHECK(pb.handle_resume(0) == PlaybackResult::WrongState);
+    CHECK(pb.handle_jump(500) == PlaybackResult::WrongState);
+    pb.handle_pause();
+    CHECK(pb.state() == DeviceState::MANUAL);
+    CHECK(strip_equals(pb, BLUE));
+    CHECK_FALSE(pb.take_present_request());
+}
+
+TEST_CASE("Playback: LOAD after MANUAL reaches LOADED", "[playback][manual]") {
+    set_clock_us(0);
+    SyncedClock clock;
+    Playback pb(1, clock);
+    REQUIRE(pb.handle_manual(BLUE.data(), BLUE.size()));
+    REQUIRE(pb.take_present_request());
+
+    auto blob = build_paint_blob(2.0f, false);
+    REQUIRE(pb.handle_load(blob.data(), blob.size()));
+    CHECK(pb.state() == DeviceState::LOADED);
+    CHECK(pb.duration_ms() == 2000);
+    CHECK(strip_is_black(pb));
     CHECK(pb.take_present_request());
 }

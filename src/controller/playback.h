@@ -16,11 +16,17 @@
 // Owners drive it with command handlers and sample frames via render_*().
 //
 // The strip changes outside the frame loop too: STOP, LOAD, detach and the
-// end of a program all clear it. Every such clear and every rendered frame
-// raises a presentation request that the owner reads with
-// take_present_request() and answers by writing the strip to its output,
-// whatever the playback state. That is what keeps the LEDs equal to the
-// strip: a STOP blanks them even though no frame is due.
+// end of a program all clear it, and MANUAL overwrites it. Every such change
+// and every rendered frame raises a presentation request that the owner
+// reads with take_present_request() and answers by writing the strip to its
+// output, whatever the playback state. That is what keeps the LEDs equal to
+// the strip: a STOP blanks them even though no frame is due.
+//
+// MANUAL holds a constant picture handed over pixel by pixel, with no
+// program loaded: nothing renders and the cursor reads 0. Another MANUAL
+// replaces the picture, STOP clears it and returns to IDLE, and LOAD, a
+// profile change or detach take their usual path; START, RESUME and JUMP
+// are WrongState.
 //
 // Clock domain is selected per loaded program: requires_sync=true reads
 // SyncedClock::now_remote_us(); requires_sync=false reads now_local_us().
@@ -29,7 +35,8 @@
 // and each frame renders at that time modulo the duration. The frame that
 // crosses into a new cycle (or skips several) rewinds the engine first.
 
-enum class DeviceState : uint8_t { IDLE, LOADED, PLAYING, PAUSED, ENDED };
+// New states go last: the controller mirrors this order.
+enum class DeviceState : uint8_t { IDLE, LOADED, PLAYING, PAUSED, ENDED, MANUAL };
 
 enum class RenderFrameResult : uint8_t {
     // Strip was not modified by this call.
@@ -101,8 +108,16 @@ public:
     // preserved cursor (anchor = now_local_us() - cursor).
     PlaybackResult handle_resume(int64_t program_start_us);
 
-    // Stop and return to LOADED. Engine reset, strip cleared.
+    // Stop: engine reset, strip cleared. Returns to LOADED when a program is
+    // loaded, else (from MANUAL) to IDLE. A no-op from IDLE.
     RenderFrameResult handle_stop();
+
+    // Show a constant picture: `rgb` holds one program-space (pre-gamma)
+    // r, g, b triple per pixel. Drops any loaded program and timing, copies
+    // the pixels into the strip, enters MANUAL and raises one presentation
+    // request, from any state. Returns false, changing nothing, without a
+    // hardware profile or unless `len` is exactly strip_length() triples.
+    bool handle_manual(const uint8_t* rgb, size_t len);
 
     // Drop the loaded program and timing; transition to IDLE. The strip is
     // cleared, which raises a presentation request like any other clear.
@@ -116,8 +131,8 @@ public:
     RenderFrameResult render_next_frame();
 
     // Does the strip hold output not yet presented? True once after every
-    // buffer clear and every rendered frame; this call consumes it. PAUSE
-    // and JUMP leave the strip alone and raise nothing.
+    // buffer clear, MANUAL picture and rendered frame; this call consumes
+    // it. PAUSE and JUMP leave the strip alone and raise nothing.
     bool take_present_request();
 
     DeviceState state() const;
@@ -127,8 +142,8 @@ public:
     // Returns 0 when no program is loaded.
     uint8_t target_fps() const;
     // Where the cursor sits: the loop cycle (always 0 for a non-looping
-    // program) and ms into it. 0/0 in IDLE and LOADED; ENDED reports the
-    // duration.
+    // program) and ms into it. 0/0 in IDLE, LOADED and MANUAL; ENDED
+    // reports the duration.
     uint32_t current_cycle() const;
     uint32_t current_t_ms() const;
     uint16_t strip_length() const;

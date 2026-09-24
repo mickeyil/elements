@@ -194,13 +194,14 @@ std::vector<uint8_t> build_paint_blob(uint16_t strip_length, float duration,
 }
 
 // ---------------------------------------------------------------------------
-// Harness: real Playback (strip length 1) and AnimationStore over fakes
+// Harness: real Playback (strip length 1 by default; 0 leaves it without a
+// hardware profile) and AnimationStore over fakes
 // ---------------------------------------------------------------------------
 
 struct Harness
 {
     SyncedClock clock;
-    Playback playback{1, clock};
+    Playback playback;
     FakeFileStore files;
     AnimationStore animations{files};
     FakeKeyValueStore kv;
@@ -212,7 +213,11 @@ struct Harness
     uint8_t reply[1024] = {};
     size_t  reply_len = 0;
 
-    Harness() { set_test_now_us(0); }
+    explicit Harness(uint16_t strip_length = 1)
+        : playback(strip_length, clock)
+    {
+        set_test_now_us(0);
+    }
 
     AckStatus run(uint8_t opcode, const std::vector<uint8_t>& payload = {})
     {
@@ -343,6 +348,77 @@ TEST_CASE("jump maps BadTime onto BadPayload and seeks on success")
     CHECK(h.run(CMD_JUMP, ahead) == AckStatus::Ok);
     CHECK(h.playback.state() == DeviceState::PAUSED);
     CHECK(h.playback.current_t_ms() == 500);
+}
+
+// ---------------------------------------------------------------------------
+// Manual
+// ---------------------------------------------------------------------------
+
+namespace {
+
+bool strip_equals(const Playback& pb, const std::vector<uint8_t>& rgb)
+{
+    return pb.strip().byte_size() == rgb.size()
+        && std::memcmp(pb.strip().bytes(), rgb.data(), rgb.size()) == 0;
+}
+
+}  // namespace
+
+TEST_CASE("manual without a hardware profile ACKs WrongState")
+{
+    Harness h(/*strip_length=*/0);
+    REQUIRE_FALSE(h.playback.has_hardware_profile());
+    CHECK(h.run(CMD_MANUAL, {1, 2, 3}) == AckStatus::WrongState);
+    CHECK(h.run(CMD_MANUAL) == AckStatus::WrongState);
+    CHECK(h.playback.state() == DeviceState::IDLE);
+}
+
+TEST_CASE("manual shows one triple per pixel and ACKs Ok")
+{
+    Harness h(3);
+    const std::vector<uint8_t> rgb = {255, 0, 0, 0, 255, 0, 10, 20, 30};
+    CHECK(h.run(CMD_MANUAL, rgb) == AckStatus::Ok);
+    CHECK(h.reply_len == 0);
+    CHECK(h.playback.state() == DeviceState::MANUAL);
+    CHECK(strip_equals(h.playback, rgb));
+}
+
+TEST_CASE("manual rejections map onto the ACK statuses and change nothing")
+{
+    Harness h(3);
+    REQUIRE(h.load_live(3) == AckStatus::Ok);
+    const std::vector<uint8_t> black(9, 0);
+    REQUIRE(strip_equals(h.playback, black));
+
+    CHECK(h.run(CMD_MANUAL) == AckStatus::BadPayload);                  // empty
+    CHECK(h.run(CMD_MANUAL, std::vector<uint8_t>(7, 9)) == AckStatus::BadPayload);
+    CHECK(h.run(CMD_MANUAL, std::vector<uint8_t>(6, 9)) == AckStatus::ProfileMismatch);
+    CHECK(h.run(CMD_MANUAL, std::vector<uint8_t>(12, 9)) == AckStatus::ProfileMismatch);
+    CHECK(h.playback.state() == DeviceState::LOADED);
+    CHECK(h.playback.duration_ms() == 2000);
+    CHECK(strip_equals(h.playback, black));
+
+    // A shown picture survives a rejected replacement too.
+    const std::vector<uint8_t> rgb = {1, 2, 3, 4, 5, 6, 7, 8, 9};
+    REQUIRE(h.run(CMD_MANUAL, rgb) == AckStatus::Ok);
+    CHECK(h.run(CMD_MANUAL, std::vector<uint8_t>(6, 9)) == AckStatus::ProfileMismatch);
+    CHECK(h.run(CMD_MANUAL, std::vector<uint8_t>(10, 9)) == AckStatus::BadPayload);
+    CHECK(h.playback.state() == DeviceState::MANUAL);
+    CHECK(strip_equals(h.playback, rgb));
+}
+
+TEST_CASE("manual clears the local animation flag")
+{
+    Harness h;
+    REQUIRE(h.store_anim("glow", build_paint_blob(1, 1.0f)) == AckStatus::Ok);
+    std::vector<uint8_t> index0;
+    put_u16(index0, 0);
+    REQUIRE(h.run(CMD_PLAY_LOCAL_ANIMATION, index0) == AckStatus::Ok);
+    REQUIRE(h.ctx.local_program_loaded);
+
+    CHECK(h.run(CMD_MANUAL, {0, 0, 255}) == AckStatus::Ok);
+    CHECK_FALSE(h.ctx.local_program_loaded);
+    CHECK(h.playback.state() == DeviceState::MANUAL);
 }
 
 // ---------------------------------------------------------------------------

@@ -21,6 +21,7 @@ from elemctl.wire import (
     encode_erase_animation,
     encode_jump,
     encode_load,
+    encode_manual,
     encode_message,
     encode_offer,
     encode_pause,
@@ -90,6 +91,7 @@ def test_link_protocol_constants_match_cpp():
         'CMD_RESUME': wire.CMD_RESUME,
         'CMD_STOP': wire.CMD_STOP,
         'CMD_PLAY_LOCAL_ANIMATION': wire.CMD_PLAY_LOCAL_ANIMATION,
+        'CMD_MANUAL': wire.CMD_MANUAL,
         'CMD_STORE_ANIMATION': wire.CMD_STORE_ANIMATION,
         'CMD_ERASE_ANIMATION': wire.CMD_ERASE_ANIMATION,
         'CMD_SET_ANIMATION_ORDER': wire.CMD_SET_ANIMATION_ORDER,
@@ -251,6 +253,23 @@ def test_empty_payload_commands():
 
 def test_encode_play_local_animation_vector():
     assert encode_play_local_animation(2) == b'\x03\x00\x00\x00\x16\x02\x00'
+
+
+def test_protocol_version_is_6():
+    # MANUAL (0x17) is a breaking wire change.
+    assert wire.PROTOCOL_VERSION == 6
+
+
+def test_encode_manual_wraps_rgb_triples():
+    rgb = bytes([255, 0, 0, 0, 255, 0, 10, 20, 30])
+    assert encode_manual(rgb) == b'\x0a\x00\x00\x00\x17' + rgb
+
+
+def test_encode_manual_rejects_empty_and_partial_triples():
+    with pytest.raises(WireError):
+        encode_manual(b'')
+    with pytest.raises(WireError):
+        encode_manual(b'\x01\x02\x03\x04')
 
 
 def test_encode_store_animation_pads_name_slot():

@@ -34,7 +34,7 @@ from dataclasses import dataclass
 
 # ---- Constants mirroring src/app/link_protocol.h --------------------------------
 
-PROTOCOL_VERSION = 5
+PROTOCOL_VERSION = 6
 
 CMD_REGISTER             = 0x00
 CMD_SET_PROFILE          = 0x01
@@ -45,6 +45,7 @@ CMD_PAUSE                = 0x13
 CMD_RESUME               = 0x14
 CMD_STOP                 = 0x15
 CMD_PLAY_LOCAL_ANIMATION = 0x16
+CMD_MANUAL               = 0x17
 CMD_STORE_ANIMATION      = 0x20
 CMD_ERASE_ANIMATION      = 0x21
 CMD_SET_ANIMATION_ORDER  = 0x22
@@ -264,6 +265,14 @@ def encode_stop():
 def encode_play_local_animation(order_index):
     _require_u16(order_index, 'order_index')
     return encode_message(CMD_PLAY_LOCAL_ANIMATION, _U16.pack(order_index))
+
+
+def encode_manual(rgb):
+    """Show a constant picture: rgb is one pre-gamma (r, g, b) byte triple
+    per pixel, exactly the device profile's strip_length pixels."""
+    if not rgb or len(rgb) % 3:
+        raise WireError(f'rgb must be non-empty whole triples, got {len(rgb)} bytes')
+    return encode_message(CMD_MANUAL, bytes(rgb))
 
 
 def encode_store_animation(name, blob):
