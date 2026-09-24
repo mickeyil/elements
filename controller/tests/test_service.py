@@ -540,6 +540,24 @@ def test_edit_device_preserves_label_when_omitted(tmp_path):
     assert sim_b['label'] == 'Stage' and sim_b['length'] == 45
 
 
+def test_edit_device_applies_strip_and_length_to_the_strip_group(tmp_path):
+    service, _hub, config_path = make_service_with_config(tmp_path)
+    cmd(service, 'add_device', device_uid='sim-twin', strip_id='main', length=30)
+    cmd(service, 'add_device', device_uid='sim-c', strip_id='side', length=10)
+
+    reply = cmd(service, 'edit_device', target_device_uid='sim-a',
+                device_uid='sim-a', strip_id='halo', length=45)
+
+    assert reply['ok'] is True
+    doc = {d['device_uid']: d for d in json.loads(config_path.read_text())['devices']}
+    assert (doc['sim-twin']['strip_id'], doc['sim-twin']['length']) == ('halo', 45)
+    assert (doc['sim-c']['strip_id'], doc['sim-c']['length']) == ('side', 10)
+    session = service._session
+    for uid in ('sim-a', 'sim-twin'):
+        assert (session.member(uid).strip_id, session.member(uid).strip_length) == ('halo', 45)
+    assert (session.member('sim-c').strip_id, session.member('sim-c').strip_length) == ('side', 10)
+
+
 def test_remove_device_persists_and_disconnects(tmp_path):
     service, hub, config_path = make_service_with_config(tmp_path)
     reply = cmd(service, 'remove_device', device_uid='sim-a')

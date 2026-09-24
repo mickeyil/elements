@@ -270,12 +270,16 @@ class ControllerService:
         # Web edit forms omit label; preserve the stored one when absent, and
         # treat an explicit null as a request to clear it.
         label = cmd.get('label') if 'label' in cmd else _doc_label(doc, target)
-        config_edit.edit_device(doc, target, device_uid=cmd.get('device_uid'),
-                                strip_id=cmd.get('strip_id'),
-                                length=cmd.get('length'), label=label)
+        # strip_id/length apply to the whole strip group; the other members
+        # that changed are routed afresh too, not only the target.
+        group = config_edit.edit_device(doc, target, device_uid=cmd.get('device_uid'),
+                                        strip_id=cmd.get('strip_id'),
+                                        length=cmd.get('length'), label=label)
         new_config = self._commit_config(doc)
         self._session.edit_device(
             target, self._device_config(new_config, cmd.get('device_uid')))
+        for uid in group:
+            self._session.edit_device(uid, self._device_config(new_config, uid))
         return {'device_uid': cmd.get('device_uid')}
 
     def _cmd_remove_device(self, cmd):

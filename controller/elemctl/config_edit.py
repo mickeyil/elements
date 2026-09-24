@@ -95,20 +95,44 @@ def edit_device(
     strip_id: str,
     length: int,
     label: str | None = None,
-) -> None:
-    """Edit a device in place. Raises ConfigError if target is missing."""
+) -> list[str]:
+    """Edit a device in place. Raises ConfigError if target is missing.
+
+    strip_id and length belong to the strip group: every other device that
+    shares the target's old strip_id takes the new values too, since config
+    allows one length per strip and a mirrored member could never be edited
+    alone. device_uid and label stay per-device.
+
+    Returns the uids of the other group members whose entry changed.
+    """
     devices = ensure_editor_shape(doc)["devices"]
+    target = next(
+        (d for d in devices
+         if isinstance(d, dict) and d.get("device_uid") == target_device_uid),
+        None,
+    )
+    if target is None:
+        raise ConfigError(f"device not found: {target_device_uid}")
+
+    changed: list[str] = []
+    old_strip_id = target.get("strip_id")
     for device in devices:
-        if isinstance(device, dict) and device.get("device_uid") == target_device_uid:
-            device["device_uid"] = device_uid
+        if (device is target or not isinstance(device, dict)
+                or device.get("strip_id") != old_strip_id):
+            continue
+        if device.get("strip_id") != strip_id or device.get("length") != length:
             device["strip_id"] = strip_id
             device["length"] = length
-            if label is None:
-                device.pop("label", None)
-            else:
-                device["label"] = label
-            return
-    raise ConfigError(f"device not found: {target_device_uid}")
+            changed.append(device.get("device_uid"))
+
+    target["device_uid"] = device_uid
+    target["strip_id"] = strip_id
+    target["length"] = length
+    if label is None:
+        target.pop("label", None)
+    else:
+        target["label"] = label
+    return changed
 
 
 def save_config_doc(path: str, doc: dict) -> None:

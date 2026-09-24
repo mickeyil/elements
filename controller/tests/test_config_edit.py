@@ -164,3 +164,47 @@ def test_save_config_doc_allows_empty_devices(tmp_path):
 
     cfg = load_config(str(path))
     assert cfg.devices == []
+
+
+def _group_doc():
+    doc = load_config_doc("/nonexistent/config.json")
+    add_device(doc, make_device_entry(
+        device_uid="esp-aabbccddeeff", strip_id="ring", length=8, label="real"))
+    add_device(doc, make_device_entry(
+        device_uid="sim-ring", strip_id="ring", length=8, label="twin"))
+    add_device(doc, make_device_entry(device_uid="sim-other", strip_id="side", length=30))
+    return doc
+
+
+def test_edit_device_propagates_strip_and_length_to_the_strip_group():
+    doc = _group_doc()
+
+    changed = edit_device(doc, "esp-aabbccddeeff", device_uid="esp-aabbccddeeff",
+                          strip_id="halo", length=12, label="real")
+
+    assert changed == ["sim-ring"]
+    assert doc["devices"][1] == {
+        "device_uid": "sim-ring", "strip_id": "halo", "length": 12, "label": "twin",
+    }
+    load_config_obj(doc)   # the group stays consistent, so the doc validates
+
+
+def test_edit_device_leaves_non_members_untouched():
+    doc = _group_doc()
+    edit_device(doc, "sim-ring", device_uid="sim-ring", strip_id="ring", length=16,
+                label="twin")
+    assert doc["devices"][2] == {"device_uid": "sim-other", "strip_id": "side", "length": 30}
+    assert doc["devices"][0]["length"] == 16
+
+
+def test_edit_device_keeps_uid_and_label_per_device():
+    doc = _group_doc()
+
+    changed = edit_device(doc, "sim-ring", device_uid="sim-halo", strip_id="ring",
+                          length=8)
+
+    assert changed == []
+    assert doc["devices"][0] == {
+        "device_uid": "esp-aabbccddeeff", "strip_id": "ring", "length": 8, "label": "real",
+    }
+    assert doc["devices"][1] == {"device_uid": "sim-halo", "strip_id": "ring", "length": 8}
