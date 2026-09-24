@@ -327,8 +327,9 @@ class ControllerService:
         if entry.error is not None:
             raise ValueError(f'program {program_id!r} has errors: {entry.error}')
         manifest = self._compile_panel(entry, strip_id, length)
+        # The source hash in the token makes an edited program reload.
         self._session.panel_run(strip_id, manifest.strips[strip_id].blob,
-                                ('panel', program_id, strip_id))
+                                ('panel', program_id, strip_id, entry.source_hash))
         return {'program_id': program_id}
 
     def _cmd_publish(self, cmd):
@@ -686,7 +687,6 @@ class ControllerService:
     def _state_dict(self):
         s = self._session
         manifest = s.manifest
-        lengths = self._logical_strip_lengths()
         session = {
             'state': s.state.name.lower(),
             'session_id': s.session_id,
@@ -700,10 +700,9 @@ class ControllerService:
             # Program strip layout in manifest order: the order and lengths an
             # observer needs to split an assembled preview frame's rgb payload.
             # Frames carry each strip's whole configured length, not the
-            # compiled one.
-            'strips': ([{'strip_id': sid, 'length': lengths[sid]}
-                        for sid in manifest.strips]
-                       if manifest is not None else []),
+            # compiled one, and leave out a strip the panel has taken.
+            'strips': [{'strip_id': sid, 'length': length}
+                       for sid, length in s.preview_strips()],
         }
         devices = []
         configured = set()

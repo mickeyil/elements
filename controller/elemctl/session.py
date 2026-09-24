@@ -255,13 +255,6 @@ class Session:
         self.program_start_us = 0
         self.cursor_us = 0
         self.state = SessionState.LOADED
-        # Reset preview assembly to the new program's strips and pacing. Sims
-        # report their whole configured strip, not the compiled length (config
-        # guarantees one length per strip_id).
-        lengths = {m.strip_id: m.strip_length for m in self._members.values()}
-        self._preview.set_program(
-            [(sid, lengths[sid]) for sid in manifest.strips],
-            manifest.target_fps)
 
         for uid, member in self._members.items():
             member.owner = 'show'     # the show reclaims any panel strip
@@ -276,6 +269,24 @@ class Session:
                 blob=artifact.blob,
                 strip_length=member.strip_length,
             ))
+        # Every strip is the show's again: preview assembles all of them.
+        self._declare_preview()
+
+    def preview_strips(self):
+        """The (strip_id, length) layout of an assembled preview frame, in
+        manifest order: the manifest's strips minus any the panel has taken.
+        Sims report their whole configured strip, not the compiled length
+        (config guarantees one length per strip_id)."""
+        if self.manifest is None:
+            return []
+        lengths = {m.strip_id: m.strip_length for m in self._members.values()}
+        panel = {m.strip_id for m in self._members.values() if m.owner == 'panel'}
+        return [(sid, lengths[sid]) for sid in self.manifest.strips
+                if sid not in panel]
+
+    def _declare_preview(self):
+        # Reset preview assembly to the program's current strips and pacing.
+        self._preview.set_program(self.preview_strips(), self.manifest.target_fps)
 
     def _check_all_strips_served(self, manifest):
         """Every manifest strip must be served by at least one device. A strip
@@ -457,10 +468,10 @@ class Session:
         """Show a constant picture: rgb holds one r, g, b triple per pixel of
         the strip's configured length. Each call is a new revision, so fills
         issued faster than the device ACKs coalesce to the latest."""
-        members = self._strip_members(strip_id)
+        members = self._take_for_panel(strip_id)
         self._manual_revision += 1
         for member in members:
-            self._panel_target(member, Target(
+            member.set_target(Target(
                 intent=Intent.MANUAL,
                 strip_length=member.strip_length,
                 pixels=bytes(rgb),
@@ -470,8 +481,8 @@ class Session:
     def panel_run(self, strip_id, blob, program_token):
         """Load and start a looping, unsynced program compiled for the strip.
         program_token names it; the same token is not reloaded."""
-        for member in self._strip_members(strip_id):
-            self._panel_target(member, Target(
+        for member in self._take_for_panel(strip_id):
+            member.set_target(Target(
                 intent=Intent.PLAYING,
                 program_token=program_token,
                 blob=blob,
@@ -481,20 +492,23 @@ class Session:
     def panel_stop(self, strip_id):
         """Blank the strip: one STOP, which leaves a manual picture at IDLE and
         a panel program parked at LOADED. The members stay panel-owned."""
-        for member in self._strip_members(strip_id):
-            self._panel_target(member, Target(intent=Intent.DETACHED))
+        for member in self._take_for_panel(strip_id):
+            member.set_target(Target(intent=Intent.DETACHED))
 
-    def _strip_members(self, strip_id):
+    def _take_for_panel(self, strip_id):
+        """Hand every member serving strip_id to the panel and return them. A
+        strip leaving a loaded show drops out of its preview frames, so the
+        rest of the show keeps assembling."""
         members = [m for m in self._members.values() if m.strip_id == strip_id]
         if not members:
             raise ValueError(f'no configured device serves strip_id {strip_id!r}')
+        leaving_show = any(m.owner == 'show' for m in members)
+        for member in members:
+            member.owner = 'panel'
+            member._clear_blocked()   # an operator action is a fresh chance to drive
+        if leaving_show and self.manifest is not None:
+            self._declare_preview()
         return members
-
-    @staticmethod
-    def _panel_target(member, target):
-        member.owner = 'panel'
-        member._clear_blocked()   # an operator action is a fresh chance to drive
-        member.set_target(target)
 
     # -----------------------------------------------------------------------
     # Device editing: add / edit / remove a configured device. The service

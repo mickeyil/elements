@@ -1074,12 +1074,12 @@ def test_panel_run_compiles_the_library_program_per_strip(tmp_path):
 
     assert cmd(service, 'panel_run', strip_id='main', program_id='glow')['ok'] is True
     assert cmd(service, 'panel_run', strip_id='side', program_id='glow')['ok'] is True
+    source_hash = service._panel_library.get('glow').source_hash
     target = service._session.member('sim-a').target
     assert target.intent is Intent.PLAYING
-    assert target.program_token == ('panel', 'glow', 'main')
+    assert target.program_token == ('panel', 'glow', 'main', source_hash)
 
     # TARGET bound each compile to its own strip, cached apart.
-    source_hash = service._panel_library.get('glow').source_hash
     main = service._artifact_cache.get(source_hash, 'panel:main:30')
     side = service._artifact_cache.get(source_hash, 'panel:side:12')
     assert [(a.strip_id, a.length) for a in main.strips.values()] == [('main', 30)]
@@ -1088,6 +1088,26 @@ def test_panel_run_compiles_the_library_program_per_strip(tmp_path):
 
     cmd(service, 'panel_run', strip_id='main', program_id='glow')
     assert service._session.member('sim-a').target.blob is target.blob   # a cache hit
+
+
+def test_panel_run_reloads_an_edited_program(tmp_path):
+    service, hub = make_service(tmp_path)
+    write_library(tmp_path, glow=GLOW)
+    cmd(service, 'rescan')
+    cmd(service, 'panel_run', strip_id='main', program_id='glow')
+    hub.emit(DeviceConnected(uid='sim-a', boot_token=1, rebooted=False))
+    service.tick_once(); _ack_ok(hub)                  # SET_PROFILE
+    service.tick_once(); _ack_ok(hub)                  # LOAD
+    service.tick_once(); _ack_ok(hub)                  # START
+    first = service._session.member('sim-a').target.blob
+
+    write_library(tmp_path, glow=GLOW.replace("'white'", "'red'"))
+    cmd(service, 'rescan')
+    cmd(service, 'panel_run', strip_id='main', program_id='glow')
+    service.tick_once()
+    blob = service._session.member('sim-a').target.blob
+    assert blob != first
+    assert hub.sent[-1][1] == wire.encode_load(blob)
 
 
 def test_panel_run_refuses_non_looping_or_multi_strip_programs(tmp_path):
@@ -1133,6 +1153,20 @@ def test_state_shows_panel_ownership_and_mode(tmp_path):
     cmd(service, 'load', program_id='prog')           # the show reclaims the strip
     device = _panel_device(service)
     assert (device['owner'], device['panel']) == ('show', None)
+
+
+def test_panel_strip_leaves_the_published_frame_layout(tmp_path):
+    service, _hub = make_service(tmp_path)
+    cmd(service, 'load', program_id='prog')
+
+    def strips():
+        return _by_type(_json(service.snapshot_messages()), 'state')[0]['session']['strips']
+
+    assert strips() == [{'strip_id': 'main', 'length': 30}]
+    cmd(service, 'panel_fill', strip_id='main', h=0, s=1, v=1)
+    assert strips() == []                             # program frames no longer carry it
+    cmd(service, 'load', program_id='prog')
+    assert strips() == [{'strip_id': 'main', 'length': 30}]
 
 
 def test_panel_device_frame_is_published(tmp_path):

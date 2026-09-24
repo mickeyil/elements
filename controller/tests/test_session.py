@@ -1708,6 +1708,34 @@ def test_panel_frames_bypass_the_program_assembler():
     assert session.drain_device_frames() == []
 
 
+def test_show_preview_keeps_flowing_without_a_panel_strip():
+    # Two strips play; the panel takes 'side'. A frame from 'main' alone now
+    # completes a program frame instead of waiting on 'side' forever.
+    session, hub = make_session(TWO_STRIPS)
+    session.load(make_manifest(('main', 30, b'M'), ('side', 30, b'S')))
+    hub.emit(DeviceConnected(uid='sim-a', boot_token=1, rebooted=False),
+             DeviceConnected(uid='sim-b', boot_token=1, rebooted=False))
+    tick(session)
+    for uid in ('sim-a', 'sim-b'):
+        ack_last(hub, uid)                       # profiles
+    tick(session)
+    for uid in ('sim-a', 'sim-b'):
+        ack_last(hub, uid)                       # both LOADED
+    session.play()
+    tick(session)
+    for uid in ('sim-a', 'sim-b'):
+        ack_last(hub, uid)                       # both PLAYING
+    session.set_preview_enabled(True)
+
+    session.panel_manual('side', b'\x01' * 90)
+    session._clock_us.now_us += 1_000_000
+    hub.frames = [_frame(uid='sim-a', t_ms=20)]
+    tick(session)
+    frames = session.drain_preview_frames()
+    assert [f.strips for f in frames] == [[b'\x00' * 90]]
+    assert session.preview_strips() == [('main', 30)]
+
+
 def test_reconnect_reapplies_the_manual_picture():
     session, hub = make_session(SINGLE)
     rgb = b'\x09' * 90
