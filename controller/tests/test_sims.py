@@ -112,6 +112,18 @@ def test_stop_terminates_cleanly(tmp_path):
     asyncio.run(run())
 
 
+def test_outside_sigterm_is_a_plain_off(tmp_path):
+    async def run():
+        manager, _ = _manager(tmp_path)
+        manager.start('sim-a')
+        await _until(lambda: _lines(tmp_path / 'pids'))
+        os.kill(manager.state()['sim-a']['pid'], signal.SIGTERM)
+        await _until(lambda: not manager.is_running('sim-a'))
+        assert manager.state()['sim-a']['last_exit'] is None
+
+    asyncio.run(run())
+
+
 def test_second_start_is_refused(tmp_path):
     async def run():
         manager, _ = _manager(tmp_path)

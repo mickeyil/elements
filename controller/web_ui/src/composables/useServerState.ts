@@ -19,6 +19,7 @@ import { deriveSimTargets } from '../lib/viewerModel';
 import type { FirmwareState } from '../lib/firmwareModel';
 import { applyDeviceLogs, type DeviceLogRecord, type DeviceLogWireRecord } from '../lib/logsModel';
 import type { PanelView } from '../lib/panelModel';
+import type { SimProcess } from '../lib/simPowerModel';
 
 // Every binary websocket message leads with its controller-protocol kind byte
 // (controller_protocol.py).
@@ -113,6 +114,8 @@ export function useServerState() {
   // Kept across a dropped socket or controller: the rows before a drop are
   // the ones worth reading, and the next history message replaces them.
   const deviceLogs = shallowRef<DeviceLogRecord[]>([]);
+  // uid -> the web's sim process of that device; uids never started are absent.
+  const sims = shallowRef<Record<string, SimProcess>>({});
   const frameDirty = ref(false);
   const rafPending = ref(false);
 
@@ -234,6 +237,9 @@ export function useServerState() {
   function applyEvent(msg: Record<string, unknown>): void {
     if (msg.event === 'server_status') {
       controllerConnected.value = Boolean(msg.controller_connected);
+      sims.value = msg.sims && typeof msg.sims === 'object'
+        ? msg.sims as Record<string, SimProcess>
+        : {};
       if (!controllerConnected.value) {
         deviceFrames.clear();
       }
@@ -284,6 +290,7 @@ export function useServerState() {
     ws.addEventListener('close', () => {
       serverConnected.value = false;
       controllerConnected.value = false;
+      sims.value = {};
       snapshot.value = null;
       session.value = null;
       deviceFrames.clear();
@@ -326,6 +333,7 @@ export function useServerState() {
     session,
     snapshot,
     simTargets,
+    sims,
   };
 }
 

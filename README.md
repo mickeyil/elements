@@ -61,19 +61,17 @@ lives in the gitignored `build/`, `local/`, and `instance/` directories.
 
 ## Run
 
-In two terminals:
-
 ```bash
-./elemctl run         # controller + web UI at http://localhost:8080 (ctrl-c stops both)
-./elemctl sim ring8   # the simulated device serving strip ring8
+./elemctl run   # builds, then runs controller + web UI at http://localhost:8080 (ctrl-c stops both)
 ```
 
 `./elemctl server` and `./elemctl web` also run individually.
 
 Open http://localhost:8080, add device `sim-ring8` (strip id `ring8`, length 8),
-then load `ring8_blue_wave` and play. `./elemctl sim` takes a strip id or a
-sim uid. Animation sources live in `animations/`; add or edit `.py` files
-there and rescan from the UI.
+power it on from its card menu, then load `ring8_blue_wave` and play.
+`./elemctl sim` still runs a sim from a terminal (a strip id or a sim uid);
+its card then shows "Running outside the app". Animation sources live in
+`animations/`; add or edit `.py` files there and rescan from the UI.
 
 ESP32 hardware: `make firmware` builds, `make flash` uploads over serial.
 The build stamps a firmware version (`tools/firmware_version.py`: the

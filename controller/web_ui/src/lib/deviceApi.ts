@@ -112,6 +112,16 @@ export function createSimTwin(deviceUid: string): Promise<Record<string, unknown
   });
 }
 
+// Starts or stops a configured sim device's process, which the web runs; the
+// outcome arrives in the next server_status.sims.
+export function setSimPower(deviceUid: string, on: boolean): Promise<Record<string, unknown>> {
+  return apiRequest(deviceUrl(deviceUid, '/power'), {
+    method: 'POST',
+    body: { on },
+    fallbackError: on ? 'Failed to power on the sim.' : 'Failed to power off the sim.',
+  });
+}
+
 interface StripMember {
   uid?: string;
   configured?: boolean;

@@ -18,7 +18,7 @@ The server's own `server_status` event carries a `sims` map (uid to `running`, `
 
 | Route | Page | What it does |
 |-------|------|-------------|
-| `/` | StatusPage | Device status panel, playback info; "Simulate" on an ESP card adds a sim twin of its strip |
+| `/` | StatusPage | Device status panel, playback info; "Simulate" on an ESP card adds a sim twin of its strip; a sim card's menu powers its sim process on and off |
 | `/panel` | PanelPage | Operator panel: take one strip from the show to hold a color, loop a panel-library program or blank it, with a sim preview |
 | `/logs` | LogsPage | Device log records as they arrive, with the last 1000 since the controller started; warnings yellow, errors red |
 | `/viewer` | ViewerPage | Live animation preview (canvas rendering of RGB frames) |

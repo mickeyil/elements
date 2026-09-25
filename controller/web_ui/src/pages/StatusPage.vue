@@ -5,7 +5,7 @@ import { RouterLink } from 'vue-router';
 import DeviceModal from '../components/DeviceModal.vue';
 import RemoveDeviceModal from '../components/RemoveDeviceModal.vue';
 import { useInjectedServerState, type SnapshotDevice } from '../composables/useServerState';
-import { createSimTwin, stripHasSimTwin, updateFirmware } from '../lib/deviceApi';
+import { createSimTwin, setSimPower, stripHasSimTwin, updateFirmware } from '../lib/deviceApi';
 import { clockLabel } from '../lib/deviceClock';
 import {
   isUpdateOffered,
@@ -16,6 +16,7 @@ import {
   type FirmwareState,
   type UpdateAvailability,
 } from '../lib/firmwareModel';
+import { simPowerNote, simPowerOffer, type SimPowerOffer } from '../lib/simPowerModel';
 
 type DeviceStatus = 'online' | 'offline' | 'discovered';
 
@@ -27,14 +28,14 @@ interface StatusCardDevice extends SnapshotDevice {
   hasLayout: boolean;
 }
 
-const { controllerConnected, snapshot } = useInjectedServerState();
+const { controllerConnected, serverConnected, sims, snapshot } = useInjectedServerState();
 const openMenuUid = ref<string | null>(null);
 const showNewDeviceModal = ref(false);
 const editingDevice = ref<StatusCardDevice | null>(null);
 const removingDevice = ref<StatusCardDevice | null>(null);
 const configuringUid = ref<string | null>(null);
 // A refused card action (an update request, which the controller
-// re-validates, or a Simulate), shown on the card until the next attempt; a
+// re-validates, a Simulate or a sim power change), shown on the card until the next attempt; a
 // started transfer reports through firmware.update.
 const cardActionError = ref<{ uid: string; message: string } | null>(null);
 
@@ -218,6 +219,30 @@ async function simulateDevice(device: StatusCardDevice): Promise<void> {
   }
 }
 
+function simPower(device: StatusCardDevice): SimPowerOffer {
+  return simPowerOffer(device, sims.value[device.uid], serverConnected.value);
+}
+
+function simNote(device: StatusCardDevice): string | null {
+  return device.isSim ? simPowerNote(device, sims.value[device.uid]) : null;
+}
+
+async function toggleSimPower(device: StatusCardDevice): Promise<void> {
+  closeMenu();
+  const offer = simPower(device);
+  if (!offer.enabled) {
+    return;
+  }
+  cardActionError.value = null;
+  try {
+    await setSimPower(device.uid, offer.action === 'on');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const label = offer.action === 'on' ? 'Power on' : 'Power off';
+    cardActionError.value = { uid: device.uid, message: `${label} failed: ${message}` };
+  }
+}
+
 function toggleMenu(deviceUid: string): void {
   openMenuUid.value = openMenuUid.value === deviceUid ? null : deviceUid;
 }
@@ -374,6 +399,14 @@ onBeforeUnmount(() => {
                 >
                   {{ firmwareNote(device) }}
                 </p>
+                <p
+                  v-else-if="simNote(device)"
+                  class="device-firmware-note mono"
+                  :class="{ 'device-firmware-note-failed': simNote(device)?.startsWith('Off:') }"
+                  :title="simNote(device) ?? ''"
+                >
+                  {{ simNote(device) }}
+                </p>
               </div>
               <div class="device-action-slot">
                 <div class="device-menu" data-device-menu>
@@ -405,6 +438,16 @@ onBeforeUnmount(() => {
                         @click="openRemoveDeviceModal(device)"
                       >
                         Remove device
+                      </button>
+                      <button
+                        v-if="simPower(device).action"
+                        type="button"
+                        class="device-menu-item"
+                        :disabled="!simPower(device).enabled"
+                        :title="simPower(device).reason ?? ''"
+                        @click="toggleSimPower(device)"
+                      >
+                        {{ simPower(device).action === 'on' ? 'Power on' : 'Power off' }}
                       </button>
                       <RouterLink
                         v-if="device.isSim"

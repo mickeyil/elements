@@ -1,6 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { ApiError, apiRequest, createSimTwin, stripHasSimTwin, updateDevice } from './deviceApi';
+import {
+  ApiError,
+  apiRequest,
+  createSimTwin,
+  setSimPower,
+  stripHasSimTwin,
+  updateDevice,
+} from './deviceApi';
 import { getLayout } from './layoutApi';
 
 function mockFetch(response: { ok: boolean; status?: number; body: unknown }) {
@@ -55,6 +62,18 @@ describe('createSimTwin', () => {
     const fetchMock = mockFetch({ ok: true, body: { ok: true, result: {} } });
     await createSimTwin('esp-aabbccddeeff');
     expect(fetchMock).toHaveBeenCalledWith('/api/devices/esp-aabbccddeeff/sim', { method: 'POST' });
+  });
+});
+
+describe('setSimPower', () => {
+  it('POSTs the wanted power state to the power route', async () => {
+    const fetchMock = mockFetch({ ok: true, body: { ok: true } });
+    await setSimPower('sim-s50-1', false);
+    expect(fetchMock).toHaveBeenCalledWith('/api/devices/sim-s50-1/power', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ on: false }),
+    });
   });
 });
 

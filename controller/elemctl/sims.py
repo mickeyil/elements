@@ -4,7 +4,8 @@ The web server owns these: Power on a sim card starts its sim_device, Power
 off stops it, and the web's shutdown stops them all. Each sim runs in its own
 task that supervises it the way `elemctl sim` does: an exit with the reboot
 sentinel is the sim rebooting, so it is respawned (behind the same crash-loop
-guard); any other exit leaves it off, with the reason kept for the page.
+guard); any other exit leaves it off, with the reason kept for the page unless
+it was a clean exit 0.
 
 One process per uid, ever: the controller replaces a device's link when a
 second one with the same uid connects, so two would fight over it.
@@ -157,6 +158,11 @@ class SimManager:
 
             if sim.stopping:
                 log.info('%s: stopped', uid)
+                self._finish(sim, None)
+                return
+            if code == 0:
+                # SIGTERM/SIGINT from outside (a shell, ctrl-c): a plain off.
+                log.info('%s: sim_device exited', uid)
                 self._finish(sim, None)
                 return
             if code != SIM_REBOOT_EXIT_CODE:
