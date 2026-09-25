@@ -21,6 +21,7 @@ from elemctl.hub import DeviceConnected, DeviceDisconnected, DeviceInfo, HubPoll
 from elemctl.library import ProgramLibrary
 from elemctl.service import (
     FIRMWARE_CHECK_INTERVAL_US,
+    DEVICE_LOG_HISTORY,
     OTA_PROGRESS_INTERVAL_US,
     ControllerService,
     hsv_to_rgb,
@@ -54,6 +55,7 @@ class FakeHub:
     def __init__(self):
         self.pending_events = []
         self.frames = []
+        self.logs = []
         self.sent = []
         self.status_queries = []   # (uid, on_ack) per status poll
         self.discovered = set()
@@ -80,7 +82,8 @@ class FakeHub:
     def poll(self, wanted_uids):
         events, self.pending_events = self.pending_events, []
         frames, self.frames = self.frames, []
-        return HubPoll(events=events, frames=frames)
+        logs, self.logs = self.logs, []
+        return HubPoll(events=events, frames=frames, logs=logs)
 
     def send(self, uid, encoded, on_ack=None):
         # Status polls run beside the session's commands; keep them apart so
@@ -1183,3 +1186,50 @@ def test_panel_device_frame_is_published(tmp_path):
     assert len(frame_msgs) == 1
     assert frame_msgs[0][4] == KIND_DEVICE_FRAME
     assert parse_device_frame_payload(frame_msgs[0][5:]) == ('sim-a', rgb)
+
+
+# ---------------------------------------------------------------------------
+# Device logs
+# ---------------------------------------------------------------------------
+
+def _log_record(seq, text='hello', level='I'):
+    return wire.LogRecord(uid='sim-a', boot_token=7, seq=seq, uptime_ms=seq * 10,
+                          level=level, text=text)
+
+
+def _device_logs(dicts):
+    return [d for d in dicts if d.get('event') == 'device_logs']
+
+
+def test_device_logs_published_and_kept_as_history(tmp_path):
+    service, hub = make_service(tmp_path)
+    service.tick_once()
+    hub.logs = [_log_record(1, 'boot'), _log_record(2, 'hot', level='W')]
+    json_msgs, _ = service.tick_once()
+
+    [msg] = _device_logs(_json(json_msgs))
+    assert 'history' not in msg
+    first = dict(msg['records'][0])
+    assert isinstance(first.pop('time'), float)
+    assert first == {'uid': 'sim-a', 'level': 'I', 'text': 'boot',
+                     'uptime_ms': 10, 'seq': 1, 'boot_token': 7}
+    assert [r['text'] for r in msg['records']] == ['boot', 'hot']
+
+    json_msgs, _ = service.tick_once()                 # nothing new, no message
+    assert _device_logs(_json(json_msgs)) == []
+
+    [history] = _device_logs(_json(service.snapshot_messages()))
+    assert history['history'] is True
+    assert history['records'] == msg['records']
+
+
+def test_device_log_history_sent_empty_and_capped(tmp_path):
+    service, hub = make_service(tmp_path)
+    [history] = _device_logs(_json(service.snapshot_messages()))
+    assert history['history'] is True and history['records'] == []
+
+    hub.logs = [_log_record(seq) for seq in range(1, DEVICE_LOG_HISTORY + 6)]
+    service.tick_once()
+    [history] = _device_logs(_json(service.snapshot_messages()))
+    assert len(history['records']) == DEVICE_LOG_HISTORY
+    assert history['records'][0]['seq'] == 6

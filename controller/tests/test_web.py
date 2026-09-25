@@ -1406,8 +1406,9 @@ def test_device_frames_are_cached_for_new_clients_and_cleared_on_disconnect(tmp_
 
     assert server._device_frames == {'sim-ring8': latest, 'sim-porch': other}
     messages = _connect_ws(server)
-    assert [opcode for opcode, _ in messages] == [0x1, 0x1, 0x2, 0x2]   # status, snapshot, frames
-    assert [payload for _, payload in messages[2:]] == [
+    # status, snapshot, frames, log history
+    assert [opcode for opcode, _ in messages] == [0x1, 0x1, 0x2, 0x2, 0x1]
+    assert [payload for _, payload in messages[2:4]] == [
         bytes([web_mod.KIND_DEVICE_FRAME]) + latest,
         bytes([web_mod.KIND_DEVICE_FRAME]) + other,
     ]
@@ -1415,4 +1416,54 @@ def test_device_frames_are_cached_for_new_clients_and_cleared_on_disconnect(tmp_
     _run_broadcast(server, [('server_status', web_mod._server_status(False))])
 
     assert server._device_frames == {}
-    assert [opcode for opcode, _ in _connect_ws(server)] == [0x1, 0x1]
+    assert [opcode for opcode, _ in _connect_ws(server)] == [0x1, 0x1, 0x1]
+
+
+def _log(seq):
+    return {'uid': 'sim-a', 'level': 'I', 'text': f'r{seq}', 'time': 1.0,
+            'uptime_ms': seq, 'seq': seq, 'boot_token': 1}
+
+
+def test_device_logs_history_replaces_and_live_appends():
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080)
+    server._apply_json_message({'type': 'event', 'event': 'device_logs',
+                                'records': [_log(1)]})
+    server._apply_json_message({'type': 'event', 'event': 'device_logs',
+                                'history': True, 'records': [_log(5), _log(6)]})
+    assert server._device_logs == [_log(5), _log(6)]
+
+    server._apply_json_message({'type': 'event', 'event': 'device_logs',
+                                'records': [_log(7)]})
+    assert server._device_logs == [_log(5), _log(6), _log(7)]
+
+
+def test_device_logs_are_capped():
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080)
+    server._apply_json_message({'type': 'event', 'event': 'device_logs',
+                                'history': True,
+                                'records': [_log(i) for i in range(999)]})
+    server._apply_json_message({'type': 'event', 'event': 'device_logs',
+                                'records': [_log(999), _log(1000), _log(1001)]})
+    assert len(server._device_logs) == 1000
+    assert server._device_logs[0] == _log(2)
+    assert server._device_logs[-1] == _log(1001)
+
+
+def test_device_logs_sent_to_new_clients_and_cleared_on_disconnect(tmp_path):
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+    writer = _FakeWsWriter()
+    server._ws_clients.add(web_mod._WsClient(writer=writer, peer='browser'))  # type: ignore[arg-type]
+    live = {'type': 'event', 'event': 'device_logs', 'records': [_log(1)]}
+
+    _run_broadcast(server, [('json', live)])
+
+    assert server._device_logs == [_log(1)]
+    assert json.loads(_ws_messages(bytes(writer.buffer))[0][1]) == live   # forwarded
+    history = json.loads(_connect_ws(server)[-1][1])
+    assert history == {'type': 'event', 'event': 'device_logs', 'history': True,
+                       'records': [_log(1)]}
+
+    _run_broadcast(server, [('server_status', web_mod._server_status(False))])
+
+    assert server._device_logs == []
+    assert json.loads(_connect_ws(server)[-1][1])['records'] == []

@@ -66,6 +66,7 @@ _FRAME_HEADER = struct.Struct('<III')   # frame_index, cycle, t_ms
 _MAX_HTTP_BODY = 1 << 20
 _WS_CLOSE_TIMEOUT = 0.25
 _CONTROLLER_REPLY_TIMEOUT = 2.0
+_DEVICE_LOG_CAP = 1000   # matches the controller's history
 _HTTP_TYPES = {
     '.html': 'text/html; charset=utf-8',
     '.js': 'application/javascript; charset=utf-8',
@@ -322,6 +323,9 @@ class WebUiServer:
         # controller sends a device's picture only when it changes, so a new
         # browser gets these instead of waiting for the next change.
         self._device_frames: dict[str, bytes] = {}
+        # The latest device log records, so a new browser's Logs page opens
+        # with history; a controller history message replaces them.
+        self._device_logs: list[dict] = []
 
     async def run(self) -> None:
         self._loop = asyncio.get_running_loop()
@@ -500,6 +504,7 @@ class WebUiServer:
                 await self._broadcast_json(msg)
                 if not connected:
                     self._device_frames.clear()
+                    self._device_logs = []
                     self._snapshot = _make_disconnected_snapshot(self._snapshot)
                     self._snapshot['server_version'] = self._server_version
                     self._snapshot['layouts'] = self._layouts
@@ -535,7 +540,9 @@ class WebUiServer:
     def _apply_json_message(self, msg: dict) -> None:
         """Fold a v3 controller message into the browser snapshot. The service
         sends full state and catalog messages (not incremental v2 events), so
-        each one replaces its slice wholesale."""
+        each one replaces its slice wholesale. Device log records are kept
+        beside the snapshot: a history message replaces them, a live one
+        appends."""
         msg_type = msg.get('type')
 
         if msg_type == 'state':
@@ -564,6 +571,15 @@ class WebUiServer:
             self._snapshot['programs'] = programs if isinstance(programs, list) else []
             library = msg.get('library')
             self._snapshot['library'] = library if isinstance(library, list) else []
+            return
+
+        if msg.get('event') == 'device_logs':
+            records = msg.get('records')
+            records = records if isinstance(records, list) else []
+            if msg.get('history'):
+                self._device_logs = records[-_DEVICE_LOG_CAP:]
+            else:
+                self._device_logs = (self._device_logs + records)[-_DEVICE_LOG_CAP:]
 
     def _apply_frame(self, payload: bytes) -> None:
         session = self._snapshot.get('session')
@@ -935,6 +951,9 @@ class WebUiServer:
             await self._send_json(client, self._snapshot)
             for frame in list(self._device_frames.values()):
                 await self._send_binary(client, KIND_DEVICE_FRAME, frame)
+            await self._send_json(client, {'type': 'event', 'event': 'device_logs',
+                                           'history': True,
+                                           'records': self._device_logs})
 
             while not reader.at_eof():
                 data = await reader.read(1024)

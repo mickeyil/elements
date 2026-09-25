@@ -17,6 +17,7 @@ import {
 } from '../lib/viewerRenderer';
 import { deriveSimTargets } from '../lib/viewerModel';
 import type { FirmwareState } from '../lib/firmwareModel';
+import { applyDeviceLogs, type DeviceLogRecord } from '../lib/logsModel';
 import type { PanelView } from '../lib/panelModel';
 
 // Every binary websocket message leads with its controller-protocol kind byte
@@ -109,6 +110,9 @@ export function useServerState() {
   const latestSlices = shallowRef<Uint8Array[]>([]);
   // uid -> rgb of the latest picture of each panel-driven device.
   const deviceFrames = shallowReactive(new Map<string, Uint8Array>());
+  // Kept across a dropped socket or controller: the rows before a drop are
+  // the ones worth reading, and the next history message replaces them.
+  const deviceLogs = shallowRef<DeviceLogRecord[]>([]);
   const frameDirty = ref(false);
   const rafPending = ref(false);
 
@@ -238,6 +242,12 @@ export function useServerState() {
 
     if (msg.event === 'snapshot') {
       applySnapshot(msg as SnapshotEvent);
+      return;
+    }
+
+    if (msg.event === 'device_logs') {
+      const records = Array.isArray(msg.records) ? msg.records as DeviceLogRecord[] : [];
+      deviceLogs.value = applyDeviceLogs(deviceLogs.value, records, Boolean(msg.history));
     }
   }
 
@@ -310,6 +320,7 @@ export function useServerState() {
     assignCanvas,
     controllerConnected,
     deviceFrames,
+    deviceLogs,
     emptyState,
     serverConnected,
     session,

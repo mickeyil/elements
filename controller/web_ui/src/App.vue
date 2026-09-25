@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, provide, ref } from 'vue';
 import { RouterLink, RouterView } from 'vue-router';
 
 import IconDevices from './components/icons/IconDevices.vue';
+import IconLogs from './components/icons/IconLogs.vue';
 import IconPanel from './components/icons/IconPanel.vue';
 import IconSimulation from './components/icons/IconSimulation.vue';
 import { serverStateKey, useServerState } from './composables/useServerState';
@@ -79,6 +80,10 @@ onBeforeUnmount(() => {
         <RouterLink class="app-nav-link" to="/viewer">
           <IconSimulation />
           <span>Simulation</span>
+        </RouterLink>
+        <RouterLink class="app-nav-link" to="/logs">
+          <IconLogs />
+          <span>Logs</span>
         </RouterLink>
       </nav>
     </aside>

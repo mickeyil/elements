@@ -41,6 +41,7 @@ class FakeHub:
     def __init__(self):
         self.pending_events = []
         self.frames = []
+        self.logs = []
         self.wanted_seen = []
         self.sent = []   # (uid, encoded, on_ack) per reconciler command
         self.disconnected = []   # (uid, reason) per disconnect() call
@@ -55,7 +56,8 @@ class FakeHub:
         self.wanted_seen.append(set(wanted_uids))
         events, self.pending_events = self.pending_events, []
         frames, self.frames = self.frames, []
-        return HubPoll(events=events, frames=frames)
+        logs, self.logs = self.logs, []
+        return HubPoll(events=events, frames=frames, logs=logs)
 
     def send(self, uid, encoded, on_ack=None):
         self.sent.append((uid, encoded, on_ack))

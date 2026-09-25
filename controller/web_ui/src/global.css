@@ -53,6 +53,8 @@
   --status-offline-soft: rgba(107, 114, 128, 0.12);
   --device-badge-bg: #32353b;
   --device-badge-text: #8c909d;
+  --log-warn: #facc15;
+  --log-error: #f87171;
   --radius-panel: 6px;
   --radius-tight: 4px;
 }

@@ -602,3 +602,38 @@ def test_device_log_stale_boot_straggler_does_not_derail_tracking(
 
     send_and_wait(2, 5, b'boot two continues')
     assert 'lost 3 log records' in caplog.text        # real gap still seen
+
+
+def poll_logs_until(hub, count, timeout_s=2.0):
+    """Poll the hub until count log records came back or time runs out."""
+    logs = []
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline and len(logs) < count:
+        logs.extend(hub.poll(WANTED).logs)
+    return logs
+
+
+def test_device_log_poll_returns_accepted_records(hub, log_client):
+    log_client.sendto(log_packet('sim-zz', text=b'noise'),
+                      ('127.0.0.1', hub.log_port))
+    log_client.sendto(log_packet('sim-a', seq=1, uptime_ms=7, level=b'W',
+                                 text=b'hot'),
+                      ('127.0.0.1', hub.log_port))
+    logs = poll_logs_until(hub, 1)
+    logs += poll_logs_until(hub, 1, timeout_s=0.2)   # nothing else may follow
+    assert logs == [wire.LogRecord(uid='sim-a', boot_token=1, seq=1,
+                                   uptime_ms=7, level='W', text='hot')]
+
+
+def test_device_log_gap_returns_a_warning_before_the_record(hub, log_client):
+    log_client.sendto(log_packet('sim-a', seq=1, text=b'one'),
+                      ('127.0.0.1', hub.log_port))
+    log_client.sendto(log_packet('sim-a', seq=5, uptime_ms=2000, text=b'five'),
+                      ('127.0.0.1', hub.log_port))
+    logs = poll_logs_until(hub, 3)
+    assert [(r.level, r.text) for r in logs] == [
+        ('I', 'one'),
+        ('W', 'lost 3 log records (ring overflow or packet loss)'),
+        ('I', 'five'),
+    ]
+    assert (logs[1].uid, logs[1].seq, logs[1].uptime_ms) == ('sim-a', 5, 2000)

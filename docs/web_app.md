@@ -10,12 +10,15 @@ Browser (Vue 3)  ◄──── HTTP / WebSocket ────►  elemctl web  
 
 `elemctl web` runs the web UI server — it does not hold playback state. The controller remains the authority. The server forwards snapshots, events, and binary program frames to the browser, and proxies device management API calls back to the controller.
 
+Device log records (UDP 6044) reach the browser as `device_logs` events: live ones append, and a `history: true` one (the last 1000, sent to each new connection) replaces what the page holds.
+
 ## Pages
 
 | Route | Page | What it does |
 |-------|------|-------------|
 | `/` | StatusPage | Device status panel, playback info; "Simulate" on an ESP card adds a sim twin of its strip |
 | `/panel` | PanelPage | Operator panel: take one strip from the show to hold a color, loop a panel-library program or blank it, with a sim preview |
+| `/logs` | LogsPage | Device log records as they arrive, with the last 1000 since the controller started; warnings yellow, errors red |
 | `/viewer` | ViewerPage | Live animation preview (canvas rendering of RGB frames) |
 | `/layouts/:deviceUid` | LayoutEditorPage | 2D pixel layout editor for simulator devices |
 

@@ -7,7 +7,7 @@ loop, everything keyed by UID:
   LinkServer       TCP 6041  REGISTER validation, commands out, ACKs back
   FrameReceiver    UDP 6042  sim preview frames
   SyncServer       UDP 6043  stateless clock-sync PONGs
-  LogReceiver      UDP 6044  device log records into our own log
+  LogReceiver      UDP 6044  device log records, logged here and passed up
 
 The hub owns connections and bytes, never meaning: it matches each
 ACK to the callback that sent the command and reports device arrivals
@@ -15,9 +15,9 @@ and departures; what a command or status means belongs to the session
 layer above.
 
 Construct a DeviceHub, then call poll(wanted_uids) once per tick; it
-returns the events and preview frames that arrived. clock_us must be
-the same monotonic microsecond clock the session layer stamps
-program_start_us with; the sync server hands it to devices.
+returns the events, preview frames and device log records that arrived.
+clock_us must be the same monotonic microsecond clock the session layer
+stamps program_start_us with; the sync server hands it to devices.
 """
 
 import logging
@@ -25,7 +25,7 @@ import random
 import socket
 import time
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from . import wire
 from .config import validate_device_uid
@@ -78,6 +78,7 @@ class DeviceInfo:
 class HubPoll:
     events: list     # DeviceConnected / DeviceDisconnected, in order
     frames: list     # wire.FramePreview from registered sims
+    logs: list       # wire.LogRecord from configured uids, gap notes included
 
 
 def _advertised_ip_toward(src_ip):
@@ -241,7 +242,8 @@ _DEVICE_LOG_LEVELS = {
 
 
 class LogReceiver:
-    """Writes device log records into the controller's own log.
+    """Writes device log records into the controller's own log, and
+    returns them so the web UI can show them too.
 
     A deliberate exception to "the hub owns bytes, never meaning": a
     log record's entire meaning is "write me to the log", so it is
@@ -255,7 +257,9 @@ class LogReceiver:
     earliest records are already gone. The cursor is per boot so a
     straggler datagram from before a reboot cannot derail the current
     boot's tracking; entries are two small ints and boots are rare, so
-    they are never pruned."""
+    they are never pruned. A gap is also returned as a synthetic 'W'
+    record, placed before the record that revealed it and carrying that
+    record's seq and uptime."""
 
     def __init__(self, port):
         self._sock = _udp_listener(port)
@@ -266,31 +270,34 @@ class LogReceiver:
         return self._sock.getsockname()[1]
 
     def poll(self, wanted_uids):
+        """Accepted records in arrival order, gap notes included."""
+        records = []
         while True:
             try:
                 datagram, _src = self._sock.recvfrom(_UDP_RECV_SIZE)
             except BlockingIOError:
-                return
+                return records
             except OSError as e:
                 log.warning('device log: recv failed: %s', e)
-                return
+                return records
             record = wire.parse_log_record(datagram)
             if record is None or record.uid not in wanted_uids:
                 continue
-            self._emit(record)
+            self._emit(record, records)
 
-    def _emit(self, record):
+    def _emit(self, record, records):
         key = (record.uid, record.boot_token)
         last = self._cursor.get(key)
         gap = record.seq - 1 if last is None else record.seq - last - 1
         if gap > 0:
-            log.warning('[%s] lost %d log records '
-                        '(ring overflow or packet loss)',
-                        record.uid, gap)
+            note = f'lost {gap} log records (ring overflow or packet loss)'
+            log.warning('[%s] %s', record.uid, note)
+            records.append(replace(record, level='W', text=note))
         if last is None or record.seq > last:
             self._cursor[key] = record.seq
         level = _DEVICE_LOG_LEVELS[record.level]
         log.log(level, '[%s] %s', record.uid, record.text)
+        records.append(record)
 
     def close(self):
         self._sock.close()
@@ -625,8 +632,8 @@ class DeviceHub:
         self._link_server.poll(now_us, wanted_uids, events)
         self._sync.poll(self._registered_boot_token)
         frames = self._frames.poll(self.is_connected)
-        self._logs.poll(wanted_uids)
-        return HubPoll(events=events, frames=frames)
+        logs = self._logs.poll(wanted_uids)
+        return HubPoll(events=events, frames=frames, logs=logs)
 
     def send(self, uid, encoded, on_ack=None):
         """Queue one encoded command for uid; on_ack gets the AckMsg.

@@ -21,6 +21,7 @@ constant color, panel_run loops a program from the panel library
 panel_stop blanks it. Each such device's latest frame is published on its own.
 """
 
+import collections
 import logging
 import math
 import time
@@ -54,6 +55,9 @@ FIRMWARE_CHECK_INTERVAL_US = 1_000_000
 # often would flood the UI, so progress refreshes at most this often.
 # Phase changes (start, done, failed) publish immediately.
 OTA_PROGRESS_INTERVAL_US = 500_000
+
+# Device log records kept for a newly connected client's Logs page.
+DEVICE_LOG_HISTORY = 1000
 
 
 def _doc_label(doc, target_uid):
@@ -135,6 +139,7 @@ class ControllerService:
         self._panel_library = ProgramLibrary(str(Path(animations_dir) / 'library'))
         self._panel_hsv = {}         # strip_id -> [h, s, v] of the last panel fill
         self._artifact_cache = ArtifactCache()
+        self._device_logs = collections.deque(maxlen=DEVICE_LOG_HISTORY)
 
         self._loaded_program_id = None
         self._last_state = None      # last published state dict (change gate)
@@ -181,17 +186,22 @@ class ControllerService:
         self._session.set_preview_enabled(enabled)
 
     def snapshot_messages(self):
-        """The full state plus the program catalog, for a newly connected
-        client. Returned as encoded controller-protocol messages."""
+        """The full state, the program catalog and the device log history,
+        for a newly connected client. Returned as encoded controller-protocol
+        messages. The history goes out even when empty, so a reconnecting
+        client drops rows from a previous controller run."""
         return [encode_json(self._state_dict()),
-                encode_json(self._catalog_dict())]
+                encode_json(self._catalog_dict()),
+                encode_json({'type': 'event', 'event': 'device_logs',
+                             'history': True,
+                             'records': list(self._device_logs)})]
 
     def tick_once(self):
         """Advance the session one tick and collect what to publish: session
         events, the full state when it changed, the catalog when it changed,
-        any assembled preview frames, and the latest frame of each
-        panel-driven device. Returns (json_msgs, frame_msgs), both lists of
-        encoded bytes."""
+        any device log records, any assembled preview frames, and the latest
+        frame of each panel-driven device. Returns (json_msgs, frame_msgs),
+        both lists of encoded bytes."""
         events = self._session.tick()
         for ev in events:
             if isinstance(ev, (MemberAttached, MemberDetached)):
@@ -210,6 +220,16 @@ class ControllerService:
         if self._catalog_dirty:
             self._catalog_dirty = False
             json_msgs.append(encode_json(self._catalog_dict()))
+
+        logs = self._session.drain_device_logs()
+        if logs:
+            now = time.time()   # controller receipt time; devices carry no wall clock
+            records = [{'uid': r.uid, 'level': r.level, 'text': r.text,
+                        'time': now, 'uptime_ms': r.uptime_ms, 'seq': r.seq,
+                        'boot_token': r.boot_token} for r in logs]
+            self._device_logs.extend(records)
+            json_msgs.append(encode_json({'type': 'event', 'event': 'device_logs',
+                                          'records': records}))
 
         frame_msgs = [encode_frame(f.frame_index, f.cycle, f.t_ms, f.strips)
                       for f in self._session.drain_preview_frames()]

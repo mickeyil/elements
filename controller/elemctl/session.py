@@ -223,6 +223,7 @@ class Session:
         self._preview_enabled = False
         self._device_frames = {}     # uid -> latest rgb of a panel-owned member
         self._pending_device_frames = set()  # uids whose latest rgb is not yet drained
+        self._pending_device_logs = []       # wire.LogRecord not yet drained
         self._manual_revision = 0
         self._tick_count = 0
 
@@ -577,6 +578,7 @@ class Session:
         self._check_end()
         self._reconcile()
         self._collect_frames(poll.frames)
+        self._pending_device_logs.extend(poll.logs)
         return self._drain_events()
 
     def _collect_frames(self, frames):
@@ -640,6 +642,12 @@ class Session:
                   if uid in self._pending_device_frames]
         self._pending_device_frames.clear()
         return frames
+
+    def drain_device_logs(self):
+        """Device log records (wire.LogRecord) received since the last call."""
+        logs = self._pending_device_logs
+        self._pending_device_logs = []
+        return logs
 
     def member(self, uid):
         return self._members.get(uid)
