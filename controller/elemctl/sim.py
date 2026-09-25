@@ -116,6 +116,22 @@ def build_sim_command(
     ]
 
 
+class RebootGuard:
+    """Crash-loop guard: trips when max_reboots reboots land within the window."""
+
+    def __init__(self, max_reboots: int = MAX_REBOOTS,
+                 window_sec: float = REBOOT_WINDOW_SEC):
+        self.max_reboots = max_reboots
+        self.window_sec = window_sec
+        self._times: collections.deque[float] = collections.deque(maxlen=max_reboots)
+
+    def record(self, now: float) -> bool:
+        """Note a reboot at now; True when it is time to give up."""
+        self._times.append(now)
+        return (len(self._times) == self.max_reboots
+                and now - self._times[0] <= self.window_sec)
+
+
 def supervise(
     cmd: list[str],
     env: dict[str, str] | None = None,
@@ -130,7 +146,7 @@ def supervise(
     the crash-loop guard trips. Installs a SIGTERM handler for the
     duration, so it must run on the main thread.
     """
-    reboot_times: collections.deque[float] = collections.deque(maxlen=max_reboots)
+    guard = RebootGuard(max_reboots, reboot_window_sec)
     state = {'proc': None, 'stop': False}
 
     def _on_sigterm(signum, frame):
@@ -156,10 +172,7 @@ def supervise(
             if state['stop'] or code != SIM_REBOOT_EXIT_CODE:
                 return code
 
-            now = clock()
-            reboot_times.append(now)
-            if (len(reboot_times) == max_reboots
-                    and now - reboot_times[0] <= reboot_window_sec):
+            if guard.record(clock()):
                 print(
                     f'elemctl sim: {max_reboots} reboots within '
                     f'{reboot_window_sec:.0f}s; giving up',

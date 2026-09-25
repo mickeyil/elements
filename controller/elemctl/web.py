@@ -35,6 +35,8 @@ from .config import (
     sim_twin_uid,
 )
 from .procs import exit_with_parent
+from .sim import REPO_ROOT
+from .sims import SimManager
 from .sim_layout import (
     DEFAULT_LAYOUTS_PATH,
     LayoutError,
@@ -126,11 +128,12 @@ def _empty_snapshot() -> dict:
     }
 
 
-def _server_status(connected: bool) -> dict:
+def _server_status(connected: bool, sims: dict[str, dict] | None = None) -> dict:
     return {
         'type': 'event',
         'event': 'server_status',
         'controller_connected': connected,
+        'sims': sims or {},
     }
 
 
@@ -227,6 +230,7 @@ _ROUTES: tuple[tuple[str, re.Pattern[str], str], ...] = tuple(
         ('DELETE', rf'/api/devices/{_SEGMENT}', '_route_remove_device'),
         ('POST', rf'/api/devices/{_SEGMENT}/update', '_route_update_firmware'),
         ('POST', rf'/api/devices/{_SEGMENT}/sim', '_route_create_sim_twin'),
+        ('POST', rf'/api/devices/{_SEGMENT}/power', '_route_power'),
         ('POST', r'/api/programs/rescan', '_route_rescan'),
         ('POST', rf'/api/programs/{_SEGMENT}/load', '_route_load_program'),
         ('POST', r'/api/session/(play|pause|resume|stop)', '_route_session'),
@@ -296,6 +300,7 @@ class WebUiServer:
         sim_devices: dict[str, int] | None = None,
         layouts_dir: str = DEFAULT_LAYOUTS_PATH,
         server_version: str | None = None,
+        sims: SimManager | None = None,
     ):
         self._socket_path = socket_path
         self._host = host
@@ -329,6 +334,11 @@ class WebUiServer:
         # to it are the interesting ones); its next history message replaces
         # them.
         self._device_logs: list[dict] = []
+        # The sim processes this server runs (Power on/off, Simulate); each
+        # change to them is rebroadcast in server_status.
+        self._sims = sims
+        if sims is not None:
+            sims.on_change = self._enqueue_sims_changed
 
     async def run(self) -> None:
         self._loop = asyncio.get_running_loop()
@@ -378,6 +388,8 @@ class WebUiServer:
                 self._loop.remove_signal_handler(signum)
         self._stop.set()
         server.close()
+        if self._sims is not None:
+            await self._sims.stop_all()
 
         ws_tasks = list(self._ws_tasks)
         for task in ws_tasks:
@@ -476,6 +488,17 @@ class WebUiServer:
             ('server_status', _server_status(connected)),
         )
 
+    def _enqueue_sims_changed(self) -> None:
+        """The sim manager's on_change; runs on the loop."""
+        if self._queue is not None:
+            self._queue.put_nowait(('sims', None))
+
+    def _status_event(self) -> dict:
+        return _server_status(
+            self._controller_connected,
+            self._sims.state() if self._sims is not None else None,
+        )
+
     def _enqueue_controller_messages(self, messages: list[tuple[int, bytes]]) -> None:
         if self._loop is None or self._queue is None:
             return
@@ -504,13 +527,17 @@ class WebUiServer:
                 assert isinstance(msg, dict)
                 connected = bool(msg.get('controller_connected'))
                 self._controller_connected = connected
-                await self._broadcast_json(msg)
+                await self._broadcast_json(self._status_event())
                 if not connected:
                     self._device_frames.clear()
                     self._snapshot = _make_disconnected_snapshot(self._snapshot)
                     self._snapshot['server_version'] = self._server_version
                     self._snapshot['layouts'] = self._layouts
                     await self._broadcast_json(self._snapshot)
+                continue
+
+            if item_type == 'sims':
+                await self._broadcast_json(self._status_event())
                 continue
 
             if item_type == 'json':
@@ -561,11 +588,19 @@ class WebUiServer:
             )
             # Keep the sim-device map current so the layout APIs follow dynamic
             # add/edit/remove rather than the startup config.
+            previous = self._sim_devices
             self._sim_devices = {
                 d['uid']: d['length'] for d in devices
                 if isinstance(d, dict) and d.get('configured')
                 and str(d.get('uid', '')).startswith('sim-')
             }
+            # A removed or renamed sim device must not keep its process. Only
+            # uids that left the config: a state message sent before a
+            # Simulate's add_device can still be queued after its twin starts.
+            if self._sims is not None:
+                for uid in previous.keys() - self._sim_devices.keys():
+                    if self._sims.is_running(uid):
+                        self._sims.stop(uid)
             return
 
         if msg_type == 'catalog':
@@ -687,6 +722,11 @@ class WebUiServer:
         await self._write_json_response(
             req.writer, *self._create_sim_twin_response(device_uid))
 
+    async def _route_power(self, req: _Request, device_uid: str) -> None:
+        payload = await self._read_json_body(req)
+        await self._write_json_response(
+            req.writer, *self._power_response(device_uid, payload))
+
     async def _route_rescan(self, req: _Request) -> None:
         await self._write_json_response(
             req.writer, *self._controller_command_response({'cmd': 'rescan'}))
@@ -740,6 +780,39 @@ class WebUiServer:
             'strip_id': strip_id,
             'program_id': program_id,
         })
+
+    def _power_response(self, device_uid: str, payload: object) -> tuple[int, dict]:
+        """Start or stop a configured sim device's process."""
+        if self._sims is None:
+            return 503, {'error': 'sim control unavailable'}
+        if not isinstance(payload, dict) or not isinstance(payload.get('on'), bool):
+            return 400, {'error': 'request body must be {"on": true|false}'}
+        if not device_uid.startswith('sim-'):
+            return 400, {'error': 'only sim devices can be powered'}
+        device = next(
+            (d for d in self._snapshot.get('devices') or []
+             if isinstance(d, dict) and d.get('configured') and d.get('uid') == device_uid),
+            None,
+        )
+        if device is None:
+            return 404, {'error': f'unknown device: {device_uid}'}
+
+        running = self._sims.is_running(device_uid)
+        if not payload['on']:
+            if not running:
+                return 409, {'error': f'{device_uid} is not running'}
+            self._sims.stop(device_uid)
+            return 200, {'ok': True}
+        if running:
+            return 409, {'error': f'{device_uid} is already running'}
+        # A second process would take over the device's link from it.
+        if device.get('status') == 'online':
+            return 409, {'error': f'{device_uid} is already running outside the app'}
+        try:
+            self._sims.start(device_uid)
+        except ValueError as e:
+            return 503, {'error': str(e)}
+        return 200, {'ok': True}
 
     def _load_program_response(self, program_id: str) -> tuple[int, dict]:
         if not isinstance(program_id, str) or not program_id:
@@ -840,7 +913,14 @@ class WebUiServer:
         label = source.get('label')
         if isinstance(label, str) and label:
             cmd['label'] = label
-        return self._controller_command_response(cmd)
+        status, response = self._controller_command_response(cmd)
+        if status == 200 and self._sims is not None:
+            try:
+                self._sims.start(twin_uid)
+            except ValueError as e:
+                # The twin exists; Power on can start it once this is fixed.
+                log.warning('could not start %s: %s', twin_uid, e)
+        return status, response
 
     def _get_layout_response(self, device_uid: str) -> tuple[int, dict]:
         configured_length = self._sim_devices.get(device_uid)
@@ -949,7 +1029,7 @@ class WebUiServer:
             self._ws_tasks.add(task)
 
         try:
-            await self._send_json(client, _server_status(self._controller_connected))
+            await self._send_json(client, self._status_event())
             await self._send_json(client, self._snapshot)
             for frame in list(self._device_frames.values()):
                 await self._send_binary(client, KIND_DEVICE_FRAME, frame)
@@ -1204,6 +1284,7 @@ def main() -> None:
     layouts = load_layouts_for_devices(config.devices, layouts_dir=layouts_dir)
     sim_devices = {dc.device_uid: dc.length for dc in config.devices if dc.device_type == 'sim'}
 
+    sims = SimManager(frame_port=config.frame_port, storage_root=REPO_ROOT / 'local')
     server = WebUiServer(
         os.path.expanduser(args.socket),
         args.host,
@@ -1212,6 +1293,7 @@ def main() -> None:
         sim_devices,
         layouts_dir,
         runtime_version,
+        sims,
     )
 
     try:

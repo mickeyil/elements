@@ -12,6 +12,8 @@ Browser (Vue 3)  ◄──── HTTP / WebSocket ────►  elemctl web  
 
 Device log records (UDP 6044) reach the browser as `device_logs` events: live ones append, and a `history: true` one (the last 1000, sent to each new connection) replaces what the page holds.
 
+The server's own `server_status` event carries a `sims` map (uid to `running`, `pid`, `last_exit`) of the sim processes the web started.
+
 ## Pages
 
 | Route | Page | What it does |
@@ -29,7 +31,8 @@ Device log records (UDP 6044) reach the browser as `device_logs` events: live on
 | `POST` | `/api/devices` | Add device |
 | `PATCH` | `/api/devices/:deviceUid` | Edit device |
 | `DELETE` | `/api/devices/:deviceUid` | Remove device |
-| `POST` | `/api/devices/:deviceUid/sim` | Add a sim twin of an ESP device's strip (uid `sim-<strip_id>`, hashed past 16 bytes; 409 if the strip already has a sim) |
+| `POST` | `/api/devices/:deviceUid/sim` | Add a sim twin of an ESP device's strip (uid `sim-<strip_id>`, hashed past 16 bytes; 409 if the strip already has a sim) and start it |
+| `POST` | `/api/devices/:deviceUid/power` | Start or stop a configured sim device's `sim_device` process; body `{on}` (409 if already in that state, or if the sim runs outside the app) |
 
 These proxy to the controller's `add_device` / `edit_device` / `remove_device` commands. Devices that share a strip id form a strip group that mirrors one program: editing the strip id or length of one member applies it to the whole group, while the uid and label stay per-device.
 

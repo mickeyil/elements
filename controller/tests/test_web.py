@@ -1161,8 +1161,9 @@ def test_route_devices_collection_rejects_patch(tmp_path):
 # --- sim twin -----------------------------------------------------------------
 
 
-def _server_with_devices(tmp_path, devices: list[dict]):
-    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+def _server_with_devices(tmp_path, devices: list[dict], sims=None):
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path),
+                         sims=sims)
     server._apply_json_message({'type': 'state', 'devices': devices})
     return server
 
@@ -1230,6 +1231,140 @@ def test_route_sim_twin_rejects_get(tmp_path):
     server = _server_with_devices(tmp_path, [_ESP])
     status, _ = _run_http_request(server, 'GET', '/api/devices/esp-aabbccddeeff/sim')
     assert status == 405
+
+
+def test_route_sim_twin_powers_the_twin_on(monkeypatch, tmp_path):
+    sims = _FakeSims()
+    server = _server_with_devices(tmp_path, [_ESP], sims)
+    monkeypatch.setattr(web_mod, 'ControllerClient', _capturing_client([], _OK_REPLY))
+
+    status, _ = _run_http_request(server, 'POST', '/api/devices/esp-aabbccddeeff/sim')
+
+    assert status == 200
+    assert sims.running == {'sim-ring8'}
+
+
+def test_route_sim_twin_succeeds_when_the_sim_is_not_built(monkeypatch, tmp_path):
+    server = _server_with_devices(tmp_path, [_ESP], _FakeSims(built=False))
+    monkeypatch.setattr(web_mod, 'ControllerClient', _capturing_client([], _OK_REPLY))
+
+    status, _ = _run_http_request(server, 'POST', '/api/devices/esp-aabbccddeeff/sim')
+
+    assert status == 200
+
+
+# --- sim power -----------------------------------------------------------------
+
+
+class _FakeSims:
+    """A SimManager stand-in: a set of running uids, refusing like the real one."""
+
+    def __init__(self, running=(), built=True):
+        self.running = set(running)
+        self.built = built
+
+    def is_running(self, uid):
+        return uid in self.running
+
+    def start(self, uid):
+        if uid in self.running:
+            raise ValueError(f'{uid} is already running')
+        if not self.built:
+            raise ValueError('sim_device not built')
+        self.running.add(uid)
+
+    def stop(self, uid):
+        if uid not in self.running:
+            raise ValueError(f'{uid} is not running')
+        self.running.discard(uid)
+
+    def state(self):
+        return {uid: {'running': True, 'pid': 1, 'last_exit': None} for uid in self.running}
+
+
+_SIM = {'uid': 'sim-ring8', 'configured': True, 'status': 'offline',
+        'strip_id': 'ring8', 'length': 8}
+
+
+def test_power_on_starts_the_sim(tmp_path):
+    sims = _FakeSims()
+    server = _server_with_devices(tmp_path, [_SIM], sims)
+    assert server._power_response('sim-ring8', {'on': True}) == (200, {'ok': True})
+    assert sims.running == {'sim-ring8'}
+
+
+def test_power_off_stops_the_sim(tmp_path):
+    sims = _FakeSims(['sim-ring8'])
+    server = _server_with_devices(tmp_path, [{**_SIM, 'status': 'online'}], sims)
+    assert server._power_response('sim-ring8', {'on': False}) == (200, {'ok': True})
+    assert sims.running == set()
+
+
+@pytest.mark.parametrize('uid, body', [
+    ('sim-ring8', []),
+    ('sim-ring8', {}),
+    ('sim-ring8', {'on': 1}),
+    ('esp-aabbccddeeff', {'on': True}),
+])
+def test_power_rejects_a_bad_request(tmp_path, uid, body):
+    server = _server_with_devices(tmp_path, [_SIM, _ESP], _FakeSims())
+    status, _ = server._power_response(uid, body)
+    assert status == 400
+
+
+def test_power_unknown_device_is_404(tmp_path):
+    server = _server_with_devices(tmp_path, [
+        {'uid': 'sim-new', 'configured': False, 'status': 'discovered'}], _FakeSims())
+    status, _ = server._power_response('sim-new', {'on': True})
+    assert status == 404
+
+
+def test_power_conflicts(tmp_path):
+    server = _server_with_devices(tmp_path, [_SIM], _FakeSims(['sim-ring8']))
+    assert server._power_response('sim-ring8', {'on': True})[0] == 409
+
+    server = _server_with_devices(tmp_path, [_SIM], _FakeSims())
+    assert server._power_response('sim-ring8', {'on': False})[0] == 409
+
+
+def test_power_on_refuses_a_sim_started_elsewhere(tmp_path):
+    sims = _FakeSims()
+    server = _server_with_devices(tmp_path, [{**_SIM, 'status': 'online'}], sims)
+    status, payload = server._power_response('sim-ring8', {'on': True})
+    assert status == 409
+    assert 'outside the app' in payload['error']
+    assert sims.running == set()
+
+
+def test_power_on_unbuilt_sim_is_503(tmp_path):
+    server = _server_with_devices(tmp_path, [_SIM], _FakeSims(built=False))
+    assert server._power_response('sim-ring8', {'on': True})[0] == 503
+
+
+def test_power_without_a_manager_is_503(tmp_path):
+    server = _server_with_devices(tmp_path, [_SIM])
+    assert server._power_response('sim-ring8', {'on': True})[0] == 503
+
+
+def test_route_power_reads_the_body(tmp_path):
+    sims = _FakeSims()
+    server = _server_with_devices(tmp_path, [_SIM], sims)
+    status, _ = _run_http_request(server, 'POST', '/api/devices/sim-ring8/power', b'{"on":true}')
+    assert status == 200
+    assert sims.running == {'sim-ring8'}
+
+
+def test_state_stops_a_sim_that_left_the_config(tmp_path):
+    sims = _FakeSims(['sim-ring8', 'sim-porch'])
+    server = _server_with_devices(tmp_path, [_SIM, {**_SIM, 'uid': 'sim-porch'}], sims)
+    server._apply_json_message({'type': 'state', 'devices': [_SIM]})
+    assert sims.running == {'sim-ring8'}
+
+
+def test_server_status_carries_the_sims(tmp_path):
+    server = _server_with_devices(tmp_path, [_SIM], _FakeSims(['sim-ring8']))
+    assert server._status_event()['sims'] == {
+        'sim-ring8': {'running': True, 'pid': 1, 'last_exit': None}}
 
 
 # --- operator panel ------------------------------------------------------------
