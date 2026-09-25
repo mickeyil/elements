@@ -10,6 +10,7 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -34,8 +35,8 @@ commands:
   sim      launch a configured network simulator
   server   start controller server
   web      start web UI server and realtime viewer
-  run      start server and web together with a joint log (ctrl-c stops both)
-  setup    install deps, build the web UI and native binaries (online)"""
+  run      build, then start server and web with a joint log (ctrl-c stops both)
+  setup    install deps, build the web UI, native binaries and firmware (online)"""
 
 _SUBCOMMANDS = {'sim', 'server', 'web', 'run', 'setup'}
 
@@ -122,12 +123,39 @@ def _build_web():
 def _build_native():
     """Configure and build the host runtime binary (sim_device) into build/.
     CMake tracks freshness, so re-running is cheap; the ~50 test executables are
-    left for `make test` (we build only the sim_device target here)."""
+    left for `make test` (we build only the sim_device target here). Once
+    configured, `cmake --build` reconfigures by itself when CMakeLists change."""
     jobs = str(os.cpu_count() or 1)
     print('elemctl: building native sim_device...', file=sys.stderr)
-    _run(['cmake', '-S', str(REPO_ROOT), '-B', str(BUILD_DIR)], tool='cmake')
+    if not (BUILD_DIR / 'CMakeCache.txt').exists():
+        _run(['cmake', '-S', str(REPO_ROOT), '-B', str(BUILD_DIR)], tool='cmake')
     _run(['cmake', '--build', str(BUILD_DIR),
           '--target', 'sim_device', '--parallel', jobs], tool='cmake')
+
+
+def _build_firmware():
+    """Build the ESP32 firmware image (build/pio/esp32dev/firmware.bin) for OTA.
+    Optional: only the hardware needs it, so without PlatformIO we skip it."""
+    if shutil.which('pio') is None:
+        print('elemctl: skipping firmware build; PlatformIO (pio) is not installed '
+              '(the simulator does not need it)', file=sys.stderr)
+        return
+    print('elemctl: building firmware...', file=sys.stderr)
+    _run(['pio', 'run', '-e', 'esp32dev'], cwd=REPO_ROOT, tool='pio')
+
+
+def _build_all():
+    _build_native()
+    _build_web()
+    _build_firmware()
+
+
+class _Terminated(Exception):
+    """Raised from our SIGTERM handler to leave the supervise loop."""
+
+
+def _raise_terminated(signum, frame):
+    raise _Terminated
 
 
 def _pump_output(proc, tag, lock):
@@ -154,12 +182,15 @@ def _stop_children(procs, grace=5.0):
 
 
 def _run_all(argv):
-    """`elemctl run`: supervise `server` and `web` as children of one process.
+    """`elemctl run`: build, then supervise `server` and `web` as children of
+    one process.
 
     Their output is interleaved on our stdout with a [server]/[web] tag.
     Ctrl-C reaches all three processes at once (same process group), and each
     child already shuts down cleanly on SIGINT; we just wait for them. If one
     child exits on its own, the other is stopped and its exit code is ours.
+    A SIGTERM sent to us alone stops both children too; if we die harder than
+    that, the children get SIGTERM from the kernel (elemctl.procs).
     """
     parser = argparse.ArgumentParser(
         prog='elemctl run',
@@ -176,6 +207,8 @@ def _run_all(argv):
     parser.add_argument('--port', default=None, help='HTTP port (web)')
     args = parser.parse_args(argv)
 
+    _build_all()
+
     shared = []
     for opt in ('config', 'socket', 'log_dir'):
         value = getattr(args, opt)
@@ -188,7 +221,8 @@ def _run_all(argv):
     if args.port is not None:
         web_args += ['--port', args.port]
 
-    env = os.environ.copy()
+    from elemctl.procs import child_env
+    env = child_env()
     env['PYTHONUNBUFFERED'] = '1'
     if sys.stdout.isatty():
         # Children write to a pipe, so let them know the far end is a terminal.
@@ -214,6 +248,7 @@ def _run_all(argv):
         t.start()
 
     exit_code = 0
+    signal.signal(signal.SIGTERM, _raise_terminated)
     try:
         while True:
             done = [n for n, p in procs.items() if p.poll() is not None]
@@ -236,6 +271,10 @@ def _run_all(argv):
                 if p.poll() is None:
                     p.kill()
                     p.wait()
+    except _Terminated:
+        exit_code = 143
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        _stop_children(procs)
     for t in pumps:
         t.join(timeout=2.0)
     sys.exit(exit_code)
@@ -309,8 +348,7 @@ def main():
     elif sub == 'setup':
         if not os.environ.pop('_ELEMCTL_SETUP_DONE', None):
             _install_deps()
-        _build_web()
-        _build_native()
+        _build_all()
         print(f'elemctl: setup complete; ready to run from {REPO_ROOT}')
 
 

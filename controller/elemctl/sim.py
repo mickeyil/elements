@@ -34,6 +34,7 @@ from .config import (
     load_config,
     validate_device_uid,
 )
+from .procs import child_env
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 BUILD_DIR = REPO_ROOT / 'build'
@@ -228,7 +229,8 @@ def main() -> None:
         print(f'elemctl sim: {e}', file=sys.stderr)
         sys.exit(1)
 
-    env = os.environ.copy()
+    # We are the sim's parent; if we die hard, the kernel stops the sim.
+    env = child_env()
     env[STORAGE_ROOT_ENV] = args.storage_root
 
     code = supervise(cmd, env)

@@ -35,6 +35,7 @@ from .controller_protocol import (
     encode_json,
     parse_json_payload,
 )
+from .procs import exit_with_parent
 from .service import ControllerService
 from .slogger import configure_logger
 from .version import get_runtime_version
@@ -330,6 +331,7 @@ def main() -> None:
                         help='logs directory (default: controller.logs_dir or <repo>/logs)')
     parser.add_argument('--debug', action='store_true', help='enable debug logging')
     args = parser.parse_args()
+    exit_with_parent()
 
     log_level = 'DEBUG' if args.debug else 'INFO'
     configure_logger(level=log_level)

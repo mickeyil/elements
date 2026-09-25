@@ -34,6 +34,7 @@ from .config import (
     resolve_runtime_path,
     sim_twin_uid,
 )
+from .procs import exit_with_parent
 from .sim_layout import (
     DEFAULT_LAYOUTS_PATH,
     LayoutError,
@@ -1171,6 +1172,7 @@ def _build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
+    exit_with_parent()
 
     configure_logger(level='INFO')
 

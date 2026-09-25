@@ -1,5 +1,8 @@
 #include <arpa/inet.h>
 #include <unistd.h>
+#ifdef __linux__
+#include <sys/prctl.h>
+#endif
 
 #include <csignal>
 #include <cstdint>
@@ -42,6 +45,25 @@ volatile std::sig_atomic_t g_stop = 0;
 void handle_stop_signal(int)
 {
     g_stop = 1;
+}
+
+// The supervisor that spawned us (e.g. elemctl sim) names itself
+// in ELEMCTL_PARENT_PID. It may die hard and never stop us, so ask the
+// kernel for SIGTERM when it goes, and exit now if it already has (we were
+// reparented before we could arm). See controller/elemctl/procs.py.
+void exit_with_parent()
+{
+#ifdef __linux__
+    const char* parent = std::getenv("ELEMCTL_PARENT_PID");
+    if (parent == nullptr) {
+        return;
+    }
+    prctl(PR_SET_PDEATHSIG, SIGTERM);
+    if (getppid() != static_cast<pid_t>(std::atol(parent))) {
+        std::fprintf(stderr, "parent %s is gone; exiting\n", parent);
+        std::exit(0);
+    }
+#endif
 }
 
 struct SimOptions
@@ -97,6 +119,8 @@ bool parse_args(int argc, char** argv, SimOptions& opts)
 
 int main(int argc, char** argv)
 {
+    exit_with_parent();
+
     SimOptions opts;
     if (!parse_args(argc, argv, opts)) {
         print_usage(argv[0]);
