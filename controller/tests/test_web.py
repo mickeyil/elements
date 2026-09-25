@@ -1449,7 +1449,7 @@ def test_device_logs_are_capped():
     assert server._device_logs[-1] == _log(1001)
 
 
-def test_device_logs_sent_to_new_clients_and_cleared_on_disconnect(tmp_path):
+def test_device_logs_sent_to_new_clients_and_kept_through_disconnect(tmp_path):
     server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
     writer = _FakeWsWriter()
     server._ws_clients.add(web_mod._WsClient(writer=writer, peer='browser'))  # type: ignore[arg-type]
@@ -1465,5 +1465,9 @@ def test_device_logs_sent_to_new_clients_and_cleared_on_disconnect(tmp_path):
 
     _run_broadcast(server, [('server_status', web_mod._server_status(False))])
 
-    assert server._device_logs == []
-    assert json.loads(_connect_ws(server)[-1][1])['records'] == []
+    assert server._device_logs == [_log(1)]      # a browser opening now still sees them
+    assert json.loads(_connect_ws(server)[-1][1])['records'] == [_log(1)]
+
+    _run_broadcast(server, [('json', {'type': 'event', 'event': 'device_logs',
+                                      'history': True, 'records': [_log(9)]})])
+    assert server._device_logs == [_log(9)]      # the controller's return replaces them

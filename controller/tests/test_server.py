@@ -12,6 +12,8 @@ from elemctl.controller_protocol import (
     ROLE_OBSERVER,
     ProtocolReader,
     encode_frame,
+    encode_json,
+    parse_json_payload,
 )
 from elemctl.server import ControllerServer, _ClientConn
 
@@ -154,3 +156,27 @@ def test_disconnect_keeps_preview_for_remaining_subscriber():
     kinds_on(b_peer)
     server._send_frames([FRAME])
     assert KIND_FRAME in kinds_on(b_peer)
+
+
+def test_message_larger_than_send_buffer_is_delivered_in_full():
+    server = make_server()
+    conn, peer = add_conn(server)
+    server._frame_subscribers.add(conn)
+    big = {'type': 'event', 'event': 'device_logs', 'text': 'x' * 2_000_000}
+
+    server._send(conn, big)                      # far beyond the socket buffer
+    assert conn.pending                          # the rest waits, client kept
+    server._send_frames([FRAME])                 # a frame never queues behind it
+    server._send(conn, {'type': 'event', 'event': 'after'})
+
+    reader = ProtocolReader()
+    messages = []
+    while len(messages) < 2:                     # a slow reader, one tick at a time
+        server._flush_clients()
+        reader.feed(peer.recv(65536))
+        messages += reader.messages()
+
+    assert [parse_json_payload(p) for _, p in messages] == [
+        big, {'type': 'event', 'event': 'after'}]
+    assert server._clients[conn.sock.fileno()] is conn
+    assert not conn.pending

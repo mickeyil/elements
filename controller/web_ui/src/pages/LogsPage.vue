@@ -53,8 +53,8 @@ onMounted(scrollToEnd);
           <p>No device log records yet.</p>
         </div>
         <div
-          v-for="(record, index) in deviceLogs"
-          :key="index"
+          v-for="record in deviceLogs"
+          :key="record.id"
           class="logs-row"
           :class="`logs-row-${levelClass(record.level)}`"
         >

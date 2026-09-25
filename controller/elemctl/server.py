@@ -20,7 +20,7 @@ import socket
 import struct
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .config import (
     DEFAULT_CONFIG_PATH, DEFAULT_LOGS_PATH, DEFAULT_SOCKET_PATH, ConfigError,
@@ -51,6 +51,9 @@ class _ClientConn:
     desc: str | None
     role: str | None = None
     hello_ok: bool = False
+    # Reliable bytes the socket would not take yet (a snapshot can outgrow the
+    # send buffer); flushed each tick, ahead of anything newer.
+    pending: bytearray = field(default_factory=bytearray)
 
 
 def _describe_peer(conn: socket.socket) -> str | None:
@@ -95,6 +98,7 @@ class ControllerServer:
 
         try:
             while self._running and not self._service.should_shutdown:
+                self._flush_clients()
                 self._accept_clients()
                 self._read_clients()
                 json_msgs, frame_msgs = self._service.tick_once()
@@ -263,20 +267,42 @@ class ControllerServer:
         self._send_bytes(client, encode_json(msg), reliable=True)
 
     def _send_bytes(self, client: _ClientConn, data: bytes, *, reliable: bool) -> bool:
+        """Send one message. Reliable bytes the socket cannot take now wait in
+        client.pending; an unreliable one (a frame) is dropped instead, and is
+        skipped outright while reliable bytes wait, so it never queues."""
+        if client.pending:
+            if reliable:
+                client.pending += data
+            return False
         try:
             sent = client.sock.send(data)
         except BlockingIOError:
             if reliable:
-                self._close_client(client)
+                client.pending += data
             return False
         except OSError:
             self._close_client(client)
             return False
         if sent == len(data):
             return True
-        # A partial write desynchronizes the stream; drop the client.
-        self._close_client(client)
+        # The head of this message is on the wire, so its tail must follow
+        # (even a frame's), or the stream desynchronizes.
+        client.pending += data[sent:]
         return False
+
+    def _flush_clients(self) -> None:
+        """Push each client's pending bytes as far as its socket takes them."""
+        for client in list(self._clients.values()):
+            if not client.pending:
+                continue
+            try:
+                sent = client.sock.send(client.pending)
+            except BlockingIOError:
+                continue
+            except OSError:
+                self._close_client(client)
+                continue
+            del client.pending[:sent]
 
     def _close_client(self, client: _ClientConn) -> None:
         self._clients.pop(client.sock.fileno(), None)

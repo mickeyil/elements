@@ -17,7 +17,7 @@ import {
 } from '../lib/viewerRenderer';
 import { deriveSimTargets } from '../lib/viewerModel';
 import type { FirmwareState } from '../lib/firmwareModel';
-import { applyDeviceLogs, type DeviceLogRecord } from '../lib/logsModel';
+import { applyDeviceLogs, type DeviceLogRecord, type DeviceLogWireRecord } from '../lib/logsModel';
 import type { PanelView } from '../lib/panelModel';
 
 // Every binary websocket message leads with its controller-protocol kind byte
@@ -246,7 +246,7 @@ export function useServerState() {
     }
 
     if (msg.event === 'device_logs') {
-      const records = Array.isArray(msg.records) ? msg.records as DeviceLogRecord[] : [];
+      const records = Array.isArray(msg.records) ? msg.records as DeviceLogWireRecord[] : [];
       deviceLogs.value = applyDeviceLogs(deviceLogs.value, records, Boolean(msg.history));
     }
   }

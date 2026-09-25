@@ -324,7 +324,9 @@ class WebUiServer:
         # browser gets these instead of waiting for the next change.
         self._device_frames: dict[str, bytes] = {}
         # The latest device log records, so a new browser's Logs page opens
-        # with history; a controller history message replaces them.
+        # with history. Kept through a controller outage (the rows leading up
+        # to it are the interesting ones); its next history message replaces
+        # them.
         self._device_logs: list[dict] = []
 
     async def run(self) -> None:
@@ -504,7 +506,6 @@ class WebUiServer:
                 await self._broadcast_json(msg)
                 if not connected:
                     self._device_frames.clear()
-                    self._device_logs = []
                     self._snapshot = _make_disconnected_snapshot(self._snapshot)
                     self._snapshot['server_version'] = self._server_version
                     self._snapshot['layouts'] = self._layouts
