@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <FastLED.h>
+#include <esp_system.h>
 
 #include "controller/app.h"
 #include "platform/device_identity.h"
@@ -25,6 +26,12 @@
 namespace {
 
 constexpr uint8_t LED_PIN = 13;
+
+// The strip's share of a 5 V / 2 A supply that also feeds the ESP32.
+// FastLED's estimate counts the whole MAX_STRIP_PIXELS buffer, which
+// only makes the cap a little conservative.
+constexpr uint8_t  SUPPLY_VOLTS = 5;
+constexpr uint32_t STRIP_MILLIAMPS = 1500;
 
 constexpr char WIFI_KV_NAMESPACE[] = "wifi";
 
@@ -54,6 +61,20 @@ DiscoveryClient g_discovery(g_discovery_udp, g_identity);
 // formatted before the Arduino runtime is ready.
 App* g_app = nullptr;
 
+const char* reset_reason_name(esp_reset_reason_t reason)
+{
+    switch (reason) {
+        case ESP_RST_POWERON:  return "power-on";
+        case ESP_RST_SW:       return "software";
+        case ESP_RST_PANIC:    return "panic";
+        case ESP_RST_INT_WDT:  return "interrupt watchdog";
+        case ESP_RST_TASK_WDT: return "task watchdog";
+        case ESP_RST_WDT:      return "watchdog";
+        case ESP_RST_BROWNOUT: return "brownout";
+        default:               return "unknown";
+    }
+}
+
 }  // namespace
 
 void setup()
@@ -61,6 +82,10 @@ void setup()
     Serial.begin(115200);
 
     g_identity = make_esp_device_identity();
+
+    const esp_reset_reason_t reason = esp_reset_reason();
+    slog_info("boot: %s firmware %s, reset: %s (%u)", g_identity.uid, g_identity.version,
+              reset_reason_name(reason), static_cast<unsigned>(reason));
 
     // Compiled-in credentials (secrets.h) land in the store first, so the
     // emptiness check below sees them and a fresh board with a known
@@ -83,6 +108,7 @@ void setup()
 
     FastLED.addLeds<WS2811, LED_PIN, RGB>(g_output.leds(), MAX_STRIP_PIXELS);
     FastLED.setBrightness(255);
+    FastLED.setMaxPowerInVoltsAndMilliamps(SUPPLY_VOLTS, STRIP_MILLIAMPS);
 
     g_app->begin();
     slog_info("elements device %s (firmware %s) up", g_identity.uid, g_identity.version);
