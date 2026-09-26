@@ -46,6 +46,7 @@ EspUdpTransport   g_log_udp;
 EspTcpTransport   g_tcp;
 EspFileStore      g_files;
 NvsKeyValueStore  g_profile_kv(HARDWARE_PROFILE_KV_NAMESPACE);
+NvsKeyValueStore  g_boot_kv("boot");
 EspSystemPlatform g_system;
 EspFrameOutput    g_output;
 
@@ -83,9 +84,16 @@ void setup()
 
     g_identity = make_esp_device_identity();
 
+    // Store this boot's reset reason before Wi-Fi starts, so a brownout
+    // loop that never gets to log is still reported after a power cycle.
     const esp_reset_reason_t reason = esp_reset_reason();
-    slog_info("boot: %s firmware %s, reset: %s (%u)", g_identity.uid, g_identity.version,
-              reset_reason_name(reason), static_cast<unsigned>(reason));
+    uint8_t previous = UINT8_MAX;
+    const bool has_previous = g_boot_kv.get_u8("reset", previous);
+    g_boot_kv.put_u8("reset", static_cast<uint8_t>(reason));
+    slog_info("boot: %s firmware %s, reset: %s (%u), previous: %s (%u)", g_identity.uid,
+              g_identity.version, reset_reason_name(reason), static_cast<unsigned>(reason),
+              has_previous ? reset_reason_name(static_cast<esp_reset_reason_t>(previous)) : "none",
+              static_cast<unsigned>(previous));
 
     // Compiled-in credentials (secrets.h) land in the store first, so the
     // emptiness check below sees them and a fresh board with a known
