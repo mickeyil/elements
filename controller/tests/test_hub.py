@@ -141,6 +141,17 @@ def test_wrong_protocol_version_closed(hub):
     dev.assert_closed()
 
 
+def test_repeated_protocol_rejection_logged_once(hub, caplog):
+    caplog.set_level(logging.DEBUG, logger='elemctl.hub')
+    for _ in range(2):
+        dev = ScriptedDevice(hub.link_port)
+        dev.register('sim-a', version=2)
+        poll_until(hub, lambda e, f: False, timeout_s=0.2)
+        dev.assert_closed()
+    rejections = [r for r in caplog.records if 'protocol_version' in r.getMessage()]
+    assert [r.levelno for r in rejections] == [logging.INFO, logging.DEBUG]
+
+
 def test_first_message_must_be_register(hub):
     dev = ScriptedDevice(hub.link_port)
     dev.ack()

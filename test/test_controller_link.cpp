@@ -370,8 +370,10 @@ TEST_CASE("a processor fault tears down; the cached OFFER reattaches")
     CHECK_FALSE(h.link.is_ready());
     CHECK_FALSE(h.tcp.is_connected());
 
-    // The discovery values are still cached; the next tick reconnects.
+    // The discovery values are still cached; the link reconnects once
+    // the retry interval has passed.
     h.tcp.inbox.clear();
+    h.advance(CONNECT_RETRY_INTERVAL_MS * 1000);
     h.link.poll();
     REQUIRE(h.link.is_ready());
 
@@ -427,7 +429,8 @@ TEST_CASE("network loss while attached tears down; return rediscovers")
     CHECK(h.link.controller_ip_addr() == 0);
 
     h.net.up = true;
-    h.link.poll();  // cached OFFER, immediate reconnect
+    h.advance(CONNECT_RETRY_INTERVAL_MS * 1000);
+    h.link.poll();  // cached OFFER reconnects
     CHECK(h.link.is_ready());
 }
 
@@ -438,4 +441,24 @@ TEST_CASE("a dead socket noticed while attached tears down")
     h.tcp.connected = false;  // peer vanished between ticks
     h.link.poll();
     CHECK_FALSE(h.link.is_ready());
+}
+
+TEST_CASE("a controller closing right after REGISTER is not retried every tick")
+{
+    // E.g. a protocol_version mismatch: the controller closes at once.
+    Harness h;
+    h.establish();
+    REQUIRE(h.tcp.connect_calls == 1);
+
+    h.tcp.connected = false;
+    h.link.poll();
+    CHECK_FALSE(h.link.is_ready());
+
+    h.link.poll();
+    CHECK(h.tcp.connect_calls == 1);
+
+    h.advance(CONNECT_RETRY_INTERVAL_MS * 1000);
+    h.link.poll();
+    CHECK(h.tcp.connect_calls == 2);
+    CHECK(h.link.is_ready());
 }

@@ -132,6 +132,8 @@ void ControllerLink::drop_link_()
     _tcp.disconnect();
     _processor.reset_stream();
     _controller_ip = 0;
-    _last_connect_us = 0;   // reconnect promptly once prerequisites return
+    // Pace the reconnect: a controller that closes right after REGISTER
+    // (e.g. a protocol mismatch) must not be retried every tick.
+    _last_connect_us = now_us();
     _state = LinkState::Discovering;
 }

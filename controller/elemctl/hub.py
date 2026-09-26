@@ -426,6 +426,7 @@ class LinkServer:
         self._unregistered = []
         self._links = {}            # uid -> _DeviceLink
         self._last_boot_tokens = {}  # uid -> last seen token, kept across disconnects
+        self._rejected_versions = {}  # uid -> protocol_version last rejected (log once)
 
     @property
     def port(self):
@@ -527,11 +528,16 @@ class LinkServer:
             conn.close()
             return
         if reg.protocol_version != wire.PROTOCOL_VERSION:
-            log.info('link: rejecting %s: protocol_version %d (ours: %d)',
-                     reg.uid, reg.protocol_version, wire.PROTOCOL_VERSION)
+            # A mismatched device retries every few seconds; say so once.
+            repeat = self._rejected_versions.get(reg.uid) == reg.protocol_version
+            self._rejected_versions[reg.uid] = reg.protocol_version
+            log.log(logging.DEBUG if repeat else logging.INFO,
+                    'link: rejecting %s: protocol_version %d (ours: %d)',
+                    reg.uid, reg.protocol_version, wire.PROTOCOL_VERSION)
             conn.close()
             return
 
+        self._rejected_versions.pop(reg.uid, None)
         if reg.uid in self._links:
             self._drop(reg.uid, 'replaced by new connection', events)
 

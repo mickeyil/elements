@@ -761,6 +761,7 @@ TEST_CASE("re-attaching stops the local background")
     h.app.tick();
     REQUIRE(h.app.status().mode == DeviceMode::DetachedBackground);
 
+    h.advance(CONNECT_RETRY_INTERVAL_MS * 1000);
     h.attach();  // controller comes back
     CHECK(h.app.status().mode == DeviceMode::AttachedControlled);
 
@@ -1011,6 +1012,7 @@ TEST_CASE("re-attaching blanks the running background")
 
     // The controller comes back: playback is reset and the LEDs go dark in
     // the same tick, not whenever the controller next loads something.
+    h.advance(CONNECT_RETRY_INTERVAL_MS * 1000);
     const size_t before = h.frames();
     h.discovery_udp.inbox.push_back(make_offer(CONTROLLER_IP, CONTROLLER_PORT));
     h.app.tick();
