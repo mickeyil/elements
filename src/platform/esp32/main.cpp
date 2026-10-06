@@ -27,11 +27,11 @@ namespace {
 
 constexpr uint8_t LED_PIN = 13;
 
-// The strip's share of a 5 V / 2 A supply that also feeds the ESP32.
-// FastLED's estimate counts the whole MAX_STRIP_PIXELS buffer, which
-// only makes the cap a little conservative.
+// Full rating of the 5 V / 2.5 A adapter the ESP32 shares in parallel, so the
+// limits can be rediscovered with the new power wiring. FastLED's estimate
+// counts the whole MAX_STRIP_PIXELS buffer, making the cap a little conservative.
 constexpr uint8_t  SUPPLY_VOLTS = 5;
-constexpr uint32_t STRIP_MILLIAMPS = 1500;
+constexpr uint32_t STRIP_MILLIAMPS = 2500;
 
 constexpr char WIFI_KV_NAMESPACE[] = "wifi";
 

@@ -85,7 +85,8 @@ const canCommand = computed(() => controllerConnected.value && Boolean(selectedS
 
 // --- color -----------------------------------------------------------------
 
-const color = ref<PanelHsv>({ h: 0, s: 1, v: 1 });
+// Start dim so a freshly opened panel never drives the strip at full power.
+const color = ref<PanelHsv>({ h: 0, s: 1, v: 0.1 });
 
 // Start the picker from the strip's held color when a strip is selected;
 // later state echoes do not move it under the operator's pointer.
