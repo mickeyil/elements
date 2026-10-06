@@ -60,7 +60,7 @@ describe('applyDeviceLogs', () => {
 describe('formatLogTime', () => {
   it('formats local time with milliseconds', () => {
     const unixSeconds = new Date(2026, 0, 2, 3, 4, 5, 67).getTime() / 1000;
-    expect(formatLogTime(unixSeconds)).toBe('03:04:05.067');
+    expect(formatLogTime(unixSeconds)).toBe('2026-01-02 03:04:05.067');
   });
 });
 

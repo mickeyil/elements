@@ -39,10 +39,11 @@ function pad(value: number, width = 2): string {
   return String(value).padStart(width, '0');
 }
 
-// Local wall-clock HH:MM:SS.mmm.
+// Local wall-clock YYYY-MM-DD HH:MM:SS.mmm, matching the controller's server.log.
 export function formatLogTime(unixSeconds: number): string {
   const date = new Date(Math.round(unixSeconds * 1000));
-  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+  return `${pad(date.getFullYear(), 4)}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} `
+    + `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
     + `.${pad(date.getMilliseconds(), 3)}`;
 }
 

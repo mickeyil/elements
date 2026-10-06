@@ -58,7 +58,7 @@ onMounted(scrollToEnd);
           class="logs-row"
           :class="`logs-row-${levelClass(record.level)}`"
         >
-          <span>{{ formatLogTime(record.time) }}</span>
+          <span class="logs-time">{{ formatLogTime(record.time) }}</span>
           <span class="logs-uid">{{ record.uid }}</span>
           <span>{{ record.level }}</span>
           <span class="logs-text">{{ record.text }}</span>
@@ -112,6 +112,10 @@ onMounted(scrollToEnd);
 
 .logs-row-error {
   color: var(--log-error);
+}
+
+.logs-time {
+  white-space: nowrap;
 }
 
 .logs-uid {
