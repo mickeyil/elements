@@ -106,7 +106,7 @@ def hsv_to_rgb(h, s, v):
 
 # The panel mode a panel-owned member's target intent means.
 _PANEL_MODES = {Intent.MANUAL: 'manual', Intent.PLAYING: 'program',
-                Intent.DETACHED: 'stopped'}
+                Intent.STOPPED: 'stopped'}
 
 
 class ControllerService:

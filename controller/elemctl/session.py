@@ -19,7 +19,7 @@ device (a JUMP onto a compiler-marked safe interval) are deferred.
 An operator panel can also take one strip over, outside the show: a constant
 picture (panel_manual), a looping library program (panel_run), or dark
 (panel_stop). Its members are panel-owned, which the show verbs skip, until
-the next load() reclaims them.
+a load() routes their strip.
 """
 
 import logging
@@ -72,11 +72,12 @@ _DEVICE_STATES = [DeviceState.IDLE, DeviceState.LOADED, DeviceState.PLAYING,
 # What the session wants of a member, independent of where the device is.
 # The reconciler closes the gap from phase to intent one command at a time.
 class Intent(Enum):
-    DETACHED = auto()   # not a participant in the current session
+    DETACHED = auto()   # nothing wanted; whatever the device shows is left alone
     READY = auto()      # profile applied and blob loaded, parked at LOADED
     PLAYING = auto()    # playing from the shared anchor
     PAUSED = auto()     # paused at a cursor
     MANUAL = auto()     # holding a constant picture (panel only)
+    STOPPED = auto()    # blanked by the panel
 
 
 # A SET_PROFILE Ok means either "already matched" or "saved a new profile
@@ -252,7 +253,8 @@ class Session:
         Routing is by strip_id: each device loads the manifest strip whose
         strip_id matches its own, and several devices may share a strip_id and
         all load that one strip (mirroring). A device whose strip_id is absent
-        from the manifest detaches. strip_id is unique per manifest (the
+        from the manifest is left alone: a show strip stops being driven, and
+        a panel strip stays the panel's. strip_id is unique per manifest (the
         compiler enforces it), so the match is always unambiguous."""
         self._check_all_strips_served(manifest)
         self._check_geometry(manifest)
@@ -264,10 +266,15 @@ class Session:
         self.cursor_us = 0
         self.state = SessionState.LOADED
 
+        reclaimed = []
         for uid, member in self._members.items():
-            member.owner = 'show'     # the show reclaims any panel strip
-            member._clear_blocked()   # a new program is a fresh chance to drive
             artifact = manifest.strips.get(member.strip_id)
+            if artifact is None and member.owner == 'panel':
+                continue                  # the panel keeps a strip the show does not route
+            if member.owner == 'panel':
+                member.owner = 'show'     # the show reclaims a panel strip it routes
+                reclaimed.append(uid)
+            member._clear_blocked()       # a new program is a fresh chance to drive
             if artifact is None:
                 member.set_target(Target(intent=Intent.DETACHED))
                 continue
@@ -276,11 +283,12 @@ class Session:
                 program_token=(self.session_id, member.strip_id),
                 blob=artifact.blob,
             ))
-        # Every strip is the show's again: preview assembles all of them, and
-        # the pictures the panel's devices last showed are stale.
+        # Preview assembles the show's strips, and the pictures the reclaimed
+        # devices last showed for the panel are stale.
         self._declare_preview()
-        self._device_frames.clear()
-        self._pending_device_frames.clear()
+        for uid in reclaimed:
+            self._device_frames.pop(uid, None)
+            self._pending_device_frames.discard(uid)
 
     def preview_strips(self):
         """The (strip_id, length) layout of an assembled preview frame, in
@@ -468,8 +476,9 @@ class Session:
 
     # -----------------------------------------------------------------------
     # Operator panel: drive every member serving one strip_id, outside the
-    # show. Each call takes those members over (owner 'panel'); the next
-    # load() gives them back. The targets survive a detach like show targets.
+    # show. Each call takes those members over (owner 'panel'); a load() that
+    # routes their strip gives them back. The targets survive a detach like
+    # show targets.
     # -----------------------------------------------------------------------
 
     def panel_manual(self, strip_id, rgb):
@@ -499,7 +508,7 @@ class Session:
         """Blank the strip: one STOP, which leaves a manual picture at IDLE and
         a panel program parked at LOADED. The members stay panel-owned."""
         for member in self._take_for_panel(strip_id):
-            member.set_target(Target(intent=Intent.DETACHED))
+            member.set_target(Target(intent=Intent.STOPPED))
 
     def _take_for_panel(self, strip_id):
         """Hand every member serving strip_id to the panel and return them. A
@@ -718,12 +727,15 @@ class Session:
             self._query_status(member)
             return
 
-        # A member the manifest no longer routes to: blank a stale program from
-        # a previous session once, then leave it idle.
+        # Nothing is wanted of this device: whatever it shows is left alone.
         if target.intent is Intent.DETACHED:
+            return
+
+        # Blanked by the panel: one STOP, then nothing.
+        if target.intent is Intent.STOPPED:
             if member.serving:
                 self._send(member, 'stop', wire.encode_stop(),
-                           lambda m: self._after_stop_detached(m))
+                           lambda m: self._after_panel_stop(m))
             return
 
         # MANUAL is valid from any device state, so no STOP first. A new
@@ -920,7 +932,7 @@ class Session:
         elif member.phase is DeviceState.MANUAL:
             member.phase = DeviceState.IDLE
 
-    def _after_stop_detached(self, member):
+    def _after_panel_stop(self, member):
         self._after_stop(member)   # the blank Stop settles the phase the same way
         member.serving = False
 

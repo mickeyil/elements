@@ -717,7 +717,7 @@ def test_start_wrong_state_reloads_keeping_profile():
     assert op == wire.CMD_LOAD
 
 
-def test_detached_member_with_stale_program_is_stopped_once():
+def test_a_strip_the_new_show_drops_is_left_alone():
     session, hub = make_session(TWO_STRIPS)
     session.load(make_manifest(('main', 30, b'M'), ('side', 30, b'S')))
     hub.emit(DeviceConnected(uid='sim-b', boot_token=1, rebooted=False))
@@ -730,19 +730,16 @@ def test_detached_member_with_stale_program_is_stopped_once():
     on_ack(ack_ok())                    # loaded 'side'; sim-b serving
     assert session.member('sim-b').serving is True
 
-    # New manifest drops 'side': sim-b detaches but still serves stale content.
+    # New manifest drops 'side': sim-b keeps what it has, and nothing is sent.
     session.load(make_manifest(('main', 30, b'M')))
     assert session.member('sim-b').target.intent is Intent.DETACHED
 
+    n = len([u for u, _, _ in hub.sent if u == 'sim-b'])
     tick(session)
-    op, on_ack = hub.last_send('sim-b')
-    assert op == wire.CMD_STOP
-    on_ack(ack_ok())
-    assert session.member('sim-b').serving is False
-
-    n = len(hub.sent)
+    session.play()                      # the show verbs skip it too
     tick(session)
-    assert len(hub.sent) == n           # stopped once, then idle
+    assert len([u for u, _, _ in hub.sent if u == 'sim-b']) == n
+    assert session.member('sim-b').serving is True
 
 
 def test_late_joiner_during_play_is_not_started():
@@ -1652,6 +1649,7 @@ def test_panel_stop_blanks_the_strip():
     on_ack(ack_ok())
 
     member = session.member('sim-a')
+    assert member.target.intent is Intent.STOPPED
     assert member.phase is DeviceState.IDLE      # STOP from MANUAL leaves IDLE
     assert member.serving is False
     assert member.owner == 'panel'
@@ -1694,6 +1692,27 @@ def test_load_reclaims_a_panel_strip():
     assert encoded == wire.encode_load(b'M')     # profile kept: straight to LOAD
     on_ack(ack_ok())
     assert member.phase is DeviceState.LOADED
+
+
+def test_a_panel_strip_the_show_does_not_route_stays_the_panels():
+    session, hub = make_session(TWO_STRIPS)
+    session.panel_manual('side', b'\x01' * 90)
+    attach_panel(session, hub, 'sim-b')
+    tick(session); ack_last(hub, 'sim-b')        # picture shown
+    hub.frames = [FramePreview(uid='sim-b', frame_index=1, cycle=0, t_ms=0,
+                               rgb=b'\x01' * 90)]
+    tick(session)
+    target = session.member('sim-b').target
+
+    session.load(make_manifest(('main', 30, b'M')))
+    member = session.member('sim-b')
+    assert member.owner == 'panel'
+    assert member.target is target
+    n = len(hub.sent)
+    tick(session)
+    assert len(hub.sent) == n                    # the picture stays: nothing sent
+    session.set_preview_enabled(True)
+    assert session.drain_device_frames() == [('sim-b', b'\x01' * 90)]
 
 
 def test_show_verbs_skip_a_panel_member():
