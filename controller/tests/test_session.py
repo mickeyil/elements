@@ -7,6 +7,8 @@ ladder and ACK handling) are all exercised without any sockets. Tests
 invoke the recorded ACK callbacks to simulate device replies.
 """
 
+import zlib
+
 import pytest
 
 from elements.types import CompiledManifest, CompiledStripArtifact
@@ -24,6 +26,7 @@ from elemctl.session import (
     ProfileState,
     Session,
     SessionState,
+    _DEVICE_STATES,
 )
 
 
@@ -79,6 +82,21 @@ def ack(status):
     return AckMsg(status=status, payload=b'')
 
 
+def status_ack(state=DeviceState.IDLE, crc=0):
+    """A QueryDeviceStatus Ok reporting what the device plays."""
+    # mode attached_controlled, no flags, no skew
+    return AckMsg(status=wire.ACK_OK, payload=wire._DEVICE_STATUS.pack(
+        0, 0, 0, _DEVICE_STATES.index(state), crc))
+
+
+def answer_status(session, hub, uid='sim-a', state=DeviceState.IDLE, crc=0):
+    """Tick the status query out of the ladder and answer it."""
+    tick(session)
+    op, on_ack = hub.last_send(uid)
+    assert op == wire.CMD_QUERY_DEVICE_STATUS
+    on_ack(status_ack(state, crc))
+
+
 DISTINCT_STRIPS = [
     DeviceConfig(device_uid='sim-a', strip_id='left', length=30),
     DeviceConfig(device_uid='sim-b', strip_id='right', length=30),
@@ -132,6 +150,7 @@ def drive_to_loaded(session, hub, uid='sim-a', blob=b'M', loop=False, length=30)
     tick(session)                       # attach + SET_PROFILE
     _, on_ack = hub.last_send(uid)
     on_ack(ack_ok())                    # profile accepted
+    answer_status(session, hub, uid)    # the device plays nothing
     tick(session)                       # LOAD
     _, on_ack = hub.last_send(uid)
     on_ack(ack_ok())                    # blob loaded; member parked at LOADED
@@ -338,7 +357,6 @@ def test_load_sets_session_id_epoch_state_and_targets():
     right = session.member('sim-b').target
     assert left.intent is Intent.READY
     assert left.blob == b'L'
-    assert left.strip_length == 30
     assert left.program_token == (1, 'left')
     assert right.program_token == (1, 'right')
 
@@ -366,11 +384,9 @@ def test_load_mirrors_shared_strip_id():
 def test_load_allows_strip_shorter_than_device():
     # A blob compiled for fewer pixels than the device has is legal; the DSL
     # allows an authored length below the configured one, so only longer fails.
-    # The target keeps the device's configured length for its profile.
     session, _hub = make_session()                       # sim-a 'left', 30 px
     session.load(make_manifest(('left', 10, b'L'), ('right', 30, b'R')))
     assert session.member('sim-a').target.intent is Intent.READY
-    assert session.member('sim-a').target.strip_length == 30
 
 
 def test_load_rejects_strip_longer_than_device():
@@ -433,7 +449,7 @@ def test_tick_passes_wanted_uids_to_hub():
 from elemctl.session import _UNSYNCED_BACKOFF_TICKS
 
 
-def test_fresh_attach_ladder_profile_then_load_then_park():
+def test_fresh_attach_ladder_profile_then_status_then_load_then_park():
     session, hub = make_session(SINGLE)
     session.load(make_manifest(('main', 30, b'M')))
     hub.emit(DeviceConnected(uid='sim-a', boot_token=1, rebooted=False))
@@ -442,6 +458,9 @@ def test_fresh_attach_ladder_profile_then_load_then_park():
     op, on_ack = hub.last_send('sim-a')
     assert op == wire.CMD_SET_PROFILE
     on_ack(ack_ok())
+
+    answer_status(session, hub)         # the device plays nothing
+    assert session.member('sim-a').phase is DeviceState.IDLE
 
     tick(session)
     op, on_ack = hub.last_send('sim-a')
@@ -471,6 +490,7 @@ def test_shorter_strip_profiles_the_configured_length_then_loads():
     _, encoded, on_ack = hub.sent[-1]
     assert encoded == wire.encode_set_profile(30)
     on_ack(ack_ok())
+    answer_status(session, hub)
 
     tick(session)
     _, encoded, on_ack = hub.sent[-1]
@@ -541,6 +561,7 @@ def test_inflight_ack_applies_after_retarget():
     session.load(make_manifest(('main', 30, b'M2')))   # retarget while in flight
     on_ack(ack_ok())                     # the device really set its profile
     assert session.member('sim-a').profile_state is ProfileState.ASSUMED_MATCH
+    answer_status(session, hub)
 
     tick(session)                        # reconciler now loads the new program
     op, _ = hub.last_send('sim-a')
@@ -625,6 +646,7 @@ def test_terminal_failure_blocks_and_emits():
     tick(session)
     _, on_ack = hub.last_send('sim-a')
     on_ack(ack_ok())                    # profile ok
+    answer_status(session, hub)
     tick(session)
     _, on_ack = hub.last_send('sim-a')  # LOAD
     on_ack(ack(wire.ACK_ERROR))         # terminal failure
@@ -646,6 +668,7 @@ def test_profile_mismatch_reprofiles():
     tick(session)
     _, on_ack = hub.last_send('sim-a')
     on_ack(ack_ok())                    # profile ASSUMED
+    answer_status(session, hub)
     tick(session)
     _, on_ack = hub.last_send('sim-a')  # LOAD
     on_ack(ack(wire.ACK_PROFILE_MISMATCH))
@@ -666,6 +689,7 @@ def test_load_wrong_state_reprofiles():
     tick(session)
     _, on_ack = hub.last_send('sim-a')
     on_ack(ack_ok())
+    answer_status(session, hub)
     tick(session)
     _, on_ack = hub.last_send('sim-a')  # LOAD
     on_ack(ack(wire.ACK_WRONG_STATE))   # no hardware profile on the device
@@ -700,6 +724,7 @@ def test_detached_member_with_stale_program_is_stopped_once():
     tick(session)
     _, on_ack = hub.last_send('sim-b')
     on_ack(ack_ok())                    # profile
+    answer_status(session, hub, 'sim-b')
     tick(session)
     _, on_ack = hub.last_send('sim-b')
     on_ack(ack_ok())                    # loaded 'side'; sim-b serving
@@ -728,6 +753,7 @@ def test_late_joiner_during_play_is_not_started():
     hub.emit(DeviceConnected(uid='sim-a', boot_token=1, rebooted=False))
     tick(session)
     _, on_ack = hub.last_send('sim-a'); on_ack(ack_ok())
+    answer_status(session, hub)
     tick(session)
     _, on_ack = hub.last_send('sim-a'); on_ack(ack_ok())   # sim-a LOADED
 
@@ -743,6 +769,7 @@ def test_late_joiner_during_play_is_not_started():
     op, on_ack = hub.last_send('sim-b')
     assert op == wire.CMD_SET_PROFILE
     on_ack(ack_ok())
+    answer_status(session, hub, 'sim-b')
     tick(session)
     _, on_ack = hub.last_send('sim-b'); on_ack(ack_ok())   # sim-b LOADED
 
@@ -771,6 +798,7 @@ def test_stale_load_failure_after_new_load_does_not_block():
     hub.emit(DeviceConnected(uid='sim-a', boot_token=1, rebooted=False))
     tick(session)
     _, on_ack = hub.last_send('sim-a'); on_ack(ack_ok())   # profile
+    answer_status(session, hub, 'sim-a')
     tick(session)
     _, load_ack = hub.last_send('sim-a')                   # Load(M) in flight
 
@@ -792,6 +820,7 @@ def test_load_failure_blocks_even_after_intent_only_retarget():
     hub.emit(DeviceConnected(uid='sim-a', boot_token=1, rebooted=False))
     tick(session)
     _, on_ack = hub.last_send('sim-a'); on_ack(ack_ok())   # profile
+    answer_status(session, hub, 'sim-a')
     tick(session)
     _, load_ack = hub.last_send('sim-a')                   # Load(M) in flight
 
@@ -847,6 +876,7 @@ def test_terminal_block_survives_play_stop_but_clears_on_load():
     hub.emit(DeviceConnected(uid='sim-a', boot_token=1, rebooted=False))
     tick(session)
     _, on_ack = hub.last_send('sim-a'); on_ack(ack_ok())   # profile
+    answer_status(session, hub, 'sim-a')
     tick(session)
     _, on_ack = hub.last_send('sim-a'); on_ack(ack(wire.ACK_ERROR))   # terminal LOAD
     assert session.member('sim-a').blocked == ('load', wire.ACK_ERROR)
@@ -1085,6 +1115,7 @@ def test_reboot_between_set_profile_and_load():
     assert op == wire.CMD_SET_PROFILE
 
     fresh_ack(ack_ok())                 # post-reboot ACK advances
+    answer_status(session, hub)
     tick(session)
     op, _ = hub.last_send('sim-a')
     assert op == wire.CMD_LOAD
@@ -1195,6 +1226,7 @@ def test_late_joiner_not_marked_ended():
     hub.emit(DeviceConnected(uid='sim-a', boot_token=1, rebooted=False))
     tick(session)
     _, on_ack = hub.last_send('sim-a'); on_ack(ack_ok())
+    answer_status(session, hub)
     tick(session)
     _, on_ack = hub.last_send('sim-a'); on_ack(ack_ok())   # sim-a LOADED
 
@@ -1205,6 +1237,7 @@ def test_late_joiner_not_marked_ended():
     hub.emit(DeviceConnected(uid='sim-b', boot_token=1, rebooted=False))
     tick(session)
     _, on_ack = hub.last_send('sim-b'); on_ack(ack_ok())   # profile
+    answer_status(session, hub, 'sim-b')
     tick(session)
     _, on_ack = hub.last_send('sim-b'); on_ack(ack_ok())   # sim-b LOADED, parked
 
@@ -1485,6 +1518,9 @@ def test_mixed_ended_and_paused_leftover_replays_whole_cohort():
         _, on_ack = hub.last_send(uid); on_ack(ack_ok())   # profiles
     tick(session)
     for uid in ('sim-a', 'sim-b'):
+        _, on_ack = hub.last_send(uid); on_ack(status_ack())
+    tick(session)
+    for uid in ('sim-a', 'sim-b'):
         _, on_ack = hub.last_send(uid); on_ack(ack_ok())   # both LOADED
 
     session.play()
@@ -1536,13 +1572,14 @@ def ack_last(hub, uid='sim-a'):
 
 
 def attach_panel(session, hub, uid='sim-a'):
-    """Attach a device whose strip already has a panel target and ACK its
-    SET_PROFILE."""
+    """Attach a device whose strip already has a panel target, ACK its
+    SET_PROFILE and report it idle."""
     hub.emit(DeviceConnected(uid=uid, boot_token=1, rebooted=False))
     tick(session)
     op, on_ack = hub.last_send(uid)
     assert op == wire.CMD_SET_PROFILE
     on_ack(ack_ok())
+    answer_status(session, hub, uid)
 
 
 def test_panel_manual_profiles_then_shows_the_picture():
@@ -1570,14 +1607,14 @@ def test_panel_fills_coalesce_to_the_latest():
     session.panel_manual('main', second)
     session.panel_manual('main', third)
     tick(session)
-    assert len(hub.sent) == 2                    # profile + the one MANUAL
+    assert len(hub.sent) == 3                    # profile, status + the one MANUAL
 
     ack_last(hub)                                # first lands
     tick(session)
-    assert [e for _, e, _ in hub.sent[2:]] == [wire.encode_manual(third)]
+    assert [e for _, e, _ in hub.sent[3:]] == [wire.encode_manual(third)]
     ack_last(hub)
     tick(session)
-    assert len(hub.sent) == 3                    # the target is shown: nothing more
+    assert len(hub.sent) == 4                    # the target is shown: nothing more
 
 
 def test_panel_manual_unknown_strip_is_refused():
@@ -1619,7 +1656,7 @@ def test_panel_stop_blanks_the_strip():
     assert member.serving is False
     assert member.owner == 'panel'
     tick(session)
-    assert len(hub.sent) == 3                    # one STOP only
+    assert len(hub.sent) == 4                    # one STOP only
 
 
 def test_panel_restart_after_stop_starts_the_kept_program():
@@ -1667,6 +1704,9 @@ def test_show_verbs_skip_a_panel_member():
     tick(session)
     for uid in ('sim-a', 'sim-b'):
         ack_last(hub, uid)                       # profiles
+    tick(session)
+    for uid in ('sim-a', 'sim-b'):
+        hub.last_send(uid)[1](status_ack())      # both idle
     tick(session)
     for uid in ('sim-a', 'sim-b'):
         ack_last(hub, uid)                       # both LOADED
@@ -1769,6 +1809,9 @@ def test_show_preview_keeps_flowing_without_a_panel_strip():
         ack_last(hub, uid)                       # profiles
     tick(session)
     for uid in ('sim-a', 'sim-b'):
+        hub.last_send(uid)[1](status_ack())      # both idle
+    tick(session)
+    for uid in ('sim-a', 'sim-b'):
         ack_last(hub, uid)                       # both LOADED
     session.play()
     tick(session)
@@ -1798,5 +1841,91 @@ def test_reconnect_reapplies_the_manual_picture():
     tick(session)
     assert hub.last_send('sim-a')[0] == wire.CMD_SET_PROFILE
     ack_last(hub)
+    answer_status(session, hub, state=DeviceState.MANUAL)
     tick(session)
     assert hub.sent[-1][1] == wire.encode_manual(rgb)
+
+
+# ---------------------------------------------------------------------------
+# Status on attach: what the device already plays
+# ---------------------------------------------------------------------------
+
+def test_reconnect_to_the_playing_panel_program_sends_nothing():
+    session, hub = make_session(SINGLE)
+    session.panel_run('main', b'P', PANEL_TOKEN)
+    hub.emit(DeviceConnected(uid='sim-a', boot_token=1, rebooted=False))
+    tick(session); ack_last(hub)                 # SET_PROFILE
+    answer_status(session, hub, state=DeviceState.PLAYING, crc=zlib.crc32(b'P'))
+
+    n = len(hub.sent)
+    tick(session)
+    assert len(hub.sent) == n                    # no LOAD, no START
+    member = session.member('sim-a')
+    assert member.phase is DeviceState.PLAYING
+    assert member.serving is True
+
+
+def test_reconnect_to_the_loaded_panel_program_only_starts_it():
+    session, hub = make_session(SINGLE)
+    session.panel_run('main', b'P', PANEL_TOKEN)
+    hub.emit(DeviceConnected(uid='sim-a', boot_token=1, rebooted=False))
+    tick(session); ack_last(hub)                 # SET_PROFILE
+    answer_status(session, hub, state=DeviceState.LOADED, crc=zlib.crc32(b'P'))
+
+    tick(session)
+    assert hub.last_send('sim-a')[0] == wire.CMD_START
+
+
+def test_a_running_device_animation_is_adopted_by_the_panel():
+    # A restarted controller wants nothing of the device, which still plays
+    # the panel's animation: the panel takes it over as it is.
+    session, hub = make_session(SINGLE)
+    hub.emit(DeviceConnected(uid='sim-a', boot_token=1, rebooted=False))
+    tick(session); ack_last(hub)                 # SET_PROFILE
+    answer_status(session, hub, state=DeviceState.PLAYING, crc=0xC0FFEE)
+
+    member = session.member('sim-a')
+    assert member.owner == 'panel'
+    assert member.target.intent is Intent.PLAYING
+    assert member.target.program_token == ('device', 0xC0FFEE)
+    n = len(hub.sent)
+    tick(session)
+    assert len(hub.sent) == n                    # nothing sent
+
+    session.panel_stop('main')
+    tick(session); ack_last(hub)
+    tick(session)
+    assert [e[4] for _, e, _ in hub.sent[n:]] == [wire.CMD_STOP]
+
+
+def test_a_device_picture_is_adopted_by_the_panel():
+    session, hub = make_session(SINGLE)
+    hub.emit(DeviceConnected(uid='sim-a', boot_token=1, rebooted=False))
+    tick(session); ack_last(hub)                 # SET_PROFILE
+    answer_status(session, hub, state=DeviceState.MANUAL)
+
+    member = session.member('sim-a')
+    assert member.owner == 'panel'
+    assert member.target.intent is Intent.MANUAL
+    n = len(hub.sent)
+    tick(session)
+    assert len(hub.sent) == n                    # the picture is left as it is
+
+    session.panel_manual('main', b'\x05' * 90)
+    tick(session)
+    assert hub.sent[-1][1] == wire.encode_manual(b'\x05' * 90)
+
+
+def test_a_refused_status_query_falls_back_to_loading():
+    session, hub = make_session(SINGLE)
+    session.load(make_manifest(('main', 30, b'M')))
+    hub.emit(DeviceConnected(uid='sim-a', boot_token=1, rebooted=False))
+    tick(session); ack_last(hub)                 # SET_PROFILE
+    tick(session)
+    op, on_ack = hub.last_send('sim-a')
+    assert op == wire.CMD_QUERY_DEVICE_STATUS
+    on_ack(ack(wire.ACK_UNKNOWN_COMMAND))
+
+    assert session.member('sim-a').status_known is True
+    tick(session)
+    assert hub.last_send('sim-a')[0] == wire.CMD_LOAD

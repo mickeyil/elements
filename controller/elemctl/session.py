@@ -23,6 +23,7 @@ the next load() reclaims them.
 """
 
 import logging
+import zlib
 
 from dataclasses import dataclass
 from enum import Enum, auto
@@ -50,9 +51,9 @@ class SessionState(Enum):
 
 
 # The controller's mirror of the device's playback core. The first six
-# values match the firmware DeviceState (src/controller/playback.h); UNKNOWN
-# is the controller-only addition, appended last, for a device whose state
-# has not been confirmed since it connected.
+# values follow the firmware DeviceState (src/controller/playback.h) in
+# order; UNKNOWN is the controller-only addition, appended last, for a
+# device whose state has not been confirmed since it connected.
 class DeviceState(Enum):
     IDLE = auto()
     LOADED = auto()
@@ -61,6 +62,11 @@ class DeviceState(Enum):
     ENDED = auto()
     MANUAL = auto()
     UNKNOWN = auto()
+
+
+# The status reply's playback byte, indexed: the firmware DeviceState value.
+_DEVICE_STATES = [DeviceState.IDLE, DeviceState.LOADED, DeviceState.PLAYING,
+                  DeviceState.PAUSED, DeviceState.ENDED, DeviceState.MANUAL]
 
 
 # What the session wants of a member, independent of where the device is.
@@ -89,7 +95,6 @@ class Target:
     intent: Intent
     program_token: tuple = None      # (session_id, strip_id); None when DETACHED
     blob: bytes = None               # the compiled strip the device should load
-    strip_length: int = 0
     anchor_us: int = 0               # program_start_us, for PLAYING
     cursor_us: int = 0               # paused position, for PAUSED
     pixels: bytes = None             # the MANUAL picture, one rgb triple per pixel
@@ -135,6 +140,7 @@ class Member:
         self.serving = False
         self.boot_token = 0
         self.phase = DeviceState.UNKNOWN
+        self.status_known = False    # phase and loaded program read from the device this link
         self.profile_state = ProfileState.UNKNOWN
         self.cursor_us = 0
         self.owner = 'show'          # 'show', or 'panel' while the operator panel drives it
@@ -150,9 +156,8 @@ class Member:
         self.start_authorized = False  # may issue the initial Start (the play() cohort)
 
     def on_connected(self, boot_token, rebooted):
-        """A link came up for this device. The device dropped any program
-        on its prior detach (src/app/app.cpp reset_for_detach), so its runtime
-        starts unknown and the profile must be re-established."""
+        """A link came up for this device. Its runtime starts unknown and is
+        learned from the status reply; the profile must be re-established."""
         self.attached = True
         self.boot_token = boot_token
         self.profile_state = ProfileState.UNKNOWN
@@ -189,6 +194,7 @@ class Member:
         # was in flight on the old link is gone with it.
         self.serving = False
         self.phase = DeviceState.UNKNOWN
+        self.status_known = False
         self.cursor_us = 0
         self._loaded_token = None
         self._applied_manual = None
@@ -269,7 +275,6 @@ class Session:
                 intent=Intent.READY,
                 program_token=(self.session_id, member.strip_id),
                 blob=artifact.blob,
-                strip_length=member.strip_length,
             ))
         # Every strip is the show's again: preview assembles all of them, and
         # the pictures the panel's devices last showed are stale.
@@ -352,7 +357,6 @@ class Session:
                 intent=Intent.PLAYING,
                 program_token=current.program_token,
                 blob=current.blob,
-                strip_length=current.strip_length,
                 anchor_us=self.program_start_us,
             ))
             member.start_authorized = ready   # set after set_target (which clears it)
@@ -452,7 +456,6 @@ class Session:
                 intent=intent,
                 program_token=current.program_token,
                 blob=current.blob,
-                strip_length=current.strip_length,
                 anchor_us=anchor_us,
                 cursor_us=cursor_us,
             ))
@@ -478,7 +481,6 @@ class Session:
         for member in members:
             member.set_target(Target(
                 intent=Intent.MANUAL,
-                strip_length=member.strip_length,
                 pixels=bytes(rgb),
                 revision=self._manual_revision,
             ))
@@ -491,7 +493,6 @@ class Session:
                 intent=Intent.PLAYING,
                 program_token=program_token,
                 blob=blob,
-                strip_length=member.strip_length,
             ))
 
     def panel_stop(self, strip_id):
@@ -703,22 +704,26 @@ class Session:
 
     def _reconcile_member(self, member):
         """Issue at most one command to close the gap from the member's
-        confirmed phase to its target. Profile first on a fresh connection,
-        then the right blob, then the playback verb."""
+        confirmed phase to its target. Profile and status first on a fresh
+        connection, then the right blob, then the playback verb."""
         target = member.target
 
+        if member.profile_state is ProfileState.UNKNOWN:
+            self._send(member, 'set_profile',
+                       wire.encode_set_profile(member.strip_length),
+                       lambda m: self._after_set_profile(m))
+            return
+
+        if not member.status_known:
+            self._query_status(member)
+            return
+
         # A member the manifest no longer routes to: blank a stale program from
-        # a previous session once, then leave it idle. No SET_PROFILE(0).
+        # a previous session once, then leave it idle.
         if target.intent is Intent.DETACHED:
             if member.serving:
                 self._send(member, 'stop', wire.encode_stop(),
                            lambda m: self._after_stop_detached(m))
-            return
-
-        if member.profile_state is ProfileState.UNKNOWN:
-            self._send(member, 'set_profile',
-                       wire.encode_set_profile(target.strip_length),
-                       lambda m: self._after_set_profile(m))
             return
 
         # MANUAL is valid from any device state, so no STOP first. A new
@@ -809,6 +814,28 @@ class Session:
 
         self._hub.send(member.uid, encoded, on_ack)
 
+    def _query_status(self, member):
+        """Ask the device what it plays, so a reconnect sends nothing when it
+        already plays what is wanted. A refused or malformed reply leaves the
+        phase UNKNOWN, and the ladder reloads as for any fresh device."""
+        member._inflight = 'query_status'
+
+        def on_ack(ack):
+            member._inflight = None
+            member.status_known = True
+            if ack.status != wire.ACK_OK:
+                log.warning('session: %s refused the status query (status %d)',
+                            member.uid, ack.status)
+                return
+            try:
+                report = wire.parse_device_status(ack.payload)
+            except wire.WireError as e:
+                log.warning('session: %s sent a bad status reply: %s', member.uid, e)
+                return
+            self._after_status(member, report)
+
+        self._hub.send(member.uid, wire.encode_query_device_status(), on_ack)
+
     def _handle_nonok(self, member, command, status):
         member.last_refusal = (command, status)
         if status == wire.ACK_UNSYNCED:
@@ -837,6 +864,35 @@ class Session:
         member._loaded_token = None
         member.phase = DeviceState.UNKNOWN
         member.start_authorized = False
+
+    def _after_status(self, member, report):
+        state = _DEVICE_STATES[report.playback_state]
+        member.phase = state
+        target = member.target
+        if target.intent is Intent.DETACHED:
+            # Nothing is wanted of this device, yet it shows something of its
+            # own (a panel animation or picture that outlived a controller
+            # restart): adopt it as the panel's, so Stop works and the UI
+            # shows it.
+            if state is DeviceState.PLAYING:
+                token = ('device', report.program_crc32)
+                member.owner = 'panel'
+                member.set_target(Target(intent=Intent.PLAYING, program_token=token))
+                member._loaded_token = token
+                member.serving = True
+            elif state is DeviceState.MANUAL:
+                member.owner = 'panel'
+                member.set_target(Target(intent=Intent.MANUAL))
+                member._applied_manual = 0   # the picture shown is revision 0
+                member.serving = True
+            return
+        if (target.blob is not None
+                and state not in (DeviceState.IDLE, DeviceState.MANUAL)
+                and report.program_crc32 == zlib.crc32(target.blob)):
+            # The device already holds the wanted program: no reload. If it is
+            # playing, nothing is sent at all.
+            member._loaded_token = target.program_token
+            member.serving = True
 
     def _after_set_profile(self, member):
         # SET_PROFILE Ok means "already matched" or "saved and rebooting",

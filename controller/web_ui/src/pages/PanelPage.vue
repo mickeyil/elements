@@ -141,7 +141,7 @@ const stateLabel = computed(() => {
     return 'Show';
   }
   if (state.mode === 'program') {
-    return `Program ${state.programId}`;
+    return `Program ${state.programId ?? 'unknown'}`;
   }
   return state.mode === 'manual' ? 'Color' : 'Stopped';
 });

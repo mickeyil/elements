@@ -25,6 +25,7 @@ import collections
 import logging
 import math
 import time
+import zlib
 
 from pathlib import Path
 
@@ -138,6 +139,7 @@ class ControllerService:
             animations_dir)
         self._panel_library = ProgramLibrary(str(Path(animations_dir) / 'library'))
         self._panel_hsv = {}         # strip_id -> [h, s, v] of the last panel fill
+        self._panel_crc_ids = {}     # (strip_id, crc32) -> library program_id or None
         self._artifact_cache = ArtifactCache()
         self._device_logs = collections.deque(maxlen=DEVICE_LOG_HISTORY)
 
@@ -794,11 +796,37 @@ class ControllerService:
             return None
         target = member.target
         mode = _PANEL_MODES[target.intent]
+        program_id = None
+        if mode == 'program':
+            # ('panel', program_id, ...) from panel_run, or ('device', crc32)
+            # for an animation adopted from the device.
+            kind, ident = target.program_token[:2]
+            program_id = (ident if kind == 'panel' else
+                          self._panel_program_for(member.strip_id, member.strip_length, ident))
         return {
             'mode': mode,
-            'program_id': target.program_token[1] if mode == 'program' else None,
+            'program_id': program_id,
             'hsv': self._panel_hsv.get(member.strip_id) if mode == 'manual' else None,
         }
+
+    def _panel_program_for(self, strip_id, length, crc):
+        """The panel-library program whose blob for this strip has this crc32
+        (an animation adopted from a device), or None. Memoized, since the
+        state is built every tick."""
+        key = (strip_id, crc)
+        if key not in self._panel_crc_ids:
+            self._panel_crc_ids[key] = None
+            for entry in self._panel_library.list_programs():
+                if entry.error is not None:
+                    continue
+                try:
+                    manifest = self._compile_panel(entry, strip_id, length)
+                except Exception:
+                    continue   # not a valid panel program for this strip
+                if zlib.crc32(manifest.strips[strip_id].blob) == crc:
+                    self._panel_crc_ids[key] = entry.program_id
+                    break
+        return self._panel_crc_ids[key]
 
     def _update_available(self, uid, info):
         """Whether to offer uid the built image (see firmware.update_available).

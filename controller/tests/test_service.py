@@ -7,6 +7,7 @@ compiles a real (tiny) program against the configured topology.
 
 import json
 import struct
+import zlib
 
 from elemctl.config import Config, DeviceConfig, load_config_obj
 from elemctl.controller_protocol import (
@@ -148,12 +149,23 @@ def _ack_ok(hub, uid='sim-a'):
     on_ack(AckMsg(status=0, payload=b''))   # 0 == wire.ACK_OK
 
 
+def _answer_status(service, hub, uid='sim-a', playback_state=0, crc=0):
+    """Tick the session's status query out and answer it. It goes out after
+    the poller's, so it is the latest query."""
+    service.tick_once()
+    sent_uid, on_ack = hub.status_queries[-1]
+    assert sent_uid == uid
+    on_ack(_status_reply(synced=False, skew_us=0,
+                         playback_state=playback_state, crc=crc))
+
+
 def drive_service_to_playing(service, hub, uid='sim-a'):
     """Load 'prog', attach the device, and ACK profile/load/start so the
     member reaches a confirmed PLAYING phase (the preview-eligible state)."""
     cmd(service, 'load', program_id='prog')
     hub.emit(DeviceConnected(uid=uid, boot_token=1, rebooted=False))
     service.tick_once(); _ack_ok(hub, uid)   # SET_PROFILE
+    _answer_status(service, hub, uid)        # the device plays nothing
     service.tick_once(); _ack_ok(hub, uid)   # LOAD
     cmd(service, 'play')
     service.tick_once(); _ack_ok(hub, uid)   # START
@@ -368,11 +380,11 @@ def _device_state(service, uid='sim-a'):
     return next(d for d in devices if d['uid'] == uid)
 
 
-def _status_reply(synced, skew_us):
+def _status_reply(synced, skew_us, playback_state=0, crc=0):
     flags = wire.STATUS_FLAG_CLOCK_SYNCED if synced else 0
     return AckMsg(status=wire.ACK_OK,
                   payload=struct.pack('<BBiBI', 0,  # mode: attached_controlled
-                                      flags, skew_us, 0, 0))
+                                      flags, skew_us, playback_state, crc))
 
 
 def test_device_clock_is_null_until_the_status_reply(tmp_path):
@@ -1056,6 +1068,7 @@ def test_panel_fill_holds_the_color_on_the_whole_strip(tmp_path):
 
     hub.emit(DeviceConnected(uid='sim-a', boot_token=1, rebooted=False))
     service.tick_once(); _ack_ok(hub)                  # SET_PROFILE
+    _answer_status(service, hub)
     service.tick_once()
     assert hub.sent[-1][1] == wire.encode_manual(bytes((0, 255, 0)) * 30)
 
@@ -1100,6 +1113,7 @@ def test_panel_run_reloads_an_edited_program(tmp_path):
     cmd(service, 'panel_run', strip_id='main', program_id='glow')
     hub.emit(DeviceConnected(uid='sim-a', boot_token=1, rebooted=False))
     service.tick_once(); _ack_ok(hub)                  # SET_PROFILE
+    _answer_status(service, hub)
     service.tick_once(); _ack_ok(hub)                  # LOAD
     service.tick_once(); _ack_ok(hub)                  # START
     first = service._session.member('sim-a').target.blob
@@ -1111,6 +1125,23 @@ def test_panel_run_reloads_an_edited_program(tmp_path):
     blob = service._session.member('sim-a').target.blob
     assert blob != first
     assert hub.sent[-1][1] == wire.encode_load(blob)
+
+
+def test_an_adopted_animation_is_named_from_the_panel_library(tmp_path):
+    service, hub = make_service(tmp_path, devices=[
+        DeviceConfig('sim-a', 'main', 30), DeviceConfig('sim-b', 'side', 12)])
+    write_library(tmp_path, glow=GLOW)
+    cmd(service, 'rescan')
+    glow = service._compile_panel(service._panel_library.get('glow'), 'main', 30)
+    crcs = {'sim-a': zlib.crc32(glow.strips['main'].blob), 'sim-b': 0xC0FFEE}
+    for uid, crc in crcs.items():
+        hub.emit(DeviceConnected(uid=uid, boot_token=1, rebooted=False))
+        service.tick_once(); _ack_ok(hub, uid)         # SET_PROFILE
+        _answer_status(service, hub, uid, playback_state=2, crc=crc)  # PLAYING
+
+    assert _panel_device(service, 'sim-a')['panel'] == {
+        'mode': 'program', 'program_id': 'glow', 'hsv': None}
+    assert _panel_device(service, 'sim-b')['panel']['program_id'] is None
 
 
 def test_panel_run_refuses_non_looping_or_multi_strip_programs(tmp_path):
