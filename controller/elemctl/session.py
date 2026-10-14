@@ -269,15 +269,16 @@ class Session:
         reclaimed = []
         for uid, member in self._members.items():
             artifact = manifest.strips.get(member.strip_id)
-            if artifact is None and member.owner == 'panel':
-                continue                  # the panel keeps a strip the show does not route
+            if artifact is None:
+                # Not routed: a show strip stops being driven, a panel strip
+                # stays the panel's.
+                if member.owner == 'show':
+                    member.set_target(Target(intent=Intent.DETACHED))
+                continue
             if member.owner == 'panel':
                 member.owner = 'show'     # the show reclaims a panel strip it routes
                 reclaimed.append(uid)
             member._clear_blocked()       # a new program is a fresh chance to drive
-            if artifact is None:
-                member.set_target(Target(intent=Intent.DETACHED))
-                continue
             member.set_target(Target(
                 intent=Intent.READY,
                 program_token=(self.session_id, member.strip_id),
