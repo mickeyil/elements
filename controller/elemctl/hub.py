@@ -291,12 +291,13 @@ class LogReceiver:
         gap = record.seq - 1 if last is None else record.seq - last - 1
         if gap > 0:
             note = f'lost {gap} log records (ring overflow or packet loss)'
-            log.warning('[%s] %s', record.uid, note)
+            log.warning('[%s +%.1fs] %s', record.uid, record.uptime_ms / 1000, note)
             records.append(replace(record, level='W', text=note))
         if last is None or record.seq > last:
             self._cursor[key] = record.seq
         level = _DEVICE_LOG_LEVELS[record.level]
-        log.log(level, '[%s] %s', record.uid, record.text)
+        log.log(level, '[%s +%.1fs] %s', record.uid, record.uptime_ms / 1000,
+                record.text)
         records.append(record)
 
     def close(self):
