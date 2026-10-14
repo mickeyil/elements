@@ -139,6 +139,9 @@ public:
     // Program length in ms (one cycle of a looping program); 0 when no
     // program is loaded.
     uint32_t duration_ms() const;
+    // crc32_ieee of the loaded blob, so the controller can tell which
+    // program the device holds; 0 when no program is loaded.
+    uint32_t program_crc32() const;
     // Returns 0 when no program is loaded.
     uint8_t target_fps() const;
     // Where the cursor sits: the loop cycle (always 0 for a non-looping
@@ -176,6 +179,7 @@ private:
     int64_t _t_program_cursor_us = 0;
     // The loop cycle the engine's timeline currently belongs to.
     int64_t _engine_cycle = 0;
+    uint32_t _program_crc32 = 0;
     bool _requires_sync = false;
     bool _loop = false;
     bool _present_pending = false;

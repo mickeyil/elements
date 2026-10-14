@@ -259,7 +259,9 @@ TEST_CASE("a query reply payload rides inside the ACK message")
     CHECK(h.processor.poll() == PollResult::Handled);
     CHECK(h.tcp.sent ==
           make_ack(ACK_OK, {MODE_DETACHED_BACKGROUND, 0x01,
-                            0x00, 0x00, 0x00, 0x00}));  // + i32 clock skew
+                            0x00, 0x00, 0x00, 0x00,     // i32 clock skew
+                            0x00,                       // playback IDLE
+                            0x00, 0x00, 0x00, 0x00}));  // u32 program crc
 }
 
 TEST_CASE("a near-max message is consumed and the stream continues")

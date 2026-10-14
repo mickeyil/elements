@@ -51,10 +51,10 @@ void App::begin()
     }
 
     // Boot detached: a device that powers up with no controller resumes its
-    // installed background, so it shows something on its own. A controller
-    // attaching later takes over (update_mode_). With no background installed
-    // the cleared strip is presented on the first tick, so the LEDs start
-    // dark (DetachedBlank) until a controller arrives.
+    // installed background, so it shows something on its own, until a
+    // controller replaces it with a LOAD of its own. With no background
+    // installed the cleared strip is presented on the first tick, so the
+    // LEDs start dark (DetachedBlank).
     try_start_background_();
 }
 
@@ -93,13 +93,17 @@ void App::update_mode_()
     _link_was_ready = ready;
 
     if (ready) {
-        // The controller owns playback now. Drop any local background so it
-        // stops animating and a later controller program can't inherit its
-        // loop flag; the reconciler will load/start its own program over this.
+        // Whatever plays keeps playing: the controller reads it from the
+        // status reply and replaces it with a LOAD or MANUAL if it wants
+        // something else (LOAD and MANUAL clear the local flag themselves).
         slog_info("attached to controller");
-        _playback.reset_for_detach();
-        _ctx.local_program_loaded = false;
         _status.mode = DeviceMode::AttachedControlled;
+        return;
+    }
+
+    if (shows_on_its_own_()) {
+        slog_info("detached from controller, keeping local playback");
+        _status.mode = DeviceMode::DetachedRunning;
         return;
     }
 
@@ -115,6 +119,14 @@ void App::update_mode_()
     // playback and cleared the local flag.)
     _status.mode = DeviceMode::DetachedBlank;
     _playback.render_black_frame();
+}
+
+bool App::shows_on_its_own_() const
+{
+    const DeviceState state = _playback.state();
+    if (state == DeviceState::MANUAL) return true;
+    return (state == DeviceState::PLAYING || state == DeviceState::PAUSED)
+        && !_playback.requires_sync();
 }
 
 void App::update_clock_status_()

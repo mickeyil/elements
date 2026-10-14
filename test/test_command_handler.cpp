@@ -581,7 +581,7 @@ TEST_CASE("play_local_animation rejects bad indices and mismatched blobs")
 // Queries
 // ---------------------------------------------------------------------------
 
-TEST_CASE("query_device_status reports mode, flags, and clock skew")
+TEST_CASE("query_device_status reports mode, flags, clock skew, and playback")
 {
     Harness h;
     h.status.mode = DeviceMode::DetachedBackground;
@@ -589,12 +589,24 @@ TEST_CASE("query_device_status reports mode, flags, and clock skew")
     h.status.clock_skew_us = -1234;
 
     REQUIRE(h.run(CMD_QUERY_DEVICE_STATUS) == AckStatus::Ok);
-    REQUIRE(h.reply_len == 6);
+    REQUIRE(h.reply_len == 11);
     CHECK(h.reply[0] == MODE_DETACHED_BACKGROUND);
     CHECK(h.reply[1] == 0x03);
     int32_t skew = 0;
     std::memcpy(&skew, h.reply + 2, 4);  // i32 LE
     CHECK(skew == -1234);
+    // Idle: no program, crc 0.
+    CHECK(h.reply[6] == static_cast<uint8_t>(DeviceState::IDLE));
+    uint32_t crc = 1;
+    std::memcpy(&crc, h.reply + 7, 4);
+    CHECK(crc == 0);
+
+    const auto blob = build_paint_blob(1, 2.0f);
+    REQUIRE(h.run(CMD_LOAD, blob) == AckStatus::Ok);
+    REQUIRE(h.run(CMD_QUERY_DEVICE_STATUS) == AckStatus::Ok);
+    CHECK(h.reply[6] == static_cast<uint8_t>(DeviceState::LOADED));
+    std::memcpy(&crc, h.reply + 7, 4);
+    CHECK(crc == crc32_ieee(blob.data(), blob.size()));
 }
 
 TEST_CASE("query_local_animations lists records in play order")

@@ -396,6 +396,7 @@ if(BUILD_TESTS)
     add_executable(test_playback
         test/test_playback.cpp
         test/test_platform_clock.cpp
+        src/controller/crc32.cpp
         src/controller/playback.cpp
         src/core/decoder.cpp
         src/core/engine.cpp

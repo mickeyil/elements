@@ -56,10 +56,17 @@ public:
     const DeviceStatus& status() const { return _status; }
 
 private:
-    // Attach/detach policy: mirror the link state into status.mode. On detach
-    // (and at boot) resume the stored background if one is installed and
-    // playable, otherwise blank the strip. Grace hold is an open design item.
+    // Attach/detach policy: mirror the link state into status.mode. Link
+    // events leave what the device shows alone; only playback commands
+    // change it. The exception is a synced program, which needs the
+    // controller's clock: on detach (and at boot) anything that cannot run
+    // on its own gives way to the stored background if one is installed
+    // and playable, otherwise the strip is blanked.
     void update_mode_();
+
+    // Does playback keep showing something without the controller? A
+    // manual picture or an unsynced program that is playing or paused.
+    bool shows_on_its_own_() const;
 
     // Mirror the clock sync state into status (synced flag and skew) for
     // the QueryDeviceStatus reply.

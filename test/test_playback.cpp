@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "core/animation_types.h"
+#include "controller/crc32.h"
 #include "controller/playback.h"
 #include "core/runtime_constants.h"
 #include "controller/synced_clock.h"
@@ -184,6 +185,7 @@ TEST_CASE("Playback: default construction has no profile and is IDLE", "[playbac
     CHECK(pb.state() == DeviceState::IDLE);
     CHECK(pb.duration_ms() == 0);
     CHECK(pb.target_fps() == 0);
+    CHECK(pb.program_crc32() == 0);
     CHECK_FALSE(pb.requires_sync());
 }
 
@@ -236,6 +238,7 @@ TEST_CASE("Playback: handle_load decodes a blob and transitions to LOADED", "[pl
     CHECK(pb.state() == DeviceState::LOADED);
     CHECK(pb.duration_ms() == 2000);
     CHECK(pb.target_fps() == 30);
+    CHECK(pb.program_crc32() == crc32_ieee(blob.data(), blob.size()));
     CHECK_FALSE(pb.requires_sync());
 }
 
@@ -822,6 +825,7 @@ TEST_CASE("Playback: reset_for_detach drops program and clears strip",
     CHECK(pb.state() == DeviceState::IDLE);
     CHECK(pb.duration_ms() == 0);
     CHECK(pb.target_fps() == 0);
+    CHECK(pb.program_crc32() == 0);
     CHECK_FALSE(pb.requires_sync());
     CHECK(strip_is_black(pb));
     // Profile is preserved.
@@ -840,6 +844,7 @@ TEST_CASE("Playback: apply_hardware_profile resets program state", "[playback]")
     REQUIRE(pb.apply_hardware_profile(HardwareProfile(2)));
     CHECK(pb.state() == DeviceState::IDLE);
     CHECK(pb.duration_ms() == 0);
+    CHECK(pb.program_crc32() == 0);
     CHECK(pb.strip_length() == 2);
 }
 
@@ -1196,6 +1201,7 @@ TEST_CASE("Playback: handle_manual while PLAYING drops the program",
     CHECK(pb.state() == DeviceState::MANUAL);
     CHECK(pb.duration_ms() == 0);
     CHECK(pb.target_fps() == 0);
+    CHECK(pb.program_crc32() == 0);
     CHECK(pb.current_t_ms() == 0);
     CHECK(strip_equals(pb, BLUE));
     CHECK(pb.take_present_request());

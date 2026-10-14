@@ -2,6 +2,7 @@
 
 #include <cstring>
 
+#include "controller/crc32.h"
 #include "core/decoder.h"
 
 namespace {
@@ -87,6 +88,7 @@ bool Playback::handle_load(const uint8_t* blob, size_t blob_len,
     _target_fps = target_fps;
     _requires_sync = requires_sync;
     _loop = loop;
+    _program_crc32 = crc32_ieee(blob, blob_len);
     _engine.reset(engine);
     _state = DeviceState::LOADED;
     return true;
@@ -268,6 +270,11 @@ uint32_t Playback::duration_ms() const
     return _duration.ms;
 }
 
+uint32_t Playback::program_crc32() const
+{
+    return _program_crc32;
+}
+
 uint8_t Playback::target_fps() const
 {
     return _target_fps;
@@ -343,6 +350,7 @@ int64_t Playback::duration_us_() const
 void Playback::unload_program_()
 {
     _engine.reset();
+    _program_crc32 = 0;
 }
 
 void Playback::reset_program_state_()

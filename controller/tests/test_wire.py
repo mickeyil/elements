@@ -255,9 +255,9 @@ def test_encode_play_local_animation_vector():
     assert encode_play_local_animation(2) == b'\x03\x00\x00\x00\x16\x02\x00'
 
 
-def test_protocol_version_is_6():
-    # MANUAL (0x17) is a breaking wire change.
-    assert wire.PROTOCOL_VERSION == 6
+def test_protocol_version_is_7():
+    # The status reply's playback fields are a breaking wire change.
+    assert wire.PROTOCOL_VERSION == 7
 
 
 def test_encode_manual_wraps_rgb_triples():
@@ -338,17 +338,21 @@ def test_parse_ack():
 
 
 def test_parse_device_status():
-    report = parse_device_status(struct.pack('<BBi', 0, 0x03, -1234))
+    report = parse_device_status(
+        struct.pack('<BBiBI', 0, 0x03, -1234, 2, 0xDEADBEEF))
     assert report.mode == 0
     assert wire.DEVICE_MODE_NAMES[report.mode] == 'attached_controlled'
     assert report.profile_present is True
     assert report.clock_synced is True
     assert report.clock_skew_us == -1234
-    report = parse_device_status(struct.pack('<BBi', 2, 0x00, 0))
+    assert report.playback_state == 2
+    assert report.program_crc32 == 0xDEADBEEF
+    report = parse_device_status(struct.pack('<BBiBI', 1, 0x00, 0, 5, 0))
+    assert wire.DEVICE_MODE_NAMES[report.mode] == 'detached_running'
     assert report.profile_present is False
     assert report.clock_synced is False
     with pytest.raises(WireError):
-        parse_device_status(b'\x00\x00\x00\x00')
+        parse_device_status(struct.pack('<BBi', 2, 0x00, 0))
 
 
 def test_parse_local_animations():

@@ -343,14 +343,15 @@ std::vector<uint8_t> name_slot(const char* name)
 uint32_t ms_from_seconds(float s) { return static_cast<uint32_t>(s * 1000.0f + 0.5f); }
 
 // Solid-red paint event covering [0, duration). Strip length = 1.
-std::vector<uint8_t> build_paint_blob(float duration, uint8_t target_fps = 50)
+std::vector<uint8_t> build_paint_blob(float duration, uint8_t target_fps = 50,
+                                      bool requires_sync = false)
 {
     std::vector<uint8_t> b;
 
     // Header.
     b.insert(b.end(), { 'E', 'L', 'E', 'M' });
     put_u8(b, 5);                                     // BLOB_VERSION
-    put_u8(b, 0x00);                                  // flags: unsynced
+    put_u8(b, requires_sync ? 0x01 : 0x00);           // flags
     put_u8(b, target_fps);
     put_u8(b, 1);                                     // layer_count
     put_u16(b, 1);                                    // strip_length
@@ -434,6 +435,23 @@ struct Harness
         output.frames.clear();   // attach presents a blank; count from here
     }
 
+    // Three burst rounds of PONGs apply the first offset
+    // (MIN_SAMPLES_TO_APPLY), so the clock holds a lease.
+    void sync_clock()
+    {
+        for (int i = 0; i < 3; ++i) {
+            REQUIRE_FALSE(sync_udp.sent.empty());
+            sync_udp.inbox.push_back(
+                make_pong(sync_udp.sent.back(), 0xC0FFEE, /*rtt_us=*/1000));
+            sync_udp.sent.clear();
+            advance(1000);
+            app.tick();
+            advance(500'000);  // next burst ping falls due
+            app.tick();
+        }
+        REQUIRE((app.status().flags & STATUS_FLAG_CLOCK_SYNCED) != 0);
+    }
+
     // Queue one command message and run the tick that serves it.
     void command(uint8_t opcode, const std::vector<uint8_t>& payload = {})
     {
@@ -504,25 +522,14 @@ TEST_CASE("the status reply carries the clock sync state")
 
     // Before any PONG: unsynced, no skew.
     h.command(CMD_QUERY_DEVICE_STATUS);
-    REQUIRE(h.tcp.sent.size() == 4 + 1 + 1 + 6);
+    REQUIRE(h.tcp.sent.size() == 4 + 1 + 1 + 11);
     CHECK((h.tcp.sent[7] & STATUS_FLAG_CLOCK_SYNCED) == 0);
     h.tcp.sent.clear();
 
-    // Three burst rounds apply the first offset (MIN_SAMPLES_TO_APPLY).
-    for (int i = 0; i < 3; ++i) {
-        REQUIRE_FALSE(h.sync_udp.sent.empty());
-        h.sync_udp.inbox.push_back(
-            make_pong(h.sync_udp.sent.back(), 0xC0FFEE, /*rtt_us=*/1000));
-        h.sync_udp.sent.clear();
-        h.advance(1000);
-        h.app.tick();
-        h.advance(500'000);  // next burst ping falls due
-        h.app.tick();
-    }
-    CHECK((h.app.status().flags & STATUS_FLAG_CLOCK_SYNCED) != 0);
+    h.sync_clock();
 
     h.command(CMD_QUERY_DEVICE_STATUS);
-    REQUIRE(h.tcp.sent.size() == 4 + 1 + 1 + 6);
+    REQUIRE(h.tcp.sent.size() == 4 + 1 + 1 + 11);
     CHECK(h.tcp.sent[4] == CMD_ACK);
     CHECK(h.tcp.sent[5] == ACK_OK);
     CHECK(h.tcp.sent[6] == MODE_ATTACHED_CONTROLLED);
@@ -751,7 +758,7 @@ TEST_CASE("detach with no stored background still blanks")
     CHECK(is_black(h.last_frame()));
 }
 
-TEST_CASE("re-attaching stops the local background")
+TEST_CASE("re-attaching leaves the local background looping")
 {
     Harness h;
     h.attach();
@@ -765,12 +772,11 @@ TEST_CASE("re-attaching stops the local background")
     h.attach();  // controller comes back
     CHECK(h.app.status().mode == DeviceMode::AttachedControlled);
 
-    // Playback was reset on attach, so the device renders nothing on its own
-    // now (the background is not still looping).
-    const size_t before = h.frames();
-    h.advance(1'000'000);
+    // The background keeps rendering until the controller replaces it.
+    h.advance(20'000);
     h.app.tick();
-    CHECK(h.frames() == before);
+    REQUIRE(h.frames() == 1);
+    CHECK(is_red(h.last_frame()));
 }
 
 TEST_CASE("boot resumes the stored background from the persisted store")
@@ -823,7 +829,7 @@ void load_and_start(Harness& h)
 
 }  // namespace
 
-TEST_CASE("boot and attach each present the cleared strip once")
+TEST_CASE("boot presents the cleared strip once; attach presents nothing")
 {
     Harness h;
 
@@ -836,12 +842,11 @@ TEST_CASE("boot and attach each present the cleared strip once")
     h.app.tick();
     CHECK(h.frames() == 1);
 
-    // Attach resets playback again, and that clear is presented too.
+    // Attach leaves playback alone, so there is nothing new to present.
     h.discovery_udp.inbox.push_back(make_offer(CONTROLLER_IP, CONTROLLER_PORT));
     h.app.tick();
     REQUIRE(h.app.is_attached());
-    REQUIRE(h.frames() == 2);
-    CHECK(is_black(h.last_frame()));
+    CHECK(h.frames() == 1);
 }
 
 TEST_CASE("without a profile nothing is presented")
@@ -999,7 +1004,11 @@ TEST_CASE("MANUAL over a playing program presents its picture once, no blank")
     CHECK(h.frames() == 2);
 }
 
-TEST_CASE("re-attaching blanks the running background")
+// ---------------------------------------------------------------------------
+// Link events leave what plays on its own alone
+// ---------------------------------------------------------------------------
+
+TEST_CASE("re-attaching keeps the background lit until the controller's LOAD")
 {
     Harness h;
     h.attach();
@@ -1010,13 +1019,77 @@ TEST_CASE("re-attaching blanks the running background")
     REQUIRE(h.app.status().mode == DeviceMode::DetachedBackground);
     REQUIRE(is_red(h.last_frame()));
 
-    // The controller comes back: playback is reset and the LEDs go dark in
-    // the same tick, not whenever the controller next loads something.
+    // The controller comes back: no blank frame, the background goes on.
     h.advance(CONNECT_RETRY_INTERVAL_MS * 1000);
     const size_t before = h.frames();
     h.discovery_udp.inbox.push_back(make_offer(CONTROLLER_IP, CONTROLLER_PORT));
     h.app.tick();
     REQUIRE(h.app.is_attached());
     REQUIRE(h.frames() == before + 1);
+    CHECK(is_red(h.last_frame()));
+
+    // The controller's LOAD replaces it, blanking the LEDs at once.
+    h.command(CMD_LOAD, build_paint_blob(2.0f));
+    REQUIRE(h.frames() == before + 2);
     CHECK(is_black(h.last_frame()));
+}
+
+TEST_CASE("detach keeps an unsynced program playing")
+{
+    Harness h;
+    h.attach();
+    h.command(CMD_LOAD, build_paint_blob(60.0f));
+    std::vector<uint8_t> start;
+    put_i64(start, 0);
+    h.command(CMD_START, start);
+    h.output.frames.clear();
+
+    h.advance(PING_TIMEOUT_MS * 1000 + 1);
+    h.app.tick();
+    REQUIRE_FALSE(h.app.is_attached());
+    CHECK(h.app.status().mode == DeviceMode::DetachedRunning);
+    REQUIRE(h.frames() == 1);
+    CHECK(is_red(h.last_frame()));
+
+    h.advance(20'000);
+    h.app.tick();
+    REQUIRE(h.frames() == 2);
+    CHECK(is_red(h.last_frame()));
+}
+
+TEST_CASE("detach keeps a manual picture")
+{
+    Harness h;
+    h.attach();
+    h.command(CMD_MANUAL, {10, 20, 30});
+    REQUIRE(h.frames() == 1);
+
+    h.advance(PING_TIMEOUT_MS * 1000 + 1);
+    h.app.tick();
+    REQUIRE_FALSE(h.app.is_attached());
+    CHECK(h.app.status().mode == DeviceMode::DetachedRunning);
+    CHECK(h.frames() == 1);   // the picture stays, nothing new presented
+}
+
+TEST_CASE("detach drops a synced program and blanks")
+{
+    Harness h;
+    h.attach();
+    h.sync_clock();
+    h.command(CMD_LOAD, build_paint_blob(60.0f, 50, /*requires_sync=*/true));
+    std::vector<uint8_t> start;
+    put_i64(start, h.now);   // offset ~0: remote time is local time
+    h.command(CMD_START, start);
+    REQUIRE(is_red(h.last_frame()));
+
+    h.advance(PING_TIMEOUT_MS * 1000 + 1);
+    h.app.tick();
+    REQUIRE_FALSE(h.app.is_attached());
+    CHECK(h.app.status().mode == DeviceMode::DetachedBlank);
+    CHECK(is_black(h.last_frame()));
+
+    const size_t before = h.frames();
+    h.advance(20'000);
+    h.app.tick();
+    CHECK(h.frames() == before);
 }

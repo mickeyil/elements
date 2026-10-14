@@ -12,12 +12,18 @@
 //   - clock_skew_us:  ClockSyncClient::last_skew_us(), mirrored by the
 //                     App each tick.
 //
-// Wire encoding (LE): u8 mode, u8 flags, i32 clock_skew_us. The layout
-// is part of the controller-link protocol.
+// The reply then appends what playback holds: the DeviceState byte and
+// Playback::program_crc32().
+//
+// Wire encoding (LE): u8 mode, u8 flags, i32 clock_skew_us,
+// u8 playback_state, u32 program_crc32. The layout is part of the
+// controller-link protocol.
 
 enum class DeviceMode : uint8_t {
     AttachedControlled  = 0,
-    DetachedGraceHold   = 1,
+    // Detached, still showing what it showed while attached: a manual
+    // picture or an unsynced program.
+    DetachedRunning     = 1,
     DetachedBlank       = 2,
     DetachedBackground  = 3,
 };

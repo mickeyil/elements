@@ -7,7 +7,7 @@
 // Opcode behavior lives with the handlers in src/command_handler.cpp.
 
 // Bumped on every breaking wire change. Sent in REGISTER.
-constexpr uint8_t PROTOCOL_VERSION = 6;
+constexpr uint8_t PROTOCOL_VERSION = 7;
 
 // ---- Session / configuration ----------------------------------------------
 
@@ -62,7 +62,7 @@ constexpr uint8_t ACK_UNSYNCED         = 6;
 // in src/device_status.h, kept as plain constants so non-C++ tooling
 // can read them.
 constexpr uint8_t MODE_ATTACHED_CONTROLLED = 0;
-constexpr uint8_t MODE_DETACHED_GRACE_HOLD = 1;
+constexpr uint8_t MODE_DETACHED_RUNNING    = 1;
 constexpr uint8_t MODE_DETACHED_BLANK      = 2;
 constexpr uint8_t MODE_DETACHED_BACKGROUND = 3;
 

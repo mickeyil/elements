@@ -371,8 +371,8 @@ def _device_state(service, uid='sim-a'):
 def _status_reply(synced, skew_us):
     flags = wire.STATUS_FLAG_CLOCK_SYNCED if synced else 0
     return AckMsg(status=wire.ACK_OK,
-                  payload=struct.pack('<BBi', 0,  # mode: attached_controlled
-                                      flags, skew_us))
+                  payload=struct.pack('<BBiBI', 0,  # mode: attached_controlled
+                                      flags, skew_us, 0, 0))
 
 
 def test_device_clock_is_null_until_the_status_reply(tmp_path):
