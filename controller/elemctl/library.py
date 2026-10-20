@@ -33,6 +33,7 @@ class ProgramEntry:
     error: str | None
     strips: list[str] | None = None
     loop: bool = False         # the source's LOOP literal
+    sync: bool = False         # the source's SYNC literal
 
 
 class ProgramLibrary:
@@ -151,7 +152,7 @@ class ProgramLibrary:
         resolved = str(path.resolve())
         source_hash = hashlib.sha256(source.encode('utf-8')).hexdigest()
         try:
-            beat, duration, loop = extract_metadata(source, resolved)
+            beat, duration, loop, sync = extract_metadata(source, resolved)
         except ValueError as e:
             return ProgramEntry(
                 program_id=program_id,
@@ -179,6 +180,7 @@ class ProgramLibrary:
             error=None,
             strips=strips,
             loop=loop,
+            sync=sync,
         )
 
 

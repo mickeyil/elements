@@ -7,7 +7,7 @@ from elemctl.program_metadata import extract_metadata, extract_strips
 
 
 def test_extract_metadata_valid_source():
-    beat, duration, loop = extract_metadata(
+    beat, duration, loop, sync = extract_metadata(
         "BEAT = 0.5\nDURATION = 32\n",
         "demo.py",
     )
@@ -15,10 +15,11 @@ def test_extract_metadata_valid_source():
     assert beat == 0.5
     assert duration == 32.0
     assert loop is False
+    assert sync is False
 
 
 def test_extract_metadata_forever_duration():
-    beat, duration, loop = extract_metadata(
+    beat, duration, loop, _ = extract_metadata(
         "from elements.dsl import *\nBEAT = 1\nDURATION = forever\n",
         "demo.py",
     )
@@ -29,18 +30,33 @@ def test_extract_metadata_forever_duration():
 
 
 def test_extract_metadata_loop_literal():
-    _, duration, loop = extract_metadata(
+    _, duration, loop, _ = extract_metadata(
         "BEAT = 1\nDURATION = 8\nLOOP = True\n", "demo.py")
     assert (duration, loop) == (8.0, True)
-    _, _, loop = extract_metadata(
+    _, _, loop, _ = extract_metadata(
         "BEAT = 1\nDURATION = 8\nLOOP = False\n", "demo.py")
     assert loop is False
 
 
-def test_extract_metadata_loop_must_be_a_bool_literal():
+@pytest.mark.parametrize('name', ['LOOP', 'SYNC'])
+def test_extract_metadata_flags_must_be_bool_literals(name):
     for value in ('1', "'yes'", 'x'):
-        with pytest.raises(ValueError, match='LOOP must be True or False'):
-            extract_metadata(f"BEAT = 1\nDURATION = 8\nLOOP = {value}\n", "demo.py")
+        with pytest.raises(ValueError, match=f'{name} must be True or False'):
+            extract_metadata(f"BEAT = 1\nDURATION = 8\n{name} = {value}\n", "demo.py")
+
+
+def test_extract_metadata_sync_literal():
+    _, _, loop, sync = extract_metadata(
+        "BEAT = 1\nDURATION = 8\nSYNC = True\n", "demo.py")
+    assert (loop, sync) == (False, True)
+    _, _, _, sync = extract_metadata(
+        "BEAT = 1\nDURATION = 8\nSYNC = False\n", "demo.py")
+    assert sync is False
+
+
+def test_extract_metadata_duplicate_sync_rejected():
+    with pytest.raises(ValueError, match='duplicate SYNC'):
+        extract_metadata("BEAT = 1\nDURATION = 8\nSYNC = True\nSYNC = False\n", "demo.py")
 
 
 def test_extract_metadata_duplicate_duration_with_forever_rejected():
@@ -99,18 +115,21 @@ def test_program_library_rescan_valid_programs(tmp_path):
     assert entries[0].error is None
     assert entries[0].strips is None
     assert entries[0].loop is False
+    assert entries[0].sync is False
 
 
-def test_program_library_rescan_forever_and_loop(tmp_path):
+def test_program_library_rescan_forever_loop_and_sync(tmp_path):
     (tmp_path / 'ever.py').write_text(
         "from elements.dsl import *\nBEAT = 1.0\nDURATION = forever\n")
     (tmp_path / 'looped.py').write_text("BEAT = 1.0\nDURATION = 4\nLOOP = True\n")
+    (tmp_path / 'synced.py').write_text("BEAT = 1.0\nDURATION = 4\nSYNC = True\n")
 
     library = ProgramLibrary(str(tmp_path))
-    ever, looped = library.list_programs()
+    ever, looped, synced = library.list_programs()
 
-    assert (ever.duration, ever.loop, ever.error) == (None, False, None)
-    assert (looped.duration, looped.loop, looped.error) == (4.0, True, None)
+    assert (ever.duration, ever.loop, ever.sync, ever.error) == (None, False, False, None)
+    assert (looped.duration, looped.loop, looped.sync, looped.error) == (4.0, True, False, None)
+    assert (synced.duration, synced.loop, synced.sync, synced.error) == (4.0, False, True, None)
 
 
 def test_program_library_rescan_extracts_literal_strip_names(tmp_path):

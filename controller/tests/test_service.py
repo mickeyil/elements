@@ -238,6 +238,15 @@ def test_load_loop_literal_passes_through(tmp_path):
     assert state['session']['duration'] == 4.0
 
 
+def test_load_sync_literal_compiles_a_synced_manifest(tmp_path):
+    service, _hub = make_service(tmp_path, with_program=False)
+    (tmp_path / 'synced.py').write_text("SYNC = True\n" + PROGRAM)
+    cmd(service, 'rescan')
+    assert cmd(service, 'load', program_id='synced')['ok'] is True
+    entry = service._library.get('synced')
+    assert service._resolve_manifest(entry).requires_sync is True
+
+
 def test_load_unknown_program_errors(tmp_path):
     service, _hub = make_service(tmp_path)
     reply = cmd(service, 'load', program_id='nope')
@@ -1037,6 +1046,9 @@ PAIR = (
 )
 
 
+SYNCED = "SYNC = True\n" + GLOW
+
+
 def write_library(tmp_path, **programs):
     library = tmp_path / 'library'
     library.mkdir(exist_ok=True)
@@ -1144,11 +1156,11 @@ def test_an_adopted_animation_is_named_from_the_panel_library(tmp_path):
     assert _panel_device(service, 'sim-b')['panel']['program_id'] is None
 
 
-def test_panel_run_refuses_non_looping_or_multi_strip_programs(tmp_path):
+def test_panel_run_refuses_non_looping_multi_strip_or_synced_programs(tmp_path):
     service, _hub = make_service(tmp_path)
-    write_library(tmp_path, once=ONCE, pair=PAIR)
+    write_library(tmp_path, once=ONCE, pair=PAIR, synced=SYNCED)
     cmd(service, 'rescan')
-    for program_id in ('once', 'pair'):
+    for program_id in ('once', 'pair', 'synced'):
         reply = cmd(service, 'panel_run', strip_id='main', program_id=program_id)
         assert reply['ok'] is False
         assert 'strip(TARGET), loop' in reply['error']

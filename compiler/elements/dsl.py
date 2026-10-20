@@ -113,7 +113,9 @@ def pacifica(**params) -> AnimDef:
 
 
 # duration is seconds or `forever`. loop=True replays the program from 0 each
-# time it reaches its duration; a forever program always loops.
+# time it reaches its duration; a forever program always loops. requires_sync=True
+# plays it on the controller's synced clock; the controller sets it from a
+# program's SYNC = True.
 
 def build(beat: float, duration: float | Forever,
           target_fps: int = 50, requires_sync: bool = False,

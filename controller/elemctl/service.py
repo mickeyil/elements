@@ -683,7 +683,8 @@ class ControllerService:
             return build_manifest(
                 beat=entry.beat,
                 duration=forever if entry.duration is None else entry.duration,
-                loop=entry.loop)
+                loop=entry.loop,
+                requires_sync=entry.sync)
         finally:
             _builder.reset()
 
