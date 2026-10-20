@@ -74,6 +74,21 @@ def _bg_refused(step, status):
     return f'{step} refused: {wire.ACK_STATUS_NAMES.get(status, status)}'
 
 
+def _bg_requires_sync(program_id):
+    return (f'program {program_id!r} requires sync and cannot be a background; '
+            'a background plays on the device alone, with no controller clock')
+
+
+def _bg_messages(program_id, blob, preview):
+    """The encoded store, order and (with preview) play-local commands of a
+    background install. Encoding them all up front makes any wire-level
+    rejection (name too long, blob too large) fail the command synchronously
+    rather than mid-chain."""
+    return (wire.encode_store_animation(program_id, blob),
+            wire.encode_set_animation_order([program_id]),
+            wire.encode_play_local_animation(0) if preview else None)
+
+
 def hsv_to_rgb(h, s, v):
     """Port of hsv_to_rgb in src/core/colors.cpp, so a panel fill shows the
     color the device would render for it. h is degrees, wrapped into
@@ -295,6 +310,8 @@ class ControllerService:
             return self._cmd_panel_fill(cmd)
         if name == 'panel_run':
             return self._cmd_panel_run(cmd)
+        if name == 'panel_set_default':
+            return self._cmd_panel_set_default(cmd)
         if name == 'panel_stop':
             strip_id, _length = self._panel_strip(cmd)
             self._session.panel_stop(strip_id)
@@ -467,9 +484,7 @@ class ControllerService:
                 f'cannot preview on {uid!r} while it is serving a loaded program; '
                 'stop the program first, or omit preview')
 
-        existing = self._bg_pushes.get(uid)
-        if existing is not None and existing['phase'] not in self._BG_TERMINAL:
-            raise ValueError(f'a background install is already in progress for {uid!r}')
+        self._require_bg_idle(uid)
 
         entry = self._library.get(program_id)
         if entry is None:
@@ -482,16 +497,57 @@ class ControllerService:
             raise ValueError(
                 f'program {program_id!r} has no strip for {dc.strip_id!r}')
         if manifest.requires_sync:
-            raise ValueError(
-                f'program {program_id!r} requires sync and cannot be a background; '
-                'a background plays on the device alone, with no controller clock')
+            raise ValueError(_bg_requires_sync(program_id))
 
-        # Encode every step up front so any wire-level rejection (name too long,
-        # blob too large) fails the command synchronously rather than mid-chain.
-        store_msg = wire.encode_store_animation(program_id, artifact.blob)
-        order_msg = wire.encode_set_animation_order([program_id])
-        play_msg = wire.encode_play_local_animation(0) if preview else None
+        msgs = _bg_messages(program_id, artifact.blob, preview)
+        if not self._bg_begin(uid, program_id, msgs):
+            # is_connected raced us between the check and the send.
+            raise ValueError(f'device {uid!r} is not connected')
 
+        log.info('set_background: installing %s on %s (preview=%s)',
+                 program_id, uid, preview)
+        return {'device_uid': uid, 'program_id': program_id,
+                'phase': self._bg_pushes[uid]['phase']}
+
+    def _cmd_panel_set_default(self, cmd):
+        """Install the panel-library program as the background of every
+        connected device on the strip, so each resumes it on its own after a
+        reboot or when the controller lets go. No preview: the panel is
+        already playing it. Progress shows per device like set_background."""
+        strip_id, length = self._panel_strip(cmd)
+        program_id = cmd.get('program_id')
+        entry = self._panel_library.get(program_id)
+        if entry is None:
+            raise ValueError(f'unknown library program: {program_id!r}')
+        if entry.error is not None:
+            raise ValueError(f'program {program_id!r} has errors: {entry.error}')
+        if entry.sync:
+            raise ValueError(_bg_requires_sync(program_id))
+        uids = [dc.device_uid for dc in self._config.devices
+                if dc.strip_id == strip_id and self._hub.is_connected(dc.device_uid)]
+        if not uids:
+            raise ValueError(f'no connected device on strip {strip_id!r}')
+        for uid in uids:
+            self._require_bg_idle(uid)
+
+        manifest = self._compile_panel(entry, strip_id, length)
+        msgs = _bg_messages(program_id, manifest.strips[strip_id].blob, False)
+        # A device that dropped since the check is simply left out.
+        started = [uid for uid in uids if self._bg_begin(uid, program_id, msgs)]
+        if not started:
+            raise ValueError(f'no connected device on strip {strip_id!r}')
+        log.info('panel_set_default: installing %s on %s', program_id, started)
+        return {'strip_id': strip_id, 'program_id': program_id, 'device_uids': started}
+
+    def _require_bg_idle(self, uid):
+        existing = self._bg_pushes.get(uid)
+        if existing is not None and existing['phase'] not in self._BG_TERMINAL:
+            raise ValueError(f'a background install is already in progress for {uid!r}')
+
+    def _bg_begin(self, uid, program_id, msgs):
+        """Start the store -> order [-> play] chain on one device, tracked in
+        _bg_pushes. False if the device was not connected after all."""
+        store_msg, order_msg, play_msg = msgs
         push = {'program_id': program_id, 'phase': 'storing', 'error': None}
 
         def on_store(ack):
@@ -516,20 +572,15 @@ class ControllerService:
                 return self._bg_fail(uid, push, _bg_refused('play_local_animation', ack.status))
             push['phase'] = 'ready'
 
-        self._bg_pushes[uid] = push
         if not self._hub.send(uid, store_msg, on_store):
-            # is_connected raced us between the check and the send.
-            del self._bg_pushes[uid]
-            raise ValueError(f'device {uid!r} is not connected')
-
-        log.info('set_background: installing %s on %s (preview=%s)',
-                 program_id, uid, preview)
-        return {'device_uid': uid, 'program_id': program_id, 'phase': push['phase']}
+            return False
+        self._bg_pushes[uid] = push
+        return True
 
     def _bg_fail(self, uid, push, reason):
         push['phase'] = 'failed'
         push['error'] = reason
-        log.warning('set_background: %s failed on %s: %s',
+        log.warning('background install: %s failed on %s: %s',
                     push['program_id'], uid, reason)
 
     def _reap_orphaned_background(self):

@@ -18,7 +18,7 @@ import {
 import { deriveSimTargets } from '../lib/viewerModel';
 import type { FirmwareState } from '../lib/firmwareModel';
 import { applyDeviceLogs, type DeviceLogRecord, type DeviceLogWireRecord } from '../lib/logsModel';
-import type { PanelView } from '../lib/panelModel';
+import type { BackgroundInstall, PanelView } from '../lib/panelModel';
 import type { SimProcess } from '../lib/simPowerModel';
 
 // Every binary websocket message leads with its controller-protocol kind byte
@@ -52,6 +52,8 @@ export interface SnapshotDevice {
   // the show owns it).
   owner?: 'show' | 'panel';
   panel?: PanelView | null;
+  // Progress of the last install of the device's stored fallback animation.
+  background?: BackgroundInstall | null;
 }
 
 interface SessionStrip {

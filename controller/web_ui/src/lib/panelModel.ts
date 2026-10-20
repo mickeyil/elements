@@ -17,6 +17,14 @@ export interface PanelView {
   hsv: [number, number, number] | null;
 }
 
+// A device's `background` field in the state snapshot: the progress of the
+// last install of its stored fallback animation.
+export interface BackgroundInstall {
+  program_id: string;
+  phase: 'storing' | 'ordering' | 'starting' | 'ready' | 'failed';
+  error: string | null;
+}
+
 // Local structural input, as in viewerModel, so this stays free of the
 // server-state composable.
 export interface PanelDeviceInput {
@@ -27,6 +35,7 @@ export interface PanelDeviceInput {
   length?: number;
   owner?: string;
   panel?: PanelView | null;
+  background?: BackgroundInstall | null;
 }
 
 export interface StripPanelState {
@@ -39,6 +48,7 @@ export interface StripDevice {
   uid: string;
   online: boolean;
   isSim: boolean;
+  background: BackgroundInstall | null;
 }
 
 export interface PanelStrip {
@@ -81,9 +91,31 @@ export function groupStrips(devices: readonly PanelDeviceInput[]): PanelStrip[] 
         uid: String(device.uid),
         online: device.status === 'online',
         isSim: String(device.uid).startsWith('sim-'),
+        background: device.background ?? null,
       })),
       panel: stripPanelState(group),
     }));
+}
+
+// One line on the strip's default (stored background) animation, from its
+// devices' last installs: in progress, the first failure, or what is
+// installed where. null when none of its devices has had one.
+export function defaultStatus(devices: readonly StripDevice[]): string | null {
+  const installs = devices.flatMap((device) => (
+    device.background ? [{ uid: device.uid, ...device.background }] : []));
+  if (!installs.length) {
+    return null;
+  }
+  if (installs.some((install) => install.phase !== 'ready' && install.phase !== 'failed')) {
+    return 'Default: installing…';
+  }
+  const failed = installs.find((install) => install.phase === 'failed');
+  if (failed) {
+    return `Default failed on ${failed.uid}: ${failed.error ?? 'unknown error'}`;
+  }
+  const programs = [...new Set(installs.map((install) => install.program_id))].join(', ');
+  const count = installs.length;
+  return `Default: ${programs} on ${count} device${count === 1 ? '' : 's'}`;
 }
 
 export function hsvToRgb({ h, s, v }: PanelHsv): [number, number, number] {

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { fillStrip, runLibraryProgram, stopStrip } from './panelApi';
+import { fillStrip, runLibraryProgram, setDefaultProgram, stopStrip } from './panelApi';
 
 function mockFetch(response: { ok: boolean; body: unknown }) {
   const fetchMock = vi.fn().mockResolvedValue({
@@ -32,6 +32,16 @@ describe('panelApi', () => {
     const fetchMock = mockFetch({ ok: true, body: { ok: true } });
     await runLibraryProgram('ring8', 'pacifica');
     expect(fetchMock).toHaveBeenCalledWith('/api/panel/ring8/run', {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ program_id: 'pacifica' }),
+    });
+  });
+
+  it('setDefaultProgram POSTs the program id to the default route', async () => {
+    const fetchMock = mockFetch({ ok: true, body: { ok: true } });
+    await setDefaultProgram('ring8', 'pacifica');
+    expect(fetchMock).toHaveBeenCalledWith('/api/panel/ring8/default', {
       method: 'POST',
       headers: JSON_HEADERS,
       body: JSON.stringify({ program_id: 'pacifica' }),

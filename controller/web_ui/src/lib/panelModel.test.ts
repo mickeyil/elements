@@ -2,10 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   LatestValueSender,
+  defaultStatus,
   groupStrips,
   hsvToCss,
   stripPanelState,
+  type BackgroundInstall,
   type PanelDeviceInput,
+  type StripDevice,
 } from './panelModel';
 
 describe('groupStrips', () => {
@@ -21,15 +24,15 @@ describe('groupStrips', () => {
       {
         stripId: 'porch',
         length: 30,
-        devices: [{ uid: 'sim-porch', online: false, isSim: true }],
+        devices: [{ uid: 'sim-porch', online: false, isSim: true, background: null }],
         panel: null,
       },
       {
         stripId: 'ring8',
         length: 8,
         devices: [
-          { uid: 'esp-1', online: true, isSim: false },
-          { uid: 'sim-ring8', online: true, isSim: true },
+          { uid: 'esp-1', online: true, isSim: false, background: null },
+          { uid: 'sim-ring8', online: true, isSim: true, background: null },
         ],
         panel: null,
       },
@@ -61,6 +64,27 @@ describe('stripPanelState', () => {
 
     expect(stripPanelState(devices)).toEqual(
       { mode: 'manual', programId: null, hsv: { h: 120, s: 0.5, v: 1 } });
+  });
+});
+
+describe('defaultStatus', () => {
+  const device = (uid: string, background: BackgroundInstall | null): StripDevice => (
+    { uid, online: true, isSim: false, background });
+  const install = (phase: BackgroundInstall['phase'], error: string | null = null) => (
+    { program_id: 'pacifica', phase, error });
+
+  it('is null until a device has had an install', () => {
+    expect(defaultStatus([device('esp-1', null)])).toBeNull();
+  });
+
+  it('reports progress, then the first failure, then what is installed', () => {
+    expect(defaultStatus([device('esp-1', install('ready')), device('esp-2', install('storing'))]))
+      .toBe('Default: installing…');
+    expect(defaultStatus([device('esp-1', install('ready')),
+      device('esp-2', install('failed', 'device disconnected during install'))]))
+      .toBe('Default failed on esp-2: device disconnected during install');
+    expect(defaultStatus([device('esp-1', install('ready')), device('esp-2', install('ready'))]))
+      .toBe('Default: pacifica on 2 devices');
   });
 });
 

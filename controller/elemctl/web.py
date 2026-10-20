@@ -238,6 +238,7 @@ _ROUTES: tuple[tuple[str, re.Pattern[str], str], ...] = tuple(
         ('POST', rf'/api/panel/{_SEGMENT}/fill', '_route_panel_fill'),
         ('POST', rf'/api/panel/{_SEGMENT}/run', '_route_panel_run'),
         ('POST', rf'/api/panel/{_SEGMENT}/stop', '_route_panel_stop'),
+        ('POST', rf'/api/panel/{_SEGMENT}/default', '_route_panel_default'),
     )
 )
 
@@ -747,7 +748,13 @@ class WebUiServer:
     async def _route_panel_run(self, req: _Request, strip_id: str) -> None:
         payload = await self._read_json_body(req)
         await self._write_json_response(
-            req.writer, *self._panel_run_response(strip_id, payload))
+            req.writer, *self._panel_program_response('panel_run', strip_id, payload))
+
+    async def _route_panel_default(self, req: _Request, strip_id: str) -> None:
+        payload = await self._read_json_body(req)
+        await self._write_json_response(
+            req.writer,
+            *self._panel_program_response('panel_set_default', strip_id, payload))
 
     async def _route_panel_stop(self, req: _Request, strip_id: str) -> None:
         await self._write_json_response(req.writer, *self._controller_command_response({
@@ -770,14 +777,15 @@ class WebUiServer:
             **hsv,
         })
 
-    def _panel_run_response(self, strip_id: str, payload: object) -> tuple[int, dict]:
+    def _panel_program_response(self, verb: str, strip_id: str,
+                                payload: object) -> tuple[int, dict]:
         if not isinstance(payload, dict):
             return 400, {'error': 'request body must be a JSON object'}
         program_id = payload.get('program_id')
         if not isinstance(program_id, str) or not program_id:
             return 400, {'error': 'program_id must be a non-empty string'}
         return self._controller_command_response({
-            'cmd': 'panel_run',
+            'cmd': verb,
             'strip_id': strip_id,
             'program_id': program_id,
         })

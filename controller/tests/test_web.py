@@ -1371,7 +1371,7 @@ def test_server_status_carries_the_sims(tmp_path):
 
 
 def test_match_route_extracts_panel_strip_id():
-    for action in ('fill', 'run', 'stop'):
+    for action in ('fill', 'run', 'stop', 'default'):
         assert _match_route('POST', f'/api/panel/ring8/{action}') == (
             f'_route_panel_{action}', ('ring8',))
     assert _match_route('POST', '/api/panel//fill') is None
@@ -1426,6 +1426,19 @@ def test_route_panel_run_rejects_a_missing_program_id(tmp_path):
     status, payload = _run_http_request(server, 'POST', '/api/panel/ring8/run', b'{}')
     assert status == 400
     assert payload == {'error': 'program_id must be a non-empty string'}
+
+
+def test_route_panel_default_forwards_program_id(monkeypatch, tmp_path):
+    server = WebUiServer('/tmp/elemctl.sock', '127.0.0.1', 8080, {}, {}, str(tmp_path))
+    commands: list[dict] = []
+    monkeypatch.setattr(web_mod, 'ControllerClient', _capturing_client(commands, _OK_REPLY))
+
+    body = json.dumps({'program_id': 'pacifica'}).encode()
+    status, _payload = _run_http_request(server, 'POST', '/api/panel/ring8/default', body)
+
+    assert status == 200
+    assert commands == [{'id': 1, 'cmd': 'panel_set_default', 'strip_id': 'ring8',
+                         'program_id': 'pacifica'}]
 
 
 def test_route_panel_stop_forwards_strip_id(monkeypatch, tmp_path):

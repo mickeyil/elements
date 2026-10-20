@@ -19,7 +19,7 @@ The server's own `server_status` event carries a `sims` map (uid to `running`, `
 | Route | Page | What it does |
 |-------|------|-------------|
 | `/` | StatusPage | Device status panel, playback info; "Simulate" on an ESP card adds a sim twin of its strip; a sim card's menu powers its sim process on and off |
-| `/panel` | PanelPage | Operator panel: take one strip from the show to hold a color, loop a panel-library program or blank it, with a sim preview |
+| `/panel` | PanelPage | Operator panel: take one strip from the show to hold a color, loop a panel-library program or blank it, set the running program as the strip's default (stored background), with a sim preview |
 | `/logs` | LogsPage | Device log records as they arrive, with the last 1000 since the controller started; warnings yellow, errors red |
 | `/viewer` | ViewerPage | Live animation preview (canvas rendering of RGB frames) |
 | `/layouts/:deviceUid` | LayoutEditorPage | 2D pixel layout editor for simulator devices |
@@ -43,6 +43,7 @@ These proxy to the controller's `add_device` / `edit_device` / `remove_device` c
 | `POST` | `/api/panel/:stripId/fill` | Hold one color on the strip; body `{h, s, v}` (h in degrees, s and v 0..1) |
 | `POST` | `/api/panel/:stripId/run` | Loop a panel-library program on the strip; body `{program_id}` |
 | `POST` | `/api/panel/:stripId/stop` | Blank the strip |
+| `POST` | `/api/panel/:stripId/default` | Store a panel-library program as the background of every connected device on the strip, which it plays on its own after a reboot or when the controller lets go; body `{program_id}` |
 
 ## Layout API
 

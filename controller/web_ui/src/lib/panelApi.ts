@@ -1,7 +1,7 @@
 import { apiRequest } from './deviceApi';
 import type { PanelHsv } from './panelModel';
 
-function panelUrl(stripId: string, action: 'fill' | 'run' | 'stop'): string {
+function panelUrl(stripId: string, action: 'fill' | 'run' | 'stop' | 'default'): string {
   return `/api/panel/${encodeURIComponent(stripId)}/${action}`;
 }
 
@@ -20,6 +20,16 @@ export function runLibraryProgram(stripId: string, programId: string): Promise<R
     method: 'POST',
     body: { program_id: programId },
     fallbackError: 'Failed to run the program.',
+  });
+}
+
+// Stores the program on every connected device of the strip as the animation
+// it plays on its own: after a reboot, or when the controller lets go.
+export function setDefaultProgram(stripId: string, programId: string): Promise<Record<string, unknown>> {
+  return apiRequest(panelUrl(stripId, 'default'), {
+    method: 'POST',
+    body: { program_id: programId },
+    fallbackError: 'Failed to set the default.',
   });
 }
 

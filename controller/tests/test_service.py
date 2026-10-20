@@ -1163,6 +1163,73 @@ def test_panel_run_refuses_non_looping_multi_strip_or_synced_programs(tmp_path):
     assert service._session.member('sim-a').owner == 'show'
 
 
+def _set_default_service(tmp_path):
+    """Two devices on 'main' and one on 'side', with the glow library program."""
+    service, hub = make_service(tmp_path, devices=[
+        DeviceConfig('sim-a', 'main', 30), DeviceConfig('sim-b', 'main', 30),
+        DeviceConfig('sim-c', 'side', 12)])
+    write_library(tmp_path, glow=GLOW, synced=SYNCED)
+    cmd(service, 'rescan')
+    return service, hub
+
+
+def test_panel_set_default_installs_on_each_connected_device_of_the_strip(tmp_path):
+    service, hub = _set_default_service(tmp_path)
+    hub.connected.update({'sim-a', 'sim-c'})               # sim-b is offline
+
+    reply = cmd(service, 'panel_set_default', strip_id='main', program_id='glow')
+    assert reply['ok'] is True
+    assert reply['result'] == {'strip_id': 'main', 'program_id': 'glow',
+                               'device_uids': ['sim-a']}
+    assert [uid for uid, _, _ in hub.sent] == ['sim-a']   # not sim-b, not side's sim-c
+    blob = service._compile_panel(service._panel_library.get('glow'), 'main', 30) \
+        .strips['main'].blob
+    assert hub.sent[-1][1] == wire.encode_store_animation('glow', blob)
+
+    _ack(hub, wire.ACK_OK)                                  # store accepted
+    assert hub.sent[-1][1] == wire.encode_set_animation_order(['glow'])
+    _ack(hub, wire.ACK_OK)                                  # order accepted, no play
+    assert len(hub.sent) == 2
+    assert _device_background(service) == {
+        'program_id': 'glow', 'phase': 'ready', 'error': None}
+    assert _device_background(service, 'sim-b') is None
+
+
+def test_panel_set_default_stores_on_every_device_of_the_strip(tmp_path):
+    service, hub = _set_default_service(tmp_path)
+    hub.connected.update({'sim-a', 'sim-b'})
+    reply = cmd(service, 'panel_set_default', strip_id='main', program_id='glow')
+    assert reply['result']['device_uids'] == ['sim-a', 'sim-b']
+    for uid in ('sim-a', 'sim-b'):
+        assert hub.last_send(uid)[0] == wire.CMD_STORE_ANIMATION
+        assert _device_background(service, uid)['phase'] == 'storing'
+
+
+def test_panel_set_default_refuses_bad_requests(tmp_path):
+    service, hub = _set_default_service(tmp_path)
+    reply = cmd(service, 'panel_set_default', strip_id='main', program_id='glow')
+    assert reply['ok'] is False and 'no connected device' in reply['error']
+
+    hub.connected.add('sim-a')
+    assert cmd(service, 'panel_set_default', strip_id='nope',
+               program_id='glow')['ok'] is False
+    reply = cmd(service, 'panel_set_default', strip_id='main', program_id='nope')
+    assert reply['ok'] is False and 'unknown library program' in reply['error']
+    reply = cmd(service, 'panel_set_default', strip_id='main', program_id='synced')
+    assert reply['ok'] is False and 'requires sync' in reply['error']
+    assert hub.sent == []
+
+
+def test_panel_set_default_rejects_while_a_device_is_installing(tmp_path):
+    service, hub = _set_default_service(tmp_path)
+    hub.connected.update({'sim-a', 'sim-b'})
+    cmd(service, 'set_background', device_uid='sim-b', program_id='prog')   # in flight
+    sent_before = len(hub.sent)
+    reply = cmd(service, 'panel_set_default', strip_id='main', program_id='glow')
+    assert reply['ok'] is False and 'already in progress' in reply['error']
+    assert len(hub.sent) == sent_before                    # nothing sent to sim-a
+
+
 def test_catalog_lists_the_panel_library(tmp_path):
     service, _hub = make_service(tmp_path)
     write_library(tmp_path, glow=GLOW, broken='BEAT = 1.0\n')

@@ -3,9 +3,10 @@ import { computed, onBeforeUnmount, ref, watch, watchPostEffect } from 'vue';
 
 import HsvPicker from '../components/HsvPicker.vue';
 import { useInjectedServerState, type SnapshotLibraryProgram } from '../composables/useServerState';
-import { fillStrip, runLibraryProgram, stopStrip } from '../lib/panelApi';
+import { fillStrip, runLibraryProgram, setDefaultProgram, stopStrip } from '../lib/panelApi';
 import {
   LatestValueSender,
+  defaultStatus,
   groupStrips,
   type PanelHsv,
   type PanelStrip,
@@ -135,6 +136,22 @@ function onStop(): void {
   }
 }
 
+// The program the panel is looping on the strip, which Set as default stores
+// on its devices so they come back to it after a reboot.
+const runningProgramId = computed(() => (
+  panelState.value?.mode === 'program' ? panelState.value.programId : null));
+const defaultLine = computed(() => defaultStatus(selectedStrip.value?.devices ?? []));
+const installing = computed(() => Boolean(selectedStrip.value?.devices.some(
+  (device) => device.background && !['ready', 'failed'].includes(device.background.phase))));
+
+function onSetDefault(): void {
+  const strip = selectedStrip.value;
+  const programId = runningProgramId.value;
+  if (strip && programId) {
+    void run(() => setDefaultProgram(strip.stripId, programId));
+  }
+}
+
 const stateLabel = computed(() => {
   const state = panelState.value;
   if (!state) {
@@ -252,15 +269,27 @@ watchPostEffect(() => {
             <section class="panel pane">
               <div class="pane-head">
                 <p class="pane-label">Animations</p>
-                <button
-                  type="button"
-                  class="ghost-button"
-                  :disabled="!canCommand || pending"
-                  @click="onStop"
-                >
-                  Stop
-                </button>
+                <div class="pane-actions">
+                  <button
+                    type="button"
+                    class="ghost-button"
+                    :disabled="!canCommand || pending || installing || !runningProgramId"
+                    title="Store the running program on the strip's devices to play after a reboot"
+                    @click="onSetDefault"
+                  >
+                    Set as default
+                  </button>
+                  <button
+                    type="button"
+                    class="ghost-button"
+                    :disabled="!canCommand || pending"
+                    @click="onStop"
+                  >
+                    Stop
+                  </button>
+                </div>
               </div>
+              <p v-if="defaultLine" class="pane-note">{{ defaultLine }}</p>
               <p v-if="!library.length" class="pane-note">No programs in the panel library.</p>
               <ul v-else class="program-list">
                 <li
@@ -460,6 +489,11 @@ watchPostEffect(() => {
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
+}
+
+.pane-actions {
+  display: flex;
+  gap: 0.5rem;
 }
 
 .pane-note {
