@@ -8,13 +8,7 @@ import pytest
 
 from elemctl.config import (
     ConfigError,
-    DEFAULT_DISCOVERY_PORT,
-    DEFAULT_FRAME_PORT,
-    DEFAULT_LINK_PORT,
     DEFAULT_FIRMWARE_IMAGE_PATH,
-    DEFAULT_LOG_PORT,
-    DEFAULT_OTA_PORT,
-    DEFAULT_SYNC_PORT,
     MAX_DEVICE_PIXELS,
     MAX_UID_BYTES,
     REPO_ROOT,
@@ -61,51 +55,9 @@ def _valid_config(**overrides):
 # Controller section
 # ---------------------------------------------------------------------------
 
-def test_ports_default_to_well_known_values(tmp_path):
-    config = load_config(_write_config(tmp_path, _valid_config()))
-    assert config.discovery_port == DEFAULT_DISCOVERY_PORT == 6040
-    assert config.link_port == DEFAULT_LINK_PORT == 6041
-    assert config.frame_port == DEFAULT_FRAME_PORT == 6042
-    assert config.sync_port == DEFAULT_SYNC_PORT == 6043
-    assert config.log_port == DEFAULT_LOG_PORT == 6044
-    assert config.ota_port == DEFAULT_OTA_PORT == 6045
-
-
-def test_explicit_ports_override_defaults(tmp_path):
-    doc = _valid_config(controller={
-        "discovery_port": 7040,
-        "link_port": 7041,
-        "frame_port": 7042,
-        "sync_port": 7043,
-        "log_port": 7044,
-        "ota_port": 7045,
-    })
-    config = load_config(_write_config(tmp_path, doc))
-    assert (config.discovery_port, config.link_port, config.frame_port,
-            config.sync_port, config.log_port,
-            config.ota_port) == (7040, 7041, 7042, 7043, 7044, 7045)
-
-
-@pytest.mark.parametrize('field', [
-    'discovery_port', 'link_port', 'frame_port', 'sync_port', 'log_port',
-    'ota_port',
-])
-@pytest.mark.parametrize('bad', [0, 65536, -1, 'x', None, True])
-def test_invalid_port_rejected(tmp_path, field, bad):
-    doc = _valid_config(controller={field: bad})
-    with pytest.raises(ConfigError):
-        load_config(_write_config(tmp_path, doc))
-
-
-def test_duplicate_ports_rejected(tmp_path):
-    doc = _valid_config(controller={"frame_port": 6043})
-    with pytest.raises(ConfigError, match='duplicates'):
-        load_config(_write_config(tmp_path, doc))
-
-
-def test_ota_port_must_not_duplicate_another_port(tmp_path):
-    doc = _valid_config(controller={"ota_port": 6041})
-    with pytest.raises(ConfigError, match='duplicates'):
+def test_old_port_key_is_rejected(tmp_path):
+    doc = _valid_config(controller={"frame_port": 6042})
+    with pytest.raises(ConfigError, match=r"controller\.frame_port.*--port-base"):
         load_config(_write_config(tmp_path, doc))
 
 
@@ -156,7 +108,6 @@ def test_optional_dirs(tmp_path):
 def test_default_doc_round_trips():
     config = load_config_obj(default_config_doc())
     assert config.devices == []
-    assert config.discovery_port == 6040
 
 
 # ---------------------------------------------------------------------------

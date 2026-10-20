@@ -30,7 +30,8 @@ class App
 {
 public:
     // The parameters are the platform-dependent pieces; everything
-    // shared is owned inside.
+    // shared is owned inside. port_base locates the controller's sync
+    // and log ports (link_protocol.h).
     App(NetInterface& network,
         DiscoveryClient&  discovery,
         TcpTransport&     tcp,
@@ -40,7 +41,8 @@ public:
         KeyValueStore&    profile_kv,
         SystemPlatform&   system,
         FrameOutput&      output,
-        const DeviceIdentity& identity);
+        const DeviceIdentity& identity,
+        uint16_t          port_base);
 
     // One-time startup: bring the network up and apply the stored
     // hardware profile, if any.

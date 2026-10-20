@@ -44,8 +44,7 @@ class TestValidateSimUid:
 
 
 def _config(*devices: DeviceConfig) -> Config:
-    return Config(discovery_port=6040, link_port=6041, frame_port=6042,
-                  sync_port=6043, log_port=6044, devices=list(devices))
+    return Config(devices=list(devices))
 
 
 class TestResolveSimUid:
@@ -86,7 +85,7 @@ class TestBuildSimCommand:
         cmd = build_sim_command(
             'sim-1',
             controller_host='10.0.0.7',
-            frame_port=7000,
+            port_base=7040,
             sim_device_bin=fake_bin,
         )
 
@@ -94,18 +93,18 @@ class TestBuildSimCommand:
             str(fake_bin),
             '--device-uid', 'sim-1',
             '--controller-host', '10.0.0.7',
-            '--frame-port', '7000',
+            '--port-base', '7040',
         ]
 
     def test_rejects_missing_binary(self, tmp_path):
         with pytest.raises(ValueError, match='not built'):
             build_sim_command('sim-1', sim_device_bin=tmp_path / 'sim_device')
 
-    def test_rejects_bad_frame_port(self, tmp_path):
+    def test_rejects_bad_port_base(self, tmp_path):
         fake_bin = tmp_path / 'sim_device'
         fake_bin.write_text('')
-        with pytest.raises(ValueError, match='frame-port'):
-            build_sim_command('sim-1', frame_port=0, sim_device_bin=fake_bin)
+        with pytest.raises(ValueError, match='port-base'):
+            build_sim_command('sim-1', port_base=65535, sim_device_bin=fake_bin)
 
 
 def _stub_cmd(tmp_path, codes):

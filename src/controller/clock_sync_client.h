@@ -22,7 +22,7 @@ struct SyncSample {
 class ClockSyncClient {
 public:
     ClockSyncClient(UdpTransport& udp, SyncedClock& clock,
-                    const DeviceIdentity& identity);
+                    const DeviceIdentity& identity, uint16_t port);
 
     // Set the sync target (IPv4, big-endian; 0 = idle). Changing
     // target resets state and restarts the burst; same target is a
@@ -81,6 +81,7 @@ private:
     UdpTransport&         _udp;
     SyncedClock&          _clock;
     const DeviceIdentity& _identity;
+    const uint16_t        _port;
 
     // Controller IPv4 (big-endian); 0 = idle.
     uint32_t _target_ip = 0;

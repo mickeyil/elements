@@ -30,8 +30,6 @@ def ensure_editor_shape(doc: dict) -> dict:
         doc["controller"] = ctrl
     if not isinstance(ctrl, dict):
         raise ConfigError("'controller' must be an object")
-    for field, value in defaults["controller"].items():
-        ctrl.setdefault(field, value)
 
     devices = doc.get("devices")
     if devices is None:

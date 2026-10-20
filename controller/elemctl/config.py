@@ -2,11 +2,10 @@
 
 Reads a JSON config describing the controller and device topology.
 
-v3 shape: the controller section holds the five well-known ports plus
-the OTA port and firmware settings (all optional); a device entry is just
-`{device_uid, strip_id, length, label?}`. Devices connect in and are
-identified by UID alone, so the config stores no addresses and no
-numeric ids. The device type is implied by the UID prefix
+v3 shape: the controller section holds path overrides (all optional);
+a device entry is just `{device_uid, strip_id, length, label?}`. Devices
+connect in and are identified by UID alone, so the config stores no
+addresses and no numeric ids. The device type is implied by the UID prefix
 (src/platform/device_identity.h).
 """
 
@@ -28,15 +27,6 @@ INSTANCE_DIR = REPO_ROOT / 'instance'
 DEFAULT_CONFIG_PATH = str(INSTANCE_DIR / 'config.json')
 DEFAULT_SOCKET_PATH = '/tmp/elemctl.sock'
 
-DEFAULT_DISCOVERY_PORT = 6040
-DEFAULT_LINK_PORT = 6041
-DEFAULT_FRAME_PORT = 6042
-DEFAULT_SYNC_PORT = 6043
-DEFAULT_LOG_PORT = 6044
-# TCP port the controller listens on during a firmware update; the
-# device connects back to it (espota protocol, see ota.py).
-DEFAULT_OTA_PORT = 6045
-
 # Must match MAX_STRIP_PIXELS in src/core/hardware_profile.h
 MAX_DEVICE_PIXELS = 300
 # Must match UID_SIZE in src/platform/device_identity.h (wire slot).
@@ -48,8 +38,10 @@ DEFAULT_LOGS_PATH = str(REPO_ROOT / 'logs')
 # tools/pio_version.py writes firmware.version beside it.
 DEFAULT_FIRMWARE_IMAGE_PATH = str(REPO_ROOT / 'build' / 'pio' / 'esp32dev' / 'firmware.bin')
 
-_PORT_FIELDS = ('discovery_port', 'link_port', 'frame_port', 'sync_port',
-                'log_port', 'ota_port')
+# Keys from when the ports were settings; they are protocol constants now
+# (wire.Ports).
+_RETIRED_PORT_FIELDS = ('discovery_port', 'link_port', 'frame_port',
+                        'sync_port', 'log_port', 'ota_port')
 _ESP_UID_RE = re.compile(r'^esp-[0-9a-f]{12}$')
 _STRIP_ID_RE = re.compile(r'^[A-Za-z0-9_-]+$')
 
@@ -98,14 +90,7 @@ def sim_twin_uid(strip_id: str) -> str:
 def default_config_doc() -> dict:
     """Return the default first-run config document."""
     return {
-        "controller": {
-            "discovery_port": DEFAULT_DISCOVERY_PORT,
-            "link_port": DEFAULT_LINK_PORT,
-            "frame_port": DEFAULT_FRAME_PORT,
-            "sync_port": DEFAULT_SYNC_PORT,
-            "log_port": DEFAULT_LOG_PORT,
-            "ota_port": DEFAULT_OTA_PORT,
-        },
+        "controller": {},
         "devices": [],
     }
 
@@ -180,15 +165,9 @@ class DeviceConfig:
 
 @dataclass
 class Config:
-    discovery_port: int
-    link_port: int
-    frame_port: int
-    sync_port: int
-    log_port: int
     devices: list[DeviceConfig]
     animations_dir: str | None = None  # override for animations directory
     logs_dir: str | None = None        # override for logs directory
-    ota_port: int = DEFAULT_OTA_PORT
     firmware_image: str | None = None  # override for the OTA image path
 
 
@@ -228,28 +207,12 @@ def load_config_obj(raw: dict) -> Config:
     if not isinstance(ctrl, dict):
         raise ConfigError("'controller' must be an object")
 
-    defaults = default_config_doc()["controller"]
-    ports: dict[str, int] = {}
-    for field in _PORT_FIELDS:
-        if field not in ctrl:
-            ports[field] = defaults[field]
-            continue
-        value = ctrl[field]
-        if not _is_int(value):
-            raise ConfigError(f"'controller.{field}' must be an integer")
-        if not (1 <= value <= 65535):
-            raise ConfigError(f"'controller.{field}' must be 1-65535, got {value}")
-        ports[field] = value
-
-    seen_ports: dict[int, str] = {}
-    for field in _PORT_FIELDS:
-        previous = seen_ports.get(ports[field])
-        if previous is not None:
+    for field in _RETIRED_PORT_FIELDS:
+        if field in ctrl:
             raise ConfigError(
-                f"'controller.{field}' duplicates 'controller.{previous}': "
-                f"{ports[field]}"
+                f"'controller.{field}' is no longer a setting: the ports are "
+                "fixed, and --port-base moves them all; remove it"
             )
-        seen_ports[ports[field]] = field
 
     animations_dir = ctrl.get("animations_dir")
     if animations_dir is not None:
@@ -327,14 +290,8 @@ def load_config_obj(raw: dict) -> Config:
         ))
 
     return Config(
-        discovery_port=ports["discovery_port"],
-        link_port=ports["link_port"],
-        frame_port=ports["frame_port"],
-        sync_port=ports["sync_port"],
-        log_port=ports["log_port"],
         devices=devices,
         animations_dir=animations_dir,
         logs_dir=logs_dir,
-        ota_port=ports["ota_port"],
         firmware_image=firmware_image,
     )

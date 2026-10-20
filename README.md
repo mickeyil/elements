@@ -65,7 +65,10 @@ lives in the gitignored `build/`, `local/`, and `instance/` directories.
 ./elemctl run   # builds, then runs controller + web UI at http://localhost:8080 (ctrl-c stops both)
 ```
 
-`./elemctl server` and `./elemctl web` also run individually.
+`./elemctl server` and `./elemctl web` also run individually. The ports
+are fixed (6040–6045); `--port-base` on `elemctl run`/`server`/`web`/`sim`
+and on `sim_device` moves the whole set, for a second instance beside a
+live one.
 
 Open http://localhost:8080, add device `sim-ring8` (strip id `ring8`, length 8),
 power it on from its card menu, then load `ring8_blue_wave` and play.

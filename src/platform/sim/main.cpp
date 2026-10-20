@@ -14,6 +14,7 @@
 #include "platform/device_identity.h"
 #include "controller/discovery.h"
 #include "controller/hardware_profile_store.h"
+#include "controller/link_protocol.h"
 #include "platform/sim/file_key_value_store.h"
 #include "platform/sim/host_network_interface.h"
 #include "platform/sim/posix_file_store.h"
@@ -34,7 +35,7 @@
 namespace {
 
 constexpr char DEFAULT_CONTROLLER_HOST[] = "127.0.0.1";
-constexpr uint16_t DEFAULT_FRAME_PORT = 6042;
+constexpr long MAX_PORT_BASE = 65535 - OTA_PORT_OFFSET;
 
 // Pause per loop pass. Frame pacing happens inside the App, so this
 // only bounds idle CPU; it must stay well under a frame interval.
@@ -70,14 +71,14 @@ struct SimOptions
 {
     const char* device_uid = nullptr;
     const char* controller_host = DEFAULT_CONTROLLER_HOST;
-    uint16_t frame_port = DEFAULT_FRAME_PORT;
+    uint16_t port_base = DEFAULT_PORT_BASE;
 };
 
 void print_usage(const char* argv0)
 {
     std::fprintf(stderr,
                  "usage: %s --device-uid <sim-...> [--controller-host <ipv4>] "
-                 "[--frame-port <port>]\n",
+                 "[--port-base <port>]\n",
                  argv0);
 }
 
@@ -93,14 +94,14 @@ bool parse_args(int argc, char** argv, SimOptions& opts)
         } else if (std::strcmp(arg, "--controller-host") == 0 && value != nullptr) {
             opts.controller_host = value;
             ++i;
-        } else if (std::strcmp(arg, "--frame-port") == 0 && value != nullptr) {
+        } else if (std::strcmp(arg, "--port-base") == 0 && value != nullptr) {
             char* end = nullptr;
             const long port = std::strtol(value, &end, 10);
-            if (end == value || *end != '\0' || port < 1 || port > 65535) {
-                std::fprintf(stderr, "bad --frame-port: %s\n", value);
+            if (end == value || *end != '\0' || port < 1 || port > MAX_PORT_BASE) {
+                std::fprintf(stderr, "bad --port-base: %s\n", value);
                 return false;
             }
-            opts.frame_port = static_cast<uint16_t>(port);
+            opts.port_base = static_cast<uint16_t>(port);
             ++i;
         } else {
             std::fprintf(stderr, "unknown or incomplete argument: %s\n", arg);
@@ -150,14 +151,16 @@ int main(int argc, char** argv)
 
     // Unicast discovery: broadcast does not reach a controller bound
     // on loopback, so the sim always aims DISCOVER at a known host.
-    DiscoveryClient discovery(discovery_udp, identity, controller_ip);
-    SimFrameOutput output(frame_udp, identity, controller_ip, opts.frame_port);
+    DiscoveryClient discovery(discovery_udp, identity,
+                              opts.port_base + DISCOVERY_PORT_OFFSET, controller_ip);
+    SimFrameOutput output(frame_udp, identity, controller_ip,
+                          opts.port_base + FRAME_PORT_OFFSET);
 
     App app(network, discovery, tcp, sync_udp, log_udp, files, profile_kv,
-            system, output, identity);
+            system, output, identity, opts.port_base);
 
-    slog_info("sim device %s (version %s) up; controller %s, frame port %u",
-              identity.uid, identity.version, opts.controller_host, opts.frame_port);
+    slog_info("sim device %s (version %s) up; controller %s, port base %u",
+              identity.uid, identity.version, opts.controller_host, opts.port_base);
 
     app.begin();
     while (!g_stop) {

@@ -7,6 +7,7 @@
 
 #include "platform/device_identity.h"
 #include "controller/discovery.h"
+#include "controller/link_protocol.h"
 #include "platform/udp_transport.h"
 #include "test_platform_clock.h"
 
@@ -30,14 +31,14 @@
 
 namespace {
 
-constexpr uint16_t DISCOVERY_PORT       = 6040;
+constexpr uint16_t DISCOVERY_PORT       = DEFAULT_PORT_BASE + DISCOVERY_PORT_OFFSET;
 constexpr int64_t  BROADCAST_INTERVAL_US = 1'500'000;
 constexpr uint16_t MAGIC                = 0xD1CC;
 
 constexpr uint32_t LOOPBACK_BE          = 0x0100007FU;  // 127.0.0.1
 constexpr uint32_t CONTROLLER_IP_A      = 0x0100A8C0U;  // 192.168.0.1
 constexpr uint32_t CONTROLLER_IP_B      = 0x0200A8C0U;  // 192.168.0.2
-constexpr uint16_t TCP_PORT_A           = 6041;
+constexpr uint16_t TCP_PORT_A           = DEFAULT_PORT_BASE + LINK_PORT_OFFSET;
 constexpr uint16_t TCP_PORT_B           = 7777;
 
 // ---- Fake UDP transport ----------------------------------------------------
@@ -161,7 +162,7 @@ TEST_CASE("controller_ip and tcp_port are zero before first OFFER",
 
     DeviceIdentity   id  = make_identity();
     FakeUdpTransport udp;
-    DiscoveryClient  d(udp, id);
+    DiscoveryClient  d(udp, id, DISCOVERY_PORT);
 
     CHECK(d.controller_ip() == 0u);
     CHECK(d.tcp_port()      == 0u);
@@ -173,7 +174,7 @@ TEST_CASE("first poll() lazy-binds on an ephemeral port", "[discovery]") {
 
     DeviceIdentity   id  = make_identity();
     FakeUdpTransport udp;
-    DiscoveryClient  d(udp, id);
+    DiscoveryClient  d(udp, id, DISCOVERY_PORT);
 
     d.poll();
 
@@ -191,7 +192,7 @@ TEST_CASE("DISCOVER carries magic, type, uid, and version", "[discovery]") {
 
     DeviceIdentity   id  = make_identity("sim-foo", "0.54+d");
     FakeUdpTransport udp;
-    DiscoveryClient  d(udp, id);
+    DiscoveryClient  d(udp, id, DISCOVERY_PORT);
 
     d.poll();
 
@@ -218,7 +219,7 @@ TEST_CASE("DISCOVER sends an empty version slot as all zeros", "[discovery]") {
 
     DeviceIdentity   id  = make_identity("sim-foo");
     FakeUdpTransport udp;
-    DiscoveryClient  d(udp, id);
+    DiscoveryClient  d(udp, id, DISCOVERY_PORT);
 
     d.poll();
 
@@ -234,7 +235,7 @@ TEST_CASE("DISCOVER truncates a long version to the 16-byte slot", "[discovery]"
     // 20 chars: fits the in-memory buffer, overflows the wire slot.
     DeviceIdentity   id  = make_identity("sim-foo", "0123456789abcdefWXYZ");
     FakeUdpTransport udp;
-    DiscoveryClient  d(udp, id);
+    DiscoveryClient  d(udp, id, DISCOVERY_PORT);
 
     d.poll();
 
@@ -249,7 +250,7 @@ TEST_CASE("DISCOVER goes to broadcast on default dst_ip", "[discovery]") {
 
     DeviceIdentity   id  = make_identity();
     FakeUdpTransport udp;
-    DiscoveryClient  d(udp, id);
+    DiscoveryClient  d(udp, id, DISCOVERY_PORT);
 
     d.poll();
 
@@ -264,7 +265,7 @@ TEST_CASE("DISCOVER honors a configured dst_ip (sim loopback path)",
 
     DeviceIdentity   id  = make_identity();
     FakeUdpTransport udp;
-    DiscoveryClient  d(udp, id, LOOPBACK_BE);
+    DiscoveryClient  d(udp, id, DISCOVERY_PORT, LOOPBACK_BE);
 
     d.poll();
 
@@ -282,7 +283,7 @@ TEST_CASE("polls within one interval do not produce a second DISCOVER",
 
     DeviceIdentity   id  = make_identity();
     FakeUdpTransport udp;
-    DiscoveryClient  d(udp, id);
+    DiscoveryClient  d(udp, id, DISCOVERY_PORT);
 
     d.poll();
     REQUIRE(udp.sent.size() == 1);
@@ -306,7 +307,7 @@ TEST_CASE("a valid OFFER populates controller_ip and tcp_port",
 
     DeviceIdentity   id  = make_identity();
     FakeUdpTransport udp;
-    DiscoveryClient  d(udp, id);
+    DiscoveryClient  d(udp, id, DISCOVERY_PORT);
 
     d.poll();
     udp.inject(build_offer(CONTROLLER_IP_A, TCP_PORT_A));
@@ -321,7 +322,7 @@ TEST_CASE("the most recent OFFER wins", "[discovery]") {
 
     DeviceIdentity   id  = make_identity();
     FakeUdpTransport udp;
-    DiscoveryClient  d(udp, id);
+    DiscoveryClient  d(udp, id, DISCOVERY_PORT);
 
     d.poll();
     udp.inject(build_offer(CONTROLLER_IP_A, TCP_PORT_A));
@@ -337,7 +338,7 @@ TEST_CASE("malformed OFFERs are ignored", "[discovery]") {
 
     DeviceIdentity   id  = make_identity();
     FakeUdpTransport udp;
-    DiscoveryClient  d(udp, id);
+    DiscoveryClient  d(udp, id, DISCOVERY_PORT);
 
     d.poll();
 
@@ -371,7 +372,7 @@ TEST_CASE("bind failure is silent and retried next tick", "[discovery]") {
 
     DeviceIdentity   id  = make_identity();
     FakeUdpTransport udp;
-    DiscoveryClient  d(udp, id);
+    DiscoveryClient  d(udp, id, DISCOVERY_PORT);
 
     udp.force_bind_fail = true;
     d.poll();
@@ -389,7 +390,7 @@ TEST_CASE("send failure closes the socket", "[discovery]") {
 
     DeviceIdentity   id  = make_identity();
     FakeUdpTransport udp;
-    DiscoveryClient  d(udp, id);
+    DiscoveryClient  d(udp, id, DISCOVERY_PORT);
 
     udp.force_send_fail = true;
     d.poll();
@@ -403,7 +404,7 @@ TEST_CASE("recv error closes the socket", "[discovery]") {
 
     DeviceIdentity   id  = make_identity();
     FakeUdpTransport udp;
-    DiscoveryClient  d(udp, id);
+    DiscoveryClient  d(udp, id, DISCOVERY_PORT);
 
     d.poll();
     REQUIRE(udp.is_bound());
@@ -420,7 +421,7 @@ TEST_CASE("has_fresh_offer tracks OFFER recency", "[discovery]") {
 
     DeviceIdentity   id  = make_identity();
     FakeUdpTransport udp;
-    DiscoveryClient  d(udp, id);
+    DiscoveryClient  d(udp, id, DISCOVERY_PORT);
 
     CHECK_FALSE(d.has_fresh_offer());
 

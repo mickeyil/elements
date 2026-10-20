@@ -7,6 +7,7 @@
 
 #include "platform/device_identity.h"
 #include "controller/discovery.h"
+#include "controller/link_protocol.h"
 #include "controller/log_sender.h"
 #include "controller/slog.h"
 #include "test_platform_clock.h"
@@ -15,7 +16,9 @@
 namespace {
 
 constexpr uint32_t CONTROLLER_IP = 0x0100007F;  // 127.0.0.1, network order
-constexpr uint16_t EXPECTED_LOG_PORT = 6044;
+constexpr uint16_t DISCOVERY_PORT = DEFAULT_PORT_BASE + DISCOVERY_PORT_OFFSET;
+constexpr uint16_t LINK_PORT = DEFAULT_PORT_BASE + LINK_PORT_OFFSET;
+constexpr uint16_t LOG_PORT = DEFAULT_PORT_BASE + LOG_PORT_OFFSET;
 
 class FakeUdpTransport : public UdpTransport
 {
@@ -42,7 +45,7 @@ public:
         const size_t take = std::min(n, pkt.size());
         std::memcpy(dst, pkt.data(), take);
         *src_ip = CONTROLLER_IP;
-        *src_port = 6040;
+        *src_port = DISCOVERY_PORT;
         return static_cast<int>(take);
     }
 
@@ -91,8 +94,8 @@ struct Harness
     DeviceIdentity identity;
     FakeUdpTransport discovery_udp;
     FakeUdpTransport log_udp;
-    DiscoveryClient discovery{discovery_udp, identity};
-    LogSender sender{log_udp, discovery, identity};
+    DiscoveryClient discovery{discovery_udp, identity, DISCOVERY_PORT};
+    LogSender sender{log_udp, discovery, identity, LOG_PORT};
 
     int64_t now = 1'000'000;
 
@@ -112,7 +115,7 @@ struct Harness
 
     void offer()
     {
-        discovery_udp.inbox.push_back(make_offer(CONTROLLER_IP, 6041));
+        discovery_udp.inbox.push_back(make_offer(CONTROLLER_IP, LINK_PORT));
         discovery.poll();
     }
 };
@@ -144,7 +147,7 @@ TEST_CASE("a fresh OFFER opens the gate and records ship encoded")
 
     REQUIRE(h.log_udp.sent.size() == 1);
     CHECK(h.log_udp.last_dst_ip == CONTROLLER_IP);
-    CHECK(h.log_udp.last_dst_port == EXPECTED_LOG_PORT);
+    CHECK(h.log_udp.last_dst_port == LOG_PORT);
     CHECK(h.log_udp.sent[0] ==
           expected_datagram("sim-log", 0xAABBCCDD, 1, 3'345,
                             SLOG_LEVEL_WARN, "wifi flaky"));

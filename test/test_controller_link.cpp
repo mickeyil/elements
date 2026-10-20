@@ -25,7 +25,8 @@
 namespace {
 
 constexpr uint32_t CONTROLLER_IP = 0x0100007F;  // 127.0.0.1, network order
-constexpr uint16_t CONTROLLER_PORT = 6041;
+constexpr uint16_t DISCOVERY_PORT = DEFAULT_PORT_BASE + DISCOVERY_PORT_OFFSET;
+constexpr uint16_t CONTROLLER_PORT = DEFAULT_PORT_BASE + LINK_PORT_OFFSET;
 
 // ---------------------------------------------------------------------------
 // Fakes
@@ -57,7 +58,7 @@ public:
         const size_t take = std::min(n, pkt.size());
         std::memcpy(dst, pkt.data(), take);
         *src_ip = CONTROLLER_IP;
-        *src_port = 6040;
+        *src_port = DISCOVERY_PORT;
         return static_cast<int>(take);
     }
 
@@ -216,7 +217,7 @@ struct Harness
     DeviceIdentity identity;
     FakeNetworkInterface net;
     FakeUdpTransport udp;
-    DiscoveryClient discovery{udp, identity};
+    DiscoveryClient discovery{udp, identity, DISCOVERY_PORT};
     FakeTcpTransport tcp;
     ControllerLink link{net, discovery, tcp, identity, handler};
 

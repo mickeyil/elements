@@ -28,13 +28,13 @@ from pathlib import Path
 
 from .config import (
     DEFAULT_CONFIG_PATH,
-    DEFAULT_FRAME_PORT,
     Config,
     ConfigError,
     load_config,
     validate_device_uid,
 )
 from .procs import child_env
+from .wire import DEFAULT_PORT_BASE, MAX_PORT_BASE
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 BUILD_DIR = REPO_ROOT / 'build'
@@ -97,12 +97,12 @@ def build_sim_command(
     device_uid: str,
     *,
     controller_host: str = DEFAULT_CONTROLLER_HOST,
-    frame_port: int = DEFAULT_FRAME_PORT,
+    port_base: int = DEFAULT_PORT_BASE,
     sim_device_bin: Path = SIM_DEVICE_BIN,
 ) -> list[str]:
     """Build the sim_device argv. The same list is reused for every re-exec."""
-    if not (1 <= frame_port <= 65535):
-        raise ValueError(f'--frame-port must be 1-65535, got {frame_port}')
+    if not (1 <= port_base <= MAX_PORT_BASE):
+        raise ValueError(f'--port-base must be 1-{MAX_PORT_BASE}, got {port_base}')
     if not sim_device_bin.is_file():
         raise ValueError(
             f"sim_device not built at {sim_device_bin}; run './elemctl setup'"
@@ -112,7 +112,7 @@ def build_sim_command(
         str(sim_device_bin),
         '--device-uid', device_uid,
         '--controller-host', controller_host,
-        '--frame-port', str(frame_port),
+        '--port-base', str(port_base),
     ]
 
 
@@ -198,9 +198,9 @@ def main() -> None:
         help='controller IPv4 for unicast discovery (default: %(default)s)',
     )
     parser.add_argument(
-        '--frame-port', type=int, default=None,
-        help='controller frame-preview UDP port (default: the config\'s '
-             f'controller.frame_port, else {DEFAULT_FRAME_PORT})',
+        '--port-base', type=int, default=DEFAULT_PORT_BASE,
+        help="the controller's port base (default: %(default)s); match the "
+             "server's --port-base",
     )
     parser.add_argument(
         '--storage-root', default=str(REPO_ROOT / 'local'),
@@ -228,15 +228,11 @@ def main() -> None:
         print(f'elemctl sim: {error}', file=sys.stderr)
         sys.exit(2)
 
-    frame_port = args.frame_port
-    if frame_port is None:
-        frame_port = config.frame_port if config is not None else DEFAULT_FRAME_PORT
-
     try:
         cmd = build_sim_command(
             device_uid,
             controller_host=args.controller_host,
-            frame_port=frame_port,
+            port_base=args.port_base,
         )
     except ValueError as e:
         print(f'elemctl sim: {e}', file=sys.stderr)

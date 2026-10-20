@@ -9,9 +9,6 @@
 
 namespace {
 
-// Broadcast destination for DISCOVER; the controller listens here.
-constexpr uint16_t DISCOVERY_PORT = 6040;
-
 // DISCOVER broadcast period.
 constexpr int64_t BROADCAST_INTERVAL_US = 1'500'000;  // 1.5 s
 
@@ -19,7 +16,7 @@ constexpr int64_t BROADCAST_INTERVAL_US = 1'500'000;  // 1.5 s
 // controller as gone.
 constexpr int64_t OFFER_FRESH_WINDOW_US = 2 * BROADCAST_INTERVAL_US;
 
-// Magic prefix; filters unrelated UDP traffic on DISCOVERY_PORT.
+// Magic prefix; filters unrelated UDP traffic on the discovery port.
 constexpr uint16_t MAGIC = 0xD1CC;
 
 constexpr uint8_t PKT_DISCOVER = 0x01;
@@ -46,8 +43,8 @@ constexpr size_t OFFER_OFF_PORT = 7;
 }  // namespace
 
 DiscoveryClient::DiscoveryClient(UdpTransport& udp, const DeviceIdentity& identity,
-                                 uint32_t dst_ip)
-    : _udp(udp), _identity(identity), _dst_ip(dst_ip)
+                                 uint16_t port, uint32_t dst_ip)
+    : _udp(udp), _identity(identity), _port(port), _dst_ip(dst_ip)
 {
     // Bind is lazy: Wi-Fi may not be up at boot.
 }
@@ -90,7 +87,7 @@ void DiscoveryClient::send_discover_()
                                         static_cast<size_t>(VERSION_SIZE));
     std::memcpy(pkt + DISCOVER_OFF_VERSION, _identity.version, version_len);
 
-    if (!_udp.send(pkt, sizeof(pkt), _dst_ip, DISCOVERY_PORT)) {
+    if (!_udp.send(pkt, sizeof(pkt), _dst_ip, _port)) {
         // Send failed: close so next tick rebinds.
         _udp.close();
         return;

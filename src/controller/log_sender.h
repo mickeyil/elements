@@ -15,16 +15,14 @@ struct DeviceIdentity;
 // nobody listens is gone, and the controller reports sequence gaps
 // rather than recovering them.
 //
-// The port is a compile-time constant on the device, like the
-// discovery and sync ports; controller.log_port in the config must
-// match it. Wire format is in log_sender.cpp, mirrored by the
-// controller's wire.py.
+// The port is the controller's log port (link_protocol.h). Wire
+// format is in log_sender.cpp, mirrored by the controller's wire.py.
 
 class LogSender
 {
 public:
     LogSender(UdpTransport& udp, const DiscoveryClient& discovery,
-              const DeviceIdentity& identity);
+              const DeviceIdentity& identity, uint16_t port);
 
     // Send up to a few records this tick. link_ready is the owner's
     // controller-liveness signal alongside discovery freshness.
@@ -34,4 +32,5 @@ private:
     UdpTransport&          _udp;
     const DiscoveryClient& _discovery;
     const DeviceIdentity&  _identity;
+    const uint16_t         _port;
 };

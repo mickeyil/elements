@@ -110,9 +110,7 @@ def make_service(tmp_path, with_program=True, ota_factory=None, devices=None):
         (tmp_path / 'prog.py').write_text(PROGRAM)
     # The image path is pinned inside tmp_path so the repo's own build
     # output never leaks into a test.
-    config = Config(discovery_port=6040, link_port=6041, frame_port=6042,
-                    sync_port=6043, log_port=6044,
-                    devices=devices or [DeviceConfig('sim-a', 'main', 30)],
+    config = Config(devices=devices or [DeviceConfig('sim-a', 'main', 30)],
                     animations_dir=str(tmp_path),
                     firmware_image=str(tmp_path / 'fw' / 'firmware.bin'))
     hub = FakeHub()
@@ -127,8 +125,7 @@ def make_service_with_config(tmp_path):
     persist (make_service leaves config_path None)."""
     (tmp_path / 'prog.py').write_text(PROGRAM)
     doc = {
-        'controller': {'discovery_port': 6040, 'link_port': 6041,
-                       'frame_port': 6042, 'sync_port': 6043},
+        'controller': {},
         'devices': [{'device_uid': 'sim-a', 'strip_id': 'main', 'length': 30}],
     }
     config_path = tmp_path / 'config.json'
@@ -919,7 +916,7 @@ def test_update_firmware_starts_a_transfer_to_the_discovered_address(tmp_path, f
     (runner,) = fake_ota.instances
     assert runner.started
     assert runner.kwargs['device_ip'] == '10.0.0.9'
-    assert runner.kwargs['listen_port'] == service._config.ota_port
+    assert runner.kwargs['listen_port'] == wire.DEFAULT_PORTS.ota
     assert str(runner.kwargs['image_path']).endswith('firmware.bin')
     assert _state(service)['firmware']['update']['phase'] == 'inviting'
 

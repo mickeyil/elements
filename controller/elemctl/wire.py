@@ -36,6 +36,41 @@ from dataclasses import dataclass
 
 PROTOCOL_VERSION = 7
 
+# The controller's well-known ports: one base, fixed offsets. --port-base
+# moves the whole set, so a second controller can share a host.
+DEFAULT_PORT_BASE = 6040
+DISCOVERY_PORT_OFFSET = 0   # UDP: DISCOVER in, OFFER out
+LINK_PORT_OFFSET      = 1   # TCP: the device link
+FRAME_PORT_OFFSET     = 2   # UDP: sim preview frames
+SYNC_PORT_OFFSET      = 3   # UDP: clock sync
+LOG_PORT_OFFSET       = 4   # UDP: device log records
+OTA_PORT_OFFSET       = 5   # TCP: espota transfer
+MAX_PORT_BASE = 65535 - OTA_PORT_OFFSET
+
+
+@dataclass(frozen=True)
+class Ports:
+    discovery: int
+    link: int
+    frame: int
+    sync: int
+    log: int
+    ota: int
+
+    @classmethod
+    def from_base(cls, base):
+        if not 1 <= base <= MAX_PORT_BASE:
+            raise ValueError(f'port base must be 1-{MAX_PORT_BASE}, got {base}')
+        return cls(discovery=base + DISCOVERY_PORT_OFFSET,
+                   link=base + LINK_PORT_OFFSET,
+                   frame=base + FRAME_PORT_OFFSET,
+                   sync=base + SYNC_PORT_OFFSET,
+                   log=base + LOG_PORT_OFFSET,
+                   ota=base + OTA_PORT_OFFSET)
+
+
+DEFAULT_PORTS = Ports.from_base(DEFAULT_PORT_BASE)
+
 CMD_REGISTER             = 0x00
 CMD_SET_PROFILE          = 0x01
 CMD_LOAD                 = 0x10
@@ -402,7 +437,7 @@ def parse_local_animations(payload):
     return records
 
 
-# ---- Discovery (UDP 6040) ------------------------------------------------------
+# ---- Discovery (UDP, Ports.discovery) -----------------------------------------
 
 @dataclass(frozen=True)
 class DiscoverMsg:
@@ -448,7 +483,7 @@ def encode_offer(ipv4, tcp_port):
             + ip_bytes + _U16.pack(tcp_port))
 
 
-# ---- Clock sync (UDP 6043) -----------------------------------------------------
+# ---- Clock sync (UDP, Ports.sync) ----------------------------------------------
 
 @dataclass(frozen=True)
 class SyncPing:
@@ -483,7 +518,7 @@ def encode_sync_pong(controller_boot_token, seq, t1_us, t2_us, t3_us):
                            t1_us, t2_us, t3_us)
 
 
-# ---- Sim frame previews (UDP 6042) ----------------------------------------------
+# ---- Sim frame previews (UDP, Ports.frame) --------------------------------------
 
 @dataclass(frozen=True)
 class FramePreview:
@@ -512,7 +547,7 @@ def parse_frame_preview(datagram):
                         t_ms=t_ms, rgb=bytes(rgb))
 
 
-# ---- Device logs (UDP 6044) --------------------------------------------------
+# ---- Device logs (UDP, Ports.log) --------------------------------------------
 
 _LOG_LEVELS = frozenset('IWE')
 

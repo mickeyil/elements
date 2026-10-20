@@ -8,6 +8,7 @@ it favors observable behavior over speed; expect ~20 seconds.
 """
 
 import os
+import socket
 import subprocess
 import time
 
@@ -28,18 +29,41 @@ UID = 'sim-hubtest'
 
 
 @pytest.fixture
-def hub():
-    # 6040/6043/6044 are compile-time well-known on the device; the link
-    # and frame ports travel in the OFFER and argv, so they can be
-    # ephemeral.
-    h = DeviceHub(discovery_port=6040, link_port=0, frame_port=0,
-                  sync_port=6043, log_port=6044)
+def port_base():
+    """A base whose hub ports are all free right now, so the test runs
+    beside a live controller."""
+    listeners = [
+        (wire.DISCOVERY_PORT_OFFSET, socket.SOCK_DGRAM),
+        (wire.LINK_PORT_OFFSET, socket.SOCK_STREAM),
+        (wire.FRAME_PORT_OFFSET, socket.SOCK_DGRAM),
+        (wire.SYNC_PORT_OFFSET, socket.SOCK_DGRAM),
+        (wire.LOG_PORT_OFFSET, socket.SOCK_DGRAM),
+    ]
+    for base in range(26040, 32000, 10):
+        socks = []
+        try:
+            for offset, kind in listeners:
+                sock = socket.socket(socket.AF_INET, kind)
+                socks.append(sock)
+                sock.bind(('', base + offset))
+        except OSError:
+            continue
+        finally:
+            for sock in socks:
+                sock.close()
+        return base
+    pytest.fail('no free port base')
+
+
+@pytest.fixture
+def hub(port_base):
+    h = DeviceHub(wire.Ports.from_base(port_base))
     yield h
     h.close()
 
 
 @pytest.fixture
-def sim_factory(hub, tmp_path):
+def sim_factory(hub, port_base, tmp_path):
     if not SIM_DEVICE_BIN.is_file():
         pytest.skip(f'sim_device not built at {SIM_DEVICE_BIN}')
 
@@ -47,7 +71,7 @@ def sim_factory(hub, tmp_path):
     env = os.environ.copy()
     env[STORAGE_ROOT_ENV] = str(tmp_path)
     cmd = build_sim_command(UID, controller_host='127.0.0.1',
-                            frame_port=hub.frame_port)
+                            port_base=port_base)
 
     def launch():
         proc = subprocess.Popen(cmd, env=env)

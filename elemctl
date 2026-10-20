@@ -201,6 +201,10 @@ def _run_all(argv):
                         help='controller unix socket path (passed to both)')
     parser.add_argument('--log-dir', default=None,
                         help='logs directory (passed to both)')
+    parser.add_argument('--port-base', default=None,
+                        help='base of the six device ports (passed to both); to run '
+                             'a second controller beside a live one, move it and give '
+                             '--socket and --port new values too')
     parser.add_argument('--debug', action='store_true',
                         help='enable debug logging (server)')
     parser.add_argument('--host', default=None, help='HTTP bind host (web)')
@@ -210,7 +214,7 @@ def _run_all(argv):
     _build_all()
 
     shared = []
-    for opt in ('config', 'socket', 'log_dir'):
+    for opt in ('config', 'socket', 'log_dir', 'port_base'):
         value = getattr(args, opt)
         if value is not None:
             shared += ['--' + opt.replace('_', '-'), value]

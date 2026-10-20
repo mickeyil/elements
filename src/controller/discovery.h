@@ -25,7 +25,7 @@ constexpr uint32_t IPV4_BROADCAST = 0xFFFFFFFFu;
 class DiscoveryClient {
 public:
     DiscoveryClient(UdpTransport& udp, const DeviceIdentity& identity,
-                    uint32_t dst_ip = IPV4_BROADCAST);
+                    uint16_t port, uint32_t dst_ip = IPV4_BROADCAST);
 
     // Per-tick entry: bind if needed, drain replies, broadcast on schedule.
     void poll();
@@ -47,6 +47,7 @@ private:
 
     UdpTransport&         _udp;
     const DeviceIdentity& _identity;
+    const uint16_t        _port;
     const uint32_t        _dst_ip;
 
     // Latest OFFER fields; 0 = not yet received.

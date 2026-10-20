@@ -37,8 +37,7 @@ def clock():
 
 @pytest.fixture
 def hub(clock):
-    h = DeviceHub(discovery_port=0, link_port=0, frame_port=0, sync_port=0,
-                  log_port=0, clock_us=clock)
+    h = DeviceHub(wire.Ports(0, 0, 0, 0, 0, 0), clock_us=clock)
     yield h
     h.close()
 

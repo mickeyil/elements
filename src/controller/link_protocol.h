@@ -3,11 +3,28 @@
 #include <cstddef>
 #include <cstdint>
 
-// TCP controller-link protocol: opcodes, version, ACK status, sizes.
-// Opcode behavior lives with the handlers in src/command_handler.cpp.
+// TCP controller-link protocol: opcodes, version, ACK status, sizes, and
+// the controller's well-known ports. Opcode behavior lives with the
+// handlers in src/command_handler.cpp.
 
 // Bumped on every breaking wire change. Sent in REGISTER.
 constexpr uint8_t PROTOCOL_VERSION = 7;
+
+// ---- Ports ----------------------------------------------------------------
+
+// The controller's well-known ports: one base, fixed offsets. A device has to
+// find discovery, sync and log on its own, so it hardcodes them; the link port
+// rides in the OFFER, the sim's frame port on its command line, the OTA port
+// in the espota invite. `--port-base` on the controller and on sim_device
+// moves the whole set, so a second controller (a test run beside a live one)
+// can share a host. Mirrored in wire.py.
+constexpr uint16_t DEFAULT_PORT_BASE = 6040;
+constexpr uint16_t DISCOVERY_PORT_OFFSET = 0;  // UDP: DISCOVER in, OFFER out
+constexpr uint16_t LINK_PORT_OFFSET      = 1;  // TCP: the device link
+constexpr uint16_t FRAME_PORT_OFFSET     = 2;  // UDP: sim preview frames
+constexpr uint16_t SYNC_PORT_OFFSET      = 3;  // UDP: clock sync
+constexpr uint16_t LOG_PORT_OFFSET       = 4;  // UDP: device log records
+constexpr uint16_t OTA_PORT_OFFSET       = 5;  // TCP: espota transfer
 
 // ---- Session / configuration ----------------------------------------------
 

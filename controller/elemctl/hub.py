@@ -1,20 +1,21 @@
 """The device hub: every socket the controller shares with devices.
 
-Five listeners on the five well-known ports, one nonblocking poll
-loop, everything keyed by UID:
+Five listeners on five of the well-known ports (wire.Ports; the sixth,
+OTA, is ota.py's), one nonblocking poll loop, everything keyed by UID:
 
-  DiscoveryServer  UDP 6040  answers DISCOVER with OFFER
-  LinkServer       TCP 6041  REGISTER validation, commands out, ACKs back
-  FrameReceiver    UDP 6042  sim preview frames
-  SyncServer       UDP 6043  stateless clock-sync PONGs
-  LogReceiver      UDP 6044  device log records, logged here and passed up
+  DiscoveryServer  UDP base+0  answers DISCOVER with OFFER
+  LinkServer       TCP base+1  REGISTER validation, commands out, ACKs back
+  FrameReceiver    UDP base+2  sim preview frames
+  SyncServer       UDP base+3  stateless clock-sync PONGs
+  LogReceiver      UDP base+4  device log records, logged here and passed up
 
 The hub owns connections and bytes, never meaning: it matches each
 ACK to the callback that sent the command and reports device arrivals
 and departures; what a command or status means belongs to the session
 layer above.
 
-Construct a DeviceHub, then call poll(wanted_uids) once per tick; it
+Construct a DeviceHub with the Ports to bind (a 0 binds an ephemeral
+port, for tests), then call poll(wanted_uids) once per tick; it
 returns the events, preview frames and device log records that arrived.
 clock_us must be the same monotonic microsecond clock the session layer
 stamps program_start_us with; the sync server hands it to devices.
@@ -101,7 +102,7 @@ def _advertised_ip_toward(src_ip):
 
 def _udp_listener(port):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    # No SO_REUSEADDR: UDP has no TIME_WAIT, and an overlap must fail loudly.
     sock.bind(('', port))
     sock.setblocking(False)
     return sock
@@ -594,18 +595,17 @@ class LinkServer:
 class DeviceHub:
     """The device-facing half of the controller; see the module doc."""
 
-    def __init__(self, *, discovery_port, link_port, frame_port, sync_port,
-                 log_port, clock_us=None):
+    def __init__(self, ports, clock_us=None):
         self._clock_us = clock_us or (lambda: time.monotonic_ns() // 1000)
         self._boot_token = 0
         while self._boot_token == 0:   # 0 is the device's unseeded sentinel
             self._boot_token = random.getrandbits(32)
 
-        self._link_server = LinkServer(link_port)
-        self._discovery = DiscoveryServer(discovery_port, self._link_server.port)
-        self._frames = FrameReceiver(frame_port)
-        self._sync = SyncServer(sync_port, self._clock_us, self._boot_token)
-        self._logs = LogReceiver(log_port)
+        self._link_server = LinkServer(ports.link)
+        self._discovery = DiscoveryServer(ports.discovery, self._link_server.port)
+        self._frames = FrameReceiver(ports.frame)
+        self._sync = SyncServer(ports.sync, self._clock_us, self._boot_token)
+        self._logs = LogReceiver(ports.log)
 
     @property
     def boot_token(self):

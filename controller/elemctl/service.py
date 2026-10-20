@@ -112,25 +112,21 @@ _PANEL_MODES = {Intent.MANUAL: 'manual', Intent.PLAYING: 'program',
 class ControllerService:
     """Binds hub + session + library; the socket-free heart of the server.
 
-    Construct from a Config. A hub and clock are built from the config ports
-    unless injected (tests pass a fake hub and a fake clock); a library is
-    built over the configured animations directory unless injected.
+    Construct from a Config and the Ports to listen on. A hub and clock are
+    built unless injected (tests pass a fake hub and a fake clock); a library
+    is built over the configured animations directory unless injected.
     """
 
-    def __init__(self, config, *, config_path=None, hub=None, clock_us=None,
-                 library=None, ota_factory=None):
+    def __init__(self, config, ports=wire.DEFAULT_PORTS, *, config_path=None,
+                 hub=None, clock_us=None, library=None, ota_factory=None):
         if clock_us is None:
             clock_us = lambda: time.monotonic_ns() // 1000
         self._config = config
         self._config_path = config_path
         self._clock_us = clock_us
+        self._ports = ports
         if hub is None:
-            hub = DeviceHub(discovery_port=config.discovery_port,
-                            link_port=config.link_port,
-                            frame_port=config.frame_port,
-                            sync_port=config.sync_port,
-                            log_port=config.log_port,
-                            clock_us=clock_us)
+            hub = DeviceHub(ports, clock_us=clock_us)
         self._hub = hub
         self._session = Session(hub, config.devices, clock_us)
         self._device_status = DeviceStatusPoller(hub, clock_us)
@@ -582,7 +578,7 @@ class ControllerService:
                              'it already runs this image or a newer one')
 
         runner = self._ota_factory(uid=uid, device_ip=info.ip, image_path=image,
-                                   listen_port=self._config.ota_port)
+                                   listen_port=self._ports.ota)
         runner.start()
         self._ota = runner
         self._ota_logged_phase = None

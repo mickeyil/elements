@@ -57,6 +57,7 @@ from .controller_protocol import (
     parse_json_payload,
 )
 from .version import get_runtime_version
+from .wire import DEFAULT_PORT_BASE
 
 log = logging.getLogger(__name__)
 
@@ -1246,6 +1247,11 @@ def _build_parser() -> argparse.ArgumentParser:
         '--log-dir', default=None,
         help='logs directory (default: controller.logs_dir or <repo>/logs)',
     )
+    parser.add_argument(
+        '--port-base', type=int, default=DEFAULT_PORT_BASE,
+        help="the controller's port base, handed to the sims this page starts "
+             '(default: %(default)s); match the server\'s --port-base',
+    )
     return parser
 
 
@@ -1284,7 +1290,7 @@ def main() -> None:
     layouts = load_layouts_for_devices(config.devices, layouts_dir=layouts_dir)
     sim_devices = {dc.device_uid: dc.length for dc in config.devices if dc.device_type == 'sim'}
 
-    sims = SimManager(frame_port=config.frame_port, storage_root=REPO_ROOT / 'local')
+    sims = SimManager(port_base=args.port_base, storage_root=REPO_ROOT / 'local')
     server = WebUiServer(
         os.path.expanduser(args.socket),
         args.host,

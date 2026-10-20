@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "controller/clock_sync_client.h"
+#include "controller/link_protocol.h"
 #include "platform/device_identity.h"
 #include "controller/synced_clock.h"
 #include "platform/udp_transport.h"
@@ -33,7 +34,7 @@ namespace {
 constexpr uint32_t CONTROLLER_IP_A     = 0x0100A8C0;  // 192.168.0.1, BE
 constexpr uint32_t CONTROLLER_IP_B     = 0x0200A8C0;  // 192.168.0.2, BE
 constexpr uint32_t WRONG_IP            = 0x6402A8C0;  // 192.168.2.100, BE
-constexpr uint16_t SYNC_PORT           = 6043;
+constexpr uint16_t SYNC_PORT           = DEFAULT_PORT_BASE + SYNC_PORT_OFFSET;
 constexpr int64_t  BURST_INTERVAL_US   = 500 * 1000;
 constexpr int64_t  STEADY_INTERVAL_US  = 15'000'000LL;
 constexpr int64_t  BURST_DURATION_US   = 10'000'000LL;
@@ -197,7 +198,7 @@ TEST_CASE("set_controller(0) at construction is the idle path",
     SyncedClock      clock;
     DeviceIdentity   id  = make_identity();
     FakeUdpTransport udp;
-    ClockSyncClient  client(udp, clock, id);
+    ClockSyncClient  client(udp, clock, id, SYNC_PORT);
 
     client.poll();
     CHECK(udp.sent.empty());
@@ -212,7 +213,7 @@ TEST_CASE("set_controller(non-zero) starts a burst and binds lazily",
     SyncedClock      clock;
     DeviceIdentity   id  = make_identity();
     FakeUdpTransport udp;
-    ClockSyncClient  client(udp, clock, id);
+    ClockSyncClient  client(udp, clock, id, SYNC_PORT);
 
     client.set_controller(CONTROLLER_IP_A);
 
@@ -236,7 +237,7 @@ TEST_CASE("set_controller(0) closes UDP and leaves SyncedClock alone",
     SyncedClock      clock;
     DeviceIdentity   id  = make_identity();
     FakeUdpTransport udp;
-    ClockSyncClient  client(udp, clock, id);
+    ClockSyncClient  client(udp, clock, id, SYNC_PORT);
 
     client.set_controller(CONTROLLER_IP_A);
 
@@ -272,7 +273,7 @@ TEST_CASE("changing target IP resets filter and restarts burst",
     SyncedClock      clock;
     DeviceIdentity   id  = make_identity();
     FakeUdpTransport udp;
-    ClockSyncClient  client(udp, clock, id);
+    ClockSyncClient  client(udp, clock, id, SYNC_PORT);
 
     client.set_controller(CONTROLLER_IP_A);
     for (int i = 0; i < 3; ++i) {
@@ -309,7 +310,7 @@ TEST_CASE("first PING carries the identity boot_token",
     SyncedClock      clock;
     DeviceIdentity   id  = make_identity(0x12345678U);
     FakeUdpTransport udp;
-    ClockSyncClient  client(udp, clock, id);
+    ClockSyncClient  client(udp, clock, id, SYNC_PORT);
 
     client.set_controller(CONTROLLER_IP_A);
     client.poll();
@@ -330,7 +331,7 @@ TEST_CASE("first PONG seeds controller_boot_token and is processed",
     SyncedClock      clock;
     DeviceIdentity   id  = make_identity();
     FakeUdpTransport udp;
-    ClockSyncClient  client(udp, clock, id);
+    ClockSyncClient  client(udp, clock, id, SYNC_PORT);
 
     client.set_controller(CONTROLLER_IP_A);
 
@@ -352,7 +353,7 @@ TEST_CASE("controller_boot_token change clears SyncedClock and discards PONG",
     SyncedClock      clock;
     DeviceIdentity   id  = make_identity();
     FakeUdpTransport udp;
-    ClockSyncClient  client(udp, clock, id);
+    ClockSyncClient  client(udp, clock, id, SYNC_PORT);
 
     client.set_controller(CONTROLLER_IP_A);
     for (int i = 0; i < 3; ++i) {
@@ -399,7 +400,7 @@ TEST_CASE("PONG with wrong source IP is discarded",
     SyncedClock      clock;
     DeviceIdentity   id  = make_identity();
     FakeUdpTransport udp;
-    ClockSyncClient  client(udp, clock, id);
+    ClockSyncClient  client(udp, clock, id, SYNC_PORT);
 
     client.set_controller(CONTROLLER_IP_A);
     client.poll();
@@ -423,7 +424,7 @@ TEST_CASE("PONG with wrong size or type is discarded",
     SyncedClock      clock;
     DeviceIdentity   id  = make_identity();
     FakeUdpTransport udp;
-    ClockSyncClient  client(udp, clock, id);
+    ClockSyncClient  client(udp, clock, id, SYNC_PORT);
 
     client.set_controller(CONTROLLER_IP_A);
     client.poll();
@@ -457,7 +458,7 @@ TEST_CASE("PONG with wrong seq or t1 is discarded",
     SyncedClock      clock;
     DeviceIdentity   id  = make_identity();
     FakeUdpTransport udp;
-    ClockSyncClient  client(udp, clock, id);
+    ClockSyncClient  client(udp, clock, id, SYNC_PORT);
 
     client.set_controller(CONTROLLER_IP_A);
     client.poll();
@@ -486,7 +487,7 @@ TEST_CASE("PONG with RTT past the gate is dropped",
     SyncedClock      clock;
     DeviceIdentity   id  = make_identity();
     FakeUdpTransport udp;
-    ClockSyncClient  client(udp, clock, id);
+    ClockSyncClient  client(udp, clock, id, SYNC_PORT);
 
     client.set_controller(CONTROLLER_IP_A);
 
@@ -518,7 +519,7 @@ TEST_CASE("three accepted rounds apply a lease with the correct sign",
     SyncedClock      clock;
     DeviceIdentity   id  = make_identity();
     FakeUdpTransport udp;
-    ClockSyncClient  client(udp, clock, id);
+    ClockSyncClient  client(udp, clock, id, SYNC_PORT);
 
     client.set_controller(CONTROLLER_IP_A);
 
@@ -578,7 +579,7 @@ TEST_CASE("skew is 0 until a second offset is applied",
     SyncedClock      clock;
     DeviceIdentity   id  = make_identity();
     FakeUdpTransport udp;
-    ClockSyncClient  client(udp, clock, id);
+    ClockSyncClient  client(udp, clock, id, SYNC_PORT);
 
     CHECK(client.last_skew_us() == 0);
 
@@ -595,7 +596,7 @@ TEST_CASE("skew is the new applied offset minus the one it replaced",
     SyncedClock      clock;
     DeviceIdentity   id  = make_identity();
     FakeUdpTransport udp;
-    ClockSyncClient  client(udp, clock, id);
+    ClockSyncClient  client(udp, clock, id, SYNC_PORT);
 
     client.set_controller(CONTROLLER_IP_A);
     sync_up(client, udp, 0xAAAAU, 1'000'000);
@@ -625,7 +626,7 @@ TEST_CASE("controller reboot resets skew to 0",
     SyncedClock      clock;
     DeviceIdentity   id  = make_identity();
     FakeUdpTransport udp;
-    ClockSyncClient  client(udp, clock, id);
+    ClockSyncClient  client(udp, clock, id, SYNC_PORT);
 
     client.set_controller(CONTROLLER_IP_A);
     sync_up(client, udp, 0xAAAAU, 1'000'000);
@@ -667,7 +668,7 @@ TEST_CASE("burst exits on the first applied lease",
     SyncedClock      clock;
     DeviceIdentity   id  = make_identity();
     FakeUdpTransport udp;
-    ClockSyncClient  client(udp, clock, id);
+    ClockSyncClient  client(udp, clock, id, SYNC_PORT);
 
     client.set_controller(CONTROLLER_IP_A);
 
@@ -700,7 +701,7 @@ TEST_CASE("burst exits on deadline if no replies come back",
     SyncedClock      clock;
     DeviceIdentity   id  = make_identity();
     FakeUdpTransport udp;
-    ClockSyncClient  client(udp, clock, id);
+    ClockSyncClient  client(udp, clock, id, SYNC_PORT);
 
     client.set_controller(CONTROLLER_IP_A);
 
@@ -742,7 +743,7 @@ TEST_CASE("send failure closes the socket, next tick rebinds",
     SyncedClock      clock;
     DeviceIdentity   id  = make_identity();
     FakeUdpTransport udp;
-    ClockSyncClient  client(udp, clock, id);
+    ClockSyncClient  client(udp, clock, id, SYNC_PORT);
 
     client.set_controller(CONTROLLER_IP_A);
 
@@ -767,7 +768,7 @@ TEST_CASE("recv error closes the socket and skips this tick's send",
     SyncedClock      clock;
     DeviceIdentity   id  = make_identity();
     FakeUdpTransport udp;
-    ClockSyncClient  client(udp, clock, id);
+    ClockSyncClient  client(udp, clock, id, SYNC_PORT);
 
     client.set_controller(CONTROLLER_IP_A);
     client.poll();

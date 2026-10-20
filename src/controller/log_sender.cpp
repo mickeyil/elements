@@ -10,8 +10,6 @@
 
 namespace {
 
-constexpr uint16_t LOG_PORT = 6044;
-
 // Filters unrelated traffic on the port; version starts the format's
 // growth story.
 constexpr uint16_t LOG_MAGIC   = 0xD16C;
@@ -27,8 +25,8 @@ constexpr int MAX_SENDS_PER_TICK = 4;
 }  // namespace
 
 LogSender::LogSender(UdpTransport& udp, const DiscoveryClient& discovery,
-                       const DeviceIdentity& identity)
-    : _udp(udp), _discovery(discovery), _identity(identity)
+                       const DeviceIdentity& identity, uint16_t port)
+    : _udp(udp), _discovery(discovery), _identity(identity), _port(port)
 {
 }
 
@@ -64,7 +62,7 @@ void LogSender::tick(bool link_ready)
                       strnlen(rec.text, sizeof(rec.text)));
         if (!w.ok()) return;   // cannot happen with these sizes
 
-        if (!_udp.send(pkt, w.bytes_written(), ip, LOG_PORT)) {
+        if (!_udp.send(pkt, w.bytes_written(), ip, _port)) {
             return;   // keep the record; try again next tick
         }
         slog_pop();

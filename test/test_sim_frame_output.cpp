@@ -3,6 +3,7 @@
 #include <cstring>
 #include <vector>
 
+#include "controller/link_protocol.h"
 #include "platform/device_identity.h"
 #include "platform/sim/sim_frame_output.h"
 #include "core/strip.h"
@@ -11,7 +12,7 @@
 namespace {
 
 constexpr uint32_t DST_IP = 0x0100007F;  // 127.0.0.1, network order
-constexpr uint16_t DST_PORT = 6042;
+constexpr uint16_t DST_PORT = DEFAULT_PORT_BASE + FRAME_PORT_OFFSET;
 
 class FakeUdpTransport : public UdpTransport
 {

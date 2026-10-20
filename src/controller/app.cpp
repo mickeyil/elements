@@ -2,6 +2,7 @@
 
 #include "platform/frame_output.h"
 #include "controller/hardware_profile_store.h"
+#include "controller/link_protocol.h"
 #include "controller/local_animation.h"
 #include "platform/network_interface.h"
 #include "platform/platform_clock.h"
@@ -26,7 +27,8 @@ App::App(NetInterface& network,
          KeyValueStore&    profile_kv,
          SystemPlatform&   system,
          FrameOutput&      output,
-         const DeviceIdentity& identity)
+         const DeviceIdentity& identity,
+         uint16_t          port_base)
     : _network(network),
       _output(output),
       _playback(_clock),
@@ -34,8 +36,8 @@ App::App(NetInterface& network,
       _ctx{_playback, _animations, profile_kv, _status, system},
       _handler(_ctx),
       _link(network, discovery, tcp, identity, _handler),
-      _sync(sync_udp, _clock, identity),
-      _log_sender(log_udp, discovery, identity)
+      _sync(sync_udp, _clock, identity, port_base + SYNC_PORT_OFFSET),
+      _log_sender(log_udp, discovery, identity, port_base + LOG_PORT_OFFSET)
 {
 }
 

@@ -13,6 +13,7 @@
 #include "platform/esp32/esp_tcp_transport.h"
 #include "platform/esp32/esp_udp_transport.h"
 #include "controller/hardware_profile_store.h"
+#include "controller/link_protocol.h"
 #include "platform/esp32/nvs_key_value_store.h"
 #include "controller/slog.h"
 #include "platform/wifi_cred_store.h"
@@ -55,7 +56,8 @@ EspFrameOutput    g_output;
 // only after setup() has assigned this.
 DeviceIdentity g_identity;
 
-DiscoveryClient g_discovery(g_discovery_udp, g_identity);
+DiscoveryClient g_discovery(g_discovery_udp, g_identity,
+                            DEFAULT_PORT_BASE + DISCOVERY_PORT_OFFSET);
 
 // App construction touches the file store through AnimationStore. Keep
 // it out of global initialization so an erased LittleFS partition is not
@@ -111,7 +113,8 @@ void setup()
     }
 
     static App app(g_network, g_discovery, g_tcp, g_sync_udp, g_log_udp,
-                   g_files, g_profile_kv, g_system, g_output, g_identity);
+                   g_files, g_profile_kv, g_system, g_output, g_identity,
+                   DEFAULT_PORT_BASE);
     g_app = &app;
 
     FastLED.addLeds<WS2811, LED_PIN, RGB>(g_output.leds(), MAX_STRIP_PIXELS);

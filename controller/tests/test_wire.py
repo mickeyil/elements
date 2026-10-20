@@ -114,6 +114,29 @@ def test_link_protocol_constants_match_cpp():
     assert wire.TCP_MSG_MAX == cpp['MAX_BLOB_BYTES'] + 256
 
 
+def test_ports_match_cpp():
+    cpp = _cpp_constants('src/controller/link_protocol.h')
+    expected = {
+        'DEFAULT_PORT_BASE': wire.DEFAULT_PORT_BASE,
+        'DISCOVERY_PORT_OFFSET': wire.DISCOVERY_PORT_OFFSET,
+        'LINK_PORT_OFFSET': wire.LINK_PORT_OFFSET,
+        'FRAME_PORT_OFFSET': wire.FRAME_PORT_OFFSET,
+        'SYNC_PORT_OFFSET': wire.SYNC_PORT_OFFSET,
+        'LOG_PORT_OFFSET': wire.LOG_PORT_OFFSET,
+        'OTA_PORT_OFFSET': wire.OTA_PORT_OFFSET,
+    }
+    for name, value in expected.items():
+        assert cpp[name] == value, f'{name}: cpp={cpp[name]} python={value}'
+
+
+def test_ports_from_base_moves_the_whole_set():
+    assert wire.DEFAULT_PORTS == wire.Ports(discovery=6040, link=6041, frame=6042,
+                                            sync=6043, log=6044, ota=6045)
+    assert wire.Ports.from_base(7040) == wire.Ports(7040, 7041, 7042, 7043, 7044, 7045)
+    with pytest.raises(ValueError, match='port base'):
+        wire.Ports.from_base(65535)
+
+
 def test_identity_and_store_sizes_match_cpp():
     identity = _cpp_constants('src/platform/device_identity.h')
     assert identity['UID_SIZE'] == wire.UID_SIZE
@@ -150,13 +173,9 @@ def test_sync_constants_match_cpp():
 
 
 def test_log_constants_match_cpp():
-    from elemctl.config import DEFAULT_LOG_PORT
     cpp = _cpp_constants('src/controller/log_sender.cpp')
     assert cpp['LOG_MAGIC'] == wire.LOG_MAGIC
     assert cpp['LOG_VERSION'] == wire.LOG_VERSION
-    # The device's port is compile-time; the config default must match
-    # it or devices log into the void.
-    assert cpp['LOG_PORT'] == DEFAULT_LOG_PORT
     # LOG_HEADER_BYTES is an expression in the C++ (uses UID_SIZE),
     # which the constant parser skips; check the same formula instead.
     assert wire.LOG_HEADER_BYTES == 2 + 1 + wire.UID_SIZE + 4 + 4 + 4 + 1

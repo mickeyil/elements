@@ -39,6 +39,7 @@ from .procs import exit_with_parent
 from .service import ControllerService
 from .slogger import configure_logger
 from .version import get_runtime_version
+from .wire import DEFAULT_PORT_BASE, Ports
 
 log = logging.getLogger(__name__)
 
@@ -330,7 +331,15 @@ def main() -> None:
     parser.add_argument('--log-dir', default=None,
                         help='logs directory (default: controller.logs_dir or <repo>/logs)')
     parser.add_argument('--debug', action='store_true', help='enable debug logging')
+    parser.add_argument('--port-base', type=int, default=DEFAULT_PORT_BASE,
+                        help='base of the six device ports, which sit at fixed '
+                             'offsets from it (default: %(default)s); move it to run '
+                             'a second controller beside a live one')
     args = parser.parse_args()
+    try:
+        ports = Ports.from_base(args.port_base)
+    except ValueError as e:
+        parser.error(str(e))
     exit_with_parent()
 
     log_level = 'DEBUG' if args.debug else 'INFO'
@@ -347,7 +356,7 @@ def main() -> None:
     log.info('elements controller started. version: %s', get_runtime_version())
     log.info('using config %s', config_path)
 
-    service = ControllerService(config, config_path=config_path)
+    service = ControllerService(config, ports, config_path=config_path)
     server = ControllerServer(service, os.path.expanduser(args.socket))
 
     def _on_signal(signum, frame):

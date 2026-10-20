@@ -27,7 +27,8 @@
 namespace {
 
 constexpr uint32_t CONTROLLER_IP = 0x0100007F;  // 127.0.0.1, network order
-constexpr uint16_t CONTROLLER_PORT = 6041;
+constexpr uint16_t DISCOVERY_PORT = DEFAULT_PORT_BASE + DISCOVERY_PORT_OFFSET;
+constexpr uint16_t CONTROLLER_PORT = DEFAULT_PORT_BASE + LINK_PORT_OFFSET;
 
 // ---------------------------------------------------------------------------
 // Fakes
@@ -64,7 +65,7 @@ public:
         const size_t take = std::min(n, pkt.size());
         std::memcpy(dst, pkt.data(), take);
         *src_ip = CONTROLLER_IP;
-        *src_port = 6040;
+        *src_port = DISCOVERY_PORT;
         return static_cast<int>(take);
     }
 
@@ -403,9 +404,9 @@ struct Harness
     RecordingSystemPlatform system{tcp};
     RecordingFrameOutput output;
     DeviceIdentity identity;
-    DiscoveryClient discovery{discovery_udp, identity};
+    DiscoveryClient discovery{discovery_udp, identity, DISCOVERY_PORT};
     App app{net, discovery, tcp, sync_udp, log_udp, files, kv, system,
-            output, identity};
+            output, identity, DEFAULT_PORT_BASE};
 
     int64_t now = 1'000'000;
 
@@ -796,9 +797,9 @@ TEST_CASE("boot resumes the stored background from the persisted store")
     DeviceIdentity id2;
     std::strcpy(id2.uid, "sim-app");
     id2.boot_token = 0x55667788;
-    DiscoveryClient discovery_client2{discovery2, id2};
+    DiscoveryClient discovery_client2{discovery2, id2, DISCOVERY_PORT};
     App app2{net2, discovery_client2, tcp2, sync2, log2, h.files, h.kv,
-             system2, output2, id2};
+             system2, output2, id2, DEFAULT_PORT_BASE};
     app2.begin();
 
     CHECK(app2.status().mode == DeviceMode::DetachedBackground);

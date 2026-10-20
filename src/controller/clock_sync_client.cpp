@@ -35,9 +35,6 @@ constexpr int64_t BURST_DURATION_SEC = 10;
 // Lease handed to SyncedClock with each apply.
 constexpr int64_t LEASE_SEC          = 55;
 
-// Sync UDP port; the controller config holds the same value.
-constexpr uint16_t SYNC_PORT = 6043;
-
 // Packet type bytes.
 constexpr uint8_t PKT_PING = 0x01;
 constexpr uint8_t PKT_PONG = 0x02;
@@ -55,8 +52,8 @@ constexpr size_t PONG_OFF_T3    = 25;
 }  // namespace
 
 ClockSyncClient::ClockSyncClient(UdpTransport& udp, SyncedClock& clock,
-                                 const DeviceIdentity& identity)
-    : _udp(udp), _clock(clock), _identity(identity)
+                                 const DeviceIdentity& identity, uint16_t port)
+    : _udp(udp), _clock(clock), _identity(identity), _port(port)
 {
     // Bind is lazy: at boot the Wi-Fi stack may not be up yet.
 }
@@ -179,7 +176,7 @@ void ClockSyncClient::send_ping_()
     std::memcpy(pkt + 1 + UID_SIZE + 4, &seq,                  4);
     std::memcpy(pkt + 1 + UID_SIZE + 8, &t1,                   8);
 
-    if (!_udp.send(pkt, sizeof(pkt), _target_ip, SYNC_PORT)) {
+    if (!_udp.send(pkt, sizeof(pkt), _target_ip, _port)) {
         // Send failed: close so next tick rebinds. The schedule is
         // unchanged, so the next poll() will retry immediately.
         _udp.close();

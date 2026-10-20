@@ -20,7 +20,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from .config import DEFAULT_FRAME_PORT
 from .procs import child_env
 from .sim import (
     MAX_REBOOTS,
@@ -32,6 +31,7 @@ from .sim import (
     RebootGuard,
     build_sim_command,
 )
+from .wire import DEFAULT_PORT_BASE
 
 log = logging.getLogger(__name__)
 
@@ -66,12 +66,12 @@ class SimManager:
         self,
         on_change: Callable[[], None] = lambda: None,
         *,
-        frame_port: int = DEFAULT_FRAME_PORT,
+        port_base: int = DEFAULT_PORT_BASE,
         storage_root: Path = REPO_ROOT / 'local',
         sim_device_bin: Path = SIM_DEVICE_BIN,
     ):
         self.on_change = on_change
-        self._frame_port = frame_port
+        self._port_base = port_base
         self._storage_root = storage_root
         self._sim_device_bin = sim_device_bin
         self._sims: dict[str, _Sim] = {}
@@ -91,7 +91,7 @@ class SimManager:
         if self.is_running(uid):
             raise ValueError(f'{uid} is already running')
         cmd = build_sim_command(
-            uid, frame_port=self._frame_port, sim_device_bin=self._sim_device_bin)
+            uid, port_base=self._port_base, sim_device_bin=self._sim_device_bin)
         # Registered before anything awaits, so a second start sees it running.
         sim = _Sim()
         self._sims[uid] = sim

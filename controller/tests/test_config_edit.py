@@ -5,10 +5,6 @@ import json
 import pytest
 
 from elemctl.config import (
-    DEFAULT_DISCOVERY_PORT,
-    DEFAULT_FRAME_PORT,
-    DEFAULT_LINK_PORT,
-    DEFAULT_SYNC_PORT,
     ConfigError,
     load_config,
     load_config_obj,
@@ -26,38 +22,33 @@ from elemctl.config_edit import (
 
 def test_load_config_obj_validates_raw_dict():
     cfg = load_config_obj({
-        "controller": {"frame_port": 9002},
+        "controller": {"logs_dir": "~/logs"},
         "devices": [{
             "device_uid": "sim-1",
             "strip_id": "main",
             "length": 60,
         }],
     })
-    assert cfg.frame_port == 9002
+    assert cfg.logs_dir == "~/logs"
     assert cfg.devices[0].device_uid == "sim-1"
 
 
 def test_load_config_doc_missing_returns_skeleton(tmp_path):
     path = tmp_path / "missing.json"
     doc = load_config_doc(str(path))
-    assert doc["controller"]["discovery_port"] == DEFAULT_DISCOVERY_PORT
-    assert doc["controller"]["link_port"] == DEFAULT_LINK_PORT
-    assert doc["controller"]["frame_port"] == DEFAULT_FRAME_PORT
-    assert doc["controller"]["sync_port"] == DEFAULT_SYNC_PORT
+    assert doc["controller"] == {}
     assert doc["devices"] == []
 
 
 def test_ensure_editor_shape_preserves_unknown_fields():
     doc = {
-        "controller": {"frame_port": 9100, "logs_dir": "~/logs"},
+        "controller": {"logs_dir": "~/logs", "animations_dir": "~/anims"},
         "devices": [],
         "notes": {"owner": "mickey"},
     }
     out = ensure_editor_shape(doc)
     assert out["notes"]["owner"] == "mickey"
-    assert out["controller"]["logs_dir"] == "~/logs"
-    assert out["controller"]["frame_port"] == 9100
-    assert out["controller"]["link_port"] == DEFAULT_LINK_PORT
+    assert out["controller"] == {"logs_dir": "~/logs", "animations_dir": "~/anims"}
 
 
 def test_make_add_remove_device_entry():
@@ -120,7 +111,6 @@ def test_save_config_doc_writes_valid_json_and_preserves_unknown_fields(tmp_path
     path = tmp_path / "config.json"
     doc = {
         "controller": {
-            "frame_port": 9002,
             "logs_dir": "~/logs",
         },
         "devices": [{
@@ -156,7 +146,7 @@ def test_save_config_doc_rejects_invalid_doc(tmp_path):
 def test_save_config_doc_allows_empty_devices(tmp_path):
     path = tmp_path / "config.json"
     doc = {
-        "controller": {"frame_port": DEFAULT_FRAME_PORT},
+        "controller": {},
         "devices": [],
     }
     save_config_doc(str(path), doc)
