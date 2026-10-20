@@ -112,19 +112,14 @@ def test_ota_port_must_not_duplicate_another_port(tmp_path):
 def test_firmware_settings_default(tmp_path):
     config = load_config(_write_config(tmp_path, _valid_config()))
     assert config.firmware_image is None
-    assert config.ota_password is None
     assert resolve_firmware_image(config) == REPO_ROOT / 'build/pio/esp32dev/firmware.bin'
     assert str(resolve_firmware_image(config)) == DEFAULT_FIRMWARE_IMAGE_PATH
 
 
 def test_firmware_settings_explicit(tmp_path):
-    doc = _valid_config(controller={
-        "firmware_image": "/srv/fw/firmware.bin",
-        "ota_password": "hunter2",
-    })
+    doc = _valid_config(controller={"firmware_image": "/srv/fw/firmware.bin"})
     config = load_config(_write_config(tmp_path, doc))
     assert resolve_firmware_image(config) == Path('/srv/fw/firmware.bin')
-    assert config.ota_password == "hunter2"
 
     # A relative image path is taken from the repo root, not the cwd.
     doc = _valid_config(controller={"firmware_image": "out/fw.bin"})
@@ -132,10 +127,9 @@ def test_firmware_settings_explicit(tmp_path):
     assert resolve_firmware_image(config) == REPO_ROOT / 'out/fw.bin'
 
 
-@pytest.mark.parametrize('field', ['firmware_image', 'ota_password'])
 @pytest.mark.parametrize('bad', ['', 5, True])
-def test_invalid_firmware_settings_rejected(tmp_path, field, bad):
-    doc = _valid_config(controller={field: bad})
+def test_invalid_firmware_settings_rejected(tmp_path, bad):
+    doc = _valid_config(controller={'firmware_image': bad})
     with pytest.raises(ConfigError):
         load_config(_write_config(tmp_path, doc))
 

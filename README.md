@@ -79,4 +79,4 @@ major from `src/platform/esp32/FIRMWARE_MAJOR`, a minor counted from
 firmware commits, `+d` for a dirty tree) that devices report in DISCOVER
 and the status page shows. After a build, the status page's device menu
 can push the new image over the air with "Update firmware"; updates are
-manual only.
+manual only and unauthenticated (any host on the LAN can flash a device).

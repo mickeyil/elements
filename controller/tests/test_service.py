@@ -784,9 +784,9 @@ class FakeOta:
 
     instances = []
 
-    def __init__(self, *, uid, device_ip, image_path, listen_port, password):
+    def __init__(self, *, uid, device_ip, image_path, listen_port):
         self.kwargs = dict(uid=uid, device_ip=device_ip, image_path=image_path,
-                           listen_port=listen_port, password=password)
+                           listen_port=listen_port)
         self.started = False
         self.state = {'uid': uid, 'phase': 'inviting', 'bytes_sent': 0,
                       'total_bytes': 0, 'error': None,
@@ -920,7 +920,6 @@ def test_update_firmware_starts_a_transfer_to_the_discovered_address(tmp_path, f
     assert runner.started
     assert runner.kwargs['device_ip'] == '10.0.0.9'
     assert runner.kwargs['listen_port'] == service._config.ota_port
-    assert runner.kwargs['password'] is None
     assert str(runner.kwargs['image_path']).endswith('firmware.bin')
     assert _state(service)['firmware']['update']['phase'] == 'inviting'
 

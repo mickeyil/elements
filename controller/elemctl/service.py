@@ -582,8 +582,7 @@ class ControllerService:
                              'it already runs this image or a newer one')
 
         runner = self._ota_factory(uid=uid, device_ip=info.ip, image_path=image,
-                                   listen_port=self._config.ota_port,
-                                   password=self._config.ota_password)
+                                   listen_port=self._config.ota_port)
         runner.start()
         self._ota = runner
         self._ota_logged_phase = None

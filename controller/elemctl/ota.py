@@ -7,13 +7,15 @@ PlatformIO nor a subprocess, and so progress is observable:
 
   1. Listen on TCP listen_port (all interfaces; the device connects back).
   2. UDP invite to device:3232, `"0 <listen_port> <size> <md5>\\n"`,
-     retried until the device answers `OK` or `AUTH <nonce>`.
-  3. On AUTH, answer `"200 <cnonce> <md5(md5(pw):nonce:cnonce)>\\n"`;
-     the device replies `OK` or an error text.
-  4. The device connects to listen_port. Stream the image in 1024-byte
+     retried until the device answers `OK`.
+  3. The device connects to listen_port. Stream the image in 1024-byte
      chunks, reading the device's ASCII byte-count reply after each.
-  5. The device verifies the md5, then sends `OK` (it reboots into the
+  4. The device verifies the md5, then sends `OK` (it reboots into the
      new image) or an error text, and closes.
+
+The transfer is unauthenticated by design: the firmware has no OTA
+password, so any host on the LAN can flash a device, the same trust the
+LAN already grants the controller.
 
 The wire strings and the chunk/ack rhythm follow the reference exactly;
 the timeouts are ours and finite everywhere, so a device that vanishes
@@ -38,9 +40,8 @@ log = logging.getLogger(__name__)
 # ArduinoOTA's default UDP port on the device.
 OTA_DEVICE_PORT = 3232
 
-# espota command codes.
+# espota's FLASH command code.
 _CMD_FLASH = 0
-_CMD_AUTH = 200
 
 # The reference streams 1024-byte chunks and reads one reply per chunk.
 _CHUNK_SIZE = 1024
@@ -59,17 +60,10 @@ class OtaError(Exception):
     """A step of the transfer failed; the message is shown to the operator."""
 
 
-def auth_response(password, nonce, cnonce):
-    """The digest ArduinoOTA expects for AUTH: md5(md5(pw):nonce:cnonce)."""
-    passmd5 = hashlib.md5(password.encode()).hexdigest()
-    return hashlib.md5(f'{passmd5}:{nonce}:{cnonce}'.encode()).hexdigest()
-
-
 class FirmwareUpdate:
     """One espota FLASH transfer of image_path to the device at device_ip.
 
-    uid only labels the snapshot. password is the device's OTA password,
-    or None for a device built without one. Timeouts are seconds:
+    uid only labels the snapshot. Timeouts are seconds:
       invite_timeout_s   per invite attempt, invite_attempts of them
       connect_timeout_s  for the device to connect back after accepting
       chunk_timeout_s    for each chunk's send and byte-count reply
@@ -77,7 +71,7 @@ class FirmwareUpdate:
                          (the device checks the md5 before answering)
     """
 
-    def __init__(self, uid, device_ip, image_path, listen_port, password=None, *,
+    def __init__(self, uid, device_ip, image_path, listen_port, *,
                  device_port=OTA_DEVICE_PORT, invite_timeout_s=3.0,
                  invite_attempts=10, connect_timeout_s=10.0,
                  chunk_timeout_s=10.0, result_timeout_s=60.0):
@@ -86,7 +80,6 @@ class FirmwareUpdate:
         self._device_port = device_port
         self._image_path = Path(image_path)
         self._listen_port = listen_port
-        self._password = password
         self._invite_timeout_s = invite_timeout_s
         self._invite_attempts = invite_attempts
         self._connect_timeout_s = connect_timeout_s
@@ -169,7 +162,7 @@ class FirmwareUpdate:
             self._stream(conn, image)
 
     def _invite(self, size, md5):
-        """Steps 2-3: invite until the device accepts; authenticate if asked."""
+        """Step 2: invite until the device accepts."""
         invite = f'{_CMD_FLASH} {self._listen_port} {size} {md5}\n'.encode()
         remote = (self._device_ip, self._device_port)
         # One socket for every attempt, unlike the reference's socket per
@@ -190,30 +183,10 @@ class FirmwareUpdate:
                                f'after {self._invite_attempts} invitations')
             if reply == 'OK':
                 return
-            if not reply.startswith('AUTH'):
-                raise OtaError(f'unexpected invitation reply: {reply!r}')
-
-            parts = reply.split()
-            if len(parts) < 2:
-                raise OtaError(f'malformed AUTH request: {reply!r}')
-            if self._password is None:
-                raise OtaError('device requires an OTA password '
-                               '(set controller.ota_password)')
-            nonce = parts[1]
-            # The device takes the cnonce as given; the reference derives
-            # it from the file name, size, md5 and address, and so do we.
-            cnonce = hashlib.md5(
-                f'{self._image_path}{size}{md5}{self._device_ip}'.encode()).hexdigest()
-            result = auth_response(self._password, nonce, cnonce)
-            try:
-                udp.sendto(f'{_CMD_AUTH} {cnonce} {result}\n'.encode(), remote)
-            except OSError as e:
-                raise OtaError(f'cannot reach {self._device_ip}: {e}') from e
-            reply = self._recv_from_device(udp, self._chunk_timeout_s)
-            if reply is None:
-                raise OtaError('no answer to authentication')
-            if reply != 'OK':
-                raise OtaError(f'authentication refused: {reply}')
+            if reply.startswith('AUTH'):
+                raise OtaError('device asked for an OTA password, which Elements '
+                               'firmware does not set; flash it over serial')
+            raise OtaError(f'unexpected invitation reply: {reply!r}')
 
     def _recv_from_device(self, udp, timeout_s):
         """The next datagram from the device's address within timeout_s, as
@@ -239,7 +212,7 @@ class FirmwareUpdate:
                 return data.decode(errors='replace').strip()
 
     def _stream(self, conn, image):
-        """Steps 4-5: chunks out, byte counts back, then the verdict."""
+        """Steps 3-4: chunks out, byte counts back, then the verdict."""
         conn.settimeout(self._chunk_timeout_s)
         reply = ''
         offset = 0

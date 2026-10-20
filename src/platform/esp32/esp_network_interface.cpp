@@ -31,10 +31,7 @@ void EspNetworkInterface::begin()
     // The controller aims the update at the address a device's DISCOVER
     // came from, so mDNS advertisement is not needed.
     ArduinoOTA.setMdnsEnabled(false);
-#ifdef ELEMENTS_OTA_PASSWORD
-    // Must match controller.ota_password on the controller.
-    ArduinoOTA.setPassword(ELEMENTS_OTA_PASSWORD);
-#endif
+    // No password: OTA is deliberately unauthenticated (the LAN is trusted).
     // Callbacks run inside ArduinoOTA.handle(), i.e. on the main loop,
     // which is what slog requires. The transfer itself blocks that loop
     // until the image is in, and on success ArduinoOTA restarts the chip

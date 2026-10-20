@@ -190,7 +190,6 @@ class Config:
     logs_dir: str | None = None        # override for logs directory
     ota_port: int = DEFAULT_OTA_PORT
     firmware_image: str | None = None  # override for the OTA image path
-    ota_password: str | None = None    # device ArduinoOTA password, if one is built in
 
 
 def resolve_runtime_path(
@@ -267,12 +266,6 @@ def load_config_obj(raw: dict) -> Config:
         if not isinstance(firmware_image, str) or not firmware_image:
             raise ConfigError("'controller.firmware_image' must be a non-empty string")
 
-    # Must match ELEMENTS_OTA_PASSWORD in the firmware build, when set.
-    ota_password = ctrl.get("ota_password")
-    if ota_password is not None:
-        if not isinstance(ota_password, str) or not ota_password:
-            raise ConfigError("'controller.ota_password' must be a non-empty string")
-
     # --- devices section ---
     devices_raw = raw.get("devices")
     if devices_raw is None:
@@ -344,5 +337,4 @@ def load_config_obj(raw: dict) -> Config:
         logs_dir=logs_dir,
         ota_port=ports["ota_port"],
         firmware_image=firmware_image,
-        ota_password=ota_password,
     )
