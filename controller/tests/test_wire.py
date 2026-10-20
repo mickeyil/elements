@@ -6,7 +6,6 @@ test that parses the constants out of the C++ headers so the two
 sides cannot drift silently.
 """
 
-import math
 import re
 import struct
 from pathlib import Path
@@ -19,7 +18,6 @@ from elemctl.wire import (
     LinkReader,
     WireError,
     encode_erase_animation,
-    encode_jump,
     encode_load,
     encode_manual,
     encode_message,
@@ -86,7 +84,6 @@ def test_link_protocol_constants_match_cpp():
         'CMD_SET_PROFILE': wire.CMD_SET_PROFILE,
         'CMD_LOAD': wire.CMD_LOAD,
         'CMD_START': wire.CMD_START,
-        'CMD_JUMP': wire.CMD_JUMP,
         'CMD_PAUSE': wire.CMD_PAUSE,
         'CMD_RESUME': wire.CMD_RESUME,
         'CMD_STOP': wire.CMD_STOP,
@@ -228,18 +225,6 @@ def test_encode_start_and_resume_vectors():
     expected_payload = struct.pack('<q', t)
     assert encode_start(t) == b'\x09\x00\x00\x00\x11' + expected_payload
     assert encode_resume(t) == b'\x09\x00\x00\x00\x14' + expected_payload
-
-
-def test_encode_jump_vector():
-    # The target travels as u32 whole ms, the compiler's own grid.
-    assert encode_jump(1500) == b'\x05\x00\x00\x00\x12' + struct.pack('<I', 1500)
-    assert encode_jump(0xFFFFFFFF)[5:] == b'\xff\xff\xff\xff'
-
-
-def test_encode_jump_rejects_non_u32():
-    for bad in (-1, 1 << 32, 1.5, math.nan, True):
-        with pytest.raises(WireError):
-            encode_jump(bad)
 
 
 def test_empty_payload_commands():

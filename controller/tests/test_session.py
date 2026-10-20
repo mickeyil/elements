@@ -133,7 +133,6 @@ def make_manifest(*strips, duration=10.0, loop=False):
             sid: CompiledStripArtifact(strip_id=sid, length=length, blob=blob)
             for sid, length, blob in strips
         },
-        safe_intervals=[(0, int(duration * 1000))],
         loop=loop,
     )
 

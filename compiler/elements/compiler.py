@@ -4,13 +4,12 @@ Pipeline:
     1. Validation (early) — bounds, params completeness
     2. Time resolution    — beats/sec -> absolute seconds -> whole milliseconds
     3. Layer inference    — events -> layers (time bin-packing, no merged map)
-    4. Buffer + view planning — pool buffers, PixelViewSpec records, per-event
+    4. Source resolution  — each source= to the event whose output it reads
+    5. Validation (late)  — timing checks
+    6. Buffer + view planning — pool buffers, PixelViewSpec records, per-event
        view indices, and copy ops that keep source data alive
-    5. Source resolution + required_start_ms via forward data-position tracing
-    6. Validation (late)  — timing checks
-    7. Safe interval analysis — dependency-aware per-strip safe intervals
-    8. Param resolution   — resolve animation params to binary-ready values
-    9. Blob emission      — serialize to the binary blob format
+    7. Param resolution   — resolve animation params to binary-ready values
+    8. Blob emission      — structural caps, then serialize to the blob format
 
 The byte layout lives in blob.py (docs/blob_format.md), enforced by
 src/core/decoder.cpp. Structural caps mirror src/core/blob_limits.h via limits.py.
@@ -27,13 +26,12 @@ from .types import (
     SecMarker, Forever, AnimDef, PixelGroup, StripDef, COLORS,
     ANIM_TYPES, TIME_PARAMS, REQUIRED_PARAMS, STATEFUL_TYPES,
     CHANNELS, DIRECTIONS,
-    CompiledStripArtifact, CompiledManifest, MemoryEstimate, ms_from_seconds,
+    CompiledStripArtifact, CompiledManifest, ms_from_seconds,
 )
 from .blob import (
     BlobProgram, BlobLayer, BlobEvent, PixelViewSpec, CopyOpSpec,
     emit_blob, pack_params, PIXV_NONE,
 )
-from .memory_estimate import estimate_memory
 from . import limits
 
 # Bytes per HSVA pixel in the device pixel pool (matches sizeof(hsva_t)).
@@ -78,7 +76,7 @@ def _fmt_ms(ms: int) -> str:
 
 
 # ---------------------------------------------------------------------------
-# 1a. Early validation (before any processing)
+# 1. Early validation (before any processing)
 # ---------------------------------------------------------------------------
 
 def _validate_early(events: list[dict], strips: list[StripDef]):
@@ -321,7 +319,7 @@ def _infer_layers(events: list[dict], max_layers: int = 32) -> list[list[dict]]:
 
 
 # ---------------------------------------------------------------------------
-# 4/5. Source resolution
+# 4. Source resolution
 # ---------------------------------------------------------------------------
 
 def _resolve_sources(events: list[dict], layers: list[list[dict]]):
@@ -412,7 +410,7 @@ def _resolve_sources(events: list[dict], layers: list[list[dict]]):
 
 
 # ---------------------------------------------------------------------------
-# 6. Late validation
+# 5. Late validation
 # ---------------------------------------------------------------------------
 
 def _validate_late(events: list[dict], duration_ms: int):
@@ -436,7 +434,7 @@ def _validate_late(events: list[dict], duration_ms: int):
 
 
 # ---------------------------------------------------------------------------
-# 4. Buffer + view planning
+# 6. Buffer + view planning
 # ---------------------------------------------------------------------------
 
 def _pixels(e: dict) -> list[int]:
@@ -457,9 +455,8 @@ def _is_stateful(e: dict) -> bool:
 class BufferPixelPos:
     """One pixel slot in a logical buffer, used for source-data bookkeeping.
 
-    `buffer` is a logical buffer id (e.g. ("dst", layer_idx) or
-    ("preserve", copy_index)), assigned a real pool slot later. `slot` is the
-    pixel index within that buffer.
+    `buffer` is a logical dst buffer id, ("dst", layer_idx), assigned a real
+    pool slot later. `slot` is the pixel index within that buffer.
     """
     buffer: Any
     slot: int
@@ -485,8 +482,6 @@ def _plan_source_copies(ordered: list[dict]) -> list[dict]:
             if source_evt is None:
                 # No source: read whatever currently sits in our own dst buffer.
                 e["_src_kind"] = "self"
-                e["_src_positions"] = [BufferPixelPos(("dst", li), j)
-                                       for j in range(len(_pixels(e)))]
             else:
                 src_pixels = source_evt["pixels"].indices
                 positions = [BufferPixelPos(("dst", source_evt["layer_idx"]),
@@ -517,53 +512,6 @@ def _plan_source_copies(ordered: list[dict]) -> list[dict]:
     return copy_plan
 
 
-def _compute_required_starts(ordered: list[dict], copy_plan: list[dict]):
-    """Set required_start_ms on every event via forward data-position tracing.
-
-    data_start[pos] is the earliest start time the data now at pos depends on.
-    An event writing its dst stamps its own required start; a copy op carries
-    the stamp from source to preserve buffer; a shift inherits the earliest
-    stamp across the positions it reads. Copies are processed before event
-    starts at the same time, matching the runtime, which samples ending events
-    first, then runs that time's copies, then starts events.
-    """
-    data_start: dict[BufferPixelPos, float] = {}
-    timeline = [("copy", c["at"], 0, c) for c in copy_plan]
-    timeline += [("event", e["at_ms"], 1, e) for e in ordered]
-    timeline.sort(key=lambda item: (item[1], item[2]))
-
-    for kind, _t, _tie, obj in timeline:
-        if kind == "copy":
-            copy = obj
-            for j, src_pos in enumerate(copy["positions"]):
-                data_start[BufferPixelPos(("preserve", copy["index"]), j)] = \
-                    data_start.get(src_pos, copy["at"])
-            continue
-
-        e = obj
-        size = len(_pixels(e))
-        src_kind = e["_src_kind"]
-        if src_kind in ("self", "direct"):
-            positions = e["_src_positions"]
-        elif src_kind == "copy":
-            positions = [BufferPixelPos(("preserve", e["_copy"]["index"]), j)
-                         for j in range(size)]
-        else:
-            positions = None
-
-        if positions is None:
-            e["required_start_ms"] = e["at_ms"]
-        else:
-            e["required_start_ms"] = min(
-                (data_start.get(pos, e["at_ms"]) for pos in positions),
-                default=e["at_ms"],
-            )
-
-        for slot in range(size):
-            data_start[BufferPixelPos(("dst", e["layer_idx"]), slot)] = \
-                e["required_start_ms"]
-
-
 def _assign_pool_slots(logical: dict[Any, dict]) -> tuple[dict[Any, int], list[int]]:
     """Map logical buffers onto pool slots, reusing across disjoint lifetimes.
 
@@ -590,8 +538,7 @@ def _assign_pool_slots(logical: dict[Any, dict]) -> tuple[dict[Any, int], list[i
 
 def _plan_buffers_and_views(layers: list[list[dict]], events: list[dict],
                             strip_length: int):
-    """Plan pool buffers, pixel views, and copy ops; set per-event view indices
-    and required_start_ms.
+    """Plan pool buffers, pixel views, and copy ops; set per-event view indices.
 
     Whole-buffer model: one dst buffer per layer (sized to the layer's largest
     event), one work buffer per stateful event, one preserve buffer per copy
@@ -599,7 +546,6 @@ def _plan_buffers_and_views(layers: list[list[dict]], events: list[dict],
     """
     ordered = sorted(events, key=lambda e: e["at_ms"])
     copy_plan = _plan_source_copies(ordered)
-    _compute_required_starts(ordered, copy_plan)
 
     # --- Logical buffer lifetimes ---
     logical: dict[Any, dict] = {}
@@ -701,7 +647,7 @@ def _plan_buffers_and_views(layers: list[list[dict]], events: list[dict],
 
 
 # ---------------------------------------------------------------------------
-# 8. Resolve animation params to binary-ready values
+# 7. Resolve animation params to binary-ready values
 # ---------------------------------------------------------------------------
 
 def _convert_color_tuple(t: tuple, fmt: str, field: str) -> tuple[float, float, float, float]:
@@ -807,80 +753,7 @@ def _resolve_anim_params(event: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# 7. Safe interval analysis
-# ---------------------------------------------------------------------------
-
-def _find_safe_intervals(events: list[dict], duration_ms: int) -> list[tuple[int, int]]:
-    """Find time ranges where rebuilding engine state from scratch is safe.
-
-    An event's unsafe span is [required_start_ms, end_ms). required_start_ms
-    reaches back through source dependencies, so the gap before a dependent
-    event is correctly marked unsafe.
-    """
-    unsafe = [(e["required_start_ms"], e["end_ms"]) for e in events]
-    if not unsafe:
-        return [(0, duration_ms)]
-
-    unsafe.sort()
-    merged = [list(unsafe[0])]
-    for lo, hi in unsafe[1:]:
-        if lo <= merged[-1][1]:
-            merged[-1][1] = max(merged[-1][1], hi)
-        else:
-            merged.append([lo, hi])
-
-    safe = []
-    prev_end = 0
-    for lo, hi in merged:
-        if lo > prev_end:
-            safe.append((prev_end, lo))
-        prev_end = max(prev_end, hi)
-    if prev_end < duration_ms:
-        safe.append((prev_end, duration_ms))
-
-    # t=0 is always safe (engine reset at t=0 is correct by construction).
-    if not safe or safe[0][0] > 0:
-        safe.insert(0, (0, 0))
-
-    return safe
-
-
-def _intersect_intervals(
-    a: list[tuple[int, int]], b: list[tuple[int, int]]
-) -> list[tuple[int, int]]:
-    """Intersect two sorted lists of non-overlapping intervals."""
-    result = []
-    i = j = 0
-    while i < len(a) and j < len(b):
-        lo = max(a[i][0], b[j][0])
-        hi = min(a[i][1], b[j][1])
-        if lo < hi or (lo == hi == 0):  # preserve degenerate (0,0)
-            result.append((lo, hi))
-        if a[i][1] <= b[j][1]:
-            i += 1
-        else:
-            j += 1
-    return result
-
-
-def _apply_width_filter(intervals: list[tuple[int, int]],
-                        target_fps: int) -> list[tuple[int, int]]:
-    """Drop intervals narrower than one frame period; always keep (0, 0).
-
-    A safe interval narrower than 1000/target_fps ms cannot render even one
-    frame before the next write lands, so it is not a usable seek target.
-    """
-    out = []
-    for lo, hi in intervals:
-        if lo == 0 and hi == 0:
-            out.append((lo, hi))
-        elif (hi - lo) * target_fps >= 1000:
-            out.append((lo, hi))
-    return out
-
-
-# ---------------------------------------------------------------------------
-# 9. Caps + assembly
+# 8. Caps + assembly
 # ---------------------------------------------------------------------------
 
 def _check_caps(strip_length: int, buffer_sizes: list[int],
@@ -926,9 +799,8 @@ def _check_caps(strip_length: int, buffer_sizes: list[int],
 
 
 def _compile_strip(strip_events: list[dict], strip_length: int, duration_ms: int,
-                   target_fps: int, requires_sync: bool, loop: bool
-                   ) -> tuple[bytes, list[tuple[int, int]], MemoryEstimate]:
-    """Run the per-strip pipeline. Returns (blob, safe_intervals, memory)."""
+                   target_fps: int, requires_sync: bool, loop: bool) -> bytes:
+    """Run the per-strip pipeline. Returns the blob."""
     layers = _infer_layers(strip_events)
     _resolve_sources(strip_events, layers)
     _validate_late(strip_events, duration_ms)
@@ -957,8 +829,7 @@ def _compile_strip(strip_events: list[dict], strip_length: int, duration_ms: int
         buffer_sizes=buffer_sizes, pixel_views=pixel_views,
         copy_ops=copy_ops, layers=blob_layers,
     )
-    safe_intervals = _find_safe_intervals(strip_events, duration_ms)
-    return emit_blob(program), safe_intervals, estimate_memory(program)
+    return emit_blob(program)
 
 
 # ---------------------------------------------------------------------------
@@ -991,7 +862,7 @@ def compile_manifest(strips: list[StripDef], events: list[dict],
                      target_fps: int = 50,
                      requires_sync: bool = False,
                      loop: bool = False) -> CompiledManifest:
-    """Full compile pipeline: returns manifest with blobs + safe intervals.
+    """Full compile pipeline: returns the manifest of per-strip blobs.
 
     duration is seconds, or forever (see resolve_program_duration).
     """
@@ -1007,34 +878,22 @@ def compile_manifest(strips: list[StripDef], events: list[dict],
     # 2. Time resolution — global, strip-independent
     _resolve_times(events, beat, duration_ms)
 
-    # 3–9. Per-strip pipeline; iterate input strips for canonical order.
+    # 3–8. Per-strip pipeline; iterate input strips for canonical order.
     # Strip names are unique (enforced in _validate_early), so keying the
     # artifacts by strip_id never collides; insertion order stays canonical.
     by_strip = _partition_by_strip(events)
     strip_artifacts = {}
-    per_strip_intervals = []
     for s in strips:
         strip_events = by_strip.get(s.name, [])
-        blob, intervals, memory = _compile_strip(strip_events, s.length, duration_ms,
-                                                 target_fps, requires_sync, loop)
+        blob = _compile_strip(strip_events, s.length, duration_ms,
+                              target_fps, requires_sync, loop)
         strip_artifacts[s.name] = CompiledStripArtifact(
-            strip_id=s.name, length=s.length, blob=blob, memory=memory,
+            strip_id=s.name, length=s.length, blob=blob,
         )
-        per_strip_intervals.append(intervals)
-
-    # Global safe interval intersection, then the frame-width filter.
-    if per_strip_intervals:
-        safe = per_strip_intervals[0]
-        for si in per_strip_intervals[1:]:
-            safe = _intersect_intervals(safe, si)
-    else:
-        safe = [(0, duration_ms)]
-    safe = _apply_width_filter(safe, target_fps)
 
     return CompiledManifest(
         duration=duration_ms / 1000,
         strips=strip_artifacts,
-        safe_intervals=safe,
         target_fps=target_fps,
         requires_sync=requires_sync,
         loop=loop,

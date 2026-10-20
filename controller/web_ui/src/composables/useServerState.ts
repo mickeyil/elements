@@ -67,7 +67,6 @@ export interface SessionState {
   // From the latest preview frame: loop cycle and ms into it.
   current_cycle?: number;
   current_t_ms?: number;
-  safe_intervals?: unknown[];
   strips?: SessionStrip[];
 }
 

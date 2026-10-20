@@ -114,35 +114,6 @@ PlaybackResult Playback::handle_start(int64_t program_start_us)
     return PlaybackResult::Ok;
 }
 
-PlaybackResult Playback::handle_jump(uint32_t t_ms)
-{
-    if (_engine == nullptr) {
-        return PlaybackResult::WrongState;
-    }
-    if (_state != DeviceState::LOADED && _state != DeviceState::PAUSED) {
-        return PlaybackResult::WrongState;
-    }
-    if (_requires_sync && !_clock.is_synced()) {
-        return PlaybackResult::Unsynced;
-    }
-    if (t_ms >= _duration.ms) {
-        return PlaybackResult::BadTime;
-    }
-
-    // A looping program jumps within the cycle the cursor is in.
-    const int64_t cycle = _loop ? _t_program_cursor_us / duration_us_() : 0;
-    const int64_t target_us = cycle * duration_us_() + us_from_ms(t_ms);
-    if (target_us <= _t_program_cursor_us) {
-        return PlaybackResult::BadTime;
-    }
-
-    _engine->reset();
-    _engine_cycle = cycle;
-    _t_program_cursor_us = target_us;
-    _state = DeviceState::PAUSED;
-    return PlaybackResult::Ok;
-}
-
 void Playback::handle_pause()
 {
     if (_state != DeviceState::PLAYING) {

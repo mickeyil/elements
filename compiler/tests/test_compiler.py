@@ -2,8 +2,8 @@
 
 Runs the test animation (wave+shift+sparks) through the full pipeline and
 validates the emitted v3 blob structure, plus the v3-specific analyses:
-per-event dst views, work views, source dependency tracing, copy ops, the
-safe-interval width filter, and structural caps.
+per-event dst views, work views, source resolution, copy ops, and
+structural caps.
 """
 
 import math
@@ -230,18 +230,21 @@ class TestSourceResolution:
         assert z_evt.work_pixv_idx != PIXV_NONE
         assert len(p.copy_ops) == 0
 
-    def test_required_start_propagates_through_copy(self):
-        """The shift's unsafe span reaches back to the source's start."""
-        s = strip("reqstart", length=5)
-        x = paint(color="red")
-        y = paint(color="green")
-        z = shift(direction="right", velocity=1, circular=False, fill="transparent")
-        x.schedule(s.pixels("0-4"), at=0, duration=1)
-        y.schedule(s.pixels("0-4"), at=1, duration=1)
-        z.schedule(s.pixels("0-4"), at=2, duration=1, source=x)
-        m = build_manifest(beat=1.0, duration=4.0)
-        # x,y,z all chain back to 0 -> unsafe [0,3); safe (0,0) + [3,4).
-        assert m.safe_intervals == [(0, 0), (3000, 4000)]
+    def test_shift_sourced_from_a_shift(self):
+        """A chain: each shift reads its source's output in place."""
+        s = strip("chain", length=5)
+        px = s.pixels("0-4")
+        a = paint(colors=[(0, 0, 0.2)] * 5)
+        b = shift(direction="right", velocity=1, circular=False, fill="transparent")
+        c = shift(direction="right", velocity=1, circular=False, fill="transparent")
+        a.schedule(px, at=0, duration=1)
+        b.schedule(px, at=2, duration=1, source=a)
+        c.schedule(px, at=4, duration=1, source=b)
+        p = decode_blob(build(beat=1.0, duration=6.0)["chain"])
+        a_evt, b_evt, c_evt = p.layers[0].events
+        assert b_evt.src_pixv_idx == a_evt.dst_pixv_idx
+        assert c_evt.src_pixv_idx == b_evt.dst_pixv_idx
+        assert len(p.copy_ops) == 0
 
     def test_source_on_non_shift_rejected(self):
         s = strip("src_nonshift", length=5)
@@ -428,6 +431,15 @@ class TestConfiguredStripLengths:
         w.schedule(px, at=2, duration=1)  # at=2 beats = 2.0s == duration
         with pytest.raises(CompileError, match="starts at"):
             build(beat=1.0, duration=2.0)
+
+    def test_event_past_duration_is_clamped(self):
+        strip1 = strip("test_clamp", length=10, type="RGB")
+        w = wave(channel="V", h=0, s=1.0, v=0.0, min_val=0.0, max_val=1.0,
+                 period=4, phase0=0, pixel_step=0)
+        w.schedule(strip1.pixels("0-9"), at=0, duration=10)
+        with pytest.warns(UserWarning, match="clamping"):
+            p = decode_blob(build(beat=1.0, duration=3.0)["test_clamp"])
+        assert p.layers[0].events[0].duration == 3000
 
     def test_missing_required_param(self):
         strip1 = strip("test_param", length=10, type="RGB")
@@ -650,102 +662,15 @@ class TestPaint:
 
 
 # ---------------------------------------------------------------------------
-# Safe interval analysis
+# Manifest
 # ---------------------------------------------------------------------------
 
-class TestSafeIntervals:
+class TestManifest:
     def _wave(self, **extra):
         params = dict(channel="V", h=0, s=1.0, v=0.0,
                       min_val=0.0, max_val=1.0, period=4, phase0=0, pixel_step=0)
         params.update(extra)
         return wave(**params)
-
-    def test_single_event_full_coverage(self):
-        s = strip("si_full", length=5)
-        w = self._wave()
-        w.schedule(s.pixels("0-4"), at=0, duration=4)
-        m = build_manifest(beat=1.0, duration=4.0)
-        assert m.safe_intervals == [(0, 0)]
-
-    def test_gap_between_events(self):
-        s = strip("si_gap", length=5)
-        w1 = self._wave()
-        w2 = self._wave(h=60)
-        w1.schedule(s.pixels("0-4"), at=0, duration=1)
-        w2.schedule(s.pixels("0-4"), at=3, duration=1)
-        m = build_manifest(beat=1.0, duration=5.0)
-        assert m.safe_intervals == [(0, 0), (1000, 3000), (4000, 5000)]
-
-    def test_source_dependent_removes_gap(self):
-        s = strip("si_dep", length=5)
-        p = paint(colors=[(0, 0, 0.2)] * 5)
-        sh = shift(direction="right", velocity=1, circular=False, fill="transparent")
-        p.schedule(s.pixels("0-4"), at=0, duration=1)
-        sh.schedule(s.pixels("0-4"), at=sec(2.0), duration=sec(2.0), source=p)
-        m = build_manifest(beat=1.0, duration=5.0)
-        assert m.safe_intervals == [(0, 0), (4000, 5000)]
-
-    def test_transitive_source_chain(self):
-        s = strip("si_trans", length=5)
-        px = s.pixels("0-4")
-        a = paint(colors=[(0, 0, 0.2)] * 5)
-        a.schedule(px, at=0, duration=1)
-        b = shift(direction="right", velocity=1, circular=False, fill="transparent")
-        b.schedule(px, at=sec(2.0), duration=sec(1.0), source=a)
-        c = shift(direction="right", velocity=1, circular=False, fill="transparent")
-        c.schedule(px, at=sec(4.0), duration=sec(1.0), source=b)
-        m = build_manifest(beat=1.0, duration=6.0)
-        assert m.safe_intervals == [(0, 0), (5000, 6000)]
-
-    def test_overlapping_unsafe_spans_merge(self):
-        s = strip("si_merge", length=5)
-        w1 = self._wave()
-        w2 = self._wave(h=60)
-        sp = spark(color="white", fade=sec(0.5))
-        w1.schedule(s.pixels("0-4"), at=0, duration=3)
-        w2.schedule(s.pixels("0-4"), at=1, duration=3)
-        sp.schedule(s.pixels("0-4"), at=0, duration=sec(0.5))
-        m = build_manifest(beat=1.0, duration=5.0)
-        assert m.safe_intervals == [(0, 0), (4000, 5000)]
-
-    def test_multi_strip_global_intersection(self):
-        sa = strip("si_ms_a", length=5)
-        sb = strip("si_ms_b", length=5)
-        wa = self._wave()
-        wb = self._wave(h=60)
-        wa.schedule(sa.pixels("0-4"), at=0, duration=1)
-        wb.schedule(sb.pixels("0-4"), at=2, duration=1)
-        m = build_manifest(beat=1.0, duration=4.0)
-        assert m.safe_intervals == [(0, 0), (1000, 2000), (3000, 4000)]
-
-    def test_event_clamped_at_duration(self):
-        s = strip("si_clamp", length=5)
-        w = self._wave()
-        w.schedule(s.pixels("0-4"), at=0, duration=10)
-        import warnings
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            m = build_manifest(beat=1.0, duration=3.0)
-        assert m.safe_intervals == [(0, 0)]
-
-    def test_adjacent_events_no_gap(self):
-        s = strip("si_adj", length=5)
-        w1 = self._wave()
-        w2 = self._wave(h=60)
-        w1.schedule(s.pixels("0-4"), at=0, duration=2)
-        w2.schedule(s.pixels("0-4"), at=2, duration=2)
-        m = build_manifest(beat=1.0, duration=4.0)
-        assert m.safe_intervals == [(0, 0)]
-
-    def test_subframe_gap_dropped_by_width_filter(self):
-        """A safe gap narrower than one frame period is dropped."""
-        s = strip("si_width", length=5)
-        w1 = self._wave()
-        w2 = self._wave(h=60)
-        w1.schedule(s.pixels("0-4"), at=0, duration=1)
-        w2.schedule(s.pixels("0-4"), at=1.01, duration=0.99)  # gap (1.0, 1.01) = 0.01s
-        m = build_manifest(beat=1.0, duration=2.0, target_fps=50)  # frame = 0.02s
-        assert m.safe_intervals == [(0, 0)]
 
     def test_manifest_strip_order_follows_declaration(self):
         sc = strip("si_ord_c", length=5)
@@ -1029,16 +954,6 @@ class TestPacifica:
         with pytest.raises(CompileError, match="source= is only supported"):
             build(beat=1.0, duration=2.0)
 
-    def test_memory_estimate_includes_scratch(self):
-        strip1 = strip("test_pacifica_mem", length=10, type="RGB")
-        px = strip1.pixels("0-9")
-        p = pacifica()
-        p.schedule(px, at=0, duration=2)
-        manifest = build_manifest(beat=1.0, duration=2.0)
-        mem = manifest.strips["test_pacifica_mem"].memory
-        # 24 B instance + 10 pixels * 3 B RGB scratch.
-        assert mem.anim_bytes == 24 + 10 * 3
-
 
 # ---------------------------------------------------------------------------
 # Millisecond grid
@@ -1122,7 +1037,6 @@ class TestMillisecondGrid:
         m = build_manifest(beat=1.0, duration=0.7)
         assert m.duration == 0.7
         assert m.duration_ms == 700
-        assert m.safe_intervals == [(0, 0), (500, 700)]
 
     def test_sec_adjacency_at_half_millisecond_tie(self):
         # The Paint's end and the Shift's start are the same authored

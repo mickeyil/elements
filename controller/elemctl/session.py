@@ -13,8 +13,8 @@ adds the reconciler: tick() drives each attached member one command at a
 time from its confirmed phase toward its target, and the play() / stop()
 verbs set those targets. Pause, resume, end-of-program completion, and
 preview-frame assembly (per-strip frames bucketed into whole-program frames)
-have since landed. Operator seek and live rejoin of a late or reconnecting
-device (a JUMP onto a compiler-marked safe interval) are deferred.
+have since landed. Live rejoin of a late or reconnecting device is
+deferred.
 
 An operator panel can also take one strip over, outside the show: a constant
 picture (panel_manual), a looping library program (panel_run), or dark
@@ -380,7 +380,7 @@ class Session:
 
     def pause(self):
         """Freeze playback at the current program cursor. Resume keeps device
-        engine state intact (no rebuild), so pausing needs no safe interval."""
+        engine state intact (no rebuild)."""
         if self.state is not SessionState.PLAYING:
             raise ValueError('pause() requires a playing session')
         if self._has_pending_start_or_resume():

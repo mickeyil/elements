@@ -23,7 +23,6 @@ AckStatus map_playback_result(PlaybackResult result)
         case PlaybackResult::Ok:         return AckStatus::Ok;
         case PlaybackResult::WrongState: return AckStatus::WrongState;
         case PlaybackResult::Unsynced:   return AckStatus::Unsynced;
-        case PlaybackResult::BadTime:    return AckStatus::BadPayload;
     }
     return AckStatus::Error;
 }
@@ -63,7 +62,6 @@ AckStatus CommandHandler::handle(uint8_t opcode,
         case CMD_SET_PROFILE:            return handle_set_profile_(r);
         case CMD_LOAD:                   return handle_load_(r);
         case CMD_START:                  return handle_start_(r);
-        case CMD_JUMP:                   return handle_jump_(r);
         case CMD_PAUSE:                  return handle_pause_(r);
         case CMD_RESUME:                 return handle_resume_(r);
         case CMD_STOP:                   return handle_stop_(r);
@@ -137,15 +135,6 @@ AckStatus CommandHandler::handle_start_(WireReader& r)
         return AckStatus::BadPayload;
     }
     return map_playback_result(_ctx.playback.handle_start(program_start_us));
-}
-
-AckStatus CommandHandler::handle_jump_(WireReader& r)
-{
-    uint32_t t_ms = 0;
-    if (!r.read_u32(t_ms) || !r.require_empty()) {
-        return AckStatus::BadPayload;
-    }
-    return map_playback_result(_ctx.playback.handle_jump(t_ms));
 }
 
 AckStatus CommandHandler::handle_pause_(WireReader& r)

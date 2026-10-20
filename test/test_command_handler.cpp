@@ -253,6 +253,7 @@ TEST_CASE("unknown opcodes ACK UnknownCommand")
     Harness h;
     CHECK(h.run(0x00) == AckStatus::UnknownCommand);  // inbound REGISTER
     CHECK(h.run(0x02) == AckStatus::UnknownCommand);  // reserved
+    CHECK(h.run(0x12) == AckStatus::UnknownCommand);  // retired JUMP
     CHECK(h.run(0x7F) == AckStatus::UnknownCommand);
     CHECK(h.run(0x80) == AckStatus::UnknownCommand);  // stray ACK
 }
@@ -328,26 +329,6 @@ TEST_CASE("synced program without a clock lease ACKs Unsynced on start")
     std::vector<uint8_t> start0;
     put_i64(start0, 0);
     CHECK(h.run(CMD_START, start0) == AckStatus::Unsynced);
-}
-
-TEST_CASE("jump maps BadTime onto BadPayload and seeks on success")
-{
-    Harness h;
-    REQUIRE(h.load_live() == AckStatus::Ok);
-
-    std::vector<uint8_t> short_target;
-    put_u16(short_target, 500);  // a u32 ms is 4 bytes
-    CHECK(h.run(CMD_JUMP, short_target) == AckStatus::BadPayload);
-
-    std::vector<uint8_t> behind;
-    put_u32(behind, 0);  // not strictly ahead of cursor 0
-    CHECK(h.run(CMD_JUMP, behind) == AckStatus::BadPayload);
-
-    std::vector<uint8_t> ahead;
-    put_u32(ahead, 500);
-    CHECK(h.run(CMD_JUMP, ahead) == AckStatus::Ok);
-    CHECK(h.playback.state() == DeviceState::PAUSED);
-    CHECK(h.playback.current_t_ms() == 500);
 }
 
 // ---------------------------------------------------------------------------

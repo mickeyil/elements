@@ -56,7 +56,6 @@ private:
     AckStatus handle_set_profile_(WireReader& r);
     AckStatus handle_load_(WireReader& r);
     AckStatus handle_start_(WireReader& r);
-    AckStatus handle_jump_(WireReader& r);
     AckStatus handle_pause_(WireReader& r);
     AckStatus handle_resume_(WireReader& r);
     AckStatus handle_stop_(WireReader& r);

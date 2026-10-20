@@ -25,8 +25,8 @@
 // MANUAL holds a constant picture handed over pixel by pixel, with no
 // program loaded: nothing renders and the cursor reads 0. Another MANUAL
 // replaces the picture, STOP clears it and returns to IDLE, and LOAD, a
-// profile change or detach take their usual path; START, RESUME and JUMP
-// are WrongState.
+// profile change or detach take their usual path; START and RESUME are
+// WrongState.
 //
 // Clock domain is selected per loaded program: requires_sync=true reads
 // SyncedClock::now_remote_us(); requires_sync=false reads now_local_us().
@@ -57,7 +57,6 @@ enum class PlaybackResult : uint8_t {
     Ok,
     WrongState,  // command not valid from the current DeviceState
     Unsynced,    // synced program, but the clock lease is not active
-    BadTime,     // time argument non-finite, out of range, or behind the cursor
 };
 
 class Playback {
@@ -90,14 +89,6 @@ public:
     // programs, program_start_us is ignored and playback starts immediately
     // (anchor = now_local_us(), cursor = 0).
     PlaybackResult handle_start(int64_t program_start_us);
-
-    // Re-anchor the program-time cursor to t_ms (milliseconds into the
-    // program; for a looping program, into the cycle the cursor is in).
-    // Valid from LOADED or PAUSED. Target must be strictly ahead of the
-    // current cursor and strictly inside [0, duration), else BadTime.
-    // Resets the engine, sets cursor to the target, transitions to PAUSED.
-    // Does not render.
-    PlaybackResult handle_jump(uint32_t t_ms);
 
     void handle_pause();
 
@@ -132,7 +123,7 @@ public:
 
     // Does the strip hold output not yet presented? True once after every
     // buffer clear, MANUAL picture and rendered frame; this call consumes
-    // it. PAUSE and JUMP leave the strip alone and raise nothing.
+    // it. PAUSE leaves the strip alone and raises nothing.
     bool take_present_request();
 
     DeviceState state() const;

@@ -130,7 +130,7 @@ def build(beat: float, duration: float | Forever,
 def build_manifest(beat: float, duration: float | Forever,
                    target_fps: int = 50, requires_sync: bool = False,
                    loop: bool = False) -> CompiledManifest:
-    """Compile the accumulated program. Returns manifest with blobs + safe intervals."""
+    """Compile the accumulated program. Returns the manifest of per-strip blobs."""
     try:
         return compile_manifest(_builder.strips, _builder.events, beat, duration,
                                 target_fps=target_fps, requires_sync=requires_sync,

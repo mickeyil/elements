@@ -150,38 +150,16 @@ def ms_from_seconds(seconds: float) -> int:
 # ---------------------------------------------------------------------------
 
 @dataclass
-class MemoryEstimate:
-    """Estimated steady-state device RAM of a decoded strip program, in bytes.
-
-    Counts the live Program and what it owns: the pixel pool, views, copy ops,
-    layers/events, and animation instances. Excludes decode-time temporaries
-    (freed before playback) and Engine playback state (allocated separately).
-    Allocator overhead and fragmentation are ignored. All fields are byte
-    counts for the named target, regardless of the host the compiler runs on.
-    """
-    target: str = "esp32"
-    pool_bytes: int = 0       # hsva_t pixel storage + the pool's index tables
-    view_bytes: int = 0       # PixelView records + owned index arrays
-    copy_op_bytes: int = 0    # CopyOp records
-    event_bytes: int = 0      # AnimationEvent records + Layer records
-    anim_bytes: int = 0       # per-event Animation instances
-    overhead_bytes: int = 0   # fixed Program shell
-    total_bytes: int = 0
-
-
-@dataclass
 class CompiledStripArtifact:
     strip_id: str
     length: int
     blob: bytes
-    memory: MemoryEstimate = field(default_factory=MemoryEstimate)
 
 
 @dataclass
 class CompiledManifest:
     duration: float               # program length, seconds; duration_ms is what blobs carry
     strips: dict[str, CompiledStripArtifact]   # keyed by strip_id; unique
-    safe_intervals: list[tuple[int, int]]      # [lo_ms, hi_ms) windows safe to seek into
     target_fps: int = 50          # program-level pacing hint, Hz; mirrored in every blob header
     requires_sync: bool = False   # program-level; mirrored in every blob header
     loop: bool = False            # program-level; mirrored in every blob header
@@ -190,8 +168,3 @@ class CompiledManifest:
     def duration_ms(self) -> int:
         """Program length as written into every strip blob header."""
         return ms_from_seconds(self.duration)
-
-    @property
-    def peak_memory_bytes(self) -> int:
-        """Worst-case single-device footprint: a device loads one strip blob."""
-        return max((a.memory.total_bytes for a in self.strips.values()), default=0)

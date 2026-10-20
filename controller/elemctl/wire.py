@@ -40,7 +40,7 @@ CMD_REGISTER             = 0x00
 CMD_SET_PROFILE          = 0x01
 CMD_LOAD                 = 0x10
 CMD_START                = 0x11
-CMD_JUMP                 = 0x12
+# 0x12 was JUMP; retired, do not reuse.
 CMD_PAUSE                = 0x13
 CMD_RESUME               = 0x14
 CMD_STOP                 = 0x15
@@ -133,7 +133,6 @@ class WireError(ValueError):
 
 _MSG_HEADER = struct.Struct('<IB')                  # length + opcode
 _U16 = struct.Struct('<H')
-_U32 = struct.Struct('<I')
 _I64 = struct.Struct('<q')
 _REGISTER = struct.Struct(f'<{UID_SIZE}sIB')        # uid + boot_token + version
 _DEVICE_STATUS = struct.Struct('<BBiBI')            # mode + flags + skew + playback state + crc32
@@ -237,17 +236,6 @@ def encode_load(blob):
 
 def encode_start(program_start_us):
     return encode_message(CMD_START, _I64.pack(program_start_us))
-
-
-# JUMP repositions playback onto a compiler-marked safe interval. Retained for
-# future seek and live rejoin; the v3 session does not issue it. t_ms is the
-# target in whole ms (for a looping program, into the current cycle), the
-# same grid the compiler's safe intervals use.
-def encode_jump(t_ms):
-    if (isinstance(t_ms, bool) or not isinstance(t_ms, int)
-            or not 0 <= t_ms <= 0xFFFFFFFF):
-        raise WireError(f't_ms must be a u32 integer, got {t_ms!r}')
-    return encode_message(CMD_JUMP, _U32.pack(t_ms))
 
 
 def encode_pause():

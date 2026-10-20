@@ -59,9 +59,6 @@ compared for ordering.
 Every timeline value is bounded by `MAX_PROGRAM_MS` (30 days), so it fits
 a u32 with room to spare. Animations receive their elapsed time as the
 same whole milliseconds, never as float seconds (see `src/core/animation.h`).
-The controller's JUMP command carries its target the same way: a u32 of
-whole milliseconds on this grid (into the current cycle, for a looping
-program).
 
 ## Buffer sizes
 

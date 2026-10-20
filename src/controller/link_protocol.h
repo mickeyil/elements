@@ -19,7 +19,7 @@ constexpr uint8_t CMD_SET_PROFILE = 0x01;
 
 constexpr uint8_t CMD_LOAD                 = 0x10;
 constexpr uint8_t CMD_START                = 0x11;
-constexpr uint8_t CMD_JUMP                 = 0x12;  // payload: u32 ms
+// 0x12 was JUMP; retired, do not reuse.
 constexpr uint8_t CMD_PAUSE                = 0x13;
 constexpr uint8_t CMD_RESUME               = 0x14;
 constexpr uint8_t CMD_STOP                 = 0x15;
