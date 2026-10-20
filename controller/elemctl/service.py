@@ -740,8 +740,9 @@ class ControllerService:
                 'serving': m.serving,
                 'phase': m.phase.name.lower(),
                 # What the session wants of this member, so a UI can tell a
-                # parked late/reconnected device (target playing, phase loaded)
-                # from one that is actually running, without inferring it.
+                # late/reconnected device still parked or joining (target
+                # playing, phase loaded) from one that is actually running,
+                # without inferring it.
                 'target_intent': m.target.intent.name.lower(),
                 'profile_state': m.profile_state.name.lower(),
                 'last_refusal': list(m.last_refusal) if m.last_refusal else None,

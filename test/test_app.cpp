@@ -1072,7 +1072,7 @@ TEST_CASE("detach keeps a manual picture")
     CHECK(h.frames() == 1);   // the picture stays, nothing new presented
 }
 
-TEST_CASE("detach drops a synced program and blanks")
+TEST_CASE("detach keeps a synced program playing")
 {
     Harness h;
     h.attach();
@@ -1082,15 +1082,37 @@ TEST_CASE("detach drops a synced program and blanks")
     put_i64(start, h.now);   // offset ~0: remote time is local time
     h.command(CMD_START, start);
     REQUIRE(is_red(h.last_frame()));
+    h.output.frames.clear();
 
     h.advance(PING_TIMEOUT_MS * 1000 + 1);
     h.app.tick();
     REQUIRE_FALSE(h.app.is_attached());
-    CHECK(h.app.status().mode == DeviceMode::DetachedBlank);
-    CHECK(is_black(h.last_frame()));
+    CHECK(h.app.status().mode == DeviceMode::DetachedRunning);
+    REQUIRE(h.frames() == 1);
+    CHECK(is_red(h.last_frame()));
 
-    const size_t before = h.frames();
     h.advance(20'000);
     h.app.tick();
-    CHECK(h.frames() == before);
+    REQUIRE(h.frames() == 2);
+    CHECK(is_red(h.last_frame()));
+}
+
+TEST_CASE("detach keeps a paused synced program")
+{
+    Harness h;
+    h.attach();
+    h.sync_clock();
+    h.command(CMD_LOAD, build_paint_blob(60.0f, 50, /*requires_sync=*/true));
+    std::vector<uint8_t> start;
+    put_i64(start, h.now);
+    h.command(CMD_START, start);
+    h.command(CMD_PAUSE);
+    const size_t before = h.frames();
+
+    h.advance(PING_TIMEOUT_MS * 1000 + 1);
+    h.app.tick();
+    REQUIRE_FALSE(h.app.is_attached());
+    CHECK(h.app.status().mode == DeviceMode::DetachedRunning);
+    CHECK(h.frames() == before);   // the paused frame stays, no blank
+    CHECK(is_red(h.last_frame()));
 }

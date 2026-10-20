@@ -58,16 +58,16 @@ public:
     const DeviceStatus& status() const { return _status; }
 
 private:
-    // Attach/detach policy: mirror the link state into status.mode. Link
-    // events leave what the device shows alone; only playback commands
-    // change it. The exception is a synced program, which needs the
-    // controller's clock: on detach (and at boot) anything that cannot run
-    // on its own gives way to the stored background if one is installed
-    // and playable, otherwise the strip is blanked.
+    // Attach/detach policy: mirror the link state into status.mode. Attach
+    // leaves what the device shows alone. On detach a manual picture and a
+    // playing or paused program keep going (a synced one on its last clock
+    // offset); anything else, like the boot state, gives way to the stored
+    // background if one is installed and playable, otherwise the strip is
+    // blanked.
     void update_mode_();
 
     // Does playback keep showing something without the controller? A
-    // manual picture or an unsynced program that is playing or paused.
+    // manual picture or a program that is playing or paused.
     bool shows_on_its_own_() const;
 
     // Mirror the clock sync state into status (synced flag and skew) for

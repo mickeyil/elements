@@ -15,8 +15,9 @@
 // the engine, the canonical RGB Strip, and a single program-time cursor.
 // Owners drive it with command handlers and sample frames via render_*().
 //
-// The strip changes outside the frame loop too: STOP, LOAD, detach and the
-// end of a program all clear it, and MANUAL overwrites it. Every such change
+// The strip changes outside the frame loop too: STOP, LOAD, the end of a
+// program and a detach with no program playing or paused all clear it, and
+// MANUAL overwrites it. Every such change
 // and every rendered frame raises a presentation request that the owner
 // reads with take_present_request() and answers by writing the strip to its
 // output, whatever the playback state. That is what keeps the LEDs equal to

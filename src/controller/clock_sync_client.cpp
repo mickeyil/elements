@@ -72,9 +72,11 @@ void ClockSyncClient::set_controller(uint32_t ip_addr)
     // during disconnect.
 
     if (ip_addr == 0) {
-        // No controller: stop sending; keep the existing lease (transient-
-        // drop policy). Reviewed and waived: a START admitted on this lease
-        // during re-attach is only possible inside one sync round trip, and a
+        // No controller: stop sending; keep the offset and its lease
+        // (transient-drop policy). A synced program keeps running on the
+        // last offset through the drop, lease or not.
+        // Reviewed and waived: a START admitted on this lease during
+        // re-attach is only possible inside one sync round trip, and a
         // controller process restart keeps its monotonic clock, so such a
         // START is still correctly timed.
         _in_burst         = false;
@@ -134,9 +136,10 @@ void ClockSyncClient::on_remote_epoch_change_()
     // Controller rebooted: fresh monotonic timeline. Mixing pre-
     // and post-reboot samples gives a meaningless median, and the
     // existing lease points at the old timeline.
-    // Wiping the offset under a running program is not reachable: the
-    // App drops the controller's program on detach, and the re-attach
-    // window is covered by the note in set_controller().
+    // A synced program that survived the restart runs on the wiped offset
+    // meanwhile: it holds its frame (or jumps ahead) for the ~1 s until the
+    // burst re-syncs; after a host reboot its timeline is gone for good and
+    // it stays wrong until the controller loads again. Accepted.
     _clock.clear_sync();
     _last_skew_us = 0;
     reset_filter_();

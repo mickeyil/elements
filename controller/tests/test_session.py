@@ -125,7 +125,7 @@ def make_session(device_configs=DISTINCT_STRIPS):
     return session, hub
 
 
-def make_manifest(*strips, duration=10.0, loop=False):
+def make_manifest(*strips, duration=10.0, loop=False, requires_sync=False):
     """strips: (strip_id, length, blob) tuples; strip_id is unique per manifest."""
     return CompiledManifest(
         duration=duration,
@@ -134,6 +134,7 @@ def make_manifest(*strips, duration=10.0, loop=False):
             for sid, length, blob in strips
         },
         loop=loop,
+        requires_sync=requires_sync,
     )
 
 
@@ -141,10 +142,12 @@ def tick(session):
     return session.tick()
 
 
-def drive_to_loaded(session, hub, uid='sim-a', blob=b'M', loop=False, length=30):
+def drive_to_loaded(session, hub, uid='sim-a', blob=b'M', loop=False, length=30,
+                    requires_sync=False):
     """Load a single-strip manifest, attach the device, and ACK its way to a
     parked LOADED state (SET_PROFILE Ok, then LOAD Ok)."""
-    session.load(make_manifest(('main', length, blob), loop=loop))
+    session.load(make_manifest(('main', length, blob), loop=loop,
+                               requires_sync=requires_sync))
     hub.emit(DeviceConnected(uid=uid, boot_token=1, rebooted=False))
     tick(session)                       # attach + SET_PROFILE
     _, on_ack = hub.last_send(uid)
@@ -155,9 +158,11 @@ def drive_to_loaded(session, hub, uid='sim-a', blob=b'M', loop=False, length=30)
     on_ack(ack_ok())                    # blob loaded; member parked at LOADED
 
 
-def drive_to_playing(session, hub, uid='sim-a', loop=False, length=30):
+def drive_to_playing(session, hub, uid='sim-a', loop=False, length=30,
+                     requires_sync=False):
     """Bring the device to LOADED, then play() and ACK the Start: PLAYING."""
-    drive_to_loaded(session, hub, uid=uid, loop=loop, length=length)
+    drive_to_loaded(session, hub, uid=uid, loop=loop, length=length,
+                    requires_sync=requires_sync)
     session.play()
     tick(session)
     _, on_ack = hub.last_send(uid)
@@ -774,6 +779,101 @@ def test_late_joiner_during_play_is_not_started():
     b_ops = [encoded[4] for uid, encoded, _ in hub.sent if uid == 'sim-b']
     assert wire.CMD_START not in b_ops
     assert session.member('sim-b').phase is DeviceState.LOADED   # parked
+
+
+def test_synced_late_joiner_is_started_on_the_anchor():
+    # A synced program's anchor is absolute on the shared clock, so a device
+    # attaching after play() starts on it, in step with the rest.
+    session, hub = make_session(TWO_STRIPS)
+    session.load(make_manifest(('main', 30, b'M'), ('side', 30, b'S'),
+                               requires_sync=True))
+    hub.emit(DeviceConnected(uid='sim-a', boot_token=1, rebooted=False))
+    tick(session)
+    _, on_ack = hub.last_send('sim-a'); on_ack(ack_ok())
+    answer_status(session, hub)
+    tick(session)
+    _, on_ack = hub.last_send('sim-a'); on_ack(ack_ok())   # sim-a LOADED
+    session.play()
+    tick(session)
+    _, on_ack = hub.last_send('sim-a'); on_ack(ack_ok())   # sim-a playing
+
+    session._clock_us.now_us += 3_000_000
+    hub.emit(DeviceConnected(uid='sim-b', boot_token=1, rebooted=False))
+    tick(session)
+    _, on_ack = hub.last_send('sim-b'); on_ack(ack_ok())   # profile
+    answer_status(session, hub, 'sim-b')
+    tick(session)
+    _, on_ack = hub.last_send('sim-b'); on_ack(ack_ok())   # sim-b LOADED
+
+    tick(session)
+    uid, encoded, on_ack = hub.sent[-1]
+    assert uid == 'sim-b'
+    assert encoded == wire.encode_start(session.program_start_us)
+    on_ack(ack_ok())
+    assert session.member('sim-b').phase is DeviceState.PLAYING
+
+
+def test_synced_reconnector_is_reloaded_and_started_on_the_anchor():
+    session, hub = make_session(SINGLE)
+    drive_to_playing(session, hub, requires_sync=True)
+    session._clock_us.now_us += 3_000_000
+
+    # The device rebooted in the drop and lost the program.
+    hub.emit(DeviceDisconnected(uid='sim-a', reason='ack timeout'),
+             DeviceConnected(uid='sim-a', boot_token=2, rebooted=True))
+    tick(session)
+    op, on_ack = hub.last_send('sim-a')
+    assert op == wire.CMD_SET_PROFILE
+    on_ack(ack_ok())
+    answer_status(session, hub)
+    tick(session)
+    op, on_ack = hub.last_send('sim-a')
+    assert op == wire.CMD_LOAD
+    on_ack(ack_ok())
+
+    tick(session)
+    _, encoded, _ = hub.sent[-1]
+    assert encoded == wire.encode_start(session.program_start_us)
+
+
+def test_unsynced_reconnector_parks_loaded():
+    # An unsynced device would start from 0 out of step, so it parks dark
+    # until the next play().
+    session, hub = make_session(SINGLE)
+    drive_to_playing(session, hub)
+
+    hub.emit(DeviceDisconnected(uid='sim-a', reason='ack timeout'),
+             DeviceConnected(uid='sim-a', boot_token=2, rebooted=True))
+    tick(session)
+    _, on_ack = hub.last_send('sim-a'); on_ack(ack_ok())   # profile
+    answer_status(session, hub)
+    tick(session)
+    op, on_ack = hub.last_send('sim-a')
+    assert op == wire.CMD_LOAD
+    on_ack(ack_ok())
+
+    n = len(hub.sent)
+    for _ in range(3):
+        tick(session)
+    assert len(hub.sent) == n
+    assert session.member('sim-a').phase is DeviceState.LOADED
+
+
+def test_synced_device_still_playing_after_a_drop_gets_nothing():
+    session, hub = make_session(SINGLE)
+    drive_to_playing(session, hub, requires_sync=True)
+
+    hub.emit(DeviceDisconnected(uid='sim-a', reason='ack timeout'),
+             DeviceConnected(uid='sim-a', boot_token=1, rebooted=False))
+    tick(session)
+    _, on_ack = hub.last_send('sim-a'); on_ack(ack_ok())   # profile
+    answer_status(session, hub, state=DeviceState.PLAYING, crc=zlib.crc32(b'M'))
+
+    n = len(hub.sent)
+    for _ in range(3):
+        tick(session)
+    assert len(hub.sent) == n
+    assert session.member('sim-a').phase is DeviceState.PLAYING
 
 
 def test_play_while_playing_is_refused():

@@ -13,8 +13,9 @@ adds the reconciler: tick() drives each attached member one command at a
 time from its confirmed phase toward its target, and the play() / stop()
 verbs set those targets. Pause, resume, end-of-program completion, and
 preview-frame assembly (per-strip frames bucketed into whole-program frames)
-have since landed. Live rejoin of a late or reconnecting device is
-deferred.
+have since landed. A device that joins or reconnects while a synced program
+plays starts on the shared anchor; under an unsynced one it parks until the
+next play().
 
 An operator panel can also take one strip over, outside the show: a constant
 picture (panel_manual), a looping library program (panel_run), or dark
@@ -335,11 +336,12 @@ class Session:
     def play(self):
         """Begin playback from a single shared anchor stamped now.
 
-        Every routed member is retargeted to PLAYING, but only members already
+        Every routed member is retargeted to PLAYING, and members already
         LOADED with the right program are authorized to issue the initial
-        Start. Members still loading, or attaching later, park at LOADED (dark)
-        for the rest of the run; a later stop() then play() restarts them from 0
-        with the rest. Live rejoin mid-program is deferred.
+        Start. Members still loading, or attaching later, rejoin on the anchor
+        once loaded when the program is synced; under an unsynced one they park
+        at LOADED (dark) for the rest of the run, and a later stop() then play()
+        restarts them from 0 with the rest.
 
         Valid from a loaded, stopped session or a naturally ENDED one (replay
         from 0). From PLAYING/PAUSED the operator resumes or stops first, so a
@@ -433,12 +435,12 @@ class Session:
         play cohort has not started yet (start_authorized, which stays set
         until the Start ACK), a Start/Resume is in flight, or it is paused
         while the target wants PLAYING. pause() must wait for this to settle,
-        or it would clear a cohort's start authorization (stranding the device,
-        since the controller has no live rejoin to recover it)
-        or capture a cursor against an
-        anchor the device has not adopted. Parked late members (start_authorized
-        False, nothing in flight) are not caught, so pause() of the playing
-        devices is not blocked by them."""
+        or it would clear a cohort's start authorization (stranding the device
+        under an unsynced program, which parks late members; a synced one
+        rejoins on the anchor) or capture a cursor against an anchor the device
+        has not adopted. Late members not yet started (start_authorized False,
+        nothing in flight) are not caught, so pause() of the playing devices is
+        not blocked by them."""
         for member in self._show_members():
             if member._inflight in ('start', 'resume'):
                 return True   # in flight (first attempt or retry): wait for the ACK
@@ -775,13 +777,16 @@ class Session:
             # still run, so a device attaching while ended can prepare.
             if not panel and self.state is not SessionState.PLAYING:
                 return
-            # The authorized cohort starts from program time 0. An unauthorized
-            # PLAYING member at LOADED (a late joiner / reconnector) parks dark
-            # for the rest of the run; live rejoin is deferred.
+            # The authorized cohort starts from program time 0. A late joiner
+            # or reconnector at LOADED rejoins on the anchor when the program is
+            # synced (the device places itself on the shared clock); under an
+            # unsynced one it parks dark for the rest of the run, since its
+            # device would start from 0.
             # ENDED is allowed so replay Starts without a reload (the device
             # permits Start from ENDED and resets its engine).
             if (member.phase in (DeviceState.LOADED, DeviceState.ENDED)
-                    and (panel or member.start_authorized)):
+                    and (panel or member.start_authorized
+                         or self.manifest.requires_sync)):
                 self._send(member, 'start', wire.encode_start(target.anchor_us),
                            lambda m: self._after_start(m),
                            still_relevant=lambda m: m.target.intent is Intent.PLAYING)

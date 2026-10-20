@@ -22,7 +22,7 @@
 enum class DeviceMode : uint8_t {
     AttachedControlled  = 0,
     // Detached, still showing what it showed while attached: a manual
-    // picture or an unsynced program.
+    // picture or a program that is playing or paused.
     DetachedRunning     = 1,
     DetachedBlank       = 2,
     DetachedBackground  = 3,

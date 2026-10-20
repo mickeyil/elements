@@ -126,9 +126,9 @@ void App::update_mode_()
 bool App::shows_on_its_own_() const
 {
     const DeviceState state = _playback.state();
-    if (state == DeviceState::MANUAL) return true;
-    return (state == DeviceState::PLAYING || state == DeviceState::PAUSED)
-        && !_playback.requires_sync();
+    return state == DeviceState::MANUAL
+        || state == DeviceState::PLAYING
+        || state == DeviceState::PAUSED;
 }
 
 void App::update_clock_status_()
