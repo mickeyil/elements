@@ -16,3 +16,20 @@ export function clockLabel(synced: boolean | null | undefined,
   }
   return `${skewMs > 0 ? '+' : '-'}${text} ms`;
 }
+
+// The ACK status a device sends for a synced program while it holds no clock
+// lease (wire.ACK_UNSYNCED).
+const ACK_UNSYNCED = 6;
+
+// Label for a device's latest refused command, from the controller's
+// last_refusal ([command, ack status]; null once a command is accepted).
+export function refusalLabel(lastRefusal: [string, number] | null | undefined): string {
+  if (!lastRefusal) {
+    return '';
+  }
+  const [command, status] = lastRefusal;
+  if (status === ACK_UNSYNCED && (command === 'start' || command === 'resume')) {
+    return 'waiting for clock sync';
+  }
+  return `refused ${command} (status ${status})`;
+}

@@ -6,7 +6,7 @@ import DeviceModal from '../components/DeviceModal.vue';
 import RemoveDeviceModal from '../components/RemoveDeviceModal.vue';
 import { useInjectedServerState, type SnapshotDevice } from '../composables/useServerState';
 import { createSimTwin, setSimPower, stripHasSimTwin, updateFirmware } from '../lib/deviceApi';
-import { clockLabel } from '../lib/deviceClock';
+import { clockLabel, refusalLabel } from '../lib/deviceClock';
 import {
   isUpdateOffered,
   updateOfferLabel,
@@ -406,6 +406,13 @@ onBeforeUnmount(() => {
                   :title="simNote(device) ?? ''"
                 >
                   {{ simNote(device) }}
+                </p>
+                <p
+                  v-if="device.cardStatus === 'online' && refusalLabel(device.last_refusal)"
+                  class="device-firmware-note mono"
+                  :title="refusalLabel(device.last_refusal)"
+                >
+                  {{ refusalLabel(device.last_refusal) }}
                 </p>
               </div>
               <div class="device-action-slot">

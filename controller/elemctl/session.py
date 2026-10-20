@@ -843,6 +843,11 @@ class Session:
         def on_ack(ack):
             member._inflight = None
             if ack.status == wire.ACK_OK:
+                if member.last_refusal is not None:
+                    refused, status = member.last_refusal
+                    log.info('session: %s accepted %s after refusing %s (%s)',
+                             member.uid, command, refused,
+                             wire.ACK_STATUS_NAMES.get(status, status))
                 member.last_refusal = None
                 apply_ok(member)
             elif still_relevant is None or still_relevant(member):
@@ -873,6 +878,14 @@ class Session:
         self._hub.send(member.uid, wire.encode_query_device_status(), on_ack)
 
     def _handle_nonok(self, member, command, status):
+        # Logged once per new refusal, not on every backoff retry.
+        if member.last_refusal != (command, status):
+            name = wire.ACK_STATUS_NAMES.get(status, status)
+            if status == wire.ACK_UNSYNCED:
+                log.info('session: %s refused %s (%s); will retry once its '
+                         'clock is synced', member.uid, command, name)
+            else:
+                log.info('session: %s refused %s (%s)', member.uid, command, name)
         member.last_refusal = (command, status)
         if status == wire.ACK_UNSYNCED:
             # Recoverable: the device will lease its clock and accept later.

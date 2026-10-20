@@ -38,6 +38,8 @@ export interface SnapshotDevice {
   target_intent?: string;
   clock_synced?: boolean | null;
   clock_skew_ms?: number | null;
+  // The latest refused command and its ACK status; null once one is accepted.
+  last_refusal?: [string, number] | null;
   // From the device's latest DISCOVER; null until one is heard. version is
   // '' for firmware that predates reporting it.
   version?: string | null;

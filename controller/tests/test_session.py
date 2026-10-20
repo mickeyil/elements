@@ -7,6 +7,7 @@ ladder and ACK handling) are all exercised without any sockets. Tests
 invoke the recorded ACK callbacks to simulate device replies.
 """
 
+import logging
 import zlib
 
 import pytest
@@ -642,6 +643,28 @@ def test_unsynced_backs_off_then_retries():
         tick(session)
     op, _ = hub.last_send('sim-a')
     assert op == wire.CMD_START                # retried after backoff
+
+
+def test_a_refusal_is_logged_once_and_its_acceptance_once(caplog):
+    caplog.set_level(logging.INFO, logger='elemctl.session')
+    session, hub = make_session(SINGLE)
+    drive_to_loaded(session, hub)
+    session.play()
+    for _ in range(2):                         # the first Start, then a retry
+        for _ in range(_UNSYNCED_BACKOFF_TICKS + 1):
+            tick(session)
+        op, on_ack = hub.last_send('sim-a')
+        assert op == wire.CMD_START
+        on_ack(ack(wire.ACK_UNSYNCED))
+    assert sum(1 for _u, e, _a in hub.sent if e[4] == wire.CMD_START) == 2
+    assert [r.getMessage() for r in caplog.records if 'refused' in r.getMessage()] == [
+        'session: sim-a refused start (unsynced); will retry once its clock is synced']
+
+    for _ in range(_UNSYNCED_BACKOFF_TICKS + 1):
+        tick(session)
+    hub.last_send('sim-a')[1](ack_ok())
+    assert [r.getMessage() for r in caplog.records if 'accepted' in r.getMessage()] == [
+        'session: sim-a accepted start after refusing start (unsynced)']
 
 
 def test_terminal_failure_blocks_and_emits():
