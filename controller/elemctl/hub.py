@@ -24,6 +24,7 @@ stamps program_start_us with; the sync server hands it to devices.
 import logging
 import random
 import socket
+import struct
 import time
 
 from dataclasses import dataclass, replace
@@ -52,6 +53,12 @@ ACK_TIMEOUT_US = 2 * PING_INTERVAL_US
 
 _TCP_RECV_CHUNK = 4096
 _UDP_RECV_SIZE = 2048
+
+# Linux SO_TIMESTAMPNS (and its SCM_ cmsg type); Python has no constant.
+# Its cmsg carries the kernel's old timespec: two native longs, so 8 bytes
+# on a 32-bit host.
+_SO_TIMESTAMPNS = 35
+_TIMESPEC = struct.Struct('ll')
 
 
 @dataclass(frozen=True)
@@ -197,10 +204,15 @@ class DiscoveryServer:
 class SyncServer:
     """Stateless PONG responder. Replies only
     to registered devices whose boot_token matches; everything else is
-    discarded without touching any state."""
+    discarded without touching any state.
+
+    t2 is the PING's arrival in the kernel, not the moment this tick
+    read it: the loop drains the socket once per tick, and a late t2
+    biases every device's offset estimate. Linux-only (SO_TIMESTAMPNS)."""
 
     def __init__(self, port, clock_us, controller_boot_token):
         self._sock = _udp_listener(port)
+        self._sock.setsockopt(socket.SOL_SOCKET, _SO_TIMESTAMPNS, 1)
         self._clock_us = clock_us
         self._controller_boot_token = controller_boot_token
 
@@ -211,18 +223,19 @@ class SyncServer:
     def poll(self, boot_token_for):
         while True:
             try:
-                datagram, src = self._sock.recvfrom(_UDP_RECV_SIZE)
+                datagram, ancdata, _flags, src = self._sock.recvmsg(
+                    _UDP_RECV_SIZE, socket.CMSG_SPACE(_TIMESPEC.size))
             except BlockingIOError:
                 return
             except OSError as e:
                 log.warning('sync: recv failed: %s', e)
                 return
-            t2 = self._clock_us()
             ping = wire.parse_sync_ping(datagram)
             if ping is None:
                 continue
             if boot_token_for(ping.uid) != ping.device_boot_token:
                 continue
+            t2 = self._arrival_us(ancdata)
             t3 = self._clock_us()
             pong = wire.encode_sync_pong(
                 self._controller_boot_token, ping.seq, ping.t1_us, t2, t3)
@@ -230,6 +243,15 @@ class SyncServer:
                 self._sock.sendto(pong, src)
             except OSError as e:
                 log.debug('sync: PONG to %s failed: %s', src, e)
+
+    def _arrival_us(self, ancdata):
+        """The datagram's arrival on the hub clock. The kernel stamps a
+        CLOCK_REALTIME timespec and the hub clock is monotonic, so carry
+        over the stamp's age rather than its value."""
+        (_level, _type, stamp), = ancdata   # the one cmsg we enabled
+        sec, nsec = _TIMESPEC.unpack(stamp)
+        age_us = (time.time_ns() - (sec * 1_000_000_000 + nsec)) // 1000
+        return self._clock_us() - age_us
 
     def close(self):
         self._sock.close()

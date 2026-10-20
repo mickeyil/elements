@@ -443,29 +443,47 @@ def sync_ping_packet(uid, boot_token, seq, t1_us):
             + struct.pack('<IIq', boot_token, seq, t1_us))
 
 
-def test_sync_ping_answered_for_registered_device(hub, clock):
-    dev = connect_device(hub, 'sim-a', boot_token=42)
-    client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    client.settimeout(2.0)
-    client.sendto(sync_ping_packet('sim-a', 42, seq=9, t1_us=12345),
-                  ('127.0.0.1', hub.sync_port))
-
+def sync_pong(hub, client):
+    """Poll the hub until its PONG reaches client; returns the fields."""
+    client.settimeout(0.05)
     deadline = time.monotonic() + 2.0
-    pong = None
-    while pong is None and time.monotonic() < deadline:
+    while time.monotonic() < deadline:
         hub.poll(WANTED)
         try:
-            client.settimeout(0.05)
             pong, _ = client.recvfrom(64)
         except socket.timeout:
             continue
+        assert len(pong) == wire.SYNC_PONG_WIRE_SIZE
+        return struct.unpack('<BIIqqq', pong)
+    pytest.fail('no PONG')
 
-    assert pong is not None and len(pong) == wire.SYNC_PONG_WIRE_SIZE
-    pkt_type, token, seq, t1, t2, t3 = struct.unpack('<BIIqqq', pong)
+
+def test_sync_ping_answered_for_registered_device(hub, clock):
+    dev = connect_device(hub, 'sim-a', boot_token=42)
+    client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    client.sendto(sync_ping_packet('sim-a', 42, seq=9, t1_us=12345),
+                  ('127.0.0.1', hub.sync_port))
+    pkt_type, token, seq, t1, t2, t3 = sync_pong(hub, client)
     assert pkt_type == wire.SYNC_PKT_PONG
     assert token == hub.boot_token != 0
     assert (seq, t1) == (9, 12345)
-    assert t2 == t3 == clock.now_us   # the fake clock stamps both
+    assert t2 <= t3 == clock.now_us   # t2 is the arrival, t3 the send
+    client.close()
+    dev.close()
+
+
+def test_sync_t2_is_the_ping_arrival_not_its_read(hub, clock):
+    dev = connect_device(hub, 'sim-a', boot_token=42)
+    # Linux turns arrival stamping on up to ~1 ms after a socket asks for
+    # it, and stamps anything that arrived before then at read time.
+    time.sleep(0.05)
+    client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    client.sendto(sync_ping_packet('sim-a', 42, seq=1, t1_us=1),
+                  ('127.0.0.1', hub.sync_port))
+    time.sleep(0.05)   # the PING waits in the socket, as it would for a tick
+    *_, t2, t3 = sync_pong(hub, client)
+    assert t3 == clock.now_us
+    assert t2 <= clock.now_us - 40_000
     client.close()
     dev.close()
 
