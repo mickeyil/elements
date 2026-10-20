@@ -40,6 +40,11 @@ log = logging.getLogger(__name__)
 # back off rather than retry every tick.
 _UNSYNCED_BACKOFF_TICKS = 25
 
+# How far ahead of now a synced Start or Resume is anchored. Covers TCP
+# delivery over Wi-Fi, power-save latency included; the device holds dark (or
+# its paused frame) until the anchor, so all devices light up together.
+_SYNCED_START_LEAD_US = 200_000
+
 _US_PER_S = 1_000_000
 
 
@@ -334,7 +339,8 @@ class Session:
                 )
 
     def play(self):
-        """Begin playback from a single shared anchor stamped now.
+        """Begin playback from a single shared anchor: now, or a lead ahead of
+        now for a synced program (_SYNCED_START_LEAD_US).
 
         Every routed member is retargeted to PLAYING, and members already
         LOADED with the right program are authorized to issue the initial
@@ -353,7 +359,7 @@ class Session:
             raise ValueError('play() is only valid from a loaded or ended session')
         if self._has_unsettled_playback():
             raise ValueError('play() requires playback to be stopped first')
-        self.program_start_us = self._clock_us()
+        self.program_start_us = self._clock_us() + self._start_lead_us()
         self.cursor_us = 0
         self.state = SessionState.PLAYING
         # A fresh run renumbers frames from 0; resume() does not (it continues).
@@ -387,22 +393,31 @@ class Session:
             raise ValueError('pause() requires a playing session')
         if self._has_pending_start_or_resume():
             raise ValueError('pause() requires playback to settle first')
-        self.cursor_us = self._clock_us() - self.program_start_us
+        # Inside a synced start's or resume's lead nothing has played past
+        # the cursor yet (0 after play(), the paused position after resume()).
+        self.cursor_us = max(self.cursor_us,
+                             self._clock_us() - self.program_start_us)
         self.state = SessionState.PAUSED
         self._retarget_routed(Intent.PAUSED, anchor_us=self.program_start_us,
                               cursor_us=self.cursor_us)
 
     def resume(self):
         """Resume playback from the paused cursor by re-anchoring program time
-        so it continues where it stopped."""
+        so it continues where it stopped (a lead ahead of now when synced)."""
         if self.state is not SessionState.PAUSED:
             raise ValueError('resume() requires a paused session')
         if self._has_unsettled_pause():
             raise ValueError('resume() requires pause to settle first')
-        self.program_start_us = self._clock_us() - self.cursor_us
+        self.program_start_us = (self._clock_us() + self._start_lead_us()
+                                 - self.cursor_us)
         self.state = SessionState.PLAYING
         self._retarget_routed(Intent.PLAYING, anchor_us=self.program_start_us,
                               cursor_us=self.cursor_us)
+
+    def _start_lead_us(self):
+        # Unsynced devices ignore the anchor and start on receipt, so the
+        # session's own program time must start now too.
+        return _SYNCED_START_LEAD_US if self.manifest.requires_sync else 0
 
     def _has_unsettled_playback(self):
         """True when a routed device is playing (or about to) and not already
@@ -790,11 +805,14 @@ class Session:
                 self._send(member, 'start', wire.encode_start(target.anchor_us),
                            lambda m: self._after_start(m),
                            still_relevant=lambda m: m.target.intent is Intent.PLAYING)
-            elif member.phase is DeviceState.PAUSED and self._reached(target.cursor_us):
-                # Resume only once live time has reached the cursor: unsynced
-                # devices ignore the anchor and resume immediately, so the
-                # controller must hold Resume until then (a no-op wait for an
-                # operator resume, which re-anchors to the cursor).
+            elif member.phase is DeviceState.PAUSED and (
+                    (not panel and self.manifest.requires_sync)
+                    or self._reached(target.cursor_us)):
+                # A synced device holds its frame until the anchor, so Resume
+                # goes at once. Unsynced devices ignore the anchor and resume
+                # immediately, so the controller holds Resume until live time
+                # has reached the cursor (a no-op wait for an operator resume,
+                # which re-anchors to the cursor).
                 self._send(member, 'resume', wire.encode_resume(target.anchor_us),
                            lambda m: self._after_resume(m),
                            still_relevant=lambda m: m.target.intent is Intent.PLAYING)

@@ -27,6 +27,7 @@ from elemctl.session import (
     Session,
     SessionState,
     _DEVICE_STATES,
+    _SYNCED_START_LEAD_US,
 )
 
 
@@ -1037,6 +1038,79 @@ def test_pause_captures_cursor_and_resume_reanchors():
     session.resume()
     # program time continues from the cursor: now - anchor == cursor.
     assert session._clock_us() - session.program_start_us == session.cursor_us
+
+
+def test_synced_play_anchors_a_lead_ahead_unsynced_now():
+    for requires_sync, lead in ((True, _SYNCED_START_LEAD_US), (False, 0)):
+        session, hub = make_session(SINGLE)
+        drive_to_loaded(session, hub, requires_sync=requires_sync)
+        now = session._clock_us()
+        session.play()
+        tick(session)
+        _, encoded, _ = hub.sent[-1]
+        assert encoded == wire.encode_start(now + lead)
+
+
+def test_pause_inside_the_synced_lead_captures_cursor_zero():
+    session, hub = make_session(SINGLE)
+    drive_to_playing(session, hub, requires_sync=True)
+    session._clock_us.now_us += _SYNCED_START_LEAD_US // 2
+    session.pause()
+    assert session.cursor_us == 0
+
+
+def test_pause_inside_a_synced_resume_lead_keeps_the_cursor():
+    session, hub = make_session(SINGLE)
+    drive_to_playing(session, hub, requires_sync=True)
+    session._clock_us.now_us += _SYNCED_START_LEAD_US + 2_000_000
+    session.pause()
+    tick(session)
+    _, on_ack = hub.last_send('sim-a'); on_ack(ack_ok())   # PAUSED
+    session.resume()
+    tick(session)
+    _, on_ack = hub.last_send('sim-a'); on_ack(ack_ok())   # resumed, holding
+    session._clock_us.now_us += _SYNCED_START_LEAD_US // 2
+    session.pause()
+    assert session.cursor_us == 2_000_000
+
+
+def test_synced_resume_goes_at_once_anchored_a_lead_ahead():
+    session, hub = make_session(SINGLE)
+    drive_to_playing(session, hub, requires_sync=True)
+    session._clock_us.now_us += _SYNCED_START_LEAD_US + 2_000_000   # 2 s played
+    session.pause()
+    assert session.cursor_us == 2_000_000
+    tick(session)
+    _, on_ack = hub.last_send('sim-a'); on_ack(ack_ok())   # PAUSED
+
+    session._clock_us.now_us += 5_000_000
+    now = session._clock_us()
+    session.resume()
+    tick(session)                            # live time is a lead short of the cursor
+    _, encoded, _ = hub.sent[-1]
+    assert encoded == wire.encode_resume(now + _SYNCED_START_LEAD_US - 2_000_000)
+
+
+def test_unsynced_resume_waits_for_live_time_to_reach_the_cursor():
+    # The device resumes on receipt, so Resume is held until the session's
+    # program time reaches the cursor (at once after an operator resume).
+    session, hub = make_session(SINGLE)
+    drive_to_playing(session, hub)
+    session._clock_us.now_us += 2_000_000
+    session.pause()
+    tick(session)
+    _, on_ack = hub.last_send('sim-a'); on_ack(ack_ok())   # PAUSED
+
+    now = session._clock_us()
+    session.resume()
+    assert session.program_start_us == now - 2_000_000
+    session.program_start_us += 100_000      # live time 100 ms short of the cursor
+    n = len(hub.sent)
+    tick(session)
+    assert len(hub.sent) == n
+    session._clock_us.now_us += 100_000
+    tick(session)
+    assert hub.last_send('sim-a')[0] == wire.CMD_RESUME
 
 
 def test_resume_refused_before_pause_settles():
